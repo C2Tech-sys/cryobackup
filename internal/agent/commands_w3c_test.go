@@ -60,13 +60,15 @@ func TestRefusedResultDoesNotWedgeTheCommandLoop(t *testing.T) {
 			if !row.Refused || row.Posted {
 				t.Errorf("journal row = %+v, want refused and not posted", row)
 			}
-			if un, _ := r.a.jr.UnpostedCommands(context.Background()); len(un) != 0 {
-				t.Errorf("%d results still unposted", len(un))
-			}
+			// The console saw the next result before the agent journals it as
+			// posted, so wait for that before counting what is left unposted.
 			waitFor(t, "the next result to be marked posted", 10*time.Second, func() bool {
 				row, _, _ := r.a.jr.Command(context.Background(), next.ID)
 				return row.Posted
 			})
+			if un, _ := r.a.jr.UnpostedCommands(context.Background()); len(un) != 0 {
+				t.Errorf("%d results still unposted", len(un))
+			}
 		})
 	}
 	text := log.String()
