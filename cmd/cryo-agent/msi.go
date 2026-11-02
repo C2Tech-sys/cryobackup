@@ -44,7 +44,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/agent"
 	"github.com/c2tech-sys/cryobackup/internal/agent/config"
@@ -313,11 +312,11 @@ func msiConfigure(req msiRequest, f msiFlags, stdout, stderr io.Writer) (int, st
 		return exitOK, ""
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), agent.EnrollTimeout)
 	defer cancel()
 	res, err := agent.Enroll(ctx, agent.EnrollOptions{
 		StateDir: stateDir, ServerURL: req.server, Token: req.token, InsecureLab: req.lab,
-		InsecurePlaintextSecrets: f.plaintext, AllowUnprotectedState: f.unprotected,
+		InsecurePlaintextSecrets: f.plaintext, AllowUnprotectedState: f.unprotected, Log: stderr,
 	})
 	if res.EventLogErr != "" {
 		fmt.Fprintln(stderr, res.EventLogErr)

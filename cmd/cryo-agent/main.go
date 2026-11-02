@@ -383,12 +383,12 @@ func cmdEnroll(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signalContext()
 	defer stop()
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, agent.EnrollTimeout)
 	defer cancel()
 	warnUnprotected(stderr, *unprotected)
 	res, err := enrollDevice(ctx, agent.EnrollOptions{
 		StateDir: *stateDir, ServerURL: *server, Token: tok, InsecureLab: *lab, SPKIPin: *pin, Proxy: *proxy,
-		InsecurePlaintextSecrets: *plain, AllowUnprotectedState: *unprotected, RepairACL: *repair,
+		InsecurePlaintextSecrets: *plain, AllowUnprotectedState: *unprotected, RepairACL: *repair, Log: stderr,
 	})
 	if res.EventLogErr != "" {
 		fmt.Fprintln(stderr, res.EventLogErr)
