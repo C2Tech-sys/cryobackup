@@ -14,7 +14,7 @@ detection, token policy), ADR 0012 (operator settings in the database).
   storage target. Note `cryo-console doctor` output (schema version, `quick_check`, master key loaded).
 - Three Windows VMs (Windows 10/11 or Server), snapshotted clean, on a hypervisor you can clone and migrate on.
   Call them VM-A, VM-B, VM-C. Time-synchronised with the console host (note the clock offset the device page shows).
-- One customer with a storage target. Two accounts: your owner, and a second admin for the two-admin steps.
+- One customer (M2 has one console-wide storage target, the one the gateway is configured with; per-customer targets come later). Two accounts: your owner, and a second admin for the two-admin steps.
 - A stopwatch, or a terminal on the console host to compare timestamps (the Commands tab shows delivered and
   answered times in the display zone).
 - Screens referenced below are in `docs/screens/m2/README.md`.
