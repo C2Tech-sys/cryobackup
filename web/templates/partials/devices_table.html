@@ -1,0 +1,41 @@
+{{/* devices_table.html - the device table (components 5.1, 5.2, 3.4): filter bar, results, pager. Shared by /devices (S19) and the customer page Devices tab (S06). The results region is also the htmx fragment of GET /ui/devices/table; every control is a plain link or a GET form first, so the table works without JavaScript. M2-W1C. */}}
+
+{{define "devices_view"}}<section class="stack devtable-view" aria-label="Devices">
+<form class="filters" id="devfilters" method="get" action="{{.BaseURL}}" role="search" aria-label="Filter devices"
+  hx-get="{{.PartialURL}}" hx-target="#devresults" hx-swap="innerHTML" hx-indicator="#devresults" hx-trigger="submit, change, input changed delay:300ms from:#dev-q"{{if .CustomerID}} hx-vals='{"customer":"{{.CustomerID}}","tab":"1"}'{{end}}>
+  <div class="field grow"><label for="dev-q">Search</label><input class="input" id="dev-q" name="q" type="search" value="{{.Form.Q}}" placeholder="Host, name or customer" autocomplete="off" spellcheck="false"></div>
+  <div class="field"><label for="dev-state">State</label><select class="input" id="dev-state" name="state">{{range .Form.States}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  {{if .ShowCustomer}}<div class="field"><label for="dev-customer">Customer</label><select class="input" id="dev-customer" name="customer">{{range .Form.Customers}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>{{end}}
+  <label class="check"><input type="checkbox" name="retired" value="1"{{if .Form.Retired}} checked{{end}}>Include retired</label>
+  {{if .Form.Sort}}<input type="hidden" name="sort" value="{{.Form.Sort}}">{{end}}{{if .Form.Desc}}<input type="hidden" name="dir" value="desc">{{end}}{{if ne .Form.Size 50}}<input type="hidden" name="size" value="{{.Form.Size}}">{{end}}
+  <button class="btn sm" type="submit">Apply</button>
+</form>
+<div id="devresults" class="stack loadable" aria-live="polite" data-loading-text="Loading devices">{{template "devices_results" .}}</div>
+</section>{{end}}
+
+{{define "devices_results"}}{{if or .Chips .Rows}}<div class="chipbar" role="status"><span>{{.Summary}}</span>{{range .Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" hx-get="{{.Partial}}" hx-target="#devresults" hx-swap="innerHTML" hx-indicator="#devresults" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}{{if .Chips}}<a class="btn ghost sm" href="{{.ClearHref}}" hx-get="{{.ClearPartial}}" hx-target="#devresults" hx-swap="innerHTML" hx-indicator="#devresults">Clear all</a>{{end}}</div>{{end}}
+{{if .Empty}}{{template "panel_state" .Empty}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Devices" tabindex="0">
+<table class="fleet devtable">
+<caption>Devices, {{.Summary}}</caption>
+<thead><tr>{{range .Heads}}<th scope="col" aria-sort="{{.Sort}}"><a class="sortlink" href="{{.Href}}" hx-get="{{.Partial}}" hx-target="#devresults" hx-swap="innerHTML" hx-indicator="#devresults">{{.Label}}{{if eq .Sort "ascending"}}<span class="sortmark" aria-hidden="true"> &#9650;</span><span class="sr-only"> (sorted ascending)</span>{{else if eq .Sort "descending"}}<span class="sortmark" aria-hidden="true"> &#9660;</span><span class="sr-only"> (sorted descending)</span>{{end}}</a></th>{{end}}</tr></thead>
+<tbody>
+{{$show := .ShowCustomer}}{{range .Rows}}<tr id="dev-{{.ID}}" class="dev{{if .Retired}} retired{{end}}">
+<td class="dev-cell"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a><small>{{if .Friendly}}{{.Friendly}}{{else}}{{.Meta}}{{end}}</small></td>
+{{if $show}}<td class="cust-cell"><a href="/customers/{{.CustomerID}}">{{.Customer}}</a></td>{{end}}
+<td class="state-cell">{{range .Chips}}{{template "chipbtn" .}} {{end}}{{template "badges" .Badges}}</td>
+<td class="age{{if .AgeClass}} {{.AgeClass}}{{end}}">{{if .AgeGlyph}}<i class="g g-{{.AgeGlyph}}" aria-hidden="true"></i>{{end}}{{.AgeText}}{{if .AgeSub}}<small>{{.AgeSub}}</small>{{end}}</td>
+<td class="due{{if .NextClass}} {{.NextClass}}{{end}}" title="{{.NextTitle}}">{{.NextText}}</td>
+<td class="agent-cell mono">{{.Agent}}</td>
+<td class="os-cell">{{.OS}}</td>
+</tr>
+{{end}}</tbody></table></div>
+{{template "pager" .Pager}}
+<p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). The next-due time is an estimate from the schedule and the last success.</p>
+{{end}}{{end}}
+
+{{define "pager"}}<nav class="pager" aria-label="Pagination"><span class="pg-text" role="status">{{.Text}}</span>
+{{if .Clamp}}<span class="meta-mono">{{.Clamp}}</span>{{end}}
+{{if gt .Pages 1}}<ul>{{range .Links}}<li>{{if .Disabled}}<span class="pg disabled" aria-disabled="true" aria-label="{{.Aria}}">{{.Label}}</span>{{else}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}"{{if .Partial}} hx-get="{{.Partial}}" hx-target="#devresults" hx-swap="innerHTML" hx-indicator="#devresults"{{end}} aria-label="{{.Aria}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</li>{{end}}</ul>{{end}}
+{{if .Sizes}}<span class="pg-size"><span class="meta-mono">Per page</span>{{range .Sizes}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}"{{if .Partial}} hx-get="{{.Partial}}" hx-target="#devresults" hx-swap="innerHTML" hx-indicator="#devresults"{{end}} aria-label="{{.Aria}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}</span>{{end}}
+</nav>{{end}}

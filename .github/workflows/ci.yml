@@ -1,0 +1,126 @@
+name: ci
+# Minutes policy (2026-10-29): the org's free Actions allowance was at 90 %,
+# and Windows minutes bill at double rate. Pull requests therefore run the
+# Linux race tests + cross-compile only; the Windows race tests, the fuzzers
+# and the MSI install smoke run on pushes to main (and on demand via
+# workflow_dispatch). Superseded runs on the same branch are cancelled.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+  # Windows race tests: on main pushes and manual runs only (double-rate minutes).
+  test-windows:
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+  # The path-free fuzz targets (architecture 10.2 M1 acceptance). The test job
+  # only replays their seeds; this one searches for new inputs for a bounded
+  # time and fails on a crasher. The fuzz cache is not kept between runs and no
+  # corpus is committed: a crasher is uploaded and, once understood, is added to
+  # testdata/fuzz/<target>/ by hand so the ordinary test job replays it for good.
+  fuzz:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: FuzzDecoder (restic stream decoder, classifier, path boundary)
+        run: go test -run='^$' -fuzz='^FuzzDecoder$' -fuzztime=60s ./internal/restic
+      - name: FuzzNoPathSurvives (path-free logging)
+        run: go test -run='^$' -fuzz='^FuzzNoPathSurvives$' -fuzztime=60s ./internal/logx
+      - name: Keep the crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: internal/*/testdata/fuzz/
+          if-no-files-found: ignore
+  cross:
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make cross
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: bin/
+  # The agent MSI, unsigned (CI holds no signing credential, ADR 0006), built
+  # and then installed, upgraded and uninstalled for real on the elevated runner.
+  msi:
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Fetch the pinned restic
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File deploy/windows/fetch-restic.ps1
+          exit $LASTEXITCODE
+      - name: Build two MSIs (0.0.1 and 0.0.2, unsigned)
+        shell: powershell
+        run: |
+          # The compiler of cryoca.dll, on record (build.ps1 refuses another major).
+          gcc --version
+          gcc -dumpmachine
+          foreach ($v in @('0.0.1', '0.0.2')) {
+            $env:CRYO_MSI_VERSION = $v
+            $env:CRYO_MSI_OUT = "$PWD/dist/msi-$v"
+            powershell -NoProfile -ExecutionPolicy Bypass -File deploy/windows/build.ps1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          go build -o dist/fakeconsole.exe ./deploy/windows/ci/fakeconsole
+          exit $LASTEXITCODE
+      - name: Install, upgrade, uninstall (smoke)
+        shell: powershell
+        run: |
+          $env:CRYO_SMOKE_MSI1 = (Resolve-Path dist/msi-0.0.1/cryobackup-agent.msi).Path
+          $env:CRYO_SMOKE_MSI2 = (Resolve-Path dist/msi-0.0.2/cryobackup-agent.msi).Path
+          $env:CRYO_SMOKE_CONSOLE = (Resolve-Path dist/fakeconsole.exe).Path
+          $env:CRYO_SMOKE_LOGS = "$PWD/dist/smoke-logs"
+          powershell -NoProfile -ExecutionPolicy Bypass -File deploy/windows/ci/smoke.ps1
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: msi
+          path: |
+            dist/msi-*/cryobackup-agent.msi
+            dist/smoke-logs/

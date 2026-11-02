@@ -1,0 +1,17 @@
+# The restic release the Windows agent ships (feature r208). One file, read by
+# build.ps1, fetch-restic.ps1 and verify.ps1 (and so by the CI job). Changing
+# restic means changing every value here together with supervisor.PinnedVersion
+# (internal/agent/supervisor) in the same commit.
+#
+# zip_sha256 is restic's own published checksum: the line
+# "restic_0.19.1_windows_amd64.zip" of the release's SHA256SUMS file,
+# https://github.com/restic/restic/releases/download/v0.19.1/SHA256SUMS
+# (signed by the restic maintainers in SHA256SUMS.asc beside it).
+# exe_sha256 is the SHA-256 of the single file in that zip,
+# restic_0.19.1_windows_amd64.exe, which the MSI installs as restic.exe byte for
+# byte and which cryo-agent.exe checks at every start.
+version=0.19.1
+zip_url=https://github.com/restic/restic/releases/download/v0.19.1/restic_0.19.1_windows_amd64.zip
+zip_sha256=da948ad707ed690426473aaba2046cd61f8f90f6f0e7dab6be0d5796531de67d
+exe_name=restic_0.19.1_windows_amd64.exe
+exe_sha256=b0dd1fd21eea5d8fe1325f55f7118213c21f36de8a261e04c0624a5ab9fd7830

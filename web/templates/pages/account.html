@@ -1,0 +1,147 @@
+{{/* S38 - My account (M2-W1A): profile, password, authenticator and recovery codes, sessions, API tokens.
+     Secrets (new token, recovery codes, enrollment key) appear in the response of the post that made them and
+     nowhere else. Every form posts to /ui/account/* and returns here. */}}
+{{define "content"}}
+<div class="page-head">
+  <div class="t"><h2>{{.Me.Username}}</h2><span class="st sm info"><i aria-hidden="true"></i>{{upper .Me.Role}}</span></div>
+  <div class="sub"><span>{{.Me.Scope}}</span><span>Last sign-in {{template "acct_when" .Me.LastLogin}}</span></div>
+</div>
+{{template "acct_note" .Notice}}
+{{if .Me.MustChange}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Your password was set by someone else.</b> Change it below so only you know it.</div></div>{{end}}
+{{if not .MasterOK}}<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>The master key is not loaded.</b> Authenticator codes cannot be checked or enrolled until it is (banner C12). Recovery codes still work.</div></div>{{end}}
+
+{{with .NewToken}}<section class="card raised once" aria-labelledby="tok-once-h">
+  <h3 id="tok-once-h">API token "{{.Name}}"</h3>
+  <div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Copy this token now.</b> It is not shown again; the console keeps only its hash. Send it as <code>Authorization: Bearer</code> on /api/v1 requests.</div></div>
+  <div class="copybar">{{copybtn "cp-api-token" "Copy the API token"}}</div>
+  <pre class="code secret" id="cp-api-token" tabindex="0" role="region" aria-label="API token, shown once">{{.Secret}}</pre>
+</section>{{end}}
+{{if .Codes}}<section class="card raised once" aria-label="New recovery codes">{{template "acct_codes" .}}</section>{{end}}
+
+<div class="two acct">
+<div class="stack">
+  <section class="card" aria-labelledby="mfa-card-h">
+    <h3 id="mfa-card-h">Authenticator {{if .MFAErr}}<span class="st sm crit"><i aria-hidden="true"></i>UNKNOWN</span>{{else}}<span class="st sm {{if .MFA.Enrolled}}ok{{else}}warn{{end}}"><i aria-hidden="true"></i>{{if .MFA.Enrolled}}ON{{else}}NOT SET UP{{end}}</span>{{end}}</h3>
+    {{if .MFAErr}}<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>The authenticator status could not be read.</b> This is not "not set up": reload the page. Your sign-in is unaffected.</div></div>{{end}}
+    {{template "acct_note" (index .Errs "totp")}}
+    {{if .MFA.Enrolled}}
+    <dl class="kv"><dt>Set up</dt><dd>{{template "acct_when" .MFA.Since}}</dd>
+      <dt>Recovery codes</dt><dd>{{if .MFA.Low}}<span class="age warn"><i class="g g-warn" aria-hidden="true"></i>{{.MFA.Left}} of {{.MFA.Total}} left</span>{{else}}{{.MFA.Left}} of {{.MFA.Total}} left{{end}}</dd></dl>
+    {{end}}
+    {{with .Enroll}}
+    <div class="stack mt">
+      {{template "acct_enroll" .}}
+      <form method="post" action="/ui/account/totp/confirm" class="stack" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+        <div class="frow">
+          <div class="field"><label for="new-code">Code from the new app</label><input class="input otp" id="new-code" name="code" type="text" inputmode="numeric" maxlength="7" autocomplete="one-time-code" required></div>
+          {{if $.MFA.Enrolled}}<div class="field"><label for="cur-code">Code from your current app, or a recovery code</label><input class="input mono" id="cur-code" name="current_code" type="text" maxlength="16" autocomplete="off" required><span class="help">Proves it is you before the old authenticator stops working.</span></div>{{end}}
+        </div>
+        <div class="actions"><button class="btn primary" type="submit">Save new authenticator</button><a class="btn ghost" href="/account">Cancel</a></div>
+      </form>
+    </div>
+    {{else}}
+    <div class="actions mt">
+      <form method="post" action="/ui/account/totp"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn" type="submit"{{if not .MasterOK}} aria-disabled="true" title="Needs the master key (banner C12)"{{end}}>{{if .MFA.Enrolled}}Replace authenticator…{{else}}Set up authenticator…{{end}}</button></form>
+    </div>
+    {{if .MFA.Enrolled}}
+    <details class="disclose mt">
+      <summary>Regenerate recovery codes…</summary>
+      {{template "acct_note" (index .Errs "codes")}}
+      <form method="post" action="/ui/account/recovery-codes" class="stack" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <div class="field"><label for="regen-code">Current authenticator code</label><input class="input otp" id="regen-code" name="code" type="text" inputmode="numeric" maxlength="7" autocomplete="one-time-code" required><span class="help">The old codes stop working and ten new ones are shown once.</span></div>
+        <div class="actions"><button class="btn" type="submit">Regenerate codes</button></div>
+      </form>
+    </details>
+    {{else}}{{template "acct_note" (index .Errs "codes")}}{{end}}
+    {{end}}
+  </section>
+
+  <section class="card" aria-labelledby="pw-h">
+    <h3 id="pw-h">Password</h3>
+    {{template "acct_note" (index .Errs "password")}}
+    <form method="post" action="/ui/account/password" class="stack" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="text" name="username" value="{{.Me.Username}}" autocomplete="username" hidden>
+      <div class="field"><label for="cur-pw">Current password</label><input class="input" id="cur-pw" name="current_password" type="password" autocomplete="current-password" required></div>
+      <div class="frow">
+        <div class="field"><label for="new-pw">New password</label><input class="input" id="new-pw" name="new_password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></div>
+        <div class="field"><label for="new-pw2">Repeat the new password</label><input class="input" id="new-pw2" name="confirm_password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></div>
+      </div>
+      <span class="help muted ui">At least 12 characters. Changing your password signs out your other sessions and revokes your API tokens.</span>
+      <div class="actions"><button class="btn primary" type="submit">Change password</button></div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="prof-h">
+    <h3 id="prof-h">Profile</h3>
+    <dl class="kv"><dt>Username</dt><dd>{{.Me.Username}}</dd><dt>Role</dt><dd>{{.Me.Role}}</dd><dt>Customers</dt><dd>{{.Me.Scope}}</dd></dl>
+    {{template "acct_note" (index .Errs "email")}}
+    <form method="post" action="/ui/account/email" class="inline-form mt">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div class="field grow"><label for="email">E-mail</label><input class="input" id="email" name="email" type="email" value="{{.Me.Email}}" autocomplete="email" required></div>
+      <button class="btn" type="submit">Save e-mail</button>
+    </form>
+  </section>
+</div>
+
+<div class="stack">
+  <section class="card" aria-labelledby="sess-h">
+    <h3 id="sess-h">Signed-in sessions <span class="count meta-mono">{{len .Sessions}}</span></h3>
+    {{template "acct_note" (index .Errs "sessions")}}
+    {{if .SessErr}}<section class="panel-state alarm" role="alert"><div><h2><i class="g g-crit" aria-hidden="true"></i>Sessions unavailable</h2><p>The session list could not be loaded. This is an alarm, not an empty list. Reload the page.</p></div></section>
+    {{else}}
+    <div class="table-wrap flat"><table class="fleet compact">
+      <caption>Your signed-in sessions, most recently active first</caption>
+      <thead><tr><th scope="col">Last active</th><th scope="col">From</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead>
+      <tbody>{{range .Sessions}}<tr>
+        <td>{{template "acct_when_short" .Seen}}{{if .Current}} <span class="st sm info"><i aria-hidden="true"></i>THIS SESSION</span>{{end}}<small>signed in {{template "acct_when_short" .Created}}</small></td>
+        <td class="mono nowrap">{{if .IP}}{{.IP}}{{else}}<span class="muted">unknown</span>{{end}}</td>
+        <td class="act">{{if .Current}}<span class="meta-mono">use Sign out</span>{{else}}<form method="post" action="/ui/account/sessions/{{.ID}}/revoke"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button class="btn sm danger" type="submit" aria-label="Sign out the session last active {{.Seen.Text}}">Sign out</button></form>{{end}}</td>
+      </tr>{{end}}</tbody>
+    </table></div>
+    <p class="meta-mono">{{len .Sessions}} signed-in session{{if ne (len .Sessions) 1}}s{{end}}. Sessions end after 12 hours idle or 7 days.</p>
+    {{end}}
+  </section>
+
+  <section class="card" aria-labelledby="tok-h">
+    <h3 id="tok-h">API tokens <span class="count meta-mono">{{len .Tokens}}</span></h3>
+    <p class="muted ui">For scripts and integrations: <code>Authorization: Bearer cbk_…</code> on /api/v1. A token never does more than your role allows, only for your customers, and stops at its expiry or when revoked. Changing your password, or an owner resetting your password or MFA, revokes every token.</p>
+    {{template "acct_note" (index .Errs "tokens")}}
+    {{if .TokErr}}<section class="panel-state alarm" role="alert"><div><h2><i class="g g-crit" aria-hidden="true"></i>Tokens unavailable</h2><p>The token list could not be loaded. This is an alarm, not an empty list. Reload the page.</p></div></section>
+    {{else if .Tokens}}
+    <div class="table-wrap flat"><table class="fleet compact">
+      <caption>Your API tokens, newest first</caption>
+      <thead><tr><th scope="col">Name</th><th scope="col">Scope</th><th scope="col">Last used</th><th scope="col">Expires</th><th scope="col">State</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead>
+      <tbody>{{range .Tokens}}<tr>
+        <td><b>{{.Name}}</b><small class="mono">{{.Prefix}}…</small></td>
+        <td>{{.Scope}}</td>
+        <td>{{template "acct_when" .LastUsed}}</td>
+        <td>{{template "acct_when" .Expires}}</td>
+        <td>{{template "acct_badge" .State}}</td>
+        <td class="act">{{if .Active}}<form method="post" action="/ui/account/tokens/{{.ID}}/revoke"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button class="btn sm danger" type="submit" aria-label="Revoke token {{.Name}}">Revoke</button></form>{{end}}</td>
+      </tr>{{end}}</tbody>
+    </table></div>
+    {{else}}
+    <div class="panel-state neutral"><div><h2>No API tokens</h2><p>Nothing can call the API as you without signing in. Create a token below when a script needs one.</p></div></div>
+    {{end}}
+    <details class="disclose mt"{{if index .Errs "token"}} open{{end}}>
+      <summary>+ Create token…</summary>
+      {{template "acct_note" (index .Errs "token")}}
+      <form method="post" action="/ui/account/tokens" class="stack" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <div class="field"><label for="tok-name">Name</label><input class="input" id="tok-name" name="name" type="text" maxlength="100" value="{{.TokenForm.Name}}" placeholder="RMM status check" required></div>
+        <div class="frow">
+          <div class="field"><label for="tok-scope">Scope</label><select class="input" id="tok-scope" name="scope">
+            <option value="read"{{if eq .TokenForm.Scope "read"}} selected{{end}}>Read-only</option>
+            <option value="full"{{if eq .TokenForm.Scope "full"}} selected{{end}}>Full: everything your role ({{.Me.Role}}) can do</option></select></div>
+          <div class="field"><label for="tok-days">Expires after</label><select class="input" id="tok-days" name="days">{{range .Lifetimes}}<option value="{{.}}"{{if eq . $.TokenForm.Days}} selected{{end}}>{{.}} days</option>{{end}}</select></div>
+        </div>
+        <div class="actions"><button class="btn primary" type="submit">Create token</button></div>
+      </form>
+    </details>
+  </section>
+</div>
+</div>
+{{end}}

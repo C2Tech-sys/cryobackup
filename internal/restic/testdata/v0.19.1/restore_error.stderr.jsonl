@@ -1,0 +1,2 @@
+{"message_type":"error","error":{"message":"failed to restore timestamp of \"C:\\\\fixture\\\\restore\\\\full\\\\C\\\\fixture-up5\": Access is denied."},"during":"restore","item":"\\C\\fixture-up5"}
+{"message_type":"exit_error","code":1,"message":"Fatal: There were 1 errors"}

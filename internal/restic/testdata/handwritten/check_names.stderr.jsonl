@@ -1,0 +1,6 @@
+{"message_type":"error","message":"file \"proxy notes.docx\" blob 0 not found in index"}
+{"message_type":"error","message":"dir node \"certificate\" has no subtree"}
+{"message_type":"error","message":"file \"vss.log\" has nil blob list"}
+{"message_type":"error","message":"error for tree 5f3a1b2c:\n  file \"x509 tls: 503.xlsx\" blob 2 not found in index\n"}
+{"message_type":"error","message":"tree 5f3a1b2c: [file \"say \\\"proxy\\\" twice.txt\" blob 1 not found in index]"}
+{"message_type":"exit_error","code":1,"message":"Fatal: repository contains errors"}

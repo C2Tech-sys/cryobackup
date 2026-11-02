@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CryoBackup agent MSI (WiX v4+ source, built with WiX Toolset 5.0.2: ADR 0007).
+  Build it with deploy/windows/build.ps1 (or "make msi"); README.md beside this
+  file explains every property and what the package does and does not do.
+
+  Preprocessor variables (all set by build.ps1):
+    Version       MSI ProductVersion, X.Y.Z[.N]
+    Manufacturer  ARP publisher
+    StageDir      folder holding cryo-agent.exe, restic.exe and cryoca.dll
+
+  The UpgradeCode below identifies the product for every release. Never change it:
+  a different UpgradeCode installs side by side instead of upgrading in place.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="CryoBackup Agent"
+           Manufacturer="$(var.Manufacturer)"
+           Version="$(var.Version)"
+           UpgradeCode="04B03054-481B-47AA-A586-4F275F1D5A51"
+           Scope="perMachine"
+           InstallerVersion="500"
+           Language="1033">
+
+    <SummaryInformation Description="CryoBackup Agent" />
+
+    <!-- In-place upgrade, inside the install transaction (afterInstallInitialize),
+         so a failed upgrade rolls back to the old version with its service.
+         A rebuilt package of the same version replaces the installed one. -->
+    <MajorUpgrade Schedule="afterInstallInitialize"
+                  AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed. Downgrading is refused: uninstall the newer version first (the device state in ProgramData is kept), then install this one." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Public properties. TOKEN is hidden: Windows Installer writes ********** in
+         its log in place of the value. -->
+    <Property Id="TOKEN" Hidden="yes" Secure="yes" />
+    <Property Id="SERVER" Secure="yes" />
+    <Property Id="CRYO_INSECURE_LAB" Secure="yes" />
+    <Property Id="CRYO_REPAIR_ACL" Secure="yes" />
+    <!-- The data of the configure action carries the token: hidden as well. -->
+    <Property Id="CryoConfigure" Hidden="yes" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPCOMMENTS" Value="Backs up this computer with restic on the schedule set in the CryoBackup console." />
+
+    <!-- Windows build number (VersionNT reports 603 on Windows 10 too, so it cannot
+         tell Windows 8.1 from Windows 10). -->
+    <Property Id="CRYO_WINBUILD">
+      <RegistrySearch Id="WinBuild" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
+    </Property>
+
+    <Launch Condition="Installed OR (VersionNT64 AND CRYO_WINBUILD &gt;= 10240)"
+            Message="[ProductName] needs 64-bit Windows 10 or Windows Server 2016 or later." />
+    <Launch Condition="Installed OR NOT TOKEN OR SERVER"
+            Message="TOKEN was given without SERVER. Give both (SERVER=https://console.example:8443) to enroll during the install, or neither to install unenrolled." />
+    <Launch Condition="Installed OR NOT SERVER OR TOKEN"
+            Message="SERVER was given without TOKEN. Give both to enroll during the install, or neither to install unenrolled." />
+    <Launch Condition='Installed OR NOT CRYO_INSECURE_LAB OR CRYO_INSECURE_LAB = "0" OR CRYO_INSECURE_LAB = "1"'
+            Message="CRYO_INSECURE_LAB must be 1 or unset." />
+    <Launch Condition='Installed OR NOT CRYO_REPAIR_ACL OR CRYO_REPAIR_ACL = "0" OR CRYO_REPAIR_ACL = "1"'
+            Message="CRYO_REPAIR_ACL must be 1 or unset." />
+    <Launch Condition='Installed OR NOT SERVER OR (SERVER ~&lt;&lt; "https://") OR CRYO_INSECURE_LAB = "1"'
+            Message="SERVER must start with https://. Plain http is refused unless CRYO_INSECURE_LAB=1 is set (lab only: it also turns off TLS verification)." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="CryoBackup" />
+    </StandardDirectory>
+
+    <Feature Id="Agent" Title="CryoBackup Agent" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="AgentComponents" />
+    </Feature>
+
+    <ComponentGroup Id="AgentComponents" Directory="INSTALLFOLDER">
+      <Component Id="CryoAgent" Bitness="always64">
+        <File Id="CryoAgentExe" Name="cryo-agent.exe" Source="$(var.StageDir)\cryo-agent.exe" KeyPath="yes" />
+
+        <!-- The MSI owns the service's life cycle: created here, stopped, started
+             and deleted by ServiceControl, all rolled back by Windows Installer.
+             What the MsiServiceConfig tables would add (delayed automatic start,
+             restart after 1, 5 and 15 minutes, the 120 s pre-shutdown budget) is
+             documented by the Windows Installer SDK not to work as expected, so the
+             configure action applies it with the code "cryo-agent install" uses. -->
+        <ServiceInstall Id="CryoBackupService"
+                        Name="CryoBackup"
+                        DisplayName="CryoBackup Agent"
+                        Description="Backs up this computer with restic on the schedule set in the CryoBackup console."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Arguments='run --state-dir "[CommonAppDataFolder]CryoBackup"'
+                        Vital="yes" />
+        <!-- Stop before files are replaced or removed, and wait for it; remove on
+             uninstall. -->
+        <ServiceControl Id="CryoBackupStop" Name="CryoBackup" Stop="both" Remove="uninstall" Wait="yes" />
+        <!-- Start after install. No wait: an unenrolled device's service stops again
+             at once (it refuses to run until enrolled), which must not fail the
+             install. The configure action has already reported the state. -->
+        <ServiceControl Id="CryoBackupStart" Name="CryoBackup" Start="install" Wait="no" />
+
+        <!-- Event Log source "CryoBackup", as "cryo-agent install" registers it. The
+             message file is cryo-agent.exe itself: its message table has the text
+             of every agent event id (deploy/windows/eventlog; EventCreate.exe has
+             none above 1000). -->
+        <RegistryKey Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\CryoBackup" ForceDeleteOnUninstall="yes">
+          <RegistryValue Name="EventMessageFile" Type="string" Value="[#CryoAgentExe]" />
+          <RegistryValue Name="TypesSupported" Type="integer" Value="7" />
+          <RegistryValue Name="CustomSource" Type="integer" Value="1" />
+        </RegistryKey>
+      </Component>
+
+      <!-- restic.exe exactly as upstream ships it: never modified, never re-signed
+           (ADR 0006). Its SHA-256 is compiled into cryo-agent.exe and checked at
+           every start. -->
+      <Component Id="Restic" Bitness="always64">
+        <File Id="ResticExe" Name="restic.exe" Source="$(var.StageDir)\restic.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Custom actions: one DLL entry point that runs cryo-agent.exe msi-<action>
+         with the request on stdin (deploy/windows/ca/cryoca.c, cmd/cryo-agent/msi.go). -->
+    <Binary Id="CryoCA" SourceFile="$(var.StageDir)\cryoca.dll" />
+
+    <!-- A fresh nonce for this install run (private property, so it cannot be set
+         from the command line): configure writes it into the state directory's
+         creation marker, and rollback removes the directory only when the marker
+         holds its own run's nonce. -->
+    <CustomAction Id="CryoNewNonce" BinaryRef="CryoCA" DllEntry="CryoNewNonce"
+                  Execute="immediate" Return="check" />
+    <CustomAction Id="CryoConfigure" BinaryRef="CryoCA" DllEntry="CryoAgentAction"
+                  Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+    <CustomAction Id="CryoRollback" BinaryRef="CryoCA" DllEntry="CryoAgentAction"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="CryoCommit" BinaryRef="CryoCA" DllEntry="CryoAgentAction"
+                  Execute="commit" Impersonate="no" Return="ignore" />
+
+    <SetProperty Id="CryoRollback" Sequence="execute" Before="CryoRollback"
+                 Condition="NOT Installed AND NOT REMOVE"
+                 Value="exe=[#CryoAgentExe]&#10;action=rollback&#10;nonce=[CryoRunNonce]" />
+    <SetProperty Id="CryoConfigure" Sequence="execute" Before="CryoConfigure"
+                 Condition="NOT Installed AND NOT REMOVE"
+                 Value="exe=[#CryoAgentExe]&#10;action=configure&#10;server=[SERVER]&#10;token=[TOKEN]&#10;lab=[CRYO_INSECURE_LAB]&#10;repair=[CRYO_REPAIR_ACL]&#10;nonce=[CryoRunNonce]" />
+    <SetProperty Id="CryoCommit" Sequence="execute" Before="CryoCommit"
+                 Condition="NOT Installed AND NOT REMOVE"
+                 Value="exe=[#CryoAgentExe]&#10;action=commit" />
+
+    <InstallExecuteSequence>
+      <Custom Action="CryoNewNonce" After="CostFinalize" Condition="NOT Installed AND NOT REMOVE" />
+      <!-- After the files and the service exist, before the service is started:
+           rollback first (so it is scheduled if configure fails), then configure,
+           then commit. A repair or an uninstall runs none of them. -->
+      <Custom Action="CryoRollback" Before="CryoConfigure" Condition="NOT Installed AND NOT REMOVE" />
+      <Custom Action="CryoConfigure" Before="StartServices" Condition="NOT Installed AND NOT REMOVE" />
+      <Custom Action="CryoCommit" After="CryoConfigure" Condition="NOT Installed AND NOT REMOVE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

@@ -1,0 +1,2801 @@
+openapi: 3.1.0
+info:
+  title: CryoBackup Console API
+  version: 0.2.0
+  summary: Agent API and admin API of the CryoBackup console, as built through milestone M2.
+  description: |
+    Two route sets served by two listeners (architecture section 5). The agent API
+    (`/api/v1/agent/*`) is on the public listener and authenticates with a device
+    token, or with an enrollment token on `/enroll`. The admin API (`/api/v1/*`) is on the
+    private listener and authenticates with a session cookie plus CSRF, or with an API
+    token (`Authorization: Bearer cbk_...`). The two route sets are disjoint.
+
+    This document lists exactly the routes the console registers through M2. A test
+    (`internal/console/server`, `TestOpenAPISpecMatchesTheRegisteredRoutes`) compares its
+    paths and methods with the registered routes in both directions, so a route without an
+    entry, or an entry without a route, fails the build. Routes of later milestones are
+    added to this file with the milestone that registers them.
+
+    Conventions. Bodies are JSON; write requests are decoded strictly (unknown fields are
+    refused). Errors are RFC 9457 `application/problem+json` with a stable `code`. Every
+    admin success body carries `computed_at`; lists are paged with `limit` and
+    `cursor` (an opaque `o<offset>` token) and say so when they were cut short
+    (`truncated`). Times are RFC 3339 in UTC. A write made with a session cookie must
+    carry the `X-CSRF-Token` header; a write made with an API token needs no CSRF token.
+    `x-min-role` names the lowest role that may call an operation (RO read-only,
+    OP operator, AD admin, OW owner, SELF any signed-in account, PENDING a password-only
+    session, ANON none, DEVICE a device token, ENROLL an enrollment token).
+  license:
+    name: AGPL-3.0-only
+    identifier: AGPL-3.0-only
+servers:
+  - url: https://console.example.invalid
+    description: The admin listener (private). The agent API is on the public listener.
+tags:
+  - name: auth
+  - name: account
+  - name: admins
+  - name: customers
+  - name: devices
+  - name: runs
+  - name: commands
+  - name: restores
+  - name: policies
+  - name: enrollment
+  - name: audit
+  - name: settings
+  - name: system
+  - name: agent
+paths:
+  /api/v1/agent/enroll:
+    post:
+      operationId: agentEnroll
+      tags: [agent]
+      summary: One-time enrollment
+      description: |
+        Creates the device, its gateway login and escrowed repository key, and returns the
+        first policy. Idempotent on the nonce. The device token, gateway password and
+        repository password appear only in this response.
+      x-min-role: ENROLL
+      security:
+        - enrollmentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EnrollRequest'}
+      responses:
+        '200':
+          description: Enrolled (or the same nonce replayed).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EnrollResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/agent/policy:
+    get:
+      operationId: agentPolicy
+      tags: [agent]
+      summary: Pull the effective policy
+      description: ETag pull of the effective policy (default, customer, device override merged). 304 when `If-None-Match` equals the current ETag and nothing else is pending.
+      x-min-role: DEVICE
+      security:
+        - deviceToken: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: {type: string}
+      responses:
+        '200':
+          description: The policy and what rides the pull.
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentPolicyResponse'}
+        '304': {description: Not modified. No body.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/agent/heartbeat:
+    post:
+      operationId: agentHeartbeat
+      tags: [agent]
+      summary: Presence and health facts
+      description: Sent about every 60 seconds. The first call after enrollment confirms the enrollment. A hardware fingerprint that differs from the recorded one raises an identity conflict but is still answered.
+      x-min-role: DEVICE
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/HeartbeatRequest'}
+      responses:
+        '200':
+          description: Server time, clock offset and hints.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HeartbeatResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/agent/runs:
+    post:
+      operationId: agentRuns
+      tags: [agent]
+      summary: Run results from the journal
+      description: A batch of run records, idempotent on the run id. An open run may be sent at start and closed later. The answer lists one result per run.
+      x-min-role: DEVICE
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RunsRequest'}
+      responses:
+        '200':
+          description: One result per run.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RunsResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/agent/snapshots:
+    post:
+      operationId: agentSnapshots
+      tags: [agent]
+      summary: Snapshot-list cache
+      description: The snapshot roots after a successful backup, from `restic snapshots --json`. The answer counts upserted and removed rows.
+      x-min-role: DEVICE
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SnapshotsRequest'}
+      responses:
+        '200':
+          description: Cache updated.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SnapshotsResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/agent/commands:
+    get:
+      operationId: agentCommands
+      tags: [agent]
+      summary: Long poll for queued commands
+      description: Holds the request for up to `wait` seconds (at most 30) until a command is queued for the device, then marks the commands delivered. One poll per device may be in flight; a second answers 409.
+      x-min-role: DEVICE
+      security:
+        - deviceToken: []
+      parameters:
+        - name: wait
+          in: query
+          required: false
+          description: Seconds to wait, capped by the console.
+          schema: {type: integer, minimum: 0, maximum: 30}
+      responses:
+        '200':
+          description: The commands (possibly none when the wait ran out).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentCommandsResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/agent/commands/{id}/result:
+    post:
+      operationId: agentCommandResult
+      tags: [agent]
+      summary: Report a command result
+      description: |
+        Idempotent. A result the console cannot apply (unknown id, another device's id,
+        a cancelled or expired command) is answered 204 and logged, never with a 4xx,
+        because the deployed agent keeps a result until it gets a 2xx and fetches no new
+        command meanwhile (ADR 0010).
+      x-min-role: DEVICE
+      security:
+        - deviceToken: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CommandResultRequest'}
+      responses:
+        '204': {description: Recorded or ignored.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/agent/start-lease:
+    post:
+      operationId: agentStartLease
+      tags: [agent]
+      summary: Fleet start lease
+      description: The agent asks before a scheduled backup so the fleet does not start at once (ADR 0005). A refusal carries `retry_after_s` between 60 and 900.
+      x-min-role: DEVICE
+      security:
+        - deviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StartLeaseRequest'}
+      responses:
+        '200':
+          description: Granted or refused.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StartLeaseResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/auth/login:
+    post:
+      operationId: authLogin
+      tags: [auth]
+      summary: Password step of the login
+      description: Starts a pending session. `mfa_required` true means the cookie can only complete the MFA step; with `mfa_enrollment_required` it can only enrol TOTP. Rate limited per client address, with a lockout after repeated failures.
+      x-min-role: ANON
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200':
+          description: Pending session started. Sets the session and CSRF cookies.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LoginResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/auth/logout:
+    post:
+      operationId: authLogout
+      tags: [auth]
+      summary: Destroy the session
+      x-min-role: SELF
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Signed out. The cookies are cleared.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/auth/mfa/totp:
+    post:
+      operationId: authMFATOTP
+      tags: [auth]
+      summary: Complete the login with a TOTP code
+      x-min-role: PENDING
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CodeRequest'}
+      responses:
+        '200':
+          description: Full session. Sets new cookies; `csrf_token` belongs to them.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LoginResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/auth/mfa/recovery:
+    post:
+      operationId: authMFARecovery
+      tags: [auth]
+      summary: Complete the login with a recovery code
+      description: A recovery code works once. `recovery_codes_left` in the answer says how many remain.
+      x-min-role: PENDING
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CodeRequest'}
+      responses:
+        '200':
+          description: Full session.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LoginResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/me:
+    get:
+      operationId: getMe
+      tags: [account]
+      summary: The signed-in account
+      x-min-role: SELF
+      responses:
+        '200':
+          description: Profile, role and scope.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Me'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    patch:
+      operationId: patchMe
+      tags: [account]
+      summary: Change own e-mail or password
+      description: All or nothing. A password change needs the current password. Session only; an API token is refused.
+      x-min-role: SELF
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PatchMeRequest'}
+      responses:
+        '200':
+          description: The updated profile.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Me'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/me/totp/begin:
+    post:
+      operationId: totpBegin
+      tags: [account]
+      summary: Start TOTP enrollment
+      description: Returns the secret and the otpauth URI once. Allowed for a full session and for the forced enrollment of a pending session.
+      x-min-role: SELF
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '200':
+          description: Secret and URI, shown once.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TOTPBeginResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/me/totp/confirm:
+    post:
+      operationId: totpConfirm
+      tags: [account]
+      summary: Confirm TOTP enrollment
+      description: Returns the recovery codes once. Re-enrolling needs `current_code`. When the confirm completes a forced enrollment the answer also carries the new session's CSRF token.
+      x-min-role: SELF
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TOTPConfirmRequest'}
+      responses:
+        '200':
+          description: Enrolled.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecoveryCodesResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/me/recovery-codes:
+    post:
+      operationId: regenerateRecoveryCodes
+      tags: [account]
+      summary: Regenerate recovery codes
+      description: Needs a current TOTP code. The old codes stop working. Shown once.
+      x-min-role: SELF
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CodeRequest'}
+      responses:
+        '200':
+          description: The new codes.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecoveryCodesResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/me/sessions:
+    get:
+      operationId: listMySessions
+      tags: [account]
+      summary: Own sessions
+      x-min-role: SELF
+      responses:
+        '200':
+          description: The caller's sessions.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionsResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/me/sessions/{id}:
+    delete:
+      operationId: revokeMySession
+      tags: [account]
+      summary: Revoke one of the caller's sessions
+      x-min-role: SELF
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Revoked.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/me/api-tokens:
+    get:
+      operationId: listMyAPITokens
+      tags: [account]
+      summary: Own API tokens
+      description: The prefix only, never the secret.
+      x-min-role: SELF
+      responses:
+        '200':
+          description: The caller's tokens.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApiTokensResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      operationId: createMyAPIToken
+      tags: [account]
+      summary: Create an API token
+      description: The secret is shown once. Scope `read` allows reads only; `full` allows the caller's own role. Session only.
+      x-min-role: SELF
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ApiTokenCreateRequest'}
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApiTokenCreateResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/me/api-tokens/{id}:
+    delete:
+      operationId: revokeMyAPIToken
+      tags: [account]
+      summary: Revoke an API token
+      x-min-role: SELF
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Revoked.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admins:
+    get:
+      operationId: listAdmins
+      tags: [admins]
+      summary: List admin accounts
+      x-min-role: AD
+      responses:
+        '200':
+          description: All accounts the caller may see.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccountsResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: createAdmin
+      tags: [admins]
+      summary: Create an account
+      description: The new account gets a one-time password-reset link, shown once. Owner session only.
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AccountRequest'}
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResetLinkResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admins/{id}:
+    get:
+      operationId: getAdmin
+      tags: [admins]
+      summary: Get an account
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Account'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: patchAdmin
+      tags: [admins]
+      summary: Change role or customer scope
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AccountRequest'}
+      responses:
+        '200':
+          description: The updated account.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Account'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      operationId: deleteAdmin
+      tags: [admins]
+      summary: Delete an account
+      description: Never the last owner, never the caller.
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Deleted.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admins/{id}/disable:
+    post:
+      operationId: disableAdmin
+      tags: [admins]
+      summary: Disable an account
+      description: Revokes its sessions and API tokens. The body is optional.
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReasonRequest'}
+      responses:
+        '204': {description: Disabled.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admins/{id}/enable:
+    post:
+      operationId: enableAdmin
+      tags: [admins]
+      summary: Re-enable an account
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Enabled.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admins/{id}/reset-mfa:
+    post:
+      operationId: resetAdminMFA
+      tags: [admins]
+      summary: Clear an account's MFA
+      description: Break-glass for a lost authenticator. The user enrols again at the next login. The body is optional.
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReasonRequest'}
+      responses:
+        '204': {description: MFA cleared.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admins/{id}/reset-password:
+    post:
+      operationId: resetAdminPassword
+      tags: [admins]
+      summary: Issue a one-time password-reset link
+      description: The link is shown once.
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '200':
+          description: The link.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResetLinkResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/customers:
+    get:
+      operationId: listCustomers
+      tags: [customers]
+      summary: List customers with rollups
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: q, in: query, required: false, description: Name search., schema: {type: string}}
+        - {name: expected, in: query, required: false, schema: {type: boolean}}
+        - {name: include_archived, in: query, required: false, schema: {type: boolean}}
+        - {name: state, in: query, required: false, description: Lifecycle state., schema: {type: string}}
+        - {name: health, in: query, required: false, description: Health filter on the rollup., schema: {type: string}}
+        - {name: sort, in: query, required: false, schema: {type: string}}
+        - {name: dir, in: query, required: false, schema: {type: string, enum: [asc, desc]}}
+      responses:
+        '200':
+          description: One page of customers.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CustomerListResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      operationId: createCustomer
+      tags: [customers]
+      summary: Create a customer
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateCustomerRequest'}
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CustomerResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/customers/{id}:
+    get:
+      operationId: getCustomer
+      tags: [customers]
+      summary: Get a customer
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The customer with its rollup.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CustomerResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: patchCustomer
+      tags: [customers]
+      summary: Edit a customer, or assign its policy
+      description: |
+        Absent fields are left alone; `null` clears a field. Assigning a policy
+        (`policy_id`) is a separate request that carries the `impact_token` of the preview
+        (`POST /api/v1/policies/{id}/impact` with `assign_customer`), and sends no other
+        field (ADR 0009).
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PatchCustomerRequest'}
+      responses:
+        '200':
+          description: The updated customer.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CustomerResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/customers/{id}/devices:
+    get:
+      operationId: listCustomerDevices
+      tags: [customers]
+      summary: Devices of a customer
+      description: Each row carries the computed state and the next due time. A device the state engine has no verdict for is shown UNKNOWN at critical severity, never healthy.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: q, in: query, required: false, description: Hostname search., schema: {type: string}}
+        - {name: class, in: query, required: false, schema: {type: string}}
+        - {name: ring, in: query, required: false, schema: {type: string}}
+        - {name: state, in: query, required: false, description: One or more states, repeated or comma separated., schema: {type: array, items: {type: string}}}
+        - {name: include_retired, in: query, required: false, schema: {type: boolean}}
+        - {name: sort, in: query, required: false, schema: {type: string}}
+        - {name: dir, in: query, required: false, schema: {type: string, enum: [asc, desc]}}
+      responses:
+        '200':
+          description: One page of devices.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CustomerDevicesResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices:
+    get:
+      operationId: listDevices
+      tags: [devices]
+      summary: Fleet table
+      description: Every device in the caller's scope with its computed state. `complete` false means the state engine could not see every device; treat that as an alarm.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: q, in: query, required: false, description: Hostname search., schema: {type: string}}
+        - {name: state, in: query, required: false, schema: {type: string}}
+        - {name: customer_id, in: query, required: false, schema: {type: string}}
+        - {name: include_retired, in: query, required: false, schema: {type: boolean}}
+      responses:
+        '200':
+          description: One page of devices.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceListResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/devices/{id}:
+    get:
+      operationId: getDevice
+      tags: [devices]
+      summary: Device detail
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: Facts, computed state, applied policy version and recent runs.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceDetail'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: patchDevice
+      tags: [devices]
+      summary: Edit device settings
+      description: Friendly name, notes, class and update ring. Absent fields are left alone; `null` clears the free-text fields.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PatchDeviceRequest'}
+      responses:
+        '200':
+          description: The device settings; `changed` false when nothing differed (no audit row is written then).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceSettingsResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/devices/{id}/runs:
+    get:
+      operationId: listDeviceRuns
+      tags: [devices]
+      summary: Run history of one device
+      description: Counts and error classes, never a file path.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: kind, in: query, required: false, schema: {type: string}}
+        - {name: outcome, in: query, required: false, schema: {type: string}}
+        - {name: since, in: query, required: false, schema: {type: string, format: date-time}}
+        - {name: until, in: query, required: false, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: One page of runs, newest first.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceRunsResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices/{id}/commands:
+    get:
+      operationId: listDeviceCommands
+      tags: [commands]
+      summary: Command history and queue of a device
+      description: A queued command past its deadline reads as expired straight away.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, required: false, schema: {type: string}}
+        - {name: type, in: query, required: false, schema: {type: string}}
+      responses:
+        '200':
+          description: One page of commands.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandListResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      operationId: queueDeviceCommand
+      tags: [commands]
+      summary: Queue a command for a device
+      description: |
+        Types: `backup_now`, `cancel`, `refresh_policy`, `check_in` (ADR 0010). A request equal to
+        a command already queued for the device returns that command (200, `coalesced`) instead of
+        adding another (201). The idempotency key may come in the body or in the
+        `Idempotency-Key` header; both must agree.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/QueueCommandRequest'}
+      responses:
+        '200':
+          description: An equal command was already queued; it is returned.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandResponse'}
+        '201':
+          description: Queued. The device's open long poll is woken.
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/CommandConflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/devices/{id}/commands/{cid}:
+    delete:
+      operationId: cancelDeviceCommand
+      tags: [commands]
+      summary: Cancel a queued command
+      description: Only while the command is still queued; once delivered the answer is 409 with reason `command_delivered`.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {name: cid, in: path, required: true, description: Command id., schema: {type: string}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Cancelled.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/CommandConflict'}
+  /api/v1/runs/{id}/cancel:
+    post:
+      operationId: cancelRun
+      tags: [runs]
+      summary: Cancel a running run
+      description: Queues a `cancel` command for the run's device. A finished run, or one that is not on the device, answers 409 with a reason.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '200':
+          description: An equal cancel was already queued.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandResponse'}
+        '201':
+          description: Cancel queued.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/CommandConflict'}
+  /api/v1/devices/{id}/identity/resolve:
+    post:
+      operationId: resolveDeviceIdentity
+      tags: [devices]
+      summary: Resolve an identity conflict
+      description: |
+        `keep` clears the flag and the recorded fingerprint; `retire` retires the device, revokes
+        its token and gateway login and triggers the gateway login sync (ADR 0010, ADR 0011).
+        Answers 409 `no_identity_conflict` when the device has no conflict.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/IdentityResolveRequest'}
+      responses:
+        '200':
+          description: Resolved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IdentityResolveResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/CommandConflict'}
+  /api/v1/devices/{id}/effective-policy:
+    get:
+      operationId: getDeviceEffectivePolicy
+      tags: [policies]
+      summary: Effective policy with provenance
+      description: The merged policy (default, customer, device override) and, per field, which layer set it.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The effective policy.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EffectivePolicyResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices/{id}/override:
+    get:
+      operationId: getDeviceOverride
+      tags: [policies]
+      summary: The device's policy override
+      description: 404 when the device has none.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The override.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OverrideResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      operationId: setDeviceOverride
+      tags: [policies]
+      summary: Set or replace the device's policy override
+      description: A sparse patch against the composed policy, with a reason and an optional expiry. Affects one device, so no impact preview is needed (ADR 0009).
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SetOverrideRequest'}
+      responses:
+        '200':
+          description: The override; `changed` false when it equals the stored one.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OverrideResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+    delete:
+      operationId: clearDeviceOverride
+      tags: [policies]
+      summary: Clear the device's policy override
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Cleared (also when there was none).}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices/{id}/restores:
+    post:
+      operationId: createRestore
+      tags: [restores]
+      summary: Create a restore
+      description: Only `download_zip` exists in M2. The zip is produced while a download streams it; nothing is written to disk on the console host (ADR 0008).
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateRestoreRequest'}
+      responses:
+        '202':
+          description: Accepted.
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Restore'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/restores/{id}:
+    get:
+      operationId: getRestore
+      tags: [restores]
+      summary: Restore status
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The restore request.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Restore'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/restores/{id}/download:
+    get:
+      operationId: downloadRestore
+      tags: [restores]
+      summary: Stream the restore archive
+      description: |
+        Consumes the single-use token from the query and streams the zip straight from the
+        repository (no Content-Length, no Range). A failure before the first byte is a problem
+        answer; a failure after it cuts the connection. When every stream slot is busy an API
+        client gets 503 with `Retry-After` and the token is not spent.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {name: token, in: query, required: true, description: Token from the mint call., schema: {type: string}}
+      responses:
+        '200':
+          description: The zip stream.
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '410': {description: The restore is past its expiry; no token is minted or accepted., content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    post:
+      operationId: mintRestoreDownload
+      tags: [restores]
+      summary: Mint a single-use download token
+      description: The token is bound to the caller's session and the restore, valid for two minutes, and replaced by the next mint.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '200':
+          description: The download URL.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DownloadResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '410': {description: The restore is past its expiry., content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/policies:
+    get:
+      operationId: listPolicies
+      tags: [policies]
+      summary: List policies
+      description: Default, template and customer policies with the number of customers and devices each one covers.
+      x-min-role: RO
+      parameters:
+        - {name: scope, in: query, required: false, schema: {type: string, enum: [default, template, customer]}}
+        - {name: customer, in: query, required: false, description: Customer id., schema: {type: string}}
+      responses:
+        '200':
+          description: The policies.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PolicyListResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      operationId: createPolicy
+      tags: [policies]
+      summary: Create a policy
+      description: A template or a customer policy, stored sparse as a merge patch against the default (ADR 0009). Creating a policy changes no device, so it needs no impact token.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreatePolicyRequest'}
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PolicyResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/PolicyConflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/policies/{id}:
+    get:
+      operationId: getPolicy
+      tags: [policies]
+      summary: Get a policy
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The policy with its current version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PolicyResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      operationId: patchPolicy
+      tags: [policies]
+      summary: Edit a policy
+      description: Bumps the version and writes a revision. Requires the `impact_token` of a preview of exactly this change (ADR 0009); a missing token is a field error, a token for another change or admin is 409, and a stale or expired token is 409.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PatchPolicyRequest'}
+      responses:
+        '200':
+          description: The policy; `changed` false when the change was a no-op.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PolicyResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/PolicyConflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+    delete:
+      operationId: deletePolicy
+      tags: [policies]
+      summary: Delete a policy
+      description: Needs the `impact_token` of a delete preview (query parameter). Refused with 409 while customers reference the policy, and always for the default policy.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {name: impact_token, in: query, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Deleted.}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/PolicyConflict'}
+  /api/v1/policies/{id}/impact:
+    post:
+      operationId: previewPolicyImpact
+      tags: [policies]
+      summary: Blast-radius preview
+      description: |
+        Previews an edit (`name`, `description`, `sections`), a delete (`delete` true) or an
+        assignment of this policy to a customer (`assign_customer`). Returns the affected device
+        count, the changed fields and an `impact_token` that the matching save must carry. The token
+        is valid for 15 minutes for the same admin and the same change, and dies with a console
+        restart (ADR 0009). Writes nothing.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ImpactRequest'}
+      responses:
+        '200':
+          description: The preview.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ImpactResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/PolicyConflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/enrollment-tokens:
+    get:
+      operationId: listEnrollmentTokens
+      tags: [enrollment]
+      summary: List enrollment tokens
+      description: Never the secret.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: customer, in: query, required: false, description: Customer id., schema: {type: string}}
+        - {name: status, in: query, required: false, schema: {type: string}}
+      responses:
+        '200':
+          description: One page of tokens.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EnrollTokenListResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: createEnrollmentToken
+      tags: [enrollment]
+      summary: Create a customer-scoped enrollment token
+      description: The secret appears only in this response. The token's policy becomes the enrolled device's override layer (ADR 0011).
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateEnrollTokenRequest'}
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CreateEnrollTokenResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/enrollment-tokens/{id}:
+    get:
+      operationId: getEnrollmentToken
+      tags: [enrollment]
+      summary: Get a token
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: Usage and remaining uses.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EnrollTokenResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      operationId: revokeEnrollmentToken
+      tags: [enrollment]
+      summary: Revoke a token
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Revoked.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/enrollment-tokens/{id}/script:
+    get:
+      operationId: getEnrollmentScript
+      tags: [enrollment]
+      summary: Deployment script for a token
+      description: |
+        Generates the RMM script (`ps1`), the MSI parameters (`msi`) or the GPO/Intune snippet
+        (`gpo`). The token secret travels in the `X-Enrollment-Token` header, never in the URL, and must
+        match the token; the token must be active.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {name: format, in: query, required: true, schema: {type: string, enum: [ps1, msi, gpo]}}
+        - {name: X-Enrollment-Token, in: header, required: true, description: The token secret., schema: {type: string}}
+      responses:
+        '200':
+          description: The script text.
+          content:
+            text/plain:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/audit:
+    get:
+      operationId: listAudit
+      tags: [audit]
+      summary: Audit events
+      description: Actor, action, object, customer, method and address. Never a file path or a secret; details are filtered before they leave the console. Times are UTC with a display-zone rendering beside them.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: actor, in: query, required: false, schema: {type: string}}
+        - {name: action, in: query, required: false, schema: {type: string}}
+        - {name: object_type, in: query, required: false, schema: {type: string}}
+        - {name: customer_id, in: query, required: false, schema: {type: string}}
+        - {name: result, in: query, required: false, schema: {type: string}}
+        - {name: since, in: query, required: false, schema: {type: string, format: date-time}}
+        - {name: until, in: query, required: false, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: One page of events, newest first.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuditListResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/settings:
+    get:
+      operationId: listSettings
+      tags: [settings]
+      summary: Console settings
+      description: Non-secret settings. `editable` false marks a setting shown read-only with the milestone that makes it take effect.
+      x-min-role: AD
+      responses:
+        '200':
+          description: The settings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SettingsResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/settings/{key}:
+    put:
+      operationId: putSetting
+      tags: [settings]
+      summary: Set a setting
+      description: M2 edits `display_timezone` and `refresh_interval_s` only (ADR 0012). The change applies to the next request on either transport. A save that changes nothing writes no audit row.
+      x-min-role: OW
+      parameters:
+        - {name: key, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutSettingRequest'}
+      responses:
+        '200':
+          description: The setting; `changed` false when the value was already stored.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PutSettingResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/version:
+    get:
+      operationId: getVersion
+      tags: [system]
+      summary: Console and schema versions
+      description: The maintenance worker's reachability is included when it was probed; its restic and rclone versions read `unknown` until the worker reports them.
+      x-min-role: RO
+      responses:
+        '200':
+          description: Versions.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VersionResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+security:
+  - sessionCookie: []
+  - apiToken: []
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: cryo_session
+      description: Admin session cookie. A write also needs the `X-CSRF-Token` header carrying the CSRF token returned at login (it is derived from the session, and also set in the `cryo_csrf` cookie).
+    apiToken:
+      type: http
+      scheme: bearer
+      description: Admin API token (`cbk_...`), created at `POST /api/v1/me/api-tokens`. Scope `read` allows reads only.
+    deviceToken:
+      type: http
+      scheme: bearer
+      description: Device token issued at enrollment. The device id always comes from the token.
+    enrollmentToken:
+      type: http
+      scheme: bearer
+      description: Enrollment token created by an admin.
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      description: Object id (a 26-character ULID).
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size. The default is 100; the maximum depends on the route (200 or 500).
+      schema: {type: integer, minimum: 1, maximum: 500}
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque page token from `next_cursor` (`o<offset>`).
+      schema: {type: string}
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: false
+      description: Required for a write made with a session cookie; not needed with an API token.
+      schema: {type: string}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Optional on the commands routes; a key in the body must equal it.
+      schema: {type: string}
+  responses:
+    BadRequest:
+      description: The request is not valid (`invalid_request`).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    ValidationFailed:
+      description: The request is not valid. When a field is at fault, `errors` names it; the message never echoes the submitted value.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/ValidationProblem'}
+    Unauthorized:
+      description: Authentication is missing or not valid (`unauthorized`).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Forbidden:
+      description: The credential does not permit this request, the role is too low, or the CSRF check failed (`forbidden`).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    NotFound:
+      description: No such object, or one outside the caller's customer scope (`not_found`).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Conflict:
+      description: The request conflicts with the current state (`conflict`), or the operation needs a key the customer holds (`custody_customer_held`).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    CommandConflict:
+      description: A state conflict with a machine-readable `reason`.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/CommandConflictProblem'}
+    PolicyConflict:
+      description: A policy conflict. `errors` names the field (`impact_token`, `policy`) and `customers` lists the customers that block a delete.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/PolicyConflictProblem'}
+    PayloadTooLarge:
+      description: The body is over the cap of the route (`payload_too_large`).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    RateLimited:
+      description: Too many requests (`rate_limited`); `Retry-After` says when to try again.
+      headers:
+        Retry-After: {schema: {type: integer}}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Unavailable:
+      description: Temporarily unavailable (`unavailable`, or `master_key_unavailable`); `Retry-After` says when to try again.
+      headers:
+        Retry-After: {schema: {type: integer}}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    Timestamp:
+      type: string
+      format: date-time
+    Problem:
+      type: object
+      description: RFC 9457 problem document. `code` is stable; `request_id` is quoted in the log and the audit row.
+      required: [type, title, status, code]
+      properties:
+        type: {type: string, description: 'urn:cryobackup:error:<code>.'}
+        title: {type: string}
+        status: {type: integer}
+        code:
+          type: string
+          enum: [invalid_request, unauthorized, forbidden, not_found, conflict, custody_customer_held, rate_limited, payload_too_large, not_modified, master_key_unavailable, unavailable, internal]
+        retry_after_s: {type: integer}
+        request_id: {type: string}
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field: {type: string}
+        message: {type: string}
+    ValidationProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            errors:
+              type: array
+              items: {$ref: '#/components/schemas/FieldError'}
+    CommandConflictProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            reason:
+              type: string
+              description: For example device_retired, device_parked, command_delivered, command_expired, no_identity_conflict, run_finished, run_not_on_device, conflict.
+    PolicyConflictProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            errors:
+              type: array
+              items: {$ref: '#/components/schemas/FieldError'}
+            customers:
+              type: array
+              items: {$ref: '#/components/schemas/ImpactCustomer'}
+
+    # ---- auth and account ----
+    AdminRef:
+      type: object
+      required: [id, username, role]
+      properties:
+        id: {type: string}
+        username: {type: string}
+        role: {type: string, enum: [read_only, operator, admin, owner]}
+    LoginRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username: {type: string}
+        password: {type: string, format: password}
+    LoginResponse:
+      type: object
+      required: [mfa_required, csrf_token, admin, computed_at]
+      properties:
+        mfa_required: {type: boolean}
+        mfa_enrollment_required: {type: boolean}
+        csrf_token: {type: string}
+        admin: {$ref: '#/components/schemas/AdminRef'}
+        recovery_codes_left: {type: integer}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    CodeRequest:
+      type: object
+      required: [code]
+      additionalProperties: false
+      properties:
+        code: {type: string, description: A TOTP code, or a recovery code on the recovery route.}
+    Me:
+      type: object
+      required: [id, username, email, role, effective_role, customer_scope, totp_enrolled, recovery_codes_left, must_change_password, via_token, computed_at]
+      properties:
+        id: {type: string}
+        username: {type: string}
+        email: {type: string}
+        role: {type: string}
+        effective_role: {type: string, description: The role after an API token's scope is applied.}
+        customer_scope:
+          type: [array, 'null']
+          description: Customer ids the account is limited to; null means all customers.
+          items: {type: string}
+        totp_enrolled: {type: boolean}
+        totp_enrolled_at: {$ref: '#/components/schemas/Timestamp'}
+        recovery_codes_left: {type: integer}
+        must_change_password: {type: boolean}
+        last_login_at: {$ref: '#/components/schemas/Timestamp'}
+        via_token: {type: boolean}
+        token_name: {type: string}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    PatchMeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        email: {type: string}
+        current_password: {type: string, format: password}
+        new_password: {type: string, format: password}
+    TOTPBeginResponse:
+      type: object
+      required: [secret, otpauth_uri, expires_at, computed_at]
+      properties:
+        secret: {type: string}
+        otpauth_uri: {type: string}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    TOTPConfirmRequest:
+      type: object
+      required: [code]
+      additionalProperties: false
+      properties:
+        code: {type: string}
+        current_code: {type: string, description: A code of the old authenticator, or a recovery code; required when re-enrolling.}
+    RecoveryCodesResponse:
+      type: object
+      required: [recovery_codes, computed_at]
+      properties:
+        recovery_codes:
+          type: array
+          items: {type: string}
+        login_complete: {type: boolean}
+        csrf_token: {type: string}
+        admin: {$ref: '#/components/schemas/AdminRef'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    Session:
+      type: object
+      required: [id, current, created_at, last_seen_at, expires_at, absolute_expires_at]
+      properties:
+        id: {type: string}
+        current: {type: boolean}
+        source_ip: {type: string}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        last_seen_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        absolute_expires_at: {$ref: '#/components/schemas/Timestamp'}
+    SessionsResponse:
+      type: object
+      required: [sessions, computed_at]
+      properties:
+        sessions:
+          type: array
+          items: {$ref: '#/components/schemas/Session'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    ApiToken:
+      type: object
+      required: [id, name, prefix, scopes, state, created_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        prefix: {type: string}
+        scopes:
+          type: array
+          items: {type: string}
+        state: {type: string, enum: [active, expired, revoked]}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        last_used_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        revoked_at: {$ref: '#/components/schemas/Timestamp'}
+    ApiTokensResponse:
+      type: object
+      required: [tokens, computed_at]
+      properties:
+        tokens:
+          type: array
+          items: {$ref: '#/components/schemas/ApiToken'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    ApiTokenCreateRequest:
+      type: object
+      required: [name, scope, days]
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        scope: {type: string, enum: [read, full]}
+        days: {type: integer, enum: [7, 30, 90, 365]}
+    ApiTokenCreateResponse:
+      type: object
+      required: [token, api_token, computed_at]
+      properties:
+        token: {type: string, description: The secret, shown once.}
+        api_token: {$ref: '#/components/schemas/ApiToken'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    Account:
+      type: object
+      required: [id, username, email, role, customer_scope, state, totp_enrolled, created_at]
+      properties:
+        id: {type: string}
+        username: {type: string}
+        email: {type: string}
+        role: {type: string}
+        customer_scope:
+          type: [array, 'null']
+          description: Customer ids the account is limited to; null means all customers.
+          items: {type: string}
+        state: {type: string, enum: [active, disabled, locked]}
+        totp_enrolled: {type: boolean}
+        last_login_at: {$ref: '#/components/schemas/Timestamp'}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+    AccountsResponse:
+      type: object
+      required: [admins, computed_at]
+      properties:
+        admins:
+          type: array
+          items: {$ref: '#/components/schemas/Account'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    AccountRequest:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        username: {type: string, description: Create only.}
+        email: {type: string, description: Create only.}
+        role: {type: string, enum: [read_only, operator, admin, owner]}
+        customer_scope:
+          type: [array, 'null']
+          description: Customer ids; null or absent means all customers.
+          items: {type: string}
+    ReasonRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: {type: string}
+    ResetLinkResponse:
+      type: object
+      required: [reset_path, reset_url, expires_at, computed_at]
+      properties:
+        admin: {$ref: '#/components/schemas/Account'}
+        reset_path: {type: string}
+        reset_url: {type: string}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+
+    # ---- devices, runs, restores, version ----
+    Device:
+      type: object
+      description: A row of the fleet table. `state` is the state engine's primary state; `flags` are the other applicable states; an engine that could not see the device says UNKNOWN, never healthy.
+      required: [id, customer_id, customer, hostname, state, flags, severity, attributes, acknowledged]
+      properties:
+        id: {type: string}
+        customer_id: {type: string}
+        customer: {type: string}
+        hostname: {type: string}
+        device_class: {type: string}
+        os_version: {type: string}
+        agent_version: {type: string}
+        state: {type: string}
+        flags:
+          type: array
+          items: {type: string}
+        severity: {type: string}
+        reason: {type: string}
+        since: {$ref: '#/components/schemas/Timestamp'}
+        attributes:
+          type: array
+          items: {type: string}
+        last_success_at: {$ref: '#/components/schemas/Timestamp'}
+        last_seen_at: {$ref: '#/components/schemas/Timestamp'}
+        acknowledged: {type: boolean}
+    DeviceListResponse:
+      type: object
+      required: [computed_at, loaded_at, complete, total, truncated, devices]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        loaded_at: {$ref: '#/components/schemas/Timestamp'}
+        complete: {type: boolean, description: False when the state engine could not see every device.}
+        total: {type: integer}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        devices:
+          type: array
+          items: {$ref: '#/components/schemas/Device'}
+    Run:
+      type: object
+      description: One run. Counts and classes only, never a path.
+      required: [id, kind, trigger, origin, started_at, attempt]
+      properties:
+        id: {type: string}
+        kind: {type: string}
+        trigger: {type: string}
+        origin: {type: string}
+        started_at: {$ref: '#/components/schemas/Timestamp'}
+        finished_at: {$ref: '#/components/schemas/Timestamp'}
+        outcome: {type: string}
+        exit_code: {type: integer}
+        error_class: {type: string}
+        error_counts:
+          type: object
+          additionalProperties: {type: integer}
+        deferred_reason: {type: string}
+        attempt: {type: integer}
+    DeviceDetail:
+      allOf:
+        - $ref: '#/components/schemas/Device'
+        - type: object
+          required: [computed_at, enrolled_at, policy_version, policy_etag, snapshots, runs]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            enrolled_at: {$ref: '#/components/schemas/Timestamp'}
+            enroll_confirmed_at: {$ref: '#/components/schemas/Timestamp'}
+            paused_until: {$ref: '#/components/schemas/Timestamp'}
+            policy_version: {type: integer}
+            policy_etag: {type: string}
+            policy_version_applied: {type: integer}
+            custody: {type: string, enum: [escrowed, customer_held]}
+            escrow_verified_at: {$ref: '#/components/schemas/Timestamp'}
+            service_state: {type: string}
+            clock_offset_ms: {type: integer}
+            snapshots: {type: integer}
+            runs:
+              type: array
+              description: The ten most recent runs.
+              items: {$ref: '#/components/schemas/Run'}
+    DeviceRow:
+      allOf:
+        - $ref: '#/components/schemas/Device'
+        - type: object
+          required: [update_ring]
+          properties:
+            friendly_name: {type: string}
+            update_ring: {type: string}
+            next_due:
+              type: object
+              required: [kind]
+              properties:
+                kind: {type: string}
+                at: {$ref: '#/components/schemas/Timestamp'}
+    CustomerDevicesResponse:
+      type: object
+      required: [computed_at, loaded_at, complete, total, of, truncated, devices]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        loaded_at: {$ref: '#/components/schemas/Timestamp'}
+        complete: {type: boolean}
+        total: {type: integer, description: Devices that match the filters.}
+        of: {type: integer, description: Devices of the customer before the filters.}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        devices:
+          type: array
+          items: {$ref: '#/components/schemas/DeviceRow'}
+    PatchDeviceRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        friendly_name: {type: [string, 'null']}
+        notes: {type: [string, 'null']}
+        device_class: {type: string}
+        update_ring: {type: string}
+    DeviceSettingsResponse:
+      type: object
+      required: [computed_at, id, customer_id, hostname, device_class, update_ring, changed, updated_at]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        id: {type: string}
+        customer_id: {type: string}
+        hostname: {type: string}
+        friendly_name: {type: string}
+        notes: {type: string}
+        device_class: {type: string}
+        update_ring: {type: string}
+        changed: {type: boolean}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    DeviceRunsResponse:
+      type: object
+      required: [computed_at, total, truncated, runs]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        total: {type: integer}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        runs:
+          type: array
+          items: {$ref: '#/components/schemas/Run'}
+    Restore:
+      type: object
+      description: A restore request. The download token never appears here; `download_ready` says whether the caller may mint one.
+      required: [id, device_id, snapshot_id, mode, status, download_count, created_at, expires_at, download_ready, computed_at]
+      properties:
+        id: {type: string}
+        device_id: {type: string}
+        snapshot_id: {type: string}
+        mode: {type: string}
+        status: {type: string}
+        error_class: {type: string}
+        bytes: {type: integer, description: Size of the last completed download; absent before one.}
+        sha256: {type: string}
+        download_count: {type: integer}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        purge_after: {$ref: '#/components/schemas/Timestamp'}
+        download_ready: {type: boolean}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    CreateRestoreRequest:
+      type: object
+      required: [snapshot_id, mode, path]
+      additionalProperties: false
+      properties:
+        snapshot_id: {type: string}
+        mode: {type: string, enum: [download_zip]}
+        path: {type: string, description: The file or folder to restore. It is checked and never logged.}
+    DownloadResponse:
+      type: object
+      required: [download_url, expires_at, computed_at]
+      properties:
+        download_url: {type: string}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+    Worker:
+      type: object
+      required: [reachable, master_key_loaded]
+      properties:
+        reachable: {type: boolean}
+        version: {type: string}
+        master_key_loaded: {type: boolean}
+        restic_version: {type: string}
+        rclone_version: {type: string}
+    VersionResponse:
+      type: object
+      required: [console, commit, build_date, schema, computed_at]
+      properties:
+        console: {type: string}
+        commit: {type: string}
+        build_date: {type: string}
+        schema: {type: integer}
+        maintain: {$ref: '#/components/schemas/Worker'}
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+
+    # ---- customers ----
+    Contact:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        email: {type: string}
+        phone: {type: string}
+        role: {type: string}
+    Rollup:
+      type: object
+      required: [status, counts, active, paused, severity, muted]
+      properties:
+        status: {type: string}
+        counts:
+          type: object
+          additionalProperties: {type: integer}
+        active: {type: integer}
+        paused: {type: integer}
+        health_pct: {type: number, description: Absent when the engine cannot compute it; a zero denominator is not 100.}
+        severity: {type: string}
+        muted: {type: boolean}
+    Customer:
+      type: object
+      required: [id, name, slug, state, expected, contacts, key_custody, devices, retired_devices, created_at, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        slug: {type: string}
+        state: {type: string}
+        expected: {type: boolean}
+        onboarding_until: {$ref: '#/components/schemas/Timestamp'}
+        display_tz: {type: string}
+        contacts:
+          type: array
+          items: {$ref: '#/components/schemas/Contact'}
+        device_cap: {type: integer}
+        policy_id: {type: string}
+        policy_name: {type: string}
+        key_custody: {type: string, enum: [escrowed, customer_held]}
+        notes: {type: string}
+        devices: {type: integer}
+        retired_devices: {type: integer}
+        last_success_at: {$ref: '#/components/schemas/Timestamp'}
+        rollup: {$ref: '#/components/schemas/Rollup'}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    CustomerListResponse:
+      type: object
+      required: [computed_at, loaded_at, complete, total, of, truncated, customers]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        loaded_at: {$ref: '#/components/schemas/Timestamp'}
+        complete: {type: boolean}
+        total: {type: integer, description: Customers that match.}
+        of: {type: integer, description: Customers before the health filter.}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        customers:
+          type: array
+          items: {$ref: '#/components/schemas/Customer'}
+    CustomerResponse:
+      allOf:
+        - $ref: '#/components/schemas/Customer'
+        - type: object
+          required: [computed_at]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+    CreateCustomerRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        slug: {type: string}
+        expected: {type: boolean}
+        onboarding_until: {type: [string, 'null'], format: date-time}
+        display_tz: {type: string}
+        contacts:
+          type: array
+          items: {$ref: '#/components/schemas/Contact'}
+        device_cap: {type: [integer, 'null']}
+        policy_id: {type: string, description: An initial policy needs no impact token; the customer has no devices yet.}
+        notes: {type: string}
+        storage_target_id: {type: string}
+        key_custody: {type: string, enum: [escrowed, customer_held]}
+    PatchCustomerRequest:
+      type: object
+      additionalProperties: false
+      description: Absent fields are left alone; `null` clears a field (not `expected`). `policy_id` travels alone with `impact_token`.
+      properties:
+        name: {type: [string, 'null']}
+        slug: {type: [string, 'null']}
+        expected: {type: boolean}
+        onboarding_until: {type: [string, 'null'], format: date-time}
+        display_tz: {type: [string, 'null']}
+        contacts:
+          type: [array, 'null']
+          items: {$ref: '#/components/schemas/Contact'}
+        device_cap: {type: [integer, 'null']}
+        policy_id: {type: [string, 'null']}
+        notes: {type: [string, 'null']}
+        impact_token: {type: string}
+
+    # ---- commands ----
+    Command:
+      type: object
+      required: [id, device_id, type, params, status, created_at, expires_at]
+      properties:
+        id: {type: string}
+        device_id: {type: string}
+        type: {type: string, enum: [backup_now, cancel, refresh_policy, check_in]}
+        params: {type: object}
+        status: {type: string, description: queued, delivered, acked, succeeded, failed, cancelled or expired. A queued command past its deadline reads as expired.}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        delivered_at: {$ref: '#/components/schemas/Timestamp'}
+        acked_at: {$ref: '#/components/schemas/Timestamp'}
+        completed_at: {$ref: '#/components/schemas/Timestamp'}
+        result: {type: object, description: The agent's result, including a late result recorded after expiry.}
+    QueueCommandRequest:
+      type: object
+      required: [type, idempotency_key]
+      additionalProperties: false
+      properties:
+        type: {type: string, enum: [backup_now, cancel, refresh_policy, check_in]}
+        params: {type: object}
+        idempotency_key: {type: string}
+        ttl_seconds: {type: integer, minimum: 60, maximum: 604800, description: 0 or absent takes the type's default (4 h for backup_now and refresh_policy, 15 min for cancel and check_in).}
+    CommandResponse:
+      allOf:
+        - $ref: '#/components/schemas/Command'
+        - type: object
+          required: [computed_at]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            coalesced: {type: boolean, description: True when an equal queued command was returned instead of a new one.}
+    CommandListResponse:
+      type: object
+      required: [computed_at, total, truncated, commands]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        total: {type: integer}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        commands:
+          type: array
+          items: {$ref: '#/components/schemas/Command'}
+    IdentityResolveRequest:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action: {type: string, enum: [keep, retire]}
+        reason: {type: string}
+    IdentityResolveResponse:
+      type: object
+      required: [computed_at, id, customer_id, hostname, resolution, retired]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        id: {type: string}
+        customer_id: {type: string}
+        hostname: {type: string}
+        resolution: {type: string}
+        retired: {type: boolean}
+
+    # ---- policies ----
+    PolicySections:
+      type: object
+      description: The policy sections (schedule, conditions, selection, retention, throttle, sla, maintenance, agent_permissions, notification_overrides). Templates and customer policies hold a sparse merge patch (RFC 7386) against the default; the specification of each section is internal/policy and architecture section 3.6.
+      additionalProperties: {type: object}
+    Policy:
+      type: object
+      required: [id, scope, name, version, sections, created_at, updated_at]
+      properties:
+        id: {type: string}
+        scope: {type: string, enum: [default, template, customer]}
+        customer_id: {type: string}
+        customer_name: {type: string}
+        name: {type: string}
+        description: {type: string}
+        template_device_class: {type: string}
+        version: {type: integer}
+        sections: {$ref: '#/components/schemas/PolicySections'}
+        customers: {type: integer, description: Customers that use it (list only).}
+        devices: {type: integer, description: Devices under it (list only).}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    PolicyListResponse:
+      type: object
+      required: [computed_at, policies]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        policies:
+          type: array
+          items: {$ref: '#/components/schemas/Policy'}
+    PolicyResponse:
+      allOf:
+        - $ref: '#/components/schemas/Policy'
+        - type: object
+          required: [computed_at]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            changed: {type: boolean, description: Present on a save; false when it changed nothing.}
+    CreatePolicyRequest:
+      type: object
+      required: [scope, name]
+      additionalProperties: false
+      properties:
+        scope: {type: string, enum: [template, customer]}
+        customer_id: {type: string, description: Required for a customer policy.}
+        name: {type: string}
+        description: {type: string}
+        template_device_class: {type: string}
+        sections: {$ref: '#/components/schemas/PolicySections'}
+        note: {type: string}
+    PatchPolicyRequest:
+      type: object
+      required: [impact_token]
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        description: {type: [string, 'null']}
+        sections: {$ref: '#/components/schemas/PolicySections'}
+        note: {type: string}
+        impact_token: {type: string, description: From the preview of exactly this change.}
+    ImpactRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        description: {type: [string, 'null']}
+        sections: {$ref: '#/components/schemas/PolicySections'}
+        delete: {type: boolean, description: Preview deleting the policy.}
+        assign_customer: {type: string, description: Preview assigning this policy to that customer.}
+    ImpactCustomer:
+      type: object
+      required: [id, name, devices, changing]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        devices: {type: integer}
+        changing: {type: integer}
+    FieldChange:
+      type: object
+      description: Field names and old and new values of a policy field. Values here are policy settings; the audit trail records field names only.
+      required: [path, old, new]
+      properties:
+        path: {type: string}
+        old: {type: string}
+        new: {type: string}
+    ImpactResponse:
+      type: object
+      required: [computed_at, kind, population, devices, invalid, customers, changes, unchanged]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        kind: {type: string, enum: [policy.update, policy.delete, customer.policy_assign]}
+        policy_id: {type: string}
+        policy_name: {type: string}
+        scope: {type: string}
+        version: {type: integer}
+        population: {type: integer, description: Active devices that run under what changes.}
+        devices: {type: integer, description: Devices that get a different effective policy.}
+        invalid: {type: integer, description: Devices whose effective policy would stop validating. A change with invalid above 0 is refused.}
+        customers:
+          type: array
+          items: {$ref: '#/components/schemas/ImpactCustomer'}
+        changes:
+          type: array
+          items: {$ref: '#/components/schemas/FieldChange'}
+        name_change: {$ref: '#/components/schemas/FieldChange'}
+        blockers:
+          type: array
+          items: {$ref: '#/components/schemas/ImpactCustomer'}
+        unchanged: {type: boolean}
+        repairs: {type: boolean}
+        impact_token: {type: string}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+    Override:
+      type: object
+      required: [id, device_id, patch, reason, expired, created_at, updated_at]
+      properties:
+        id: {type: string}
+        device_id: {type: string}
+        patch: {type: object}
+        reason: {type: string}
+        set_by: {type: string}
+        set_by_name: {type: string}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        expired: {type: boolean}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    OverrideResponse:
+      allOf:
+        - $ref: '#/components/schemas/Override'
+        - type: object
+          required: [computed_at]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            changed: {type: boolean}
+    SetOverrideRequest:
+      type: object
+      required: [patch, reason]
+      additionalProperties: false
+      properties:
+        patch: {type: object}
+        reason: {type: string}
+        expires_at: {type: [string, 'null'], format: date-time}
+    EffectiveField:
+      type: object
+      required: [path, value, source]
+      properties:
+        path: {type: string}
+        value: {}
+        source: {type: string, enum: [default, policy, override]}
+        inherited: {description: The value the field would have without the layer that set it.}
+    EffectivePolicyResponse:
+      type: object
+      required: [computed_at, device_id, customer_id, policy_id, policy_name, policy_scope, version, etag, policy, fields]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        device_id: {type: string}
+        customer_id: {type: string}
+        policy_id: {type: string}
+        policy_name: {type: string}
+        policy_scope: {type: string}
+        version: {type: integer}
+        etag: {type: string}
+        policy: {type: object}
+        fields:
+          type: array
+          items: {$ref: '#/components/schemas/EffectiveField'}
+        override: {$ref: '#/components/schemas/Override'}
+
+    # ---- enrollment ----
+    EnrollToken:
+      type: object
+      required: [id, customer_id, customer, device_class, status, expires_at, max_uses, used_count, uses_left, devices, created_at]
+      properties:
+        id: {type: string}
+        customer_id: {type: string}
+        customer: {type: string}
+        label: {type: string}
+        policy_id: {type: string}
+        policy_name: {type: string}
+        device_class: {type: string}
+        status: {type: string}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        max_uses: {type: [integer, 'null']}
+        used_count: {type: integer}
+        uses_left: {type: [integer, 'null']}
+        devices: {type: integer}
+        created_by: {type: string}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        last_used_at: {$ref: '#/components/schemas/Timestamp'}
+        revoked_at: {$ref: '#/components/schemas/Timestamp'}
+    EnrollTokenListResponse:
+      type: object
+      required: [computed_at, total, of, truncated, tokens]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        total: {type: integer}
+        of: {type: integer}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        tokens:
+          type: array
+          items: {$ref: '#/components/schemas/EnrollToken'}
+    EnrollTokenResponse:
+      allOf:
+        - $ref: '#/components/schemas/EnrollToken'
+        - type: object
+          required: [computed_at]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+    CreateEnrollTokenRequest:
+      type: object
+      required: [customer_id]
+      additionalProperties: false
+      properties:
+        customer_id: {type: string}
+        label: {type: string}
+        policy_id: {type: string}
+        device_class: {type: string}
+        expires_in: {type: string, description: 'A duration such as 12h, 7d or 2w. The default is 7d.'}
+        max_uses: {type: [integer, 'null']}
+    CreateEnrollTokenResponse:
+      allOf:
+        - $ref: '#/components/schemas/EnrollTokenResponse'
+        - type: object
+          required: [token]
+          properties:
+            token: {type: string, description: The secret, shown once.}
+
+    # ---- audit and settings ----
+    AuditEvent:
+      type: object
+      required: [id, occurred_at, occurred_local, actor_type, method, action, result, severity, details]
+      properties:
+        id: {type: string}
+        occurred_at: {$ref: '#/components/schemas/Timestamp'}
+        occurred_local: {type: string, description: The time in the display zone, 12-hour clock.}
+        actor_type: {type: string}
+        actor_id: {type: string}
+        actor: {type: string}
+        method: {type: string}
+        source_ip: {type: string}
+        action: {type: string}
+        object_type: {type: string}
+        object_id: {type: string}
+        customer_id: {type: string}
+        result: {type: string}
+        severity: {type: string}
+        details: {type: object, description: Filtered; never a path or a secret.}
+    AuditListResponse:
+      type: object
+      required: [computed_at, display_timezone, total, of, truncated, events]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        display_timezone: {type: string}
+        total: {type: integer}
+        of: {type: integer}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        events:
+          type: array
+          items: {$ref: '#/components/schemas/AuditEvent'}
+    Setting:
+      type: object
+      required: [key, label, value, stored, editable]
+      properties:
+        key: {type: string}
+        label: {type: string}
+        value: {description: The effective value, JSON; null when nothing is stored.}
+        stored: {type: boolean, description: True once an operator has saved a value (it then wins over config.json, ADR 0012).}
+        editable: {type: boolean}
+        takes_effect_in: {type: string, description: For a read-only setting, the milestone that makes it take effect.}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_by: {type: string}
+    SettingsResponse:
+      type: object
+      required: [computed_at, settings]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        settings:
+          type: array
+          items: {$ref: '#/components/schemas/Setting'}
+    PutSettingRequest:
+      type: object
+      required: [value]
+      additionalProperties: false
+      properties:
+        value: {description: The new value, JSON. The zone is an IANA name; the refresh interval is whole seconds.}
+    PutSettingResponse:
+      allOf:
+        - $ref: '#/components/schemas/Setting'
+        - type: object
+          required: [computed_at, changed]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            changed: {type: boolean}
+
+    # ---- agent API (internal/api) ----
+    EnrollRequest:
+      type: object
+      required: [nonce, hostname, os, arch, device_class, hw_fingerprint, agent_version, restic_version]
+      properties:
+        nonce: {type: string, pattern: '^[0-9a-f]{32}$', description: Generated by the installer; the enrollment is idempotent on it.}
+        hostname: {type: string, minLength: 1, maxLength: 253}
+        os: {type: string}
+        os_version: {type: string}
+        arch: {type: string, enum: [amd64, arm64, x86]}
+        device_class: {type: string, enum: [laptop, desktop, unknown]}
+        hw_fingerprint: {type: string, pattern: '^[0-9a-f]{16,128}$'}
+        agent_version: {type: string}
+        restic_version: {type: string}
+    Gateway:
+      type: object
+      required: [url, username, password]
+      properties:
+        url: {type: string}
+        username: {type: string}
+        password: {type: string, format: password}
+    GatewaySecret:
+      type: object
+      required: [password, issued_at]
+      properties:
+        password: {type: string, format: password}
+        issued_at: {$ref: '#/components/schemas/Timestamp'}
+    AgentPolicyResponse:
+      type: object
+      required: [policy, policy_id, version, etag, paused, server_time]
+      properties:
+        policy:
+          type: object
+          description: The effective policy document, nine sections (internal/policy).
+        policy_id: {type: string}
+        version: {type: integer}
+        etag: {type: string}
+        pending_gateway_secret: {$ref: '#/components/schemas/GatewaySecret'}
+        hold_until: {$ref: '#/components/schemas/Timestamp'}
+        paused: {type: boolean}
+        paused_until: {$ref: '#/components/schemas/Timestamp'}
+        release_target: {type: string}
+        server_time: {$ref: '#/components/schemas/Timestamp'}
+    EnrollResponse:
+      type: object
+      required: [device_id, customer_id, device_token, gateway, custody, policy, server_time]
+      properties:
+        device_id: {type: string}
+        customer_id: {type: string}
+        device_token: {type: string, format: password}
+        gateway: {$ref: '#/components/schemas/Gateway'}
+        repo_password: {type: string, format: password, description: Present only for escrowed custody, and only in this response.}
+        custody: {type: string, enum: [escrowed, customer_held]}
+        policy: {$ref: '#/components/schemas/AgentPolicyResponse'}
+        server_time: {$ref: '#/components/schemas/Timestamp'}
+    Progress:
+      type: object
+      required: [run_id, kind, percent_done, bytes_done, total_bytes, files_done, total_files, error_count, seconds_elapsed, stalled, updated_at]
+      properties:
+        run_id: {type: string}
+        kind: {type: string}
+        percent_done: {type: number, minimum: 0, maximum: 1}
+        bytes_done: {type: integer}
+        total_bytes: {type: integer}
+        files_done: {type: integer}
+        total_files: {type: integer}
+        error_count: {type: integer}
+        seconds_elapsed: {type: integer}
+        stalled: {type: boolean}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    HeartbeatRequest:
+      type: object
+      required: [agent_version, uptime_s, queue_depth, journal_depth, device_time, service_state, policy_etag, policy_version_applied, hw_fingerprint, gateway_secret_acked]
+      properties:
+        agent_version: {type: string}
+        restic_version: {type: string}
+        uptime_s: {type: integer}
+        on_ac: {type: boolean}
+        battery_pct: {type: integer, minimum: 0, maximum: 100}
+        metered: {type: boolean}
+        vpn: {type: boolean}
+        queue_depth: {type: integer}
+        journal_depth: {type: integer}
+        device_time: {$ref: '#/components/schemas/Timestamp'}
+        service_state: {type: string, enum: [idle, running, paused, deferred]}
+        last_error_class: {type: string}
+        deferred_reason: {type: string, description: Required when service_state is deferred, and only then.}
+        progress: {$ref: '#/components/schemas/Progress'}
+        policy_etag: {type: string}
+        policy_version_applied: {type: integer}
+        hw_fingerprint: {type: string, description: Compared with the recorded fingerprint; a difference raises an identity conflict (ADR 0011).}
+        gateway_secret_acked: {type: boolean}
+        active_run_id: {type: string}
+    HeartbeatResponse:
+      type: object
+      required: [server_time, clock_offset_ms, commands_pending, policy_etag]
+      properties:
+        server_time: {$ref: '#/components/schemas/Timestamp'}
+        clock_offset_ms: {type: integer}
+        commands_pending: {type: boolean}
+        policy_etag: {type: string}
+        release_hint: {type: string}
+    RunStats:
+      type: object
+      required: [files_new, files_changed, files_unmodified, dirs_new, dirs_changed, dirs_unmodified, total_files_processed, data_added, data_added_packed, total_bytes_processed, total_duration_s, failed_files, long_run]
+      properties:
+        files_new: {type: integer}
+        files_changed: {type: integer}
+        files_unmodified: {type: integer}
+        dirs_new: {type: integer}
+        dirs_changed: {type: integer}
+        dirs_unmodified: {type: integer}
+        total_files_processed: {type: integer}
+        data_added: {type: integer}
+        data_added_packed: {type: integer}
+        total_bytes_processed: {type: integer}
+        total_duration_s: {type: number}
+        failed_files: {type: integer}
+        vss_fallback_volumes:
+          type: array
+          items: {type: string, pattern: '^[A-Z]$'}
+        long_run: {type: boolean}
+        lease: {type: string, enum: [granted, bypassed, not_required]}
+    ErrorProjection:
+      type: object
+      description: Error counts by class and file extension. Never a path.
+      required: [during, class, ext, count]
+      properties:
+        during: {type: string}
+        class: {type: string}
+        ext: {type: string}
+        count: {type: integer, minimum: 1}
+    RunRecord:
+      type: object
+      required: [id, kind, trigger, started_at, stats, attempt, policy_version, agent_version, initial]
+      properties:
+        id: {type: string, description: 26-character ULID generated by the agent.}
+        kind: {type: string}
+        trigger: {type: string, enum: [schedule, catchup, wake, boot, manual, retry]}
+        started_at: {$ref: '#/components/schemas/Timestamp'}
+        finished_at: {$ref: '#/components/schemas/Timestamp'}
+        outcome: {type: string, enum: [success, partial, failed, cancelled, skipped, deferred, interrupted, abandoned], description: Empty or absent while the run is open.}
+        exit_code: {type: integer}
+        snapshot_id: {type: string, pattern: '^[0-9a-f]{64}$'}
+        stats: {$ref: '#/components/schemas/RunStats'}
+        error_counts:
+          type: array
+          items: {$ref: '#/components/schemas/ErrorProjection'}
+        error_class: {type: string}
+        attempt: {type: integer, minimum: 1}
+        deferred_reason: {type: string}
+        policy_version: {type: integer}
+        agent_version: {type: string}
+        initial: {type: boolean}
+    RunsRequest:
+      type: object
+      required: [runs]
+      properties:
+        runs:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/RunRecord'}
+    RunResult:
+      type: object
+      required: [id, status]
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [created, updated, duplicate, rejected]}
+        reason: {type: string, enum: [invalid, conflict, internal]}
+    RunsResponse:
+      type: object
+      required: [results, server_time]
+      properties:
+        results:
+          type: array
+          items: {$ref: '#/components/schemas/RunResult'}
+        server_time: {$ref: '#/components/schemas/Timestamp'}
+    ResticSnapshot:
+      type: object
+      description: One snapshot as `restic snapshots --json` prints it. Roots only; the username must be empty.
+      required: [id, time, paths]
+      properties:
+        id: {type: string, pattern: '^[0-9a-f]{64}$'}
+        short_id: {type: string}
+        time: {$ref: '#/components/schemas/Timestamp'}
+        parent: {type: string}
+        tree: {type: string}
+        paths:
+          type: array
+          items: {type: string}
+        hostname: {type: string}
+        username: {type: string}
+        tags:
+          type: array
+          items: {type: string}
+        program_version: {type: string}
+        summary: {type: object}
+    SnapshotsRequest:
+      type: object
+      required: [snapshots]
+      properties:
+        snapshots:
+          type: array
+          items: {$ref: '#/components/schemas/ResticSnapshot'}
+    SnapshotsResponse:
+      type: object
+      required: [upserted, removed, server_time]
+      properties:
+        upserted: {type: integer}
+        removed: {type: integer}
+        server_time: {$ref: '#/components/schemas/Timestamp'}
+    AgentCommand:
+      type: object
+      required: [id, type, created_at, expires_at]
+      properties:
+        id: {type: string}
+        type: {type: string, enum: [backup_now, cancel, refresh_policy, restart_service, update_agent, pause, resume, hold, restore, check_in, uninstall]}
+        params: {type: object}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+    AgentCommandsResponse:
+      type: object
+      required: [commands, server_time]
+      properties:
+        commands:
+          type: array
+          items: {$ref: '#/components/schemas/AgentCommand'}
+        server_time: {$ref: '#/components/schemas/Timestamp'}
+    CommandResultRequest:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [acked, succeeded, failed]}
+        error_class: {type: string, description: Only allowed when status is failed.}
+        result: {type: object}
+    StartLeaseRequest:
+      type: object
+      required: [run_id]
+      properties:
+        run_id: {type: string, description: 26-character ULID of the run the agent is about to start.}
+    StartLeaseResponse:
+      type: object
+      required: [granted, server_time]
+      properties:
+        granted: {type: boolean}
+        lease_until: {$ref: '#/components/schemas/Timestamp'}
+        retry_after_s: {type: integer, minimum: 60, maximum: 900, description: Only when granted is false.}
+        server_time: {$ref: '#/components/schemas/Timestamp'}

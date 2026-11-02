@@ -1,0 +1,1 @@
+{"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file: GetFileAttributesEx C:\\fixture\\no-such-repo\\config: The system cannot find the path specified.\nIs there a repository at the following location?\nC:\\fixture\\no-such-repo"}

@@ -1,0 +1,113 @@
+/* CryoBackup tokens - generated from tokens.json; dark-first. Display face: Orbitron, rationed (tokens.json display-usage). */
+:root {
+  --bg: #0B1220;
+  --surface: #121C30;
+  --surface-raised: #182642;
+  --border: #243656;
+  --border-input: #56709C;
+  --text: #E8F0FA;
+  --text-muted: #93A6C6;
+  --accent: #5CC9F5;
+  --on-accent: #06111F;
+  --danger: #FF7A7A;
+  --warning: #F5B547;
+  --success: #48D597;
+  --on-status: #06111F;
+  --accent-soft: rgba(92,201,245,.14);
+  --danger-soft: rgba(255,122,122,.14);
+  --warning-soft: rgba(245,181,71,.16);
+  --success-soft: rgba(72,213,151,.14);
+  color-scheme: dark;
+  --font-display: 'Orbitron', 'Michroma', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Martian Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --text-xs: 12px; --leading-xs: 16px; --weight-xs: 500;
+  --text-sm: 13px; --leading-sm: 18px; --weight-sm: 400;
+  --text-base: 14px; --leading-base: 20px; --weight-base: 400;
+  --text-md: 16px; --leading-md: 24px; --weight-md: 500;
+  --text-lg: 20px; --leading-lg: 28px; --weight-lg: 600;
+  --text-xl: 28px; --leading-xl: 34px; --weight-xl: 600;
+  --text-display: 40px; --leading-display: 44px; --weight-display: 600;
+  --text-2xs: 10.5px; --leading-2xs: 14px; --weight-2xs: 500;
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+  --shadow-card: 0 1px 0 rgba(255,255,255,.03) inset, 0 1px 2px rgba(0,0,0,.35);
+  --shadow-pop: 0 16px 40px rgba(2,8,20,.55);
+  --shadow-glow: 0 0 0 1px rgba(92,201,245,.35), 0 0 24px rgba(92,201,245,.18);
+  --glow: var(--shadow-glow);
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --motion-ease: cubic-bezier(.2,.8,.2,1);
+  --layout-sidebar: 224px;
+  --layout-header: 56px;
+  --layout-content-max: 1440px;
+  --layout-gutter: 24px;
+  --layout-pad: 18px;
+  --bp-sm: 640px;
+  --bp-md: 900px;
+  --bp-lg: 1200px;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #F3F7FC;
+    --surface: #FFFFFF;
+    --surface-raised: #FFFFFF;
+    --border: #D5DFEE;
+    --border-input: #7D90B0;
+    --text: #0E1A2E;
+    --text-muted: #4D5F7E;
+    --accent: #0A6FAE;
+    --on-accent: #FFFFFF;
+    --danger: #B42323;
+    --warning: #9A5A00;
+    --success: #13743F;
+    --on-status: #FFFFFF;
+    --accent-soft: rgba(10,111,174,.10);
+    --danger-soft: rgba(180,35,35,.10);
+    --warning-soft: rgba(154,90,0,.12);
+    --success-soft: rgba(19,116,63,.10);
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #F3F7FC;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --border: #D5DFEE;
+  --border-input: #7D90B0;
+  --text: #0E1A2E;
+  --text-muted: #4D5F7E;
+  --accent: #0A6FAE;
+  --on-accent: #FFFFFF;
+  --danger: #B42323;
+  --warning: #9A5A00;
+  --success: #13743F;
+  --on-status: #FFFFFF;
+  --accent-soft: rgba(10,111,174,.10);
+  --danger-soft: rgba(180,35,35,.10);
+  --warning-soft: rgba(154,90,0,.12);
+  --success-soft: rgba(19,116,63,.10);
+  color-scheme: light;
+}
+/* display roles (the only places Orbitron appears) */
+.t-hero-wordmark { font: 900 40px/1 var(--font-display); letter-spacing: .06em; }
+.t-wordmark { font: 800 15px/1 var(--font-display); letter-spacing: .12em; }
+.t-page-title { font: 600 12.5px/1.2 var(--font-display); letter-spacing: .22em; text-transform: uppercase; }
+.t-big-number { font: 700 23px/1.1 var(--font-display); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.t-big-number.sm { font-size: 18px; }
+.t-eyebrow-chip { font: 600 9.5px/1 var(--font-display); letter-spacing: .14em; text-transform: uppercase; }

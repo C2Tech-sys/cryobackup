@@ -1,0 +1,39 @@
+{{/* S01 - sign in. Password only in M0 (TOTP, recovery codes, WebAuthn and OIDC arrive at M2 and later). A bare centred shell: no sidebar, no topbar. */}}
+{{define "bare"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Sign in · CryoBackup</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="{{asset "fonts.css"}}">
+<link rel="stylesheet" href="{{asset "tokens.css"}}">
+<link rel="stylesheet" href="{{asset "app.css"}}">
+<script src="{{asset "js/theme.js"}}"></script>
+</head>
+<body>
+{{template "icons"}}
+<main class="login" id="main">
+  <div class="box">
+    <div class="brandrow">
+      <svg aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg>
+      <div class="t-hero-wordmark wm" role="img" aria-label="CryoBackup"><b>CRYO</b><span>BACKUP</span></div>
+      <h1 class="sr-only">Sign in</h1>
+    </div>
+    <section class="card" aria-labelledby="signin-h">
+      <h2 id="signin-h">Sign in to the console</h2>
+      {{if .Fixtures}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>Fixtures mode.</b> The fleet is fictional and nothing leaves this machine.</div></div>{{end}}
+      {{if .Error}}<div class="banner crit dense" role="alert" id="signin-err"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><span class="sr-only">Error: </span>{{.Error}}</div></div>{{end}}
+      <form method="post" action="/login" autocomplete="on">
+        {{if .Nonce}}<input type="hidden" name="login_nonce" value="{{.Nonce}}">{{end}}
+        <div class="field"><label for="username">Username</label><input class="input lg" id="username" name="username" type="text" value="{{.Username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus{{if .Error}} aria-describedby="signin-err"{{end}}></div>
+        <div class="field"><label for="password">Password</label><input class="input lg" id="password" name="password" type="password" autocomplete="current-password" required{{if .Error}} aria-describedby="signin-err"{{end}}></div>
+        <button class="btn primary lg" type="submit">Sign in</button>
+      </form>
+    </section>
+    <p class="meta-mono center">Sessions end after 12 hours idle and 7 days in total.</p>
+  </div>
+</main>
+</body>
+</html>{{end}}

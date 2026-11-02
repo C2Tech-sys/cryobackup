@@ -1,0 +1,8 @@
+{{/* B09 - the audit log viewer (M2-W3A). The filter bar, results, detail panel and pager are partials/audit.html. */}}
+{{define "title"}}Audit log{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Audit log</span></nav>
+<div class="page-head"><div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-file"/></svg><h2>Audit log</h2><span class="st neutral sm"><i aria-hidden="true"></i>READ-ONLY</span></div>
+  <div class="sub"><span>Who did what, to which object, from where. Every change and every sign-in is one row; rows are never edited.</span></div></div>
+{{template "audit_view" .Table}}
+{{end}}

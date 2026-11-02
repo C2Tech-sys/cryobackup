@@ -1,0 +1,427 @@
+<title>CryoBackup Type Options</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anta&family=Audiowide&family=Big+Shoulders+Display:wght@600;800&family=Bruno+Ace&family=Chakra+Petch:wght@600;700&family=Doto:wght@600;800&family=Electrolize&family=Exo+2:wght@500;700&family=Figtree:wght@400;500;600&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Goldman&family=Hanken+Grotesk:wght@400;500;600&family=Host+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Iceberg&family=Iceland&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Jura:wght@600;700&family=Kode+Mono:wght@500;700&family=Manrope:wght@400;500;600&family=Martian+Mono:wght@400;500&family=Michroma&family=Orbitron:wght@600;800&family=Oxanium:wght@600;700&family=Rajdhani:wght@600;700&family=Saira:wght@600;700&family=Sometype+Mono:wght@400;500&family=Syncopate:wght@700&family=Tektur:wght@500;700&family=Tomorrow:wght@600;700&family=Turret+Road:wght@700;800&family=Unbounded:wght@500;700&family=Workbench&family=Zen+Dots&display=swap">
+<style>
+/* Layout: a type specimen for one decision. Same tokens as the approved concepts; every sample is the same console fragment so only the typeface changes. */
+:root {
+  --bg: #0B1220; --surface: #121C30; --surface-raised: #182642; --border: #243656; --border-input: #56709C;
+  --text: #E8F0FA; --text-muted: #93A6C6; --accent: #5CC9F5; --on-accent: #06111F;
+  --danger: #FF7A7A; --warning: #F5B547; --success: #48D597; --on-status: #06111F;
+  --accent-soft: rgba(92,201,245,.14); --danger-soft: rgba(255,122,122,.14); --success-soft: rgba(72,213,151,.14);
+  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px;
+  --shadow-pop: 0 16px 40px rgba(2,8,20,.55);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #F3F7FC; --surface: #FFFFFF; --surface-raised: #FFFFFF; --border: #D5DFEE; --border-input: #7D90B0;
+    --text: #0E1A2E; --text-muted: #4D5F7E; --accent: #0A6FAE; --on-accent: #FFFFFF;
+    --danger: #B42323; --warning: #9A5A00; --success: #13743F; --on-status: #FFFFFF;
+    --accent-soft: rgba(10,111,174,.10); --danger-soft: rgba(180,35,35,.10); --success-soft: rgba(19,116,63,.10);
+    --shadow-pop: 0 16px 40px rgba(14,26,46,.18); color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #F3F7FC; --surface: #FFFFFF; --surface-raised: #FFFFFF; --border: #D5DFEE; --border-input: #7D90B0;
+  --text: #0E1A2E; --text-muted: #4D5F7E; --accent: #0A6FAE; --on-accent: #FFFFFF;
+  --danger: #B42323; --warning: #9A5A00; --success: #13743F; --on-status: #FFFFFF;
+  --accent-soft: rgba(10,111,174,.10); --danger-soft: rgba(180,35,35,.10); --success-soft: rgba(19,116,63,.10);
+  --shadow-pop: 0 16px 40px rgba(14,26,46,.18); color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font-ui); font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 0 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h2 { font: 600 13px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text-muted); }
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin: 44px 0 18px; }
+.sec-head p { margin: 0; max-width: 70ch; color: var(--text-muted); }
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+.bar .in { max-width: 1240px; margin: 0 auto; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.bar .meta { color: var(--text-muted); font-size: 12px; }
+.bar nav { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+.bar nav a { color: var(--text-muted); text-decoration: none; font-size: 12px; padding: 6px 10px; border-radius: var(--radius-sm); }
+.bar nav a:hover { color: var(--text); background: var(--surface); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.seg button { font: 500 12px/1 var(--font-ui); background: transparent; color: var(--text-muted); border: 0; padding: 8px 12px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hero { padding-block: 36px 4px; max-width: 72ch; }
+.hero h1 { font: 600 clamp(26px, 3.6vw, 38px)/1.15 var(--font-ui); letter-spacing: -.01em; }
+.hero p { color: var(--text-muted); font-size: 15px; margin: 12px 0 0; }
+.fixed { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.fixed span { font: 500 11.5px/1 var(--font-mono); padding: 6px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted); }
+.fixed span b { color: var(--success); font-weight: 500; }
+.markicon { color: var(--accent); flex: none; }
+
+/* wordmark wall */
+.wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
+.wm { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px 12px; display: grid; gap: 10px; min-width: 0; }
+.wm .big { display: flex; align-items: center; gap: 10px; font-size: 24px; line-height: 1; white-space: nowrap; overflow: hidden; letter-spacing: .04em; }
+.wm .big b { color: var(--accent); font-weight: inherit; }
+.wm .big svg { flex: none; }
+.wm .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.wm .small { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1; letter-spacing: .06em; color: var(--text); white-space: nowrap; }
+.wm .small b { color: var(--accent); font-weight: inherit; }
+.wm .lab { font: 500 11px/1.3 var(--font-mono); color: var(--text-muted); text-align: right; }
+.wm .lab b { display: block; color: var(--text); font-weight: 600; font-family: var(--font-ui); font-size: 12px; }
+.wm.pick { border-color: color-mix(in srgb, var(--accent) 50%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent) inset; }
+.wm.ref { opacity: .75; }
+
+/* pairings */
+.pairs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 900px) { .pairs { grid-template-columns: 1fr; } }
+.pair { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; min-width: 0; }
+.pair .cap { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.pair .cap .id { font: 700 12px/1 var(--font-mono); padding: 6px 8px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); flex: none; }
+.pair .cap h3 { font: 600 14px/1.3 var(--font-ui); }
+.pair .cap .faces { font: 500 11px/1.4 var(--font-mono); color: var(--text-muted); }
+.pair .cap .tag { margin-left: auto; font: 500 11px/1 var(--font-mono); color: var(--text-muted); white-space: nowrap; padding-top: 4px; }
+.pair .shot { background: var(--bg); padding: 14px 16px 16px; display: grid; gap: 12px; }
+.pair .top { display: flex; align-items: center; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.pair .top .lk { display: flex; align-items: center; gap: 8px; font-size: 17px; line-height: 1; letter-spacing: .05em; white-space: nowrap; }
+.pair .top .lk b { color: var(--accent); font-weight: inherit; }
+.pair .top .ttl { margin-left: 10px; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--text); }
+.pair .top .fresh { margin-left: auto; font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px; }
+.pair .top .fresh i { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.pair .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.pair .kpi { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; background: var(--surface); }
+.pair .kpi .l { font: 500 10px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+.pair .kpi .v { font-size: 30px; line-height: 1.1; margin-top: 4px; letter-spacing: .01em; }
+.pair .kpi .v small { font: 500 11px/1 var(--font-ui); color: var(--text-muted); margin-left: 5px; }
+.pair .kpi.bad .v { color: var(--danger); } .pair .kpi.good .v { color: var(--success); }
+.pair .body { font-size: 13px; color: var(--text); max-width: 58ch; }
+.pair .row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; font-size: 12.5px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.pair .row .dev { font-weight: 600; }
+.pair .row .dev small { display: block; font-size: 11px; color: var(--text-muted); font-weight: 400; }
+.pair .row .data { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+.pair .note { padding: 10px 16px 14px; font-size: 12.5px; color: var(--text-muted); border-top: 1px solid var(--border); }
+.pair .note b { color: var(--text); font-weight: 600; }
+.st { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 7px; border-radius: 999px; font: 600 11px/1 var(--font-ui); letter-spacing: .02em; border: 1px solid transparent; white-space: nowrap; }
+.st i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; }
+.st.crit { color: var(--danger); background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 35%, transparent); } .st.crit i { border-radius: 2px; transform: rotate(45deg); }
+.st.ok { color: var(--success); background: var(--success-soft); border-color: color-mix(in srgb, var(--success) 35%, transparent); }
+
+/* numerals */
+.nums { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.num { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; min-width: 0; }
+.num .v { font-size: 44px; line-height: 1; letter-spacing: .01em; white-space: nowrap; overflow: hidden; }
+.num .v2 { font-size: 15px; line-height: 1; margin-top: 8px; color: var(--text-muted); white-space: nowrap; overflow: hidden; }
+.num .lab { font: 500 11px/1.3 var(--font-mono); color: var(--text-muted); margin-top: 10px; }
+.num .lab b { color: var(--text); font-family: var(--font-ui); font-weight: 600; font-size: 12px; display: block; }
+
+/* ui and mono rows */
+.rows { display: grid; gap: 8px; }
+.r { display: grid; grid-template-columns: 170px 1fr; gap: 14px; align-items: center; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); min-width: 0; }
+@media (max-width: 640px) { .r { grid-template-columns: 1fr; } }
+.r .lab { font: 600 12.5px/1.3 var(--font-ui); }
+.r .lab small { display: block; font: 500 10.5px/1.4 var(--font-mono); color: var(--text-muted); font-weight: 400; }
+.r .smp { min-width: 0; display: grid; gap: 6px; }
+.r .smp p { margin: 0; font-size: 13.5px; max-width: 70ch; }
+.r .smp .t { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 10px; font-size: 12.5px; color: var(--text-muted); padding-top: 6px; border-top: 1px dashed var(--border); }
+.r .smp .t b { color: var(--text); font-weight: 600; }
+.r .smp code { font-size: 12.5px; color: var(--text); white-space: pre; overflow-x: auto; display: block; }
+.r .smp code .c { color: var(--text-muted); } .r .smp code .k { color: var(--accent); } .r .smp code .e { color: var(--danger); }
+.r.pick { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+
+.decide { display: grid; gap: 10px; margin-top: 8px; }
+.decide .q { display: grid; grid-template-columns: 180px 1fr; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); font-size: 13px; }
+@media (max-width: 640px) { .decide .q { grid-template-columns: 1fr; } }
+.decide .q b { font-weight: 600; }
+.decide .q span { color: var(--text-muted); }
+.decide .q .rec { color: var(--accent); font-weight: 600; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+/* families */
+.f-chakra { font-family: 'Chakra Petch', sans-serif; font-weight: 700; }
+.f-michroma { font-family: 'Michroma', sans-serif; font-weight: 400; }
+.f-tektur { font-family: 'Tektur', sans-serif; font-weight: 700; }
+.f-anta { font-family: 'Anta', sans-serif; font-weight: 400; }
+.f-doto { font-family: 'Doto', sans-serif; font-weight: 800; }
+.f-kode { font-family: 'Kode Mono', monospace; font-weight: 700; }
+.f-unbounded { font-family: 'Unbounded', sans-serif; font-weight: 700; }
+.f-bigsh { font-family: 'Big Shoulders Display', sans-serif; font-weight: 800; }
+.f-orbitron { font-family: 'Orbitron', sans-serif; font-weight: 800; }
+.f-oxanium { font-family: 'Oxanium', sans-serif; font-weight: 700; }
+.f-rajdhani { font-family: 'Rajdhani', sans-serif; font-weight: 700; }
+.f-saira { font-family: 'Saira', sans-serif; font-weight: 700; }
+.f-tomorrow { font-family: 'Tomorrow', sans-serif; font-weight: 700; }
+.f-turret { font-family: 'Turret Road', sans-serif; font-weight: 800; }
+.f-bruno { font-family: 'Bruno Ace', sans-serif; font-weight: 400; }
+.f-zendots { font-family: 'Zen Dots', sans-serif; font-weight: 400; }
+.f-audiowide { font-family: 'Audiowide', sans-serif; font-weight: 400; }
+.f-electrolize { font-family: 'Electrolize', sans-serif; font-weight: 400; }
+.f-jura { font-family: 'Jura', sans-serif; font-weight: 700; }
+.f-syncopate { font-family: 'Syncopate', sans-serif; font-weight: 700; }
+.f-workbench { font-family: 'Workbench', monospace; font-weight: 400; }
+.f-iceland { font-family: 'Iceland', sans-serif; font-weight: 400; }
+.f-iceberg { font-family: 'Iceberg', sans-serif; font-weight: 400; }
+.f-goldman { font-family: 'Goldman', sans-serif; font-weight: 400; }
+.f-exo { font-family: 'Exo 2', sans-serif; font-weight: 700; }
+.f-plex { font-family: 'IBM Plex Sans', sans-serif; }
+.f-figtree { font-family: 'Figtree', sans-serif; }
+.f-geist { font-family: 'Geist', sans-serif; }
+.f-instrument { font-family: 'Instrument Sans', sans-serif; }
+.f-hanken { font-family: 'Hanken Grotesk', sans-serif; }
+.f-host { font-family: 'Host Grotesk', sans-serif; }
+.f-manrope { font-family: 'Manrope', sans-serif; }
+.f-plexmono { font-family: 'IBM Plex Mono', monospace; }
+.f-jbmono { font-family: 'JetBrains Mono', monospace; }
+.f-geistmono { font-family: 'Geist Mono', monospace; }
+.f-kodemono { font-family: 'Kode Mono', monospace; }
+.f-martian { font-family: 'Martian Mono', monospace; font-size: 11.5px !important; }
+.f-sometype { font-family: 'Sometype Mono', monospace; }
+.u-figtree { --font-ui: 'Figtree', system-ui, sans-serif; }
+.u-geist { --font-ui: 'Geist', system-ui, sans-serif; }
+.u-instrument { --font-ui: 'Instrument Sans', system-ui, sans-serif; }
+.u-hanken { --font-ui: 'Hanken Grotesk', system-ui, sans-serif; }
+.u-host { --font-ui: 'Host Grotesk', system-ui, sans-serif; }
+.u-manrope { --font-ui: 'Manrope', system-ui, sans-serif; }
+.m-jb { --font-mono: 'JetBrains Mono', monospace; }
+.m-geist { --font-mono: 'Geist Mono', monospace; }
+.m-kode { --font-mono: 'Kode Mono', monospace; }
+.m-martian { --font-mono: 'Martian Mono', monospace; }
+.m-sometype { --font-mono: 'Sometype Mono', monospace; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="m1" viewBox="0 0 64 64">
+    <path d="M32 5 L55 18.5 V45.5 L32 59 L9 45.5 V18.5 Z" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linejoin="round"/>
+    <path d="M32 16 V48 M18.1 24 L45.9 40 M45.9 24 L18.1 40" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M32 16 l-4 4 M32 16 l4 4 M32 48 l-4 -4 M32 48 l4 -4 M18.1 24 l5.4 -1.4 M18.1 24 l1.4 5.4 M45.9 40 l-5.4 1.4 M45.9 40 l-1.4 -5.4 M45.9 24 l-5.4 -1.4 M45.9 24 l-1.4 5.4 M18.1 40 l5.4 1.4 M18.1 40 l1.4 -5.4" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+    <circle cx="32" cy="32" r="4" fill="currentColor"/>
+  </symbol>
+</defs></svg>
+
+<div class="bar"><div class="in">
+  <svg class="markicon" width="24" height="24" viewBox="0 0 64 64" aria-hidden="true"><use href="#m1"/></svg>
+  <span class="meta">CryoBackup · type options · v0.2 · 2026-10-21</span>
+  <div class="seg" role="group" aria-label="Preview theme"><button type="button" id="th-dark" aria-pressed="true">Dark</button><button type="button" id="th-light" aria-pressed="false">Light</button></div>
+  <nav><a href="#wall">Wordmark wall</a><a href="#pairs">Pairings</a><a href="#nums">Numerals</a><a href="#ui">UI face</a><a href="#mono">Data face</a><a href="#decide">Decide</a></nav>
+</div></div>
+
+<main class="wrap">
+  <div class="hero">
+    <h1>Second pass on type. Twenty-four display faces on the wall, eight full pairings, and the numerals on their own.</h1>
+    <p>The mark, the palette, the state language and the five mocks are approved and fixed. The only thing being chosen here is the <b>display face</b> (wordmark, page titles, big numbers) and, optionally, the interface face and the data face underneath it. Every sample is the same console fragment, so only the type changes.</p>
+    <div class="fixed"><span>mark <b>M1 hex crystal</b></span><span>palette <b>approved</b></span><span>states <b>approved</b></span><span>mocks 5–9 <b>approved</b></span><span>type <b style="color:var(--warning)">open</b></span></div>
+  </div>
+
+  <!-- WALL -->
+  <section id="wall">
+    <div class="sec-head"><h2>A · Wordmark wall</h2><p>Each card shows the lockup at 24 px and at tray size (12 px). If it dies at 12 px, it is a heading face, not a wordmark face. The two from v0.1 sit at the bottom for reference.</p></div>
+    <div class="wall">
+      <div class="wm pick"><div class="big f-michroma"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-michroma"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Michroma</b>wide · Eurostile lineage · 2001 / NASA</span></div></div>
+      <div class="wm pick"><div class="big f-tektur"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-tektur"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Tektur</b>2023 · squared, variable width · fresh HUD</span></div></div>
+      <div class="wm pick"><div class="big f-anta"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-anta"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Anta</b>2024 · squared geometric · phone-OS feel</span></div></div>
+      <div class="wm pick"><div class="big f-doto"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-doto"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Doto</b>2024 · dot matrix · instrument readout</span></div></div>
+      <div class="wm pick"><div class="big f-kode"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-kode"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Kode Mono</b>2024 · engineered mono · terminal</span></div></div>
+      <div class="wm pick"><div class="big f-unbounded"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-unbounded"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Unbounded</b>wide · modern display · aerospace</span></div></div>
+      <div class="wm"><div class="big f-bigsh"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-bigsh"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Big Shoulders Display</b>condensed · industrial · bold</span></div></div>
+      <div class="wm"><div class="big f-orbitron"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-orbitron"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Orbitron</b>the obvious sci-fi · gamer risk</span></div></div>
+      <div class="wm"><div class="big f-oxanium"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-oxanium"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Oxanium</b>rounded-square tech · console</span></div></div>
+      <div class="wm"><div class="big f-rajdhani"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-rajdhani"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Rajdhani</b>condensed squared · HUD</span></div></div>
+      <div class="wm"><div class="big f-saira"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-saira"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Saira</b>industrial squared · motorsport</span></div></div>
+      <div class="wm"><div class="big f-tomorrow"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-tomorrow"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Tomorrow</b>geometric futurist · clean</span></div></div>
+      <div class="wm"><div class="big f-turret"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-turret"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Turret Road</b>squared, heavy · armoured</span></div></div>
+      <div class="wm"><div class="big f-bruno"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-bruno"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Bruno Ace</b>2023 · squared display · retro-future</span></div></div>
+      <div class="wm"><div class="big f-zendots"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-zendots"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Zen Dots</b>rounded sci-fi · display only</span></div></div>
+      <div class="wm"><div class="big f-audiowide"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-audiowide"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Audiowide</b>wide techno · 90s</span></div></div>
+      <div class="wm"><div class="big f-electrolize"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-electrolize"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Electrolize</b>HUD · light</span></div></div>
+      <div class="wm"><div class="big f-jura"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-jura"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Jura</b>squared humanist · quiet sci-fi</span></div></div>
+      <div class="wm"><div class="big f-syncopate"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-syncopate"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Syncopate</b>ultra-wide · aerospace · display only</span></div></div>
+      <div class="wm"><div class="big f-workbench"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-workbench"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Workbench</b>2024 · stencil mono · machined</span></div></div>
+      <div class="wm"><div class="big f-goldman"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-goldman"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Goldman</b>bold squared · badge</span></div></div>
+      <div class="wm"><div class="big f-iceland"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-iceland"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Iceland</b>on-brand name · condensed tech</span></div></div>
+      <div class="wm"><div class="big f-iceberg"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-iceberg"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Iceberg</b>on-brand name · squared, light</span></div></div>
+      <div class="wm ref"><div class="big f-chakra"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-chakra"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Chakra Petch</b>v0.1 option A · reference</span></div></div>
+      <div class="wm ref"><div class="big f-exo"><svg width="26" height="26" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</div><div class="row"><span class="small f-exo"><svg width="12" height="12" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="lab"><b>Exo 2</b>sci-fi humanist · reference</span></div></div>
+    </div>
+  </section>
+
+  <!-- PAIRINGS -->
+  <section id="pairs">
+    <div class="sec-head"><h2>B · Eight pairings, same console fragment</h2><p>Display face on the wordmark, the page title and the big numbers; the interface face on everything else; the data face on timestamps, sizes and versions. Outlined cards are the ones I would stand behind.</p></div>
+    <div class="pairs">
+
+      <div class="pair" style="border-color: color-mix(in srgb, var(--accent) 50%, transparent)">
+        <div class="cap"><span class="id">T1</span><div><h3>Mission control</h3><div class="faces">Michroma · IBM Plex Sans · IBM Plex Mono</div></div><span class="tag">wide · timeless</span></div>
+        <div class="shot">
+          <div class="top"><span class="lk f-michroma"><svg width="20" height="20" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="ttl f-michroma">Fleet health</span><span class="fresh"><i></i>polled 13:42:10</span></div>
+          <div class="kpis"><div class="kpi"><div class="l">Devices</div><div class="v f-michroma">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v f-michroma">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v f-michroma">7</div></div></div>
+          <p class="body">Three consecutive failures since Friday 02:10. VSS snapshot failed on volume C:; restic fell back to live reads and the locked files failed.</p>
+          <div class="row"><span class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></span><span class="st crit"><i></i>FAILED ×3</span><span class="data f-plexmono">3 d ago · 38.2 GB · 1.4.2</span></div>
+        </div>
+        <div class="note"><b>Why:</b> Michroma is the open descendant of Eurostile Extended, the typeface of 2001, Kubrick's HAL screens and every NASA mission patch. Wide, calm, instantly "control room" without a single gamer cue. One weight only, so it is strictly a display face; the UI stays in Plex.</div>
+      </div>
+
+      <div class="pair" style="border-color: color-mix(in srgb, var(--accent) 50%, transparent)">
+        <div class="cap"><span class="id">T2</span><div><h3>Fresh HUD</h3><div class="faces">Tektur · Figtree · JetBrains Mono</div></div><span class="tag">2023 · variable</span></div>
+        <div class="shot u-figtree m-jb">
+          <div class="top"><span class="lk f-tektur"><svg width="20" height="20" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="ttl f-tektur">Fleet health</span><span class="fresh"><i></i>polled 13:42:10</span></div>
+          <div class="kpis"><div class="kpi"><div class="l">Devices</div><div class="v f-tektur">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v f-tektur">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v f-tektur">7</div></div></div>
+          <p class="body">Three consecutive failures since Friday 02:10. VSS snapshot failed on volume C:; restic fell back to live reads and the locked files failed.</p>
+          <div class="row"><span class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></span><span class="st crit"><i></i>FAILED ×3</span><span class="data f-jbmono">3 d ago · 38.2 GB · 1.4.2</span></div>
+        </div>
+        <div class="note"><b>Why:</b> Tektur is new (2023), squared, and a variable font with a width axis, so the wordmark can be wide and the numbers narrow from one file. Figtree is a friendlier interface face than Plex; JetBrains Mono is the data face most engineers already read all day.</div>
+      </div>
+
+      <div class="pair" style="border-color: color-mix(in srgb, var(--accent) 50%, transparent)">
+        <div class="cap"><span class="id">T3</span><div><h3>Instrument readout</h3><div class="faces">Doto · Instrument Sans · Geist Mono</div></div><span class="tag">dot matrix · bold move</span></div>
+        <div class="shot u-instrument m-geist">
+          <div class="top"><span class="lk f-doto" style="font-size:19px"><svg width="20" height="20" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="ttl f-doto" style="font-size:15px">Fleet health</span><span class="fresh"><i></i>polled 13:42:10</span></div>
+          <div class="kpis"><div class="kpi"><div class="l">Devices</div><div class="v f-doto" style="font-size:34px">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v f-doto" style="font-size:34px">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v f-doto" style="font-size:34px">7</div></div></div>
+          <p class="body">Three consecutive failures since Friday 02:10. VSS snapshot failed on volume C:; restic fell back to live reads and the locked files failed.</p>
+          <div class="row"><span class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></span><span class="st crit"><i></i>FAILED ×3</span><span class="data f-geistmono">3 d ago · 38.2 GB · 1.4.2</span></div>
+        </div>
+        <div class="note"><b>Why:</b> the outside-the-box one. Doto is a 2024 dot-matrix face: the big numbers read like a cryo-chamber readout or a flight-deck display, and nothing else in backup looks like it. Used only for the wordmark and the KPI numerals; it would be unreadable as a heading face, so page titles fall back to the interface face. High character, highest risk of looking like a toy if overused.</div>
+      </div>
+
+      <div class="pair" style="border-color: color-mix(in srgb, var(--accent) 50%, transparent)">
+        <div class="cap"><span class="id">T4</span><div><h3>Engineer's terminal</h3><div class="faces">Kode Mono · Geist · Geist Mono</div></div><span class="tag">mono-led</span></div>
+        <div class="shot u-geist m-geist">
+          <div class="top"><span class="lk f-kode"><svg width="20" height="20" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="ttl f-kode">Fleet health</span><span class="fresh"><i></i>polled 13:42:10</span></div>
+          <div class="kpis"><div class="kpi"><div class="l">Devices</div><div class="v f-kode">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v f-kode">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v f-kode">7</div></div></div>
+          <p class="body">Three consecutive failures since Friday 02:10. VSS snapshot failed on volume C:; restic fell back to live reads and the locked files failed.</p>
+          <div class="row"><span class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></span><span class="st crit"><i></i>FAILED ×3</span><span class="data f-geistmono">3 d ago · 38.2 GB · 1.4.2</span></div>
+        </div>
+        <div class="note"><b>Why:</b> Kode Mono (2024) is a monospace drawn to be a display face: angular, engineered, with real personality in the K, R and 4. Geist, Vercel's open family, carries the interface and the data with the same skeleton. The whole console reads like a well-made terminal, which is exactly what an operator trusts.</div>
+      </div>
+
+      <div class="pair">
+        <div class="cap"><span class="id">T5</span><div><h3>Aerospace wide</h3><div class="faces">Unbounded · Manrope · Martian Mono</div></div><span class="tag">wide · modern</span></div>
+        <div class="shot u-manrope m-martian">
+          <div class="top"><span class="lk f-unbounded" style="font-size:15px"><svg width="20" height="20" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="ttl f-unbounded" style="font-size:12px">Fleet health</span><span class="fresh"><i></i>polled 13:42:10</span></div>
+          <div class="kpis"><div class="kpi"><div class="l">Devices</div><div class="v f-unbounded" style="font-size:27px">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v f-unbounded" style="font-size:27px">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v f-unbounded" style="font-size:27px">7</div></div></div>
+          <p class="body">Three consecutive failures since Friday 02:10. VSS snapshot failed on volume C:; restic fell back to live reads and the locked files failed.</p>
+          <div class="row"><span class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></span><span class="st crit"><i></i>FAILED ×3</span><span class="data f-martian">3 d ago · 38.2 GB · 1.4.2</span></div>
+        </div>
+        <div class="note"><b>Why:</b> Unbounded is a wide, modern display face with a crypto-era feel; Manrope is soft and legible; Martian Mono is the widest data face here. Together: premium, wide, a little fashionable. Risk: it dates faster than T1 and takes more horizontal room in tables.</div>
+      </div>
+
+      <div class="pair">
+        <div class="cap"><span class="id">T6</span><div><h3>Industrial condensed</h3><div class="faces">Big Shoulders Display · Hanken Grotesk · Sometype Mono</div></div><span class="tag">condensed · bold</span></div>
+        <div class="shot u-hanken m-sometype">
+          <div class="top"><span class="lk f-bigsh" style="font-size:21px"><svg width="20" height="20" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="ttl f-bigsh" style="font-size:17px">Fleet health</span><span class="fresh"><i></i>polled 13:42:10</span></div>
+          <div class="kpis"><div class="kpi"><div class="l">Devices</div><div class="v f-bigsh" style="font-size:36px">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v f-bigsh" style="font-size:36px">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v f-bigsh" style="font-size:36px">7</div></div></div>
+          <p class="body">Three consecutive failures since Friday 02:10. VSS snapshot failed on volume C:; restic fell back to live reads and the locked files failed.</p>
+          <div class="row"><span class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></span><span class="st crit"><i></i>FAILED ×3</span><span class="data f-sometype">3 d ago · 38.2 GB · 1.4.2</span></div>
+        </div>
+        <div class="note"><b>Why:</b> the opposite of sci-fi: a tall, condensed industrial face (Chicago signage) that makes big numbers hit hard and saves space in dense tables. Confident and masculine; least "cryo" of the eight, most "ops floor".</div>
+      </div>
+
+      <div class="pair">
+        <div class="cap"><span class="id">T7</span><div><h3>All-in sci-fi</h3><div class="faces">Orbitron · Exo 2 · Share Tech Mono</div></div><span class="tag">maximum genre</span></div>
+        <div class="shot" style="--font-ui: 'Exo 2', system-ui, sans-serif; --font-mono: 'Share Tech Mono', monospace">
+          <div class="top"><span class="lk f-orbitron" style="font-size:16px"><svg width="20" height="20" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="ttl f-orbitron" style="font-size:12px">Fleet health</span><span class="fresh"><i></i>polled 13:42:10</span></div>
+          <div class="kpis"><div class="kpi"><div class="l">Devices</div><div class="v f-orbitron" style="font-size:27px">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v f-orbitron" style="font-size:27px">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v f-orbitron" style="font-size:27px">7</div></div></div>
+          <p class="body">Three consecutive failures since Friday 02:10. VSS snapshot failed on volume C:; restic fell back to live reads and the locked files failed.</p>
+          <div class="row"><span class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></span><span class="st crit"><i></i>FAILED ×3</span><span class="data">3 d ago · 38.2 GB · 1.4.2</span></div>
+        </div>
+        <div class="note"><b>Why it is here:</b> because you asked for geeky and this is the geekiest. Orbitron is the typeface every sci-fi UI mockup reaches for, which is also its problem: it reads "game launcher" to a lot of people, and the numerals are wide and slow to scan. Included so the choice is informed, not because I recommend it.</div>
+      </div>
+
+      <div class="pair">
+        <div class="cap"><span class="id">T8</span><div><h3>Machined stencil</h3><div class="faces">Workbench · Host Grotesk · Kode Mono</div></div><span class="tag">2024 · unusual</span></div>
+        <div class="shot u-host m-kode">
+          <div class="top"><span class="lk f-workbench" style="font-size:18px"><svg width="20" height="20" viewBox="0 0 64 64" class="markicon"><use href="#m1"/></svg><b>CRYO</b>BACKUP</span><span class="ttl f-workbench" style="font-size:14px">Fleet health</span><span class="fresh"><i></i>polled 13:42:10</span></div>
+          <div class="kpis"><div class="kpi"><div class="l">Devices</div><div class="v f-workbench" style="font-size:32px">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v f-workbench" style="font-size:32px">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v f-workbench" style="font-size:32px">7</div></div></div>
+          <p class="body">Three consecutive failures since Friday 02:10. VSS snapshot failed on volume C:; restic fell back to live reads and the locked files failed.</p>
+          <div class="row"><span class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></span><span class="st crit"><i></i>FAILED ×3</span><span class="data f-kodemono">3 d ago · 38.2 GB · 1.4.2</span></div>
+        </div>
+        <div class="note"><b>Why:</b> Workbench (2024) is a stencil monospace that looks machined, like lettering cut into a cryo-chamber panel. Distinctive to the point of odd; it works as a wordmark and nowhere else, so T8 is really "T4 with a stranger logo".</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NUMERALS -->
+  <section id="nums">
+    <div class="sec-head"><h2>C · The numerals, alone</h2><p>Big numbers are where the display face shows most: the KPI tiles, the age ring, the digest summary. Same three figures in each candidate, then a line of timestamps at table size.</p></div>
+    <div class="nums">
+      <div class="num"><div class="v f-michroma">212 · 94.3</div><div class="v2 f-michroma">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Michroma</b>wide, even, slow and certain</div></div>
+      <div class="num"><div class="v f-tektur">212 · 94.3</div><div class="v2 f-tektur">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Tektur</b>squared, compact, HUD</div></div>
+      <div class="num"><div class="v f-anta">212 · 94.3</div><div class="v2 f-anta">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Anta</b>geometric, friendly tech</div></div>
+      <div class="num"><div class="v f-doto">212 · 94.3</div><div class="v2 f-doto">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Doto</b>dot matrix, readout</div></div>
+      <div class="num"><div class="v f-kode">212 · 94.3</div><div class="v2 f-kode">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Kode Mono</b>engineered, tabular by nature</div></div>
+      <div class="num"><div class="v f-unbounded" style="font-size:36px">212 · 94.3</div><div class="v2 f-unbounded">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Unbounded</b>wide, modern</div></div>
+      <div class="num"><div class="v f-bigsh" style="font-size:50px">212 · 94.3</div><div class="v2 f-bigsh" style="font-size:17px">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Big Shoulders</b>condensed, loud</div></div>
+      <div class="num"><div class="v f-oxanium">212 · 94.3</div><div class="v2 f-oxanium">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Oxanium</b>rounded-square console</div></div>
+      <div class="num"><div class="v f-rajdhani" style="font-size:50px">212 · 94.3</div><div class="v2 f-rajdhani" style="font-size:17px">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Rajdhani</b>condensed HUD</div></div>
+      <div class="num"><div class="v f-orbitron" style="font-size:34px">212 · 94.3</div><div class="v2 f-orbitron" style="font-size:13px">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Orbitron</b>wide, genre</div></div>
+      <div class="num"><div class="v f-chakra">212 · 94.3</div><div class="v2 f-chakra">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Chakra Petch</b>v0.1 reference</div></div>
+      <div class="num"><div class="v f-tomorrow">212 · 94.3</div><div class="v2 f-tomorrow">13:42:10 · 38.2 GB · 1.4.2</div><div class="lab"><b>Tomorrow</b>geometric futurist</div></div>
+    </div>
+  </section>
+
+  <!-- UI FACE -->
+  <section id="ui">
+    <div class="sec-head"><h2>D · Interface face</h2><p>Everything that is not a title or a number: table cells, labels, forms, the digest body. This is the face you read for hours, so it is judged on quiet legibility, not character. Same paragraph and table row in each.</p></div>
+    <div class="rows">
+      <div class="r pick f-plex"><div class="lab">IBM Plex Sans<small>v0.1 choice · open · superb numerals</small></div><div class="smp"><p>Waiting for power. The laptop is at 14% on battery; the backup will run when it is plugged in, or at 18:00 at the latest. Last successful backup was yesterday at 02:10 and took 14 minutes.</p><div class="t"><span><b>FRONTDESK-01</b></span><span>3 d ago</span><span>38.2 GB</span><span>agent 1.4.2</span></div></div></div>
+      <div class="r f-figtree"><div class="lab">Figtree<small>friendly geometric · very even</small></div><div class="smp"><p>Waiting for power. The laptop is at 14% on battery; the backup will run when it is plugged in, or at 18:00 at the latest. Last successful backup was yesterday at 02:10 and took 14 minutes.</p><div class="t"><span><b>FRONTDESK-01</b></span><span>3 d ago</span><span>38.2 GB</span><span>agent 1.4.2</span></div></div></div>
+      <div class="r f-geist"><div class="lab">Geist<small>Vercel's open family · crisp, neutral</small></div><div class="smp"><p>Waiting for power. The laptop is at 14% on battery; the backup will run when it is plugged in, or at 18:00 at the latest. Last successful backup was yesterday at 02:10 and took 14 minutes.</p><div class="t"><span><b>FRONTDESK-01</b></span><span>3 d ago</span><span>38.2 GB</span><span>agent 1.4.2</span></div></div></div>
+      <div class="r f-instrument"><div class="lab">Instrument Sans<small>compact, slightly technical</small></div><div class="smp"><p>Waiting for power. The laptop is at 14% on battery; the backup will run when it is plugged in, or at 18:00 at the latest. Last successful backup was yesterday at 02:10 and took 14 minutes.</p><div class="t"><span><b>FRONTDESK-01</b></span><span>3 d ago</span><span>38.2 GB</span><span>agent 1.4.2</span></div></div></div>
+      <div class="r f-hanken"><div class="lab">Hanken Grotesk<small>classic grotesk · dense tables</small></div><div class="smp"><p>Waiting for power. The laptop is at 14% on battery; the backup will run when it is plugged in, or at 18:00 at the latest. Last successful backup was yesterday at 02:10 and took 14 minutes.</p><div class="t"><span><b>FRONTDESK-01</b></span><span>3 d ago</span><span>38.2 GB</span><span>agent 1.4.2</span></div></div></div>
+      <div class="r f-host"><div class="lab">Host Grotesk<small>2024 · narrow, efficient</small></div><div class="smp"><p>Waiting for power. The laptop is at 14% on battery; the backup will run when it is plugged in, or at 18:00 at the latest. Last successful backup was yesterday at 02:10 and took 14 minutes.</p><div class="t"><span><b>FRONTDESK-01</b></span><span>3 d ago</span><span>38.2 GB</span><span>agent 1.4.2</span></div></div></div>
+      <div class="r f-manrope"><div class="lab">Manrope<small>soft geometric · rounder</small></div><div class="smp"><p>Waiting for power. The laptop is at 14% on battery; the backup will run when it is plugged in, or at 18:00 at the latest. Last successful backup was yesterday at 02:10 and took 14 minutes.</p><div class="t"><span><b>FRONTDESK-01</b></span><span>3 d ago</span><span>38.2 GB</span><span>agent 1.4.2</span></div></div></div>
+    </div>
+  </section>
+
+  <!-- MONO -->
+  <section id="mono">
+    <div class="sec-head"><h2>E · Data face</h2><p>Timestamps, sizes, versions, device ids, the run log, the deployment script. Judged on digit clarity (0 vs O, 1 vs l) and how it sits next to the interface face.</p></div>
+    <div class="rows">
+      <div class="r pick"><div class="lab">IBM Plex Mono<small>v0.1 choice · pairs with Plex Sans</small></div><div class="smp"><code class="f-plexmono"><span class="c"># run 01J9Y4K3…7QF · backup · scheduled</span>
+13:40:02  <span class="k">snapshot</span>  vss ok C:  files 37,902  new 1.3 GB  0O1lI
+13:54:41  <span class="e">error</span>     locked_file × 23  (under tolerance: no)
+13:54:42  <span class="k">exit 3</span>     partial · 14m 40s · 12.1 MB/s</code></div></div>
+      <div class="r"><div class="lab">JetBrains Mono<small>the editor font · tall x-height</small></div><div class="smp"><code class="f-jbmono"><span class="c"># run 01J9Y4K3…7QF · backup · scheduled</span>
+13:40:02  <span class="k">snapshot</span>  vss ok C:  files 37,902  new 1.3 GB  0O1lI
+13:54:41  <span class="e">error</span>     locked_file × 23  (under tolerance: no)
+13:54:42  <span class="k">exit 3</span>     partial · 14m 40s · 12.1 MB/s</code></div></div>
+      <div class="r"><div class="lab">Geist Mono<small>neutral · pairs with Geist</small></div><div class="smp"><code class="f-geistmono"><span class="c"># run 01J9Y4K3…7QF · backup · scheduled</span>
+13:40:02  <span class="k">snapshot</span>  vss ok C:  files 37,902  new 1.3 GB  0O1lI
+13:54:41  <span class="e">error</span>     locked_file × 23  (under tolerance: no)
+13:54:42  <span class="k">exit 3</span>     partial · 14m 40s · 12.1 MB/s</code></div></div>
+      <div class="r"><div class="lab">Kode Mono<small>angular · doubles as display</small></div><div class="smp"><code class="f-kodemono"><span class="c"># run 01J9Y4K3…7QF · backup · scheduled</span>
+13:40:02  <span class="k">snapshot</span>  vss ok C:  files 37,902  new 1.3 GB  0O1lI
+13:54:41  <span class="e">error</span>     locked_file × 23  (under tolerance: no)
+13:54:42  <span class="k">exit 3</span>     partial · 14m 40s · 12.1 MB/s</code></div></div>
+      <div class="r"><div class="lab">Martian Mono<small>wide · spacious</small></div><div class="smp"><code class="f-martian"><span class="c"># run 01J9Y4K3…7QF · backup · scheduled</span>
+13:40:02  <span class="k">snapshot</span>  vss ok C:  files 37,902  new 1.3 GB  0O1lI
+13:54:41  <span class="e">error</span>     locked_file × 23  (under tolerance: no)
+13:54:42  <span class="k">exit 3</span>     partial · 14m 40s · 12.1 MB/s</code></div></div>
+      <div class="r"><div class="lab">Sometype Mono<small>humanist mono · soft</small></div><div class="smp"><code class="f-sometype"><span class="c"># run 01J9Y4K3…7QF · backup · scheduled</span>
+13:40:02  <span class="k">snapshot</span>  vss ok C:  files 37,902  new 1.3 GB  0O1lI
+13:54:41  <span class="e">error</span>     locked_file × 23  (under tolerance: no)
+13:54:42  <span class="k">exit 3</span>     partial · 14m 40s · 12.1 MB/s</code></div></div>
+    </div>
+  </section>
+
+  <!-- DECIDE -->
+  <section id="decide">
+    <div class="sec-head"><h2>F · Decide</h2><p>Pick a pairing by number, or compose one: a display face from the wall, an interface face from D, a data face from E. Mixing is fine; they are independent tokens.</p></div>
+    <div class="decide">
+      <div class="q"><b>My pick</b><div><span class="rec">T1 Mission control (Michroma)</span> for the product, with <span class="rec">T3's Doto numerals</span> borrowed for the KPI tiles and the age ring only.<br><span>Michroma gives the wordmark and titles a real lineage (the control-room look that predates every game UI) and ages well; Doto on the big numbers alone adds the readout character you asked for without making a single table harder to read. Interface stays IBM Plex Sans, data stays IBM Plex Mono, so nothing else in the mocks moves.</span></div></div>
+      <div class="q"><b>Runner-up</b><div><span class="rec">T4 Engineer's terminal (Kode Mono + Geist)</span><br><span>If you want the whole console to feel like a well-made terminal rather than a control room. Cleanest at small sizes of the character faces.</span></div></div>
+      <div class="q"><b>Boldest</b><div><span class="rec">T3 Instrument readout</span> all the way, Doto on the wordmark too.<br><span>Unmistakable, nothing else in the category looks like it; the tray icon and the favicon still carry the M1 mark, so the dot-matrix wordmark only ever appears large.</span></div></div>
+      <div class="q"><b>Not recommended</b><div>T7 Orbitron (genre cliché), Zen Dots / Audiowide / Syncopate (display-only faces that fail at 12 px), Iceland / Iceberg (fun names, dated shapes).</div></div>
+      <div class="q"><b>Reply with</b><div>a T number, or "display X + UI Y + data Z", and whether the Doto-numerals borrow is in or out.</div></div>
+    </div>
+  </section>
+
+  <footer><span>CryoBackup · type options v0.2 · all faces are open-licensed (OFL) and will be vendored, never loaded from a CDN in the product</span><span>Decisions so far: M1 · palette · states · mocks approved</span></footer>
+</main>
+
+<script>
+(function(){
+  var root=document.documentElement, d=document.getElementById('th-dark'), l=document.getElementById('th-light');
+  function set(t){ root.setAttribute('data-theme',t); d.setAttribute('aria-pressed',t==='dark'); l.setAttribute('aria-pressed',t==='light'); try{ localStorage.setItem('cryo-design-theme',t); }catch(e){} }
+  d.addEventListener('click',function(){set('dark')}); l.addEventListener('click',function(){set('light')});
+  var saved=null; try{ saved=localStorage.getItem('cryo-design-theme'); }catch(e){}
+  var attr=root.getAttribute('data-theme');
+  if(saved==='light'||saved==='dark') set(saved); else if(attr==='light'||attr==='dark') set(attr); else set('dark');
+})();
+</script>

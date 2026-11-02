@@ -1,0 +1,77 @@
+{{/* S25 - the policy editor and the pages around it: new, review (blast radius), delete (M2-W2A). Server-rendered; every value is validated by internal/policy. */}}
+{{define "title"}}{{.Title}}{{end}}
+
+{{define "content"}}
+{{if or (eq .Mode "edit") (eq .Mode "new")}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/policies">Policies</a> / <span>{{.Head.Name}}</span></nav>
+{{if .Saved}}<div class="banner ok dense" role="status"><i class="g g-ok" aria-hidden="true"></i><div class="b-text">{{.Saved}}</div></div>{{end}}
+{{with .Notice}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+<article class="card" aria-labelledby="pol-title">
+  <header class="page-head">
+    <div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-file"/></svg><h2 id="pol-title">{{.Head.Name}}</h2>
+      <span class="row"><span class="st {{if eq .Head.Scope "default"}}info{{else}}neutral{{end}} sm"><i aria-hidden="true"></i>{{.Head.ScopeLabel}}</span>{{if .Head.Version}}<span class="st neutral sm"><i aria-hidden="true"></i>VERSION {{.Head.Version}}</span>{{end}}</span></div>
+    <div class="sub">{{if .Head.Customer}}<span>for <a href="{{.Head.CustomerHref}}">{{.Head.Customer}}</a></span>{{end}}{{if .IsDefault}}<span>The base of every other policy</span>{{end}}{{if eq .Mode "new"}}<span>Starts from the default policy</span>{{end}}</div>
+  </header>
+  <form class="mt stack" method="post" action="{{.Action}}" id="policy-form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    {{template "pol_errsummary" .Summary}}
+    {{with .Repair}}<section class="banner warn dense repairlist" role="status" aria-labelledby="rep-h"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b id="rep-h">{{len .Items}} stored {{if eq (len .Items) 1}}setting is{{else}}settings are{{end}} not usable.</b> The rest of this policy is kept.
+      <ul class="errlist">{{range .Items}}<li><a href="#{{.Anchor}}">{{.Section}} · {{.Label}}</a>: {{.Reason}} <span class="meta-mono">Stored: {{.Stored}}</span></li>{{end}}</ul></div></section>{{end}}
+    {{if .Sparse}}<div class="banner info dense" role="note"><i class="g g-info" aria-hidden="true"></i><div class="b-text">Shown in full for editing. A setting you leave equal to the default keeps following the default; only settings that differ are stored as this policy's own.</div></div>{{end}}
+    <section class="formcard polident" id="pol-identity" aria-label="Policy name">
+      <div class="field"><label for="pol-name">Name <span class="muted">(required)</span></label>
+        <input class="input" id="pol-name" name="name" type="text" maxlength="100" autocomplete="off" value="{{.Name}}"{{if .NameErr}} aria-invalid="true" aria-describedby="pol-name-err"{{end}}>{{with .NameErr}}<span class="err" id="pol-name-err">{{.}}</span>{{end}}</div>
+      <div class="field"><label for="pol-desc">Description <span class="muted">(optional)</span></label>
+        <textarea class="input" id="pol-desc" name="description" rows="2" maxlength="500"{{if .DescErr}} aria-invalid="true" aria-describedby="pol-desc-err"{{end}}>{{.Desc}}</textarea>{{with .DescErr}}<span class="err" id="pol-desc-err">{{.}}</span>{{end}}</div>
+      {{if eq .Mode "new"}}<div class="frow"><div class="field"><label for="pol-cust">Who can use it</label>
+        <select class="input" id="pol-cust" name="customer_id"{{if .CustErr}} aria-invalid="true"{{end}}>{{range .CustOpts}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{with .CustErr}}<span class="err">{{.}}</span>{{end}}</div>
+        <div class="field"><label for="pol-class">Meant for</label><select class="input" id="pol-class" name="template_device_class">{{range .Classes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select><span class="help">A label for templates; it does not change the settings.</span></div></div>{{end}}
+    </section>
+    <nav class="polnav" aria-label="Policy sections">{{range .SecNav}}<a href="#{{.ID}}">{{.Title}}{{if .Errs}} <span class="st crit sm"><i aria-hidden="true"></i>{{.Errs}}</span>{{end}}</a>{{end}}</nav>
+    {{template "pol_sections" .Sections}}
+    <section class="formcard" aria-label="Note"><div class="field"><label for="pol-note">Reason for the change <span class="muted">(optional, kept with the revision)</span></label>
+      <input class="input" id="pol-note" name="note" type="text" maxlength="200" autocomplete="off" value="{{.Note}}"></div></section>
+    <div class="polbar">
+      <a class="btn ghost" href="/policies">Cancel</a>
+      {{if eq .Mode "edit"}}{{if .CanDelete}}<a class="btn danger" href="/policies/{{.Head.ID}}/delete">Delete…</a>{{else}}<span class="meta-mono">{{.WhyNot}}</span>{{end}}{{end}}
+      <button class="btn primary" type="submit">{{if eq .Mode "new"}}Create policy{{else}}Review changes…{{end}}</button>
+    </div>
+  </form>
+  {{if .Revisions}}<section class="mt" aria-labelledby="h-revs"><h3 class="h-label" id="h-revs">Revisions <span class="count">{{len .Revisions}}</span></h3>
+  <div class="table-wrap" role="region" aria-label="Revisions" tabindex="0"><table class="fleet compact"><caption class="sr-only">Revisions of this policy, newest first</caption>
+    <thead><tr><th scope="col">Version</th><th scope="col">Changed by</th><th scope="col">When</th><th scope="col">Note</th></tr></thead>
+    <tbody>{{range .Revisions}}<tr><td class="mono">v{{.Version}}{{if .Current}} <span class="st info sm"><i aria-hidden="true"></i>CURRENT</span>{{end}}</td><td>{{.By}}</td><td><time datetime="{{.ISO}}">{{.When}}</time></td><td class="wrap">{{.Note}}</td></tr>{{end}}</tbody></table></div></section>{{end}}
+</article>
+
+{{else if eq .Mode "review"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/policies">Policies</a> / <a href="/policies/{{.Head.ID}}">{{.Head.Name}}</a> / <span>Review</span></nav>
+<article class="card" aria-labelledby="pol-title">
+  <header class="page-head"><div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-file"/></svg><h2 id="pol-title">Review the change to {{.Head.Name}}</h2></div>
+    <div class="sub"><span>Nothing is saved until you confirm.</span></div></header>
+  <div class="mt stack">
+    {{with .Review}}{{template "pol_review" .}}{{end}}
+    <form class="row end" method="post" action="{{.ConfirmTo}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      {{range .Hidden}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+      {{with .Review}}<input type="hidden" name="impact_token" value="{{.Token}}">{{end}}
+      <button class="btn" type="submit" formaction="{{.EditURL}}">Edit again</button>
+      <a class="btn ghost" href="/policies/{{.Head.ID}}">Discard</a>
+      {{with .Review}}{{if not .Unchanged}}<button class="btn primary" type="submit">{{.Confirm}}</button>{{end}}{{end}}
+    </form>
+  </div>
+</article>
+
+{{else}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/policies">Policies</a> / <a href="/policies/{{.Head.ID}}">{{.Head.Name}}</a> / <span>Delete</span></nav>
+<article class="card" aria-labelledby="pol-title">
+  <header class="page-head"><div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-file"/></svg><h2 id="pol-title">Delete {{.Head.Name}}</h2></div></header>
+  <div class="mt stack">
+    {{with .Review}}{{template "pol_review" .}}{{end}}
+    {{if eq .Mode "delete"}}<form class="row end" method="post" action="{{.ConfirmTo}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      {{with .Review}}<input type="hidden" name="impact_token" value="{{.Token}}">{{end}}
+      <a class="btn" href="/policies/{{.Head.ID}}">Keep it</a>
+      <button class="btn danger-solid" type="submit">{{with .Review}}{{.Confirm}}{{end}}</button></form>
+    {{else}}<div class="row end"><a class="btn" href="/policies/{{.Head.ID}}">Back to the policy</a></div>{{end}}
+  </div>
+</article>
+{{end}}
+{{end}}

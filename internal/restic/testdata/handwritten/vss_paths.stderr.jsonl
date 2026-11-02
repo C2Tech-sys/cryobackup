@@ -1,0 +1,7 @@
+{"message_type":"error","error":{"message":"C:\\Data\\proxy\\x: open \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy3\\Data\\proxy\\x: Access is denied."},"during":"archival","item":"C:\\Data\\proxy\\x"}
+{"message_type":"error","error":{"message":"C:\\Data\\vss\\Program Files\\certificate book.xlsx: open \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy3\\Data\\vss\\Program Files\\certificate book.xlsx: The process cannot access the file because it is being used by another process."},"during":"archival","item":"C:\\Data\\vss\\Program Files\\certificate book.xlsx"}
+{"message_type":"error","error":{"message":"incomplete metadata for C:\\Data\\vss\\x.docx: open \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy3\\Data\\vss\\x.docx: Access is denied."},"during":"archival","item":"C:\\Data\\vss\\x.docx"}
+{"message_type":"error","error":{"message":"readdirnames C:\\Data\\proxy\\500 failed: open \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy3\\Data\\proxy\\500: The system cannot find the path specified."},"during":"archival","item":"C:\\Data\\proxy\\500"}
+{"message_type":"error","error":{"message":"C:\\Data\\proxy\\alias.exe: unsupported file type \"irregular\""},"during":"archival","item":"C:\\Data\\proxy\\alias.exe"}
+{"message_type":"error","error":{"message":"directory \"C:\\\\Data\\\\proxy\" changed type, refusing to archive"},"during":"archival","item":"C:\\Data\\proxy"}
+{"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}

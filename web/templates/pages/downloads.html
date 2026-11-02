@@ -1,0 +1,43 @@
+{{/* S30 - agent downloads (M2-W2B). The console does not host installers in M2: it shows the one the operator placed in
+     the artifacts directory, with its version and SHA-256, and says where to get it. */}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Agent downloads</span></nav>
+<div class="page-head">
+  <div class="t"><h2>Agent downloads</h2></div>
+  <div class="sub"><span>The Windows agent is one MSI. Deploy it with your RMM; the enrollment wizard generates the script.</span></div>
+</div>
+{{range .Notes}}{{template "inline_banner" .}}{{end}}
+
+<section class="card flow" aria-labelledby="msi-h">
+  <h3 id="msi-h">Windows agent <span class="muted">(64-bit MSI)</span>{{if .MSI.Found}} <span class="st sm ok"><i aria-hidden="true"></i>READY</span>{{end}}</h3>
+  {{if .MSI.Found}}
+  <dl class="kv">
+    <dt>File</dt><dd class="mono">{{.MSI.FileName}}</dd>
+    <dt>Version</dt><dd>{{if .MSI.VersionKnown}}<span class="mono">{{.MSI.Version}}</span>{{else}}<span class="st sm warn"><i aria-hidden="true"></i>UNKNOWN</span> <span class="muted">Name the file cryobackup-agent-X.Y.Z.msi, or put the version in cryobackup-agent.msi.version next to it.</span>{{end}}</dd>
+    <dt>Size</dt><dd>{{.MSI.Size}}</dd>
+    <dt>Placed</dt><dd>{{.MSI.Placed}}</dd>
+  </dl>
+  <h4 class="h-label">SHA-256</h4>
+  <div class="copybar">{{copybtn "cp-sha256" "Copy the SHA-256 of the agent installer"}}</div>
+  <pre class="code" id="cp-sha256" tabindex="0" role="region" aria-label="SHA-256 of the agent MSI">{{.MSI.SHA256}}</pre>
+  <p class="muted ui">Computed here from the file on the console host. It is the value the RMM wrapper's <code>MsiSha256</code> variable should carry, and what the file must hash to on the endpoint:</p>
+  <div class="copybar">{{copybtn "cp-verify" "Copy the hash check command"}}</div>
+  <pre class="code" id="cp-verify" tabindex="0" role="region" aria-label="Verify the hash on the endpoint">Get-FileHash -Algorithm SHA256 -LiteralPath .\{{.MSI.FileName}}</pre>
+  {{else if .MSI.Err}}
+  <section class="panel-state alarm" role="alert"><div><svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg><h2><i class="g g-crit" aria-hidden="true"></i>Installer could not be read</h2><p>The artifacts directory or the MSI in it could not be read. This is an alarm, not an empty list: check the file and its permissions on the console host.</p></div></section>
+  {{else}}
+  <section class="panel-state partial" role="alert"><div><svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg><h2><i class="g g-warn" aria-hidden="true"></i>No agent installer found</h2><p>{{if .MSI.Configured}}Nothing named cryobackup-agent*.msi is in the console's artifacts directory.{{else}}No artifacts directory is configured (artifacts_dir).{{end}} Without it the deployment snippets cannot carry the installer's hash.</p></div></section>
+  {{end}}
+</section>
+
+<section class="card flow" aria-labelledby="get-h">
+  <h3 id="get-h">Where to get it</h3>
+  <ol class="notes steps-text">
+    <li>Build it with <code>make msi</code> (output <code>dist\windows\cryobackup-agent.msi</code>) or take the signed MSI from your release channel.</li>
+    <li>Copy it into the console's artifacts directory (the <code>artifacts_dir</code> setting) on the console host. This page then shows its hash. The console does not serve installers in this release and has no upload form, so nothing here is reachable from the internet.</li>
+    <li>Stage the file on endpoints with your RMM's file distribution, and run <code>install-cryobackup.ps1</code> with the variables from <a href="/enroll">Enroll devices</a>.</li>
+  </ol>
+  <p class="muted ui">Agents reach the console at <span class="mono">{{.ServerURL}}</span>. A page that pre-binds a customer to a download arrives with release management.</p>
+  <div class="actions"><a class="btn primary" href="/enroll">Create an enrollment token</a></div>
+</section>
+{{end}}

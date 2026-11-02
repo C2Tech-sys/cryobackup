@@ -1,0 +1,75 @@
+{{/* S01 second step - the MFA step of sign-in (M2-W1A). A pending (password-only) session sees only this page:
+     verify (TOTP code, or a recovery code), enroll (first sign-in of an account without TOTP: QR + key + code),
+     codes (recovery codes shown once after enrollment). Bare centred shell like the password step. */}}
+{{define "bare"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="referrer" content="same-origin">
+<title>{{.Title}} · CryoBackup</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="{{asset "fonts.css"}}">
+<link rel="stylesheet" href="{{asset "tokens.css"}}">
+<link rel="stylesheet" href="{{asset "app.css"}}">
+<script src="{{asset "js/theme.js"}}"></script>
+</head>
+<body>
+{{template "icons"}}
+<main class="login mfa" id="main">
+  <div class="box{{if ne .Mode "verify"}} wide{{end}}">
+    <div class="brandrow">
+      <svg aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg>
+      <div class="t-hero-wordmark wm" role="img" aria-label="CryoBackup"><b>CRYO</b><span>BACKUP</span></div>
+      <h1 class="sr-only">{{.Title}}</h1>
+    </div>
+    <section class="card" aria-labelledby="mfa-h">
+      <ol class="signin-steps" aria-label="Sign-in steps"><li class="done"><i aria-hidden="true"><svg width="11" height="11"><use href="#i-check"/></svg></i>Password</li><li class="{{if eq .Mode "codes"}}done{{else}}on{{end}}" {{if ne .Mode "codes"}}aria-current="step"{{end}}><i aria-hidden="true">{{if eq .Mode "codes"}}<svg width="11" height="11"><use href="#i-check"/></svg>{{else}}2{{end}}</i>{{if eq .Mode "verify"}}Authenticator code{{else}}Authenticator setup{{end}}</li></ol>
+      <h2 id="mfa-h">{{.Title}}</h2>
+      {{if .Fixtures}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>Fixtures mode.</b> The fleet is fictional; the authenticator step is real.</div></div>{{end}}
+      {{template "acct_note" .Error}}
+
+      {{if eq .Mode "verify"}}
+      <p class="lead">Signed in as <b>{{.Username}}</b>. Enter the six-digit code from your authenticator app.</p>
+      <form method="post" action="/login/mfa" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <div class="field"><label for="code">Authentication code</label>
+          <input class="input lg otp" id="code" name="code" type="text" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required autofocus{{if .Error}} aria-invalid="true"{{end}}>
+          <span class="help">Codes change every 30 seconds and each one works once.</span></div>
+        <button class="btn primary lg" type="submit">Verify</button>
+      </form>
+      <details class="alt">
+        <summary>Lost your authenticator? Use a recovery code</summary>
+        <form method="post" action="/login/mfa/recovery" autocomplete="off">
+          <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <div class="field"><label for="rcode">Recovery code</label>
+            <input class="input mono" id="rcode" name="code" type="text" autocapitalize="none" spellcheck="false" placeholder="xxxxx-xxxxx" maxlength="16" required>
+            <span class="help">Each recovery code works once. If you have none left, ask an owner to reset your MFA.</span></div>
+          <button class="btn" type="submit">Sign in with a recovery code</button>
+        </form>
+      </details>
+
+      {{else if eq .Mode "enroll"}}
+      <p class="lead">Signed in as <b>{{.Username}}</b>. Every account needs an authenticator app: set one up to finish signing in.</p>
+      {{if .QR}}
+      {{template "acct_enroll" .}}
+      <form method="post" action="/login/mfa/enroll" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <div class="field"><label for="code">Code from the app</label>
+          <input class="input lg otp" id="code" name="code" type="text" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required{{if .Error}} aria-invalid="true"{{end}}></div>
+        <button class="btn primary lg" type="submit">Finish setup</button>
+      </form>
+      {{end}}
+
+      {{else}}
+      <p class="lead">Your authenticator is set up and you are signed in, <b>{{.Username}}</b>.</p>
+      {{template "acct_codes" .}}
+      <a class="btn primary lg" href="/">I saved them: continue to the console</a>
+      {{end}}
+    </section>
+    {{if ne .Mode "codes"}}<form class="center" method="post" action="/login/mfa/cancel"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="linkbtn" type="submit">Sign in as someone else</button></form>{{end}}
+  </div>
+</main>
+</body>
+</html>{{end}}

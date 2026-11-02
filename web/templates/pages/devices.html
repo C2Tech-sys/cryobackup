@@ -1,0 +1,6 @@
+{{/* S19 - all devices (M2-W1C). The table, its filters and its pager are partials/devices_table.html. */}}
+{{define "title"}}Devices{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Devices</span></nav>
+{{template "devices_view" .Table}}
+{{end}}

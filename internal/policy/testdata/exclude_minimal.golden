@@ -1,0 +1,38 @@
+# CryoBackup exclude patterns for restic --iexclude-file.
+# Generated from the policy; changes are overwritten.
+# Backslash separators; matched case-insensitively; the last matching line wins.
+
+# mandatory
+C:\ProgramData\CryoBackup
+C:\Users\fixture\AppData\Local\restic
+C:\Users\Fixture-Two\AppData\Local\restic
+pagefile.sys
+hiberfil.sys
+swapfile.sys
+DumpStack.log.tmp
+$$Recycle.Bin
+System Volume Information
+
+# baseline
+C:\Users\fixture\AppData\Local\Temp
+C:\Users\Fixture-Two\AppData\Local\Temp
+C:\Windows\Temp
+C:\Users\fixture\AppData\Local\Microsoft\WindowsApps
+C:\Users\Fixture-Two\AppData\Local\Microsoft\WindowsApps
+C:\Users\fixture\AppData\Local\Google\Chrome\User Data\*\Cache
+C:\Users\Fixture-Two\AppData\Local\Google\Chrome\User Data\*\Cache
+C:\Users\fixture\AppData\Local\Google\Chrome\User Data\*\Code Cache
+C:\Users\Fixture-Two\AppData\Local\Google\Chrome\User Data\*\Code Cache
+C:\Users\fixture\AppData\Local\Google\Chrome\User Data\*\GPUCache
+C:\Users\Fixture-Two\AppData\Local\Google\Chrome\User Data\*\GPUCache
+C:\Users\fixture\AppData\Local\Microsoft\Edge\User Data\*\Cache
+C:\Users\Fixture-Two\AppData\Local\Microsoft\Edge\User Data\*\Cache
+C:\Users\fixture\AppData\Local\Microsoft\Edge\User Data\*\Code Cache
+C:\Users\Fixture-Two\AppData\Local\Microsoft\Edge\User Data\*\Code Cache
+C:\Users\fixture\AppData\Local\Microsoft\Edge\User Data\*\GPUCache
+C:\Users\Fixture-Two\AppData\Local\Microsoft\Edge\User Data\*\GPUCache
+C:\Users\fixture\AppData\Local\Mozilla\Firefox\Profiles\*\cache2
+C:\Users\Fixture-Two\AppData\Local\Mozilla\Firefox\Profiles\*\cache2
+C:\Windows\Prefetch
+thumbcache_*.db
+Thumbs.db

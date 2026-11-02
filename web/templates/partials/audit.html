@@ -1,0 +1,64 @@
+{{/* audit.html - the audit log viewer (B09, components 5.1, 5.2, 3.4, 9.5), M2-W3A. The filter bar is a plain GET form, every control a plain link, so the page works without JavaScript; with htmx the results region (#auditresults) is swapped from GET /ui/audit/table and the canonical URL is pushed. */}}
+
+{{define "audit_view"}}<section class="stack audit-view" aria-label="Audit log">
+<form class="filters" id="auditfilters" method="get" action="{{.BaseURL}}" role="search" aria-label="Filter the audit log"
+  hx-get="{{.PartialURL}}" hx-target="#auditresults" hx-swap="innerHTML" hx-indicator="#auditresults" hx-trigger="submit, change, input changed delay:300ms from:#au-actor">
+  <div class="field"><label for="au-actor">Actor</label><input class="input" id="au-actor" name="actor" type="search" value="{{.Form.Actor}}" list="au-actors" placeholder="Username or account id" autocomplete="off" spellcheck="false"><datalist id="au-actors">{{range .Form.Actors}}<option value="{{.}}">{{end}}</datalist></div>
+  <div class="field"><label for="au-action">Action</label><select class="input" id="au-action" name="action">{{range .Form.Actions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <div class="field"><label for="au-type">Object</label><select class="input" id="au-type" name="type">{{range .Form.Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <div class="field"><label for="au-customer">Customer</label><select class="input" id="au-customer" name="customer">{{range .Form.Customers}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <div class="field"><label for="au-result">Result</label><select class="input" id="au-result" name="result">{{range .Form.Results}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <div class="field"><label for="au-from">From <span class="muted">({{.Zone}})</span></label><input class="input mono" id="au-from" name="from" type="date" value="{{.Form.From}}"{{with .Form.Err "from"}} aria-invalid="true"{{end}}></div>
+  <div class="field"><label for="au-to">To <span class="muted">({{.Zone}})</span></label><input class="input mono" id="au-to" name="to" type="date" value="{{.Form.To}}"{{with .Form.Err "to"}} aria-invalid="true"{{end}}></div>
+  {{if ne .Form.Size 50}}<input type="hidden" name="size" value="{{.Form.Size}}">{{end}}
+  <button class="btn sm" type="submit">Apply</button>
+</form>
+<div id="auditresults" class="stack loadable" aria-live="polite" data-loading-text="Loading the audit log">{{template "audit_results" .}}</div>
+</section>{{end}}
+
+{{define "audit_results"}}{{if or .Chips .Rows}}<div class="chipbar" role="status"><span>{{.Summary}}</span>{{range .Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" hx-get="{{.Partial}}" hx-target="#auditresults" hx-swap="innerHTML" hx-indicator="#auditresults" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}{{if .Chips}}<a class="btn ghost sm" href="{{.ClearHref}}" hx-get="{{.ClearPartial}}" hx-target="#auditresults" hx-swap="innerHTML" hx-indicator="#auditresults">Clear all</a>{{end}}</div>{{end}}
+{{with .Detail}}{{template "audit_detail" .}}{{end}}
+{{if .Empty}}{{template "panel_state" .Empty}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Audit events" tabindex="0">
+<table class="fleet audit">
+<caption>Audit events, newest first. {{.Summary}}</caption>
+<thead><tr><th scope="col">When</th><th scope="col">Actor</th><th scope="col">Action</th><th scope="col">Object</th><th scope="col">Customer</th><th scope="col">Result</th><th scope="col">Via</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr id="ev-{{.ID}}" class="ev{{if .Selected}} sel{{end}}"{{if .Selected}} aria-current="true"{{end}}>
+<td class="when"><a href="{{.Href}}" hx-get="{{.Partial}}" hx-target="#auditresults" hx-swap="innerHTML" hx-indicator="#auditresults" title="{{.WhenFull}}" aria-label="Open the event: {{.Action}}, {{.When}}"><time datetime="{{.ISO}}">{{.When}}</time></a></td>
+<td class="actor-cell">{{.Actor}}<small>{{.ActorKind}}</small></td>
+<td class="act-cell wrap">{{.Action}}<small>{{.ActionCode}}</small></td>
+<td class="obj-cell">{{if .Object}}{{if .ObjectHref}}<a href="{{.ObjectHref}}">{{.Object}}</a>{{else}}{{.Object}}{{end}}{{else}}<span class="muted">-</span>{{end}}</td>
+<td class="cust-cell">{{if .Customer}}{{if .CustomerHref}}<a href="{{.CustomerHref}}">{{.Customer}}</a>{{else}}{{.Customer}}{{end}}{{else}}<span class="muted">console-wide</span>{{end}}</td>
+<td>{{template "chip" .Result}}</td>
+<td class="via mono">{{.Method}}</td>
+</tr>
+{{end}}</tbody></table></div>
+{{template "audit_pager" .Pager}}
+{{end}}
+{{if not .Err}}<p class="meta-mono">Checked {{.AsOf}}. Times are shown in {{.Zone}} and stored in UTC. {{.Of}} {{if eq .Of 1}}event is{{else}}events are{{end}} recorded in total for this account; the log is read-only.</p>{{end}}
+{{end}}
+
+{{define "audit_detail"}}<aside class="card raised auditdetail" id="audit-detail" aria-labelledby="ad-h">
+{{if .Missing}}<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b id="ad-h">That event cannot be shown.</b> It does not exist, or it belongs to a customer this account cannot see. <a href="{{.CloseHref}}" hx-get="{{.ClosePartial}}" hx-target="#auditresults" hx-swap="innerHTML" hx-indicator="#auditresults">Close</a></div></div>
+{{else}}
+<header class="page-head"><div class="t"><h3 id="ad-h">{{.Action}}</h3>{{template "chip" .Result}}<code class="meta-mono">{{.ActionCode}}</code>
+  <a class="btn ghost sm close" href="{{.CloseHref}}" hx-get="{{.ClosePartial}}" hx-target="#auditresults" hx-swap="innerHTML" hx-indicator="#auditresults">Close</a></div>
+  <div class="sub"><time datetime="{{.ISO}}">{{.When}}</time><span>{{.UTC}}</span>{{if .Severity}}<span>severity {{.Severity}}</span>{{end}}</div></header>
+<div class="auditdetail-grid">
+  <dl class="kv compact">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl>
+  <section aria-labelledby="ad-det"><h4 class="h-label" id="ad-det">Stored details <span class="count">{{len .Lines}}</span></h4>
+  {{if .Lines}}<div class="table-wrap flat" role="region" aria-label="Stored details" tabindex="0"><table class="fleet compact"><caption class="sr-only">Details stored with this event</caption>
+    <thead><tr><th scope="col">Field</th><th scope="col">Value</th></tr></thead>
+    <tbody>{{range .Lines}}<tr><td class="mono">{{.Key}}</td><td class="mono wrap">{{if .Withheld}}<span class="muted">{{.Withheld}}</span>{{else}}{{.Value}}{{end}}</td></tr>{{end}}</tbody></table></div>
+  {{else}}<p class="meta-mono">No details were stored with this event. The actor, object and result above are the whole record.</p>{{end}}
+  <p class="meta-mono">Details are path-free by rule. A value that looks like a file path or a secret is never shown here.</p></section>
+</div>
+{{end}}
+</aside>{{end}}
+
+{{define "audit_pager"}}<nav class="pager" aria-label="Pagination"><span class="pg-text" role="status">{{.Text}}</span>
+{{if .Clamp}}<span class="meta-mono">{{.Clamp}}</span>{{end}}
+{{if gt .Pages 1}}<ul>{{range .Links}}<li>{{if .Disabled}}<span class="pg disabled" aria-disabled="true" aria-label="{{.Aria}}">{{.Label}}</span>{{else}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}"{{if .Partial}} hx-get="{{.Partial}}" hx-target="#auditresults" hx-swap="innerHTML" hx-indicator="#auditresults"{{end}} aria-label="{{.Aria}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</li>{{end}}</ul>{{end}}
+{{if .Sizes}}<span class="pg-size"><span class="meta-mono">Per page</span>{{range .Sizes}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}"{{if .Partial}} hx-get="{{.Partial}}" hx-target="#auditresults" hx-swap="innerHTML" hx-indicator="#auditresults"{{end}} aria-label="{{.Aria}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}</span>{{end}}
+</nav>{{end}}

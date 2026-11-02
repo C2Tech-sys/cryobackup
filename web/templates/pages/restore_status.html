@@ -1,0 +1,20 @@
+{{/* B17 - restore progress and download. The live part refreshes itself every two seconds while the zip is being prepared. */}}
+{{define "restore_live"}}<div id="restore-live" class="stack" data-live{{if .Poll}} data-poll hx-get="/ui/partials/restore/{{.ID}}" hx-trigger="load delay:2s" hx-swap="outerHTML"{{end}}>
+<span class="asof"></span>
+<div class="row">{{template "chip" .Status}}<span class="mono">{{.Created}}</span>{{if .Bytes}}<span class="mono">{{.Bytes}}</span>{{end}}</div>
+<div class="banner {{if .Failed}}crit{{else if .CanDownload}}ok{{else}}info{{end}} dense" role="{{if .Failed}}alert{{else}}status{{end}}"><i class="g g-{{if .Failed}}crit{{else if .CanDownload}}ok{{else}}info{{end}}" aria-hidden="true"></i><div class="b-text">{{.Message}}</div></div>
+{{if .CanDownload}}<form class="row" method="post" action="/ui/restores/{{.ID}}/download"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn primary" type="submit"><svg width="14" height="14" aria-hidden="true"><use href="#i-download"/></svg>Download zip</button><span class="meta-mono">Expires {{.Expires}}</span></form>{{end}}
+</div>{{end}}
+
+{{define "content"}}
+{{with .R}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <a href="/devices/{{.DeviceID}}">{{.Host}}</a> / <span>Restore</span></nav>
+<section class="wiz" aria-labelledby="rs-h">
+{{template "steps" .Steps}}
+<div class="in"><h2 id="rs-h">Restore from {{.Host}}</h2>
+{{template "restore_live" .}}
+</div>
+<div class="foot"><a class="btn ghost" href="/devices/{{.DeviceID}}">Back to the device</a><a class="btn" href="/devices/{{.DeviceID}}/restore">Restore another file</a></div>
+</section>
+{{end}}
+{{end}}

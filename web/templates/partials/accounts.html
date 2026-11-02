@@ -1,0 +1,33 @@
+{{/* accounts.html - pieces shared by the M2-W1A account screens (S01 MFA step, S32, S38). Names are prefixed acct_. */}}
+
+{{/* acct_when: a timestamp in the operator zone with its UTC instant; "never" when empty. */}}
+{{/* acct_when_short: the compact form for narrow cells; never wraps. */}}
+{{define "acct_when_short"}}{{if .Text}}<time class="nowrap" datetime="{{.ISO}}" title="{{.Text}}">{{.Short}}</time>{{else}}<span class="muted">never</span>{{end}}{{end}}
+{{define "acct_when"}}{{if .Text}}<time datetime="{{.ISO}}" title="{{.Text}}">{{.Text}}</time>{{else}}<span class="muted">never</span>{{end}}{{end}}
+
+{{/* acct_badge: a word with its state glyph (components 0.1). */}}
+{{define "acct_badge"}}<span class="st sm {{.Class}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}
+
+{{/* acct_note: an inline banner from a Note (components 9.3). */}}
+{{define "acct_note"}}{{with .}}<div class="banner {{.Class}} dense"{{if eq .Class "crit"}} role="alert"{{else}} role="status"{{end}}><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text">{{if eq .Class "crit"}}<span class="sr-only">Error: </span>{{end}}<b>{{.Title}}</b> {{.Text}}</div></div>{{end}}{{end}}
+
+{{/* acct_enroll: the TOTP enrollment block (components 9.8): QR, manual key, expiry. */}}
+{{define "acct_enroll"}}<div class="enroll">
+  <div class="qrbox">{{.QR}}</div>
+  <ol class="enroll-steps">
+    <li>Open an authenticator app (any app that supports TOTP codes) and add an account by scanning the QR code.</li>
+    <li>No camera? Enter this key by hand, as a time-based key:
+      <div class="copybar">{{copybtn "cp-totp-key" "Copy the authenticator key"}}</div>
+      <pre class="code secret" id="cp-totp-key" tabindex="0" role="region" aria-label="Authenticator key, shown once">{{.Secret}}</pre></li>
+    <li>Type the six-digit code the app shows to finish.</li>
+  </ol>
+</div>
+<p class="meta-mono">This setup is valid until {{.Expires}}. The key is shown on this page only and is never logged.</p>{{end}}
+
+{{/* acct_codes: recovery codes shown once, with a text download. */}}
+{{define "acct_codes"}}<section class="codes-once" aria-labelledby="codes-h">
+  <div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b id="codes-h">Save these recovery codes now.</b> They are shown once. Each one signs you in a single time if your authenticator is lost; the console keeps only their hashes.</div></div>
+  <div class="copybar">{{copybtn "cp-recovery" "Copy the recovery codes"}}</div>
+  <ol class="codes" id="cp-recovery" aria-label="Recovery codes">{{range .Codes}}<li><code>{{.}}</code></li>{{end}}</ol>
+  <div class="actions"><a class="btn sm" download="cryobackup-recovery-codes.txt" href="data:text/plain;charset=utf-8,{{.CodesTxt}}"><svg width="12" height="12" aria-hidden="true"><use href="#i-download"/></svg>Download as text</a></div>
+</section>{{end}}

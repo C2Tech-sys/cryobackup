@@ -1,0 +1,33 @@
+{
+  "active_run_id": "01JAZK3Q8W5N6X7Y8Z9A0B1C2E",
+  "agent_version": "1.2.3",
+  "battery_pct": 87,
+  "deferred_reason": "battery",
+  "device_time": "2026-10-22T14:03:09.512Z",
+  "gateway_secret_acked": true,
+  "hw_fingerprint": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "journal_depth": 2,
+  "last_error_class": "network",
+  "metered": true,
+  "on_ac": true,
+  "policy_etag": "\"ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12\"",
+  "policy_version_applied": 7,
+  "progress": {
+    "bytes_done": 4200,
+    "error_count": 2,
+    "files_done": 42,
+    "kind": "backup",
+    "percent_done": 0.42,
+    "run_id": "01JAZK3Q8W5N6X7Y8Z9A0B1C2D",
+    "seconds_elapsed": 61,
+    "stalled": true,
+    "total_bytes": 10000,
+    "total_files": 100,
+    "updated_at": "2026-10-22T14:04:09.512Z"
+  },
+  "queue_depth": 3,
+  "restic_version": "0.19.1",
+  "service_state": "deferred",
+  "uptime_s": 86400,
+  "vpn": true
+}

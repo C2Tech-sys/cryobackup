@@ -1,0 +1,9 @@
+{"message_type":"verbose_status","action":"restored","item":"\\invoices\\2026-01.pdf","size":16}
+{"message_type":"verbose_status","action":"restored","item":"\\invoices\\2026-02.pdf","size":17}
+{"message_type":"verbose_status","action":"restored","item":"\\media\\clip.mp4","size":2097152}
+{"message_type":"verbose_status","action":"restored","item":"\\notes\\readme.txt","size":15}
+{"message_type":"verbose_status","action":"restored","item":"\\notes\\todo.docx","size":13}
+{"message_type":"verbose_status","action":"restored","item":"\\invoices","size":0}
+{"message_type":"verbose_status","action":"restored","item":"\\media","size":0}
+{"message_type":"verbose_status","action":"restored","item":"\\notes","size":0}
+{"message_type":"summary","total_files":8,"files_restored":8,"total_bytes":2097213,"bytes_restored":2097213}

@@ -1,0 +1,23 @@
+{{/* visuals.html - KPI tiles, rings and the customer group of the data table. */}}
+
+{{define "kpis"}}<div id="kpis" class="kpis" role="list" aria-label="Fleet summary">{{range .}}{{$sp := .Spark}}<div class="kpi {{.Tone}}" role="listitem"><div class="l">{{if .Glyph}}<i class="g g-{{.Glyph}}" aria-hidden="true"></i>{{end}}{{.Label}}</div><div class="v t-big-number{{if .Na}} na{{end}}" aria-hidden="true">{{.Value}}{{if .Unit}}<small>{{.Unit}}</small>{{end}}</div><span class="sr-only">{{.Label}}: {{.SR}}</span>{{if $sp}}<div class="spark" aria-hidden="true">{{range $i, $h := $sp}}<i{{if eq (add $i 1) (len $sp)}} class="hi"{{end}} style="height: {{$h}}%"></i>{{end}}</div>{{end}}</div>{{end}}</div>{{end}}
+
+{{define "ring"}}<div class="ringcard"><h2>{{.Title}}</h2>
+<svg viewBox="0 0 120 120" role="img" aria-label="{{.Aria}}"><circle class="track{{if .Alarm}} alarm-ring{{end}}" cx="60" cy="60" r="46" fill="none" stroke-width="14"/>{{range .Segs}}<circle class="seg-{{.Class}}" cx="60" cy="60" r="46" fill="none" stroke-width="14" stroke-dasharray="{{.Dash}}" stroke-dashoffset="{{.Offset}}" transform="rotate(-90 60 60)"/>{{end}}<text class="t-big-number{{if gt (len .Center) 3}} sm{{end}}" x="60" y="61">{{.Center}}</text><text class="cap{{if gt (len .Caption) 9}} sm{{end}}" x="60" y="77">{{.Caption}}</text></svg>
+<ul>{{range .Legend}}<li><i class="g g-{{.Class}}" aria-hidden="true"></i>{{.Label}}<b>{{.N}}</b></li>{{end}}</ul></div>{{end}}
+
+{{/* group: one customer as a <tbody> with a rowgroup header (components 3.5). Healthy customers default to collapsed; fresh.js applies it, so without JavaScript every row is visible. */}}
+{{define "group"}}<tbody id="{{.ID}}" class="grp{{if .Variant}} {{.Variant}}{{end}}" data-default-collapsed="{{.Collapsed}}" data-collapsed="false">
+<tr class="ghead"><th scope="rowgroup" colspan="5"><div class="ghead-in">
+{{if .Rows}}<button type="button" class="chev" aria-expanded="true" aria-controls="{{.ID}}" aria-label="{{.Aria}}"><svg aria-hidden="true"><use href="#i-chev"/></svg></button>{{else}}<span class="chev none" aria-hidden="true"></span><span class="sr-only">{{.Aria}}</span>{{end}}
+{{with .Status}}{{template "chip" .}}{{end}}<span>{{.Name}}</span><span class="cnt">{{.CountText}}</span>{{if .Note}}<span class="st crit"><i aria-hidden="true"></i>{{.Note}}</span>{{end}}
+{{template "gauge" .Gauge}}{{template "roll" .Roll}}
+</div></th></tr>
+{{range .Rows}}<tr id="dev-{{.ID}}" class="dev">
+<td class="dev-cell"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a>{{if .Meta}}<small>{{.Meta}}</small>{{end}}</td>
+<td class="state-cell">{{range .Chips}}{{template "chipbtn" .}} {{end}}{{template "badges" .Badges}}</td>
+<td class="age{{if .AgeClass}} {{.AgeClass}}{{end}}">{{if .AgeGlyph}}<i class="g g-{{.AgeGlyph}}" aria-hidden="true"></i>{{end}}{{.AgeText}}{{if .AgeSub}}<small>{{.AgeSub}}</small>{{end}}</td>
+<td class="strip-cell">{{template "strip" .Strip}}</td>
+<td class="agent-cell mono">{{.Agent}}</td>
+</tr>
+{{end}}</tbody>{{end}}

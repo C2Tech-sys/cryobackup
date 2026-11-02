@@ -1,0 +1,103 @@
+{{/* B07 - device panel as its full-page twin: Summary, History, Settings, Policy (M2-W2A) and Audit tabs (M2-W1C). Path-free: counts, classes, versions and times only. */}}
+{{define "device_live"}}<div id="device-live" class="stack" data-live>
+<span class="asof" aria-live="polite"></span>
+{{with .Dev}}
+{{if .Cause}}<div class="banner {{.Cause.Class}} dense"{{if eq .Cause.Class "crit"}} role="alert"{{else}} role="status"{{end}}><i class="g g-{{.Cause.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Cause.Title}}.</b> {{.Cause.Text}}</div></div>{{end}}
+<div class="actions">
+  {{if .CanRestore}}<a class="btn primary sm" href="/devices/{{.ID}}/restore"><svg width="12" height="12" aria-hidden="true"><use href="#i-restore"/></svg>Restore files…</a>
+  {{else}}<span class="btn sm" role="link" aria-disabled="true" aria-describedby="restore-why"><svg width="12" height="12" aria-hidden="true"><use href="#i-restore"/></svg>Restore files…</span><span class="meta-mono" id="restore-why">{{.RestoreNote}}</span>{{end}}
+</div>
+{{with .Progress}}{{template "run_progress" .}}{{end}}
+<section aria-labelledby="h-strip"><h3 class="h-label" id="h-strip">Last 10 days</h3>{{template "strip" .Strip}}</section>
+<section aria-labelledby="h-runs"><h3 class="h-label" id="h-runs">Last ten runs <span class="count">{{len .Runs}}</span></h3>
+{{if .Runs}}<ol class="hist">{{range .Runs}}<li><time class="d" datetime="{{.DateISO}}">{{.Date}}</time><span class="sum">{{template "chip" .Chip}} {{.Summary}}</span><span class="s">{{.Exit}}</span><span class="s">{{.Duration}}</span></li>{{end}}</ol>
+<p><a href="/devices/{{.ID}}/history">All runs, with filters</a></p>
+{{else if .RunsErr}}<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>Recent runs could not be read.</b> This is an alarm, not an empty list. Reload the page; if it persists, check the console log and the database.</div></div>
+{{else}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>No runs recorded yet.</b> A device with no history past its grace period is an alarm, not an empty list.</div></div>{{end}}
+</section>
+<section aria-labelledby="h-facts"><h3 class="h-label" id="h-facts">Facts</h3>
+{{if .FactsErr}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Some facts could not be read.</b> The rows below are what could be read; a missing row is a failed read, not a zero.</div></div>{{end}}
+<dl class="kv">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{with .Chip}}{{template "chip" .}}{{else}}{{.Value}}{{end}}</dd>{{end}}</dl></section>
+{{end}}
+</div>{{end}}
+
+{{define "device_history"}}<div class="stack" id="device-history">
+<form class="filters" method="get" action="{{.Action}}" role="search" aria-label="Filter runs">
+  <div class="field"><label for="h-kind">Kind</label><select class="input" id="h-kind" name="kind">{{range .Form.Kind}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <div class="field"><label for="h-outcome">Outcome</label><select class="input" id="h-outcome" name="outcome">{{range .Form.Outcome}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <div class="field"><label for="h-range">Range</label><select class="input" id="h-range" name="range">{{range .Form.Range}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  {{if ne .Form.Size 50}}<input type="hidden" name="size" value="{{.Form.Size}}">{{end}}
+  <button class="btn sm" type="submit">Apply</button>
+</form>
+{{if .Chips}}<div class="chipbar" role="status"><span>{{.Summary}}</span>{{range .Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}<a class="btn ghost sm" href="{{.Clear}}">Clear all</a></div>{{end}}
+{{with .Warn}}{{template "inline_banner" .}}{{end}}
+{{with .Empty}}{{template "panel_state" .}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Run history" tabindex="0">
+<table class="fleet">
+<caption>Run history, newest first, {{.Summary}}</caption>
+<thead><tr><th scope="col">Started</th><th scope="col">Kind</th><th scope="col">Outcome</th><th scope="col">Summary</th><th scope="col">Duration</th><th scope="col">Exit</th><th scope="col">Trigger</th></tr></thead>
+<tbody>{{range .Rows}}<tr>
+<td><time datetime="{{.ISO}}">{{.Started}}</time></td><td>{{.Kind}}</td><td>{{template "chip" .Chip}}</td><td class="wrap">{{.Summary}}</td><td class="mono">{{.Duration}}</td><td class="mono">{{.Exit}}</td><td>{{.Trigger}}</td>
+</tr>{{end}}</tbody></table></div>
+{{template "pager" .Pager}}{{end}}
+</div>{{end}}
+
+{{define "device_settings"}}<div class="stack" id="device-settings">
+<form class="formcard" method="post" action="{{.Action}}" aria-label="Device settings">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  {{if .Summary}}<div class="banner crit dense" role="alert" tabindex="-1"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>The settings were not saved.</b> Fix {{len .Summary}} {{if eq (len .Summary) 1}}field{{else}}fields{{end}}:<ul class="errlist">{{range .Summary}}<li>{{.Message}}</li>{{end}}</ul></div></div>{{end}}
+  {{if .ReadOnly}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text">{{.Why}}</div></div>{{end}}
+  <fieldset class="plain stack"{{if .ReadOnly}} disabled{{end}}>
+    <div class="field"><label for="s-name">Display name <span class="muted">(optional)</span></label>
+      <input class="input" id="s-name" name="friendly_name" type="text" maxlength="120" value="{{.Friendly}}" autocomplete="off"{{if .Err "friendly_name"}} aria-invalid="true" aria-describedby="s-name-help s-name-err"{{else}} aria-describedby="s-name-help"{{end}}>
+      <span class="help" id="s-name-help">Shown beside the hostname. The hostname itself never changes.</span>{{with .Err "friendly_name"}}<span class="err" id="s-name-err">{{.}}</span>{{end}}</div>
+    <div class="frow">
+      <div class="field"><label for="s-class">Device class</label>
+        <select class="input" id="s-class" name="device_class"{{if .Err "device_class"}} aria-invalid="true" aria-describedby="s-class-err"{{end}}>{{range .Classes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        {{with .Err "device_class"}}<span class="err" id="s-class-err">{{.}}</span>{{end}}</div>
+      <div class="field"><label for="s-ring">Update ring</label>
+        <select class="input" id="s-ring" name="update_ring"{{if .Err "update_ring"}} aria-invalid="true" aria-describedby="s-ring-err"{{end}}>{{range .Rings}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        {{with .Err "update_ring"}}<span class="err" id="s-ring-err">{{.}}</span>{{end}}</div>
+    </div>
+    <div class="field"><label for="s-notes">Notes <span class="muted">(optional)</span></label>
+      <textarea class="input" id="s-notes" name="notes" rows="4" maxlength="2000"{{if .Err "notes"}} aria-invalid="true" aria-describedby="s-notes-err"{{end}}>{{.Notes}}</textarea>
+      {{with .Err "notes"}}<span class="err" id="s-notes-err">{{.}}</span>{{end}}</div>
+  </fieldset>
+  {{if not .ReadOnly}}<div class="row end"><button class="btn primary" type="submit">Save settings</button></div>{{end}}
+</form>
+<section aria-labelledby="h-sfacts"><h3 class="h-label" id="h-sfacts">Device facts</h3>
+<dl class="kv">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl></section>
+</div>{{end}}
+
+{{define "device_audit"}}<div class="stack" id="device-audit">
+{{with .Warn}}{{template "inline_banner" .}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Device audit" tabindex="0">
+<table class="fleet">
+<caption>Audit rows of this device, newest first, {{.Pager.Text}}</caption>
+<thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Result</th><th scope="col">Details</th></tr></thead>
+<tbody>{{range .Rows}}<tr><td><time datetime="{{.ISO}}">{{.When}}</time></td><td>{{.Actor}}</td><td>{{.Action}}</td><td>{{template "chip" .Result}}</td><td class="wrap">{{.Details}}</td></tr>{{end}}</tbody></table></div>
+{{template "pager" .Pager}}{{end}}
+<p class="meta-mono">Read-only. Audit rows are never edited; they hold names, ids and field names, never file paths.</p>
+</div>{{end}}
+
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/devices">Devices</a> / <a href="/customers/{{.Dev.CustomerID}}">{{.Dev.Customer}}</a> / <span>{{.Dev.Host}}</span></nav>
+{{if .Saved}}<div class="banner ok dense" role="status"><i class="g g-ok" aria-hidden="true"></i><div class="b-text">{{.Saved}}</div></div>{{end}}
+<article class="card" aria-labelledby="dev-h">
+  <header class="page-head">
+    <div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-pc"/></svg><h2 id="dev-h">{{.Dev.Host}}</h2>
+      <span class="row">{{range .Dev.Chips}}{{template "chipbtn" .}}{{end}}{{template "badges" .Dev.Badges}}</span></div>
+    <div class="sub">{{range .Dev.Sub}}<span>{{.}}</span>{{end}}</div>
+    {{with .Actions}}{{template "dev_actions" .}}{{end}}{{/* M2-W2C: action menu, notice and identity panel (partials/commands.html) */}}
+    <nav class="tabs" aria-label="Device sections">{{range .Tabs}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
+  </header>
+  <div class="mt">
+  {{if eq .Tab "summary"}}{{template "device_live" .}}
+  {{else if eq .Tab "history"}}{{template "device_history" .History}}
+  {{else if eq .Tab "commands"}}{{template "device_commands" .Commands}}
+  {{else if eq .Tab "settings"}}{{template "device_settings" .Settings}}
+  {{else if eq .Tab "audit"}}{{template "device_audit" .Audit}}
+  {{else if eq .Tab "policy"}}{{template "device_policy" .Policy}}{{end}}
+  </div>
+</article>
+{{end}}

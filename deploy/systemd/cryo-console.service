@@ -1,0 +1,57 @@
+# cryo-console serve: the agent API (public) and the admin UI (loopback or mesh).
+# Holds the database and the master key; holds NO storage credential (architecture DH1).
+# Install: see README.md in this directory.
+
+[Unit]
+Description=CryoBackup console (agent API and admin UI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryobackup
+Group=cryobackup
+ExecStart=/usr/local/bin/cryo-console serve --config /etc/cryobackup/config.json
+Restart=on-failure
+RestartSec=5s
+UMask=0027
+# No crash dumps (ADR 0008): a core file could hold a restore stream or keys.
+LimitCORE=0
+
+# The admin-path socket lives here, shared with cryo-maintain through the group.
+RuntimeDirectory=cryobackup
+RuntimeDirectoryMode=0770
+RuntimeDirectoryPreserve=yes
+# StateDirectory creates /var/lib/cryobackup (database, artifacts) and
+# /var/lib/cryobackup-auth (the htpasswd the gateway reads).
+StateDirectory=cryobackup cryobackup-auth
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/cryobackup /var/lib/cryobackup-auth /run/cryobackup
+ConfigurationDirectory=cryobackup
+ConfigurationDirectoryMode=0750
+
+# Hardening
+# Credential isolation: even as the same user, this process cannot open the other
+# tiers' secrets (a leading "-" ignores a path that is not there).
+InaccessiblePaths=-/etc/cryobackup/rclone-admin.conf -/etc/cryobackup/rclone-gateway.conf
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

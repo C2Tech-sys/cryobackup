@@ -1,0 +1,68 @@
+# The gateway: rclone serve restic, append-only, private repositories, TLS >= 1.2.
+# Same flags as the compose service (architecture 7.1, engine 3.1-3.2). Holds the
+# GATEWAY credential only: rclone-gateway.conf contains the [store] remote and no other.
+# The htpasswd is written by cryo-console (mode 0640, group cryobackup) and hot-reloaded.
+#
+# --append-only is a command-line flag. Do NOT replace it with Environment=RCLONE_APPEND_ONLY:
+# the environment form has failed to enforce before (engine 3.2). Run
+# deploy/rclone/append-only-test.sh (L-APPEND-1) after every change to this file.
+# Install: see README.md in this directory.
+
+[Unit]
+Description=CryoBackup gateway (rclone serve restic, append-only)
+After=network-online.target cryo-console.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryobackup
+Group=cryobackup
+# /etc/cryobackup/gateway.env defines GATEWAY_PORT, BUCKET and PREFIX (no secret).
+EnvironmentFile=/etc/cryobackup/gateway.env
+Environment=RCLONE_CONFIG=/etc/cryobackup/rclone-gateway.conf
+ExecStart=/usr/local/bin/rclone serve restic \
+    --addr :${GATEWAY_PORT} \
+    --cert /etc/cryobackup/tls/gateway.crt \
+    --key /etc/cryobackup/tls/gateway.key \
+    --min-tls-version tls1.2 \
+    --htpasswd /var/lib/cryobackup-auth/htpasswd \
+    --append-only \
+    --private-repos \
+    store:${BUCKET}/${PREFIX}
+# The htpasswd file may not exist until cryo-console has synced it once.
+Restart=always
+RestartSec=5s
+UMask=0077
+# No crash dumps (ADR 0008): a core file could hold backup data in flight.
+LimitCORE=0
+
+# Hardening: this unit never writes to disk.
+# Credential isolation: the gateway holds the append-only credential only. Even as the
+# same user it cannot open the admin credential, the master key, the console config or
+# the console's state directory (the database, artifacts). The htpasswd it reads lives
+# in /var/lib/cryobackup-auth, a different directory. A leading "-" ignores a path that
+# is not there.
+InaccessiblePaths=-/etc/cryobackup/rclone-admin.conf -/etc/cryobackup/master.key -/etc/cryobackup/config.json -/var/lib/cryobackup
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Ports below 1024 need AmbientCapabilities=CAP_NET_BIND_SERVICE and the same in
+# CapabilityBoundingSet; the default 9443 does not.
+
+[Install]
+WantedBy=multi-user.target

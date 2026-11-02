@@ -1,0 +1,50 @@
+{
+  "agent_version": "1.2.3",
+  "attempt": 2,
+  "deferred_reason": "lock",
+  "error_class": "lock",
+  "error_counts": [
+    {
+      "class": "permission",
+      "count": 3,
+      "during": "archival",
+      "ext": "docx"
+    },
+    {
+      "class": "locked",
+      "count": 1,
+      "during": "scan",
+      "ext": "pdf"
+    }
+  ],
+  "exit_code": 11,
+  "finished_at": "2026-10-22T14:08:09.512Z",
+  "id": "01JAZK3Q8W5N6X7Y8Z9A0B1C2D",
+  "initial": true,
+  "kind": "backup",
+  "outcome": "deferred",
+  "policy_version": 7,
+  "snapshot_id": "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12",
+  "started_at": "2026-10-22T14:03:09.512Z",
+  "stats": {
+    "data_added": 8,
+    "data_added_packed": 9,
+    "dirs_changed": 5,
+    "dirs_new": 4,
+    "dirs_unmodified": 6,
+    "failed_files": 12,
+    "files_changed": 2,
+    "files_new": 1,
+    "files_unmodified": 3,
+    "lease": "granted",
+    "long_run": true,
+    "total_bytes_processed": 10,
+    "total_duration_s": 11.5,
+    "total_files_processed": 7,
+    "vss_fallback_volumes": [
+      "C",
+      "D"
+    ]
+  },
+  "trigger": "catchup"
+}

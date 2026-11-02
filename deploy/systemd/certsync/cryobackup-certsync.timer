@@ -1,0 +1,16 @@
+# Optional: run the certificate sync daily. An ACME client renews well before expiry
+# (certbot at 30 days left), so a daily run picks a renewal up within a day.
+
+[Unit]
+Description=CryoBackup certificate sync, daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+# A host that was off at the scheduled time syncs when it comes back.
+Persistent=true
+OnBootSec=10min
+Unit=cryobackup-certsync.service
+
+[Install]
+WantedBy=timers.target

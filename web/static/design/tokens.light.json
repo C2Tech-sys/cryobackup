@@ -1,0 +1,240 @@
+{
+  "_about": "CryoBackup design tokens. Dark-first (the console's default), light theme mirrored. Role names are fixed; values are the brand. Check with: python3 contrast.py tokens.json (dark) and tokens.light.json (light).",
+  "color": {
+    "bg": "#F3F7FC",
+    "surface": "#FFFFFF",
+    "surface-raised": "#FFFFFF",
+    "border": "#D5DFEE",
+    "border-input": "#7D90B0",
+    "text": "#0E1A2E",
+    "text-muted": "#4D5F7E",
+    "accent": "#0A6FAE",
+    "on-accent": "#FFFFFF",
+    "danger": "#B42323",
+    "warning": "#9A5A00",
+    "success": "#13743F",
+    "on-status": "#FFFFFF"
+  },
+  "pairs": [
+    [
+      "text",
+      "bg"
+    ],
+    [
+      "text",
+      "surface"
+    ],
+    [
+      "text",
+      "surface-raised"
+    ],
+    [
+      "text-muted",
+      "bg"
+    ],
+    [
+      "text-muted",
+      "surface"
+    ],
+    [
+      "text-muted",
+      "surface-raised"
+    ],
+    [
+      "on-accent",
+      "accent"
+    ],
+    [
+      "accent",
+      "bg"
+    ],
+    [
+      "accent",
+      "surface"
+    ],
+    [
+      "danger",
+      "bg"
+    ],
+    [
+      "danger",
+      "surface"
+    ],
+    [
+      "warning",
+      "bg"
+    ],
+    [
+      "warning",
+      "surface"
+    ],
+    [
+      "success",
+      "bg"
+    ],
+    [
+      "success",
+      "surface"
+    ],
+    [
+      "on-status",
+      "danger"
+    ],
+    [
+      "on-status",
+      "warning"
+    ],
+    [
+      "on-status",
+      "success"
+    ],
+    [
+      "border-input",
+      "bg",
+      "ui"
+    ],
+    [
+      "border-input",
+      "surface",
+      "ui"
+    ],
+    [
+      "accent",
+      "surface",
+      "ui"
+    ]
+  ],
+  "font": {
+    "display": "'Orbitron', 'Michroma', 'IBM Plex Sans', system-ui, sans-serif",
+    "sans": "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    "mono": "'Martian Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace"
+  },
+  "type": {
+    "xs": {
+      "size": 12,
+      "line": 16,
+      "weight": 500
+    },
+    "sm": {
+      "size": 13,
+      "line": 18,
+      "weight": 400
+    },
+    "base": {
+      "size": 14,
+      "line": 20,
+      "weight": 400
+    },
+    "md": {
+      "size": 16,
+      "line": 24,
+      "weight": 500
+    },
+    "lg": {
+      "size": 20,
+      "line": 28,
+      "weight": 600
+    },
+    "xl": {
+      "size": 28,
+      "line": 34,
+      "weight": 600
+    },
+    "display": {
+      "size": 40,
+      "line": 44,
+      "weight": 600
+    },
+    "2xs": {
+      "size": 10.5,
+      "line": 14,
+      "weight": 500
+    }
+  },
+  "space": [
+    0,
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64
+  ],
+  "radius": {
+    "xs": 4,
+    "sm": 6,
+    "md": 10,
+    "lg": 14,
+    "pill": 999
+  },
+  "shadow": {
+    "card": "0 1px 0 rgba(255,255,255,.03) inset, 0 1px 2px rgba(0,0,0,.35)",
+    "pop": "0 16px 40px rgba(2,8,20,.55)",
+    "glow": "0 0 0 1px rgba(92,201,245,.35), 0 0 24px rgba(92,201,245,.18)"
+  },
+  "motion": {
+    "fast": "120ms",
+    "base": "200ms",
+    "slow": "320ms",
+    "ease": "cubic-bezier(.2,.8,.2,1)"
+  },
+  "layout": {
+    "sidebar": 224,
+    "header": 56,
+    "content-max": 1440,
+    "gutter": 24,
+    "pad": 18,
+    "breakpoints": {
+      "sm": 640,
+      "md": 900,
+      "lg": 1200
+    }
+  },
+  "display-usage": {
+    "_about": "Orbitron is rationed to these five roles. It never sets sentences, table cells, hostnames, state chips, forms, buttons, email body or tray text; weight floor 600; size floor 9.5px (eyebrow chips) / 12.5px (titles) / 18px (numbers).",
+    "hero-wordmark": {
+      "weight": 900,
+      "size": 40,
+      "tracking": ".06em"
+    },
+    "wordmark": {
+      "weight": 800,
+      "size": 15,
+      "tracking": ".12em",
+      "note": "nav 15px, email 16px, tray 12px"
+    },
+    "page-title": {
+      "weight": 600,
+      "size": 12.5,
+      "tracking": ".22em",
+      "transform": "uppercase"
+    },
+    "big-number": {
+      "weight": 700,
+      "size": "18-28",
+      "tracking": ".02em",
+      "note": "KPI tiles 23, age-ring centre 18, digest summary 19, hero 28"
+    },
+    "eyebrow-chip": {
+      "weight": 600,
+      "size": 9.5,
+      "tracking": ".14em",
+      "note": "sparingly"
+    }
+  },
+  "surface": {
+    "content-ground": "radial-gradient(color-mix(in srgb, var(--accent) 9%, transparent) 1px, transparent 1px) 22px grid",
+    "topbar-hairline": "0 1px 0 color-mix(in srgb, var(--accent) 22%, transparent)"
+  },
+  "_approved": "2026-10-21: M1 mark, palette, state language, mocks, type O1 (Orbitron + IBM Plex Sans + IBM Plex Mono), dot-grid ground, hero weight 900 / 800 elsewhere",
+  "soft": {
+    "accent-soft": "rgba(10,111,174,.10)",
+    "danger-soft": "rgba(180,35,35,.10)",
+    "warning-soft": "rgba(154,90,0,.12)",
+    "success-soft": "rgba(19,116,63,.10)"
+  }
+}

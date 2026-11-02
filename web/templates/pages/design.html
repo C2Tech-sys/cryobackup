@@ -1,0 +1,121 @@
+{{/* /design - the design-system check page (components 12.1). Registered in fixtures mode only, on the private listener. Every component is rendered here in its states from the same partials the screens use; the chips are the classifier's real output. */}}
+{{define "head"}}<script src="{{asset "js/design.js"}}" defer></script>{{end}}
+
+{{define "content"}}{{$o := .Only}}
+<div class="d-toolbar" role="toolbar" aria-label="Design page toggles">
+  <div class="grp"><span class="label-mono">Theme</span><div class="seg" role="group" aria-label="Theme"><button type="button" data-toggle="theme" data-value="system" aria-pressed="true">System</button><button type="button" data-toggle="theme" data-value="dark" aria-pressed="false">Dark</button><button type="button" data-toggle="theme" data-value="light" aria-pressed="false">Light</button></div></div>
+  <div class="grp"><span class="label-mono">Motion</span><div class="seg" role="group" aria-label="Reduced motion simulation"><button type="button" data-toggle="motion" data-value="normal" aria-pressed="true">Normal</button><button type="button" data-toggle="motion" data-value="reduce" aria-pressed="false">Reduced</button></div></div>
+  <div class="grp"><span class="label-mono">Force stale</span><div class="seg" role="group" aria-label="Force the stale rule"><button type="button" data-toggle="stale" data-value="off" aria-pressed="true">Off</button><button type="button" data-toggle="stale" data-value="on" aria-pressed="false">On</button></div></div>
+  <div class="grp"><span class="label-mono">SSE drop</span><div class="seg" role="group" aria-label="Force the stream to drop"><button type="button" data-toggle="drop" data-value="off" aria-pressed="true">Off</button><button type="button" data-toggle="drop" data-value="on" aria-pressed="false">On</button></div></div>
+  <div class="grp"><span class="label-mono">Width</span><div class="seg" role="group" aria-label="Viewport width preset"><button type="button" data-toggle="width" data-value="full" aria-pressed="true">Full</button><button type="button" data-toggle="width" data-value="320" aria-pressed="false">320</button><button type="button" data-toggle="width" data-value="640" aria-pressed="false">640</button><button type="button" data-toggle="width" data-value="900" aria-pressed="false">900</button><button type="button" data-toggle="width" data-value="1200" aria-pressed="false">1200</button></div></div>
+  <div class="grp"><span class="label-mono">Hit targets</span><div class="seg" role="group" aria-label="Outline controls under 32 pixels"><button type="button" data-toggle="hit" data-value="off" aria-pressed="true">Off</button><button type="button" data-toggle="hit" data-value="on" aria-pressed="false">On</button></div></div>
+</div>
+<nav class="tabs" aria-label="Design sections"><a href="/design"{{if not $o}} aria-current="page"{{end}}>All</a>{{range .Sections}}<a href="/design/{{.Key}}"{{if eq $o .Key}} aria-current="page"{{end}}>{{.Title}}</a>{{end}}</nav>
+
+<section class="d-section" aria-labelledby="d-checks"><header><h2 id="d-checks">Built-in checks</h2><span class="used">run against the embedded stylesheets and templates at request time; the same functions run in the repository tests</span></header>
+<div class="d-grid">{{range .Checks}}<div class="card compact"><h3 class="row">{{if .Pass}}<span class="st ok sm"><i aria-hidden="true"></i>PASS</span>{{else}}<span class="st crit sm"><i aria-hidden="true"></i>FAIL</span>{{end}} {{.Name}}</h3><p class="meta-mono">{{.Summary}}</p>{{range .Details}}<p class="meta-mono">{{.}}</p>{{end}}</div>{{end}}</div></section>
+
+<div class="d-frame">
+
+{{if or (not $o) (eq $o "tokens")}}<section class="d-section" id="tokens" aria-labelledby="d-tokens"><header><h2 id="d-tokens">Foundations</h2><span class="used">tokens.css, display roles, type recipes</span></header>
+<div class="d-sw">{{range .Tokens}}<div><span class="chip" style="display:block;background: var(--{{.}})"></span><span class="lab"><b>{{.}}</b><span class="mono">var(--{{.}})</span></span></div>{{end}}</div>
+<div class="card stack"><h3 class="h-label">Display roles: the only places the display face appears</h3>
+<div class="d-matrix">
+<div class="r"><span class="k">hero wordmark</span><span class="t-hero-wordmark wm"><b>CRYO</b><span>BACKUP</span></span></div>
+<div class="r"><span class="k">wordmark</span><span class="t-wordmark wm"><b>CRYO</b><span>BACKUP</span></span></div>
+<div class="r"><span class="k">page title</span><span class="t-page-title">Fleet health</span></div>
+<div class="r"><span class="k">big number</span><span class="t-big-number">212 <small class="muted ui">devices</small></span></div>
+<div class="r"><span class="k">eyebrow chip</span><span class="t-eyebrow-chip">Last ten runs</span></div>
+<div class="r"><span class="k">never</span><span class="ui">Sentences, table cells, hostnames, state chips, buttons and forms use IBM Plex: <b>FRONTDESK-01</b> versus <b>FR0NTDESK-O1</b> stay distinguishable.</span></div>
+</div></div>
+<div class="card stack"><h3 class="h-label">Type recipes</h3>
+<div class="d-matrix">
+<div class="r"><span class="k">body 14/20</span><span>Backups finished at 2:10 AM.</span></div>
+<div class="r"><span class="k">ui 12.5/18</span><span class="ui">Buttons, table cells and menu items</span></div>
+<div class="r"><span class="k">ui-sm 11.5</span><span class="ui-sm">STATE CHIPS</span></div>
+<div class="r"><span class="k">label-mono</span><span class="label-mono">Table header</span></div>
+<div class="r"><span class="k">meta-mono</span><span class="meta-mono">2026-10-20 1:42:10 PM · 38.2 GB · 1.4.2</span></div>
+</div></div>
+<details class="card"><summary class="h-label">Contrast table (WCAG AA, both themes)</summary>
+<table class="check-table"><thead><tr><th>Theme</th><th>Pair</th><th>Ratio</th><th>Needs</th><th></th></tr></thead><tbody>{{range .Contrast}}<tr><td>{{.Theme}}</td><td>{{.FG}} on {{.BG}}</td><td>{{printf "%.2f" .Ratio}}:1</td><td>{{printf "%.1f" .Need}}:1 ({{.Kind}})</td><td class="{{if .Pass}}pass{{else}}fail{{end}}">{{if .Pass}}pass{{else}}FAIL{{end}}</td></tr>{{end}}</tbody></table></details>
+</section>{{end}}
+
+{{if or (not $o) (eq $o "surfaces")}}<section class="d-section" id="surfaces" aria-labelledby="d-surfaces"><header><h2 id="d-surfaces">Surfaces</h2><span class="used">Card, key-value list, section label, tooltip</span></header>
+<div class="d-grid">
+<div class="card"><h3>Card (default)</h3><p class="ui muted">Radius lg, padding 18, border --border, shadow --shadow-card.</p></div>
+<div class="card compact"><h3 class="h-label">Compact card</h3><p class="ui muted">KPI tiles and ring cards.</p></div>
+<div class="card raised"><h3 class="h-label">Raised card</h3><p class="ui muted">Dialog footers and wizard step bars.</p></div>
+<div class="card inset"><p class="meta-mono">Inset card: log lines and history rows.</p></div>
+</div>
+<div class="card"><h3 class="h-label">Key-value list</h3><dl class="kv">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}<dt>Last backup</dt><dd><span class="muted">&mdash;<span class="sr-only"> not available</span></span></dd></dl></div>
+<div class="card"><h3 class="h-label">Tooltip (hover or focus the chip; Esc dismisses)</h3>{{with index .Catalogue 7}}<div class="row">{{template "chipbtn" .Chip}}</div>{{end}}</div>
+</section>{{end}}
+
+{{if or (not $o) (eq $o "controls")}}<section class="d-section" id="controls" aria-labelledby="d-controls"><header><h2 id="d-controls">Controls</h2><span class="used">Button, icon button, link, form field, input, select, checkbox, radio, toggle, segmented control</span></header>
+<div class="card stack">
+<div class="row"><button class="btn primary" type="button">Primary</button><button class="btn" type="button">Secondary</button><button class="btn ghost" type="button">Ghost</button><button class="btn danger" type="button">Danger</button><button class="btn danger-solid" type="button">Danger solid</button></div>
+<div class="row"><button class="btn primary sm" type="button">Small</button><button class="btn primary" type="button">Medium</button><button class="btn primary lg" type="button">Large</button>
+<button class="btn" type="button" aria-disabled="true" aria-describedby="why-dis">Disabled</button><span class="meta-mono" id="why-dis">Disabled with a stated reason: the device is retired.</span>
+<button class="btn primary" type="button" aria-busy="true">Saving</button>
+<button class="iconbtn" type="button" aria-label="Copy device id"><svg aria-hidden="true"><use href="#i-copy"/></svg></button><button class="iconbtn sm" type="button" aria-label="Close panel"><svg aria-hidden="true"><use href="#i-x"/></svg></button></div>
+<p class="ui">Links: <a href="/design/controls">inline link</a> · <a class="hostname" href="/design/controls">FRONTDESK-01</a></p>
+</div>
+<div class="card stack">
+<div class="frow"><div class="field"><label for="d-t">Text (filled)</label><input class="input" id="d-t" value="Summit Eye Care"></div><div class="field"><label for="d-ro">Read-only</label><input class="input mono" id="d-ro" value="01J9ZZ0000000000000000ABCD" readonly></div></div>
+<div class="frow"><div class="field"><label for="d-dis">Disabled</label><input class="input" id="d-dis" value="Locked by policy" disabled></div><div class="field"><label for="d-bad">Invalid</label><input class="input" id="d-bad" value="18-8" aria-invalid="true" aria-describedby="d-bad-e"><span class="err" id="d-bad-e">Hour range 18-8 is not valid: the start must be before the end. For overnight use 18-24;0-8.</span></div></div>
+<div class="field"><label for="d-sel">Select</label><select class="input" id="d-sel"><option>Inherit from policy</option><option>Every 4 hours</option></select><span class="help">The empty choice is explicit, never a blank row.</span></div>
+<div class="row"><label class="check"><input type="checkbox" checked> Checkbox</label><label class="switch"><input type="checkbox" role="switch" checked><span>Switch</span><span class="onoff" aria-hidden="true"></span></label><label class="check"><input type="radio" name="d-r" checked> Radio</label></div>
+<div class="opt"><label><input type="radio" name="d-o" checked><div><b>Escrowed on this console</b><span>Each device gets its own key; a wrapped copy is kept here under the master key.</span></div></label><label><input type="radio" name="d-o"><div><b>Customer holds the key</b><span>The key is shown once and never stored here.</span><span class="warnline">No server-side retention, no technician restore, no escrow check.</span></div></label></div>
+<div class="row"><div class="seg" role="group" aria-label="Grouped or flat"><button type="button" aria-pressed="true">Grouped</button><button type="button" aria-pressed="false">Flat</button></div></div>
+</div></section>{{end}}
+
+{{if or (not $o) (eq $o "state")}}<section class="d-section" id="state" aria-labelledby="d-state"><header><h2 id="d-state">State language</h2><span class="used">Device state chip (17 states and RUNNING), run outcome chip, attribute badge, filter chip, rollup chips</span></header>
+<div class="card"><h3 class="h-label">Primary states, in precedence order (state.Precedence())</h3>
+<div class="table-wrap" role="region" aria-label="State catalogue" tabindex="0"><table class="fleet"><caption>State catalogue</caption><thead><tr><th scope="col">#</th><th scope="col">State</th><th scope="col">Sample chip</th><th scope="col">Class</th><th scope="col">Classifier output (fixtures)</th></tr></thead><tbody>
+{{range $i, $c := .Catalogue}}<tr><td class="mono">{{add $i 1}}</td><td class="mono">{{$c.Row.State}}</td><td>{{template "chipbtn" $c.Chip}}</td><td><i class="g g-{{$c.Row.Class}}" aria-hidden="true"></i> {{$c.Row.Class}}</td><td>{{if $c.Fixture}}{{range $c.Fixture}}{{template "chip" .}} {{end}}<span class="meta-mono">{{$c.Host}}</span>{{else}}<span class="meta-mono">no fixture device in this state</span>{{end}}</td></tr>{{end}}
+</tbody></table></div></div>
+<div class="card"><h3 class="h-label">RUNNING overlay (replaces OK; a small chip after any other state; never a primary state)</h3><div class="row">{{range .Running}}{{template "chip" .}}{{end}}</div></div>
+<div class="card"><h3 class="h-label">Run outcome chip (8 outcomes, RUNNING, unrecognised)</h3><div class="row">{{range .Outcomes}}{{template "chip" .}}{{end}}</div></div>
+<div class="card"><h3 class="h-label">Attribute badges</h3><div class="stack">{{range .Badges}}<div class="row"><span class="meta-mono">{{.Name}}</span>{{template "badges" .Set}}</div>{{end}}</div></div>
+<div class="card"><h3 class="h-label">Filter chip and customer rollup chips</h3><div class="row"><span class="fchip">State: FAILED<a href="/design/state" aria-label="Remove filter: State FAILED"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{template "roll" .Rolls}}</div></div>
+</section>{{end}}
+
+{{if or (not $o) (eq $o "live")}}<section class="d-section" id="live" aria-labelledby="d-live"><header><h2 id="d-live">Live and degraded</h2><span class="used">Freshness stamp, condition banners C01 to C16, inline banner, toast, empty states</span></header>
+<div class="card"><h3 class="h-label">Freshness stamp states</h3><div class="d-matrix">{{range .Stamps}}<div class="r"><span class="k">{{.Stamp.State}}</span><div class="cells"><div class="fresh" data-state="{{.Stamp.State}}">{{template "stampbody" .Stamp}}</div><span class="meta-mono">{{.Note}}</span></div></div>{{end}}</div></div>
+<div class="card stack"><h3 class="h-label">Condition banners C01 to C16 (critical first; never dismissible)</h3><ul class="banners">{{range .CBanners}}<li class="banner {{.Class}}"><span class="st {{.Class}}"><i aria-hidden="true"></i>{{.Label}}</span><div class="b-text"><span class="sr-only">{{if eq .Class "crit"}}Critical{{else}}Warning{{end}}: </span>{{.Text}}</div></li>{{end}}</ul></div>
+<div class="card stack"><h3 class="h-label">Entity banners</h3><ul class="banners">{{range .Entity.Items}}<li class="banner {{.Class}}"><span class="st {{.Class}}"><i aria-hidden="true"></i>{{.Label}}</span><div class="b-text">{{.Text}}</div></li>{{end}}</ul></div>
+<div class="card stack"><h3 class="h-label">Inline banners</h3>
+<div class="banner info dense"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>Info.</b> Copy this token now. It is not shown again.</div></div>
+<div class="banner ok dense"><i class="g g-ok" aria-hidden="true"></i><div class="b-text"><b>Saved.</b> 31 devices pick up version 13 at their next check-in.</div></div>
+<div class="banner warn dense"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Warning.</b> No server-side retention for a customer-held key.</div></div>
+<div class="banner crit dense"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>Error.</b> Policy not saved: the keep-within rule is required. Your edits are kept.</div></div></div>
+<div class="card stack"><h3 class="h-label">Toasts</h3><div class="toast ok"><i class="g g-ok" aria-hidden="true"></i><div>Policy saved. 31 devices pick up version 13 at their next check-in.</div></div><div class="toast crit"><i class="g g-crit" aria-hidden="true"></i><div>Digest not delivered to ops@example-msp.com. It will retry at 06:45.</div></div></div>
+<div class="stack"><h3 class="h-label">Empty, no-data and degraded panels</h3>{{range .Panels}}<div><p class="meta-mono">{{.Name}}</p>{{template "panel_state" .View}}</div>{{end}}
+<div class="card"><p class="meta-mono">Loading skeleton (never contains digits)</p><span class="skeleton"></span><br><span class="skeleton"></span></div></div>
+</section>{{end}}
+
+{{if or (not $o) (eq $o "data")}}<section class="d-section" id="data" aria-labelledby="d-data"><header><h2 id="d-data">Data table and customer groups</h2><span class="used">B01: exceptions first, MISSING rows, UNKNOWN devices, customer-wide silence</span></header>
+<div class="card"><h3 class="h-label">Group header variants</h3><div class="table-wrap"><table class="fleet"><caption>Customer group header variants</caption><thead><tr><th scope="col">Device</th><th scope="col">State</th><th scope="col">Last success</th><th scope="col">Last 10 days</th><th scope="col">Agent</th></tr></thead>{{range .Variants}}{{template "group" .Group}}{{end}}</table></div></div>
+<div class="card"><h3 class="h-label">The fixture board, as the classifier renders it</h3><div class="table-wrap"><table class="fleet"><caption>Fixture fleet</caption><thead><tr><th scope="col">Device</th><th scope="col">State</th><th scope="col">Last success</th><th scope="col">Last 10 days</th><th scope="col">Agent</th></tr></thead>{{range .Board.Groups}}{{template "group" .}}{{end}}</table></div></div>
+</section>{{end}}
+
+{{if or (not $o) (eq $o "visuals")}}<section class="d-section" id="visuals" aria-labelledby="d-visuals"><header><h2 id="d-visuals">Visuals</h2><span class="used">KPI tile, ten-day strip, age ring, health gauge</span></header>
+{{range .KPISets}}<div class="card"><h3 class="h-label">KPI tiles: {{.Name}}</h3>{{template "kpis" .KPIs}}</div>{{end}}
+<div class="card stack"><h3 class="h-label">Ten-day strip: none, success, mixed, missed, failed (distinct shapes)</h3>{{range .Strips}}<div>{{template "strip" .}}</div>{{end}}</div>
+<div class="rings">{{range .Rings}}<div><p class="meta-mono">{{.Name}}</p>{{template "ring" .Ring}}</div>{{end}}</div>
+<div class="card stack"><h3 class="h-label">Health gauge</h3>{{range .Gauges}}<div class="row"><span class="meta-mono">{{.Name}}</span>{{template "gauge" .G}}</div>{{end}}</div>
+</section>{{end}}
+
+{{if or (not $o) (eq $o "runs")}}<section class="d-section" id="runs" aria-labelledby="d-runs"><header><h2 id="d-runs">Run views</h2><span class="used">Live run progress, run history list</span></header>
+<div class="stack">{{range .Progress}}<div><p class="meta-mono">{{.Name}}</p>{{template "run_progress" .P}}</div>{{end}}
+<div class="prog" data-stale="since 1:41:52 PM"><div class="l"><span>Live · backup · stream lost</span><span class="mono">62%</span></div><div class="track"><i style="width: 62%"></i></div><span class="asof">Progress as of 1:41:52 PM. Live updates disconnected.</span></div></div>
+<div class="card"><h3 class="h-label">Run history</h3><ol class="hist">{{range .Runs}}<li><time class="d" datetime="{{.DateISO}}">{{.Date}}</time><span class="sum">{{template "chip" .Chip}} {{.Summary}}</span><span class="s">{{.Exit}}</span><span class="s">{{.Duration}}</span></li>{{end}}</ol></div>
+<div class="card"><h3 class="h-label">Wizard steps (restore)</h3>{{template "steps" .Steps}}</div>
+</section>{{end}}
+
+{{if or (not $o) (eq $o "shell")}}<section class="d-section" id="shell" aria-labelledby="d-shell"><header><h2 id="d-shell">App shell</h2><span class="used">sidebar, topbar, skip link, drawer</span></header>
+<div class="card"><p class="ui">This page is the shell: landmarks <code>header</code>, <code>nav</code> (Console navigation) and <code>main</code>, a skip link as the first focusable element, the freshness stamp in the topbar, the condition strip under it, a 224 px sidebar from 1200 px, a 56 px rail from 900 px and a drawer below that. Use the width presets above and the Tab key to check them.</p></div>
+</section>{{end}}
+
+</div>
+{{end}}

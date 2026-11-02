@@ -1,0 +1,42 @@
+{{/* B08 / S05 / S06 / S17 - the customer page: Overview, Devices, Settings (M2-W1C) and Policy (M2-W2A, admin) tabs. */}}
+{{define "title"}}{{.H.Name}}{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/customers">Customers</a> / <span>{{.H.Name}}</span></nav>
+{{if .Saved}}<div class="banner ok dense" role="status"><i class="g g-ok" aria-hidden="true"></i><div class="b-text">{{.Saved}}</div></div>{{end}}
+<article class="card" aria-labelledby="cust-h">
+  <header class="page-head">
+    <div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-folder"/></svg><h2 id="cust-h">{{.H.Name}}</h2>
+      <span class="row">{{with .H.Status}}{{template "chip" .}}{{end}}{{range .H.Extra}}{{template "chip" .}}{{end}}{{if .H.Expected}}<span class="st info sm"><i aria-hidden="true"></i>EXPECTED</span>{{end}}{{template "roll" .H.Roll}}{{with .H.Gauge}}{{template "gauge" .}}{{end}}</span></div>
+    <div class="sub">{{range .H.Sub}}<span>{{.}}</span>{{end}}</div>
+    <nav class="tabs" aria-label="Customer sections">{{range .H.Tabs}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
+  </header>
+  <div class="mt stack">
+  {{with .H.Cause}}<div class="banner {{.Class}} dense" role="alert"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+  {{if eq .Tab "overview"}}{{template "customer_overview" .Overview}}
+  {{else if eq .Tab "devices"}}{{template "devices_view" .Table}}
+  {{else if eq .Tab "settings"}}{{template "customer_form" .Form}}
+  {{else if eq .Tab "policy"}}{{template "customer_policy" .Policy}}{{end}}
+  </div>
+</article>
+{{end}}
+
+{{define "customer_overview"}}<div class="stack" id="customer-overview">
+{{with .Empty}}{{template "panel_state" .}}{{end}}
+<div class="two">
+  <section aria-labelledby="h-cfacts"><h3 class="h-label" id="h-cfacts">Facts</h3>
+    <dl class="kv">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{if .Glyph}}<span class="age {{.Class}}"><i class="g g-{{.Glyph}}" aria-hidden="true"></i>{{.Value}}</span>{{else}}{{.Value}}{{end}}{{if .Sub}}<small class="meta-mono"> {{.Sub}}</small>{{end}}</dd>{{end}}</dl>
+  </section>
+  <section aria-labelledby="h-ccontacts"><h3 class="h-label" id="h-ccontacts">Contacts <span class="count">{{len .Contacts}}</span></h3>
+    {{if .Contacts}}<ul class="contacts-list">{{range .Contacts}}<li><b>{{.Name}}</b>{{if .Role}} <span class="muted">{{.Role}}</span>{{end}}{{if .Email}}<br><a href="mailto:{{.Email}}">{{.Email}}</a>{{end}}{{if .Phone}}<br><span class="mono">{{.Phone}}</span>{{end}}</li>{{end}}</ul>
+    {{else}}<p class="muted">No contacts recorded. Add some in Settings.</p>{{end}}
+  </section>
+</div>
+{{if .Attention}}<section aria-labelledby="h-attn"><h3 class="h-label" id="h-attn">Needs attention <span class="count">{{.AttnTotal}}</span></h3>
+<div class="table-wrap" role="region" aria-label="Devices needing attention" tabindex="0"><table class="fleet">
+<caption>Devices needing attention, worst first</caption>
+<thead><tr><th scope="col">Device</th><th scope="col">State</th><th scope="col">Last success</th></tr></thead>
+<tbody>{{range .Attention}}<tr class="dev"><td class="dev-cell"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a></td><td class="state-cell">{{range .Chips}}{{template "chipbtn" .}} {{end}}</td><td class="age {{.AgeCls}}"><i class="g g-{{.AgeGlyph}}" aria-hidden="true"></i>{{.Age}}</td></tr>{{end}}</tbody></table></div>
+{{if gt .AttnTotal (len .Attention)}}<p><a href="{{.DevicesURL}}">All {{.AttnTotal}} devices that need attention, in the Devices tab</a></p>{{end}}
+</section>
+{{else if .Checked}}<p class="meta-mono" role="status"><i class="g g-ok" aria-hidden="true"></i> {{.Checked}}</p>{{end}}
+</div>{{end}}

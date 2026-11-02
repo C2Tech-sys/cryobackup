@@ -1,0 +1,50 @@
+{{/* customer_form.html - the customer form shared by S04 (create) and the Settings tab of S05 (M2-W1C). Component rules: components 2.4 to 2.7. Errors are listed at the top and again beside each field; a rejected post keeps every value. */}}
+{{define "customer_form"}}<form class="formcard" method="post" action="{{.Action}}" aria-label="{{if .New}}New customer{{else}}Customer settings{{end}}">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  {{if .Summary}}<div class="banner crit dense" role="alert" tabindex="-1" id="form-errors"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>{{if .New}}The customer was not created.{{else}}The changes were not saved.{{end}}</b> Fix {{len .Summary}} {{if eq (len .Summary) 1}}field{{else}}fields{{end}}:<ul class="errlist">{{range .Summary}}<li>{{.Message}}</li>{{end}}</ul></div></div>{{end}}
+  {{if .ReadOnly}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text">Creating and editing customers needs the admin role. This view is read-only.</div></div>{{end}}
+  <fieldset class="plain stack"{{if .ReadOnly}} disabled{{end}}>
+    <div class="frow">
+      <div class="field"><label for="f-name">Name (required)</label>
+        <input class="input" id="f-name" name="name" type="text" maxlength="200" required value="{{.Name}}" autocomplete="off"{{if .HasErr "name"}} aria-invalid="true" aria-describedby="f-name-err"{{end}}>
+        {{with .Err "name"}}<span class="err" id="f-name-err">{{.}}</span>{{end}}</div>
+      <div class="field"><label for="f-slug">Slug <span class="muted">(optional)</span></label>
+        <input class="input mono" id="f-slug" name="slug" type="text" maxlength="63" value="{{.Slug}}" autocomplete="off" spellcheck="false" aria-describedby="f-slug-help{{if .HasErr "slug"}} f-slug-err{{end}}"{{if .HasErr "slug"}} aria-invalid="true"{{end}}>
+        <span class="help" id="f-slug-help">Lower-case letters, digits and hyphens. Derived from the name when empty.</span>{{with .Err "slug"}}<span class="err" id="f-slug-err">{{.}}</span>{{end}}</div>
+    </div>
+    <div class="opt"><label><input type="checkbox" name="expected" value="1"{{if .Expected}} checked{{end}}><span><b>Expected to have devices</b><span>An expected customer with no active devices raises a critical MISSING alarm, so a customer whose agents were never installed cannot sit quietly green.</span></span></label></div>
+    <div class="frow">
+      <div class="field"><label for="f-onb">Onboarding until <span class="muted">(optional)</span></label>
+        <input class="input" id="f-onb" name="onboarding_until" type="datetime-local" value="{{.Onboarding}}" aria-describedby="f-onb-help{{if .HasErr "onboarding_until"}} f-onb-err{{end}}"{{if .HasErr "onboarding_until"}} aria-invalid="true"{{end}}>
+        <span class="help" id="f-onb-help">Until this time an expected customer without devices is ONBOARDING, not MISSING. Time zone: {{.Zone}}.</span>{{with .Err "onboarding_until"}}<span class="err" id="f-onb-err">{{.}}</span>{{end}}</div>
+      <div class="field"><label for="f-cap">Device cap <span class="muted">(optional)</span></label>
+        <input class="input mono" id="f-cap" name="device_cap" type="text" inputmode="numeric" value="{{.DeviceCap}}" autocomplete="off" aria-describedby="f-cap-help{{if .HasErr "device_cap"}} f-cap-err{{end}}"{{if .HasErr "device_cap"}} aria-invalid="true"{{end}}>
+        <span class="help" id="f-cap-help">The most devices that may enroll. Empty means no cap.</span>{{with .Err "device_cap"}}<span class="err" id="f-cap-err">{{.}}</span>{{end}}</div>
+    </div>
+    <div class="frow">
+      {{if .New}}<div class="field"><label for="f-policy">Policy</label>
+        <select class="input" id="f-policy" name="policy_id"{{if .HasErr "policy_id"}} aria-invalid="true" aria-describedby="f-policy-err"{{end}}>{{range .Policies}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        {{with .Err "policy_id"}}<span class="err" id="f-policy-err">{{.}}</span>{{end}}</div>
+      {{else}}<div class="field"><span class="lbl">Policy</span>
+        <span id="f-policy-now">{{range .Policies}}{{if .Selected}}{{.Label}}{{end}}{{end}}</span>
+        <span class="help" id="f-policy-help">{{if .PolicyHref}}Change it on the <a href="{{.PolicyHref}}">Policy tab</a>, which shows the devices affected before anything is saved.{{else}}Changing the policy needs the admin role and the Policy tab.{{end}}</span></div>{{end}}
+      <div class="field"><label for="f-tz">Display time zone <span class="muted">(optional)</span></label>
+        <input class="input mono" id="f-tz" name="display_tz" type="text" value="{{.TZ}}" placeholder="America/Chicago" autocomplete="off" spellcheck="false" aria-describedby="f-tz-help{{if .HasErr "display_tz"}} f-tz-err{{end}}"{{if .HasErr "display_tz"}} aria-invalid="true"{{end}}>
+        <span class="help" id="f-tz-help">An IANA zone name. Empty uses the console's zone.</span>{{with .Err "display_tz"}}<span class="err" id="f-tz-err">{{.}}</span>{{end}}</div>
+    </div>
+    <fieldset class="plain stack contacts" aria-describedby="f-contacts-help"><legend class="lbl">Contacts <span class="muted">(optional)</span></legend>
+      <span class="help" id="f-contacts-help">People to reach at this customer. Empty rows are ignored.</span>
+      {{range $i, $c := .Contacts}}<div class="contact-row">
+        <input class="input" name="contact_name" type="text" maxlength="200" value="{{$c.Name}}" placeholder="Name" aria-label="Contact {{add $i 1}} name" autocomplete="off">
+        <input class="input" name="contact_email" type="email" maxlength="254" value="{{$c.Email}}" placeholder="Email" aria-label="Contact {{add $i 1}} email" autocomplete="off">
+        <input class="input" name="contact_phone" type="text" maxlength="40" value="{{$c.Phone}}" placeholder="Phone" aria-label="Contact {{add $i 1}} phone" autocomplete="off">
+        <input class="input" name="contact_role" type="text" maxlength="100" value="{{$c.Role}}" placeholder="Role" aria-label="Contact {{add $i 1}} role" autocomplete="off">
+      </div>{{end}}
+      {{with .Err "contacts"}}<span class="err" id="f-contacts-err">{{.}}</span>{{end}}
+    </fieldset>
+    <div class="field"><label for="f-notes">Notes <span class="muted">(optional)</span></label>
+      <textarea class="input" id="f-notes" name="notes" rows="3" maxlength="2000"{{if .HasErr "notes"}} aria-invalid="true" aria-describedby="f-notes-err"{{end}}>{{.Notes}}</textarea>
+      {{with .Err "notes"}}<span class="err" id="f-notes-err">{{.}}</span>{{end}}</div>
+  </fieldset>
+  {{if not .ReadOnly}}<div class="row end">{{if .Cancel}}<a class="btn" href="{{.Cancel}}">Cancel</a>{{end}}<button class="btn primary" type="submit">{{if .New}}Create customer{{else}}Save changes{{end}}</button></div>{{end}}
+</form>{{end}}

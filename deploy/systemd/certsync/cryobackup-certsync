@@ -1,0 +1,254 @@
+#!/bin/sh
+# cryobackup-certsync: copy an ACME client's certificate and private key for the
+# agent listener and the gateway into /etc/cryobackup/tls, and restart the unit
+# that uses a pair only when that pair changed.
+#
+# Optional. It exists for hosts where an ACME client (certbot, acme.sh, lego, ...)
+# issues the certificates and keeps them in its own tree, which the cryobackup
+# user must not be able to read. Nothing here names a host: the two host names and
+# where the client keeps its files come from the environment (certsync.env, see
+# certsync.env.example and README.md).
+#
+# Discovery -> verify -> act -> report:
+#   * a pair is only installed when both files exist, the certificate parses and
+#     the private key matches it (a half-renewed tree never reaches a service);
+#   * files are written into a private directory beside the destination and renamed
+#     into place, so a service never reads a half-written file; the key is renamed
+#     before the certificate;
+#   * mode 0440, owner root:cryobackup by default (CERTSYNC_OWNER);
+#   * the unit is restarted only when the pair changed (an unchanged run touches nothing);
+#   * a certificate that expires within CERTSYNC_WARN_DAYS fails the run: the ACME
+#     client has stopped renewing, and a failed timer shows in `systemctl --failed`.
+#
+# Exit codes: 0 all pairs in sync; 1 at least one pair failed (the others are still
+# processed); 2 bad configuration, nothing done.
+#
+# Environment (all optional except at least one host name):
+#   CERTSYNC_AGENT_HOST      host name of the agent listener certificate (cryo-console)
+#   CERTSYNC_GATEWAY_HOST    host name of the gateway certificate (rclone-gateway)
+#   CERTSYNC_CERT_PATTERN    printf pattern, %s = host name; default /etc/letsencrypt/live/%s/fullchain.pem
+#   CERTSYNC_KEY_PATTERN     the same for the key; default /etc/letsencrypt/live/%s/privkey.pem
+#   CERTSYNC_DEST_DIR        default /etc/cryobackup/tls (files agent.crt/.key, gateway.crt/.key)
+#   CERTSYNC_OWNER           chown argument, default root:cryobackup; set empty to skip chown
+#   CERTSYNC_MODE            default 0440
+#   CERTSYNC_AGENT_UNIT      default cryo-console.service
+#   CERTSYNC_GATEWAY_UNIT    default rclone-gateway.service
+#   CERTSYNC_WARN_DAYS       default 14
+#   CERTSYNC_DRY_RUN=1       report what would change, change nothing, restart nothing
+#   CERTSYNC_SYSTEMCTL       default systemctl (tests substitute a stub)
+#   CERTSYNC_CHOWN           default chown (tests substitute a stub; when set, a non-root run calls it)
+set -eu
+
+AGENT_HOST=${CERTSYNC_AGENT_HOST:-}
+GATEWAY_HOST=${CERTSYNC_GATEWAY_HOST:-}
+CERT_PATTERN=${CERTSYNC_CERT_PATTERN:-/etc/letsencrypt/live/%s/fullchain.pem}
+KEY_PATTERN=${CERTSYNC_KEY_PATTERN:-/etc/letsencrypt/live/%s/privkey.pem}
+DEST=${CERTSYNC_DEST_DIR:-/etc/cryobackup/tls}
+OWNER=${CERTSYNC_OWNER-root:cryobackup}
+MODE=${CERTSYNC_MODE:-0440}
+AGENT_UNIT=${CERTSYNC_AGENT_UNIT:-cryo-console.service}
+GATEWAY_UNIT=${CERTSYNC_GATEWAY_UNIT:-rclone-gateway.service}
+WARN_DAYS=${CERTSYNC_WARN_DAYS:-14}
+DRY=${CERTSYNC_DRY_RUN:-0}
+SYSTEMCTL=${CERTSYNC_SYSTEMCTL:-systemctl}
+CHOWN=${CERTSYNC_CHOWN:-chown}
+
+say() { echo "certsync: $*"; }
+err() { echo "certsync: ERROR: $*" >&2; }
+
+# A host name is substituted into file paths: letters, digits, dots and hyphens
+# only, no leading dot, no "..".
+valid_host() {
+    case $1 in
+        '' | .* | *..* | *[!A-Za-z0-9.-]*) return 1 ;;
+    esac
+    return 0
+}
+
+# subst PATTERN HOST prints PATTERN with every %s replaced by HOST. (Not printf:
+# the pattern is plain text, and printf would also interpret % and backslashes.)
+subst() {
+    pat=$1 out=
+    while :; do
+        case $pat in
+            *%s*)
+                out=$out${pat%%%s*}$2
+                pat=${pat#*%s}
+                ;;
+            *) out=$out$pat; break ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
+if [ -z "$AGENT_HOST" ] && [ -z "$GATEWAY_HOST" ]; then
+    err "set CERTSYNC_AGENT_HOST and/or CERTSYNC_GATEWAY_HOST (certsync.env)"
+    exit 2
+fi
+for h in "$AGENT_HOST" "$GATEWAY_HOST"; do
+    if [ -n "$h" ] && ! valid_host "$h"; then
+        err "a configured host name is not a plain DNS name"
+        exit 2
+    fi
+done
+case $WARN_DAYS in '' | *[!0-9]*) err "CERTSYNC_WARN_DAYS must be a whole number"; exit 2 ;; esac
+if ! command -v openssl >/dev/null 2>&1; then
+    err "openssl is required to check that a key matches its certificate"
+    exit 2
+fi
+if [ ! -d "$DEST" ]; then
+    err "the destination directory does not exist"
+    exit 2
+fi
+
+WORK=
+cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; return 0; }
+trap cleanup EXIT INT TERM
+if [ "$DRY" != 1 ]; then
+    WORK=$(mktemp -d "$DEST/.certsync.XXXXXX")
+fi
+
+# pair_matches CERT KEY succeeds only when both files PARSE and the key belongs to
+# the certificate (equal public-key digests; works for RSA and EC alike).
+# Each file is parsed on its own first and its public key captured with its exit
+# status: piping a failed parse into `openssl sha256` would still print the digest
+# of empty input, and two unparseable files would compare equal. The empty-input
+# digest is refused as a second guard.
+EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+pair_matches() {
+    openssl x509 -in "$1" -noout </dev/null >/dev/null 2>&1 || return 1
+    openssl pkey -in "$2" -noout -passin pass: </dev/null >/dev/null 2>&1 || return 1
+    pm_cpub=$(openssl x509 -in "$1" -noout -pubkey </dev/null 2>/dev/null) || return 1
+    pm_kpub=$(openssl pkey -in "$2" -pubout -passin pass: </dev/null 2>/dev/null) || return 1
+    [ -n "$pm_cpub" ] && [ -n "$pm_kpub" ] || return 1
+    pm_c=$(printf '%s\n' "$pm_cpub" | openssl sha256 2>/dev/null) || return 1
+    pm_k=$(printf '%s\n' "$pm_kpub" | openssl sha256 2>/dev/null) || return 1
+    case $pm_c$pm_k in *"$EMPTY_SHA256"*) return 1 ;; esac
+    [ -n "$pm_c" ] && [ "$pm_c" = "$pm_k" ]
+}
+
+# sync_pair NAME HOST UNIT: NAME is the destination base name (agent or gateway).
+sync_pair() {
+    name=$1 host=$2 unit=$3
+    cert=$(subst "$CERT_PATTERN" "$host")
+    key=$(subst "$KEY_PATTERN" "$host")
+
+    if [ ! -s "$cert" ] || [ ! -s "$key" ]; then
+        err "$name ($host): the ACME client's certificate or key is missing or empty"
+        return 1
+    fi
+    if ! openssl x509 -in "$cert" -noout >/dev/null 2>&1; then
+        err "$name ($host): the certificate file is not a readable certificate"
+        return 1
+    fi
+    # -passin pass: gives openssl an empty passphrase instead of letting it prompt on a
+    # terminal: an encrypted key fails here at once (the services cannot unlock one either).
+    if ! openssl pkey -in "$key" -noout -passin pass: </dev/null >/dev/null 2>&1; then
+        err "$name ($host): the private key is encrypted or unreadable; nothing installed"
+        return 1
+    fi
+    if ! pair_matches "$cert" "$key"; then
+        err "$name ($host): the private key does not match the certificate (or one is unreadable); nothing installed"
+        return 1
+    fi
+
+    dcert=$DEST/$name.crt dkey=$DEST/$name.key
+    changed=0
+    cmp -s "$cert" "$dcert" 2>/dev/null || changed=1
+    cmp -s "$key" "$dkey" 2>/dev/null || changed=1
+
+    if [ "$changed" = 1 ]; then
+        if [ "$DRY" = 1 ]; then
+            say "dry run: would install the $name pair and restart $unit"
+        else
+            # Every step is checked by hand: this function runs as `sync_pair ... || rc=1`,
+            # where POSIX turns `set -e` off, so a failed step would otherwise fall through
+            # to the rename and the restart.
+            tc=$WORK/$name.crt tk=$WORK/$name.key
+            if ! cat "$cert" >"$tc" || ! cat "$key" >"$tk"; then
+                err "$name ($host): copying the ACME client's files failed; nothing installed"
+                rm -f "$tc" "$tk"
+                return 1
+            fi
+            # Verify the COPIES (not the sources, which a renewal may have replaced since
+            # the check above): this is the pair that will be installed.
+            if ! pair_matches "$tc" "$tk"; then
+                err "$name ($host): the copied private key does not match the copied certificate (or a copy is unreadable); nothing installed"
+                rm -f "$tc" "$tk"
+                return 1
+            fi
+            if ! chmod "$MODE" "$tc" "$tk"; then
+                err "$name ($host): chmod $MODE failed; nothing installed"
+                rm -f "$tc" "$tk"
+                return 1
+            fi
+            if [ -n "$OWNER" ]; then
+                # A non-root run skips chown unless CERTSYNC_CHOWN names one (tests do).
+                if [ "$(id -u)" = 0 ] || [ -n "${CERTSYNC_CHOWN:-}" ]; then
+                    if ! "$CHOWN" "$OWNER" "$tc" "$tk"; then
+                        err "$name ($host): chown $OWNER failed; nothing installed"
+                        rm -f "$tc" "$tk"
+                        return 1
+                    fi
+                else
+                    say "not root: ownership of the $name files left as is"
+                fi
+            fi
+            # The key moves first, so keep the installed one to put back if the
+            # certificate cannot follow: whatever restarts the unit later (Restart=always,
+            # a reboot) must never find a key that does not match the certificate.
+            prev=$WORK/$name.key.prev had_prev=0
+            if [ -e "$dkey" ]; then
+                if ! cp -p "$dkey" "$prev"; then
+                    err "$name ($host): could not save the installed key; nothing installed"
+                    rm -f "$tc" "$tk" "$prev"
+                    return 1
+                fi
+                had_prev=1
+            fi
+            if ! mv -f "$tk" "$dkey"; then
+                err "$name ($host): installing the key failed; nothing restarted"
+                rm -f "$tc" "$tk" "$prev"
+                return 1
+            fi
+            if ! mv -f "$tc" "$dcert"; then
+                rm -f "$tc"
+                if [ "$had_prev" = 1 ]; then
+                    if mv -f "$prev" "$dkey"; then
+                        err "$name ($host): installing the certificate failed after the key; the previous key was restored, nothing restarted"
+                    else
+                        err "$name ($host): installing the certificate failed AFTER the key and the previous key could NOT be restored: $dkey and $dcert are out of step, fix before restarting $unit"
+                    fi
+                elif rm -f "$dkey"; then
+                    err "$name ($host): installing the certificate failed after the key; the new key was removed, nothing restarted"
+                else
+                    err "$name ($host): installing the certificate failed AFTER the key and the new key could NOT be removed: $dkey has no matching certificate, fix before restarting $unit"
+                fi
+                return 1
+            fi
+            say "$name pair installed"
+            if ! "$SYSTEMCTL" restart "$unit"; then
+                err "$name: restarting $unit failed"
+                return 1
+            fi
+            say "$unit restarted"
+        fi
+    else
+        say "$name pair unchanged"
+    fi
+
+    # The pair now in place (or, on a dry run, about to be) must not be close to expiry.
+    check=$cert
+    [ "$DRY" = 1 ] || check=$dcert
+    if ! openssl x509 -in "$check" -noout -checkend $((WARN_DAYS * 86400)) >/dev/null 2>&1; then
+        err "$name ($host): the certificate expires within $WARN_DAYS days: the ACME client is not renewing it"
+        return 1
+    fi
+    return 0
+}
+
+rc=0
+if [ "$DRY" = 1 ]; then say "dry run: nothing will be changed"; fi
+if [ -n "$AGENT_HOST" ]; then sync_pair agent "$AGENT_HOST" "$AGENT_UNIT" || rc=1; fi
+if [ -n "$GATEWAY_HOST" ]; then sync_pair gateway "$GATEWAY_HOST" "$GATEWAY_UNIT" || rc=1; fi
+exit $rc

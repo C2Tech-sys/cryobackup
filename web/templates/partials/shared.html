@@ -1,0 +1,47 @@
+{{/* shared.html - state language, banners, stamp and small visuals used by every page and by /design. */}}
+
+{{/* chip: a state or outcome chip as plain text (lists, headers, banners). components 3.1, 3.2 */}}
+{{define "chip"}}<span class="st {{.Class}}{{if .Small}} sm{{end}}{{if .Pulse}} pulse{{end}}{{if .Dashed}} dashed{{end}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}
+
+{{/* chipbtn: the chip inside a table State column is a button so keyboard users reach the reason popover. */}}
+{{define "chipbtn"}}<span class="tipwrap"><button type="button" class="st {{.Class}}{{if .Small}} sm{{end}}{{if .Pulse}} pulse{{end}}{{if .Dashed}} dashed{{end}}" aria-describedby="tip-{{.ID}}"><i aria-hidden="true"></i>{{.Text}}</button>{{if .Reason}}<span class="tip" role="tooltip" id="tip-{{.ID}}"><b>{{.Title}}</b>{{.Reason}}</span>{{end}}</span>{{end}}
+
+{{define "badges"}}{{if or .Shown .More}}<span class="badges">{{range .Shown}}<span class="badge {{.Class}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}{{if .More}}<details class="more"><summary aria-label="{{len .More}} more attributes">+{{len .More}}</summary><div class="more-pop">{{range .More}}<span class="badge {{.Class}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}</div></details>{{end}}</span>{{end}}{{end}}
+
+{{define "roll"}}{{if .}}<ul class="roll" aria-label="Devices by state">{{range .}}<li><span class="tipwrap"><span class="st {{.Class}}" tabindex="0" aria-label="{{.Label}}"><i aria-hidden="true"></i>{{.N}}</span>{{if .Tip}}<span class="tip right" role="tooltip">{{.Tip}}</span>{{end}}</span></li>{{end}}</ul>{{end}}{{end}}
+
+{{define "gauge"}}{{with .}}<span class="gauge {{.Class}}" role="meter" aria-valuemin="0" aria-valuemax="100"{{if ne .Value "n/a"}} aria-valuenow="{{.Pct}}"{{end}} aria-valuetext="{{.Text}}"><span class="track"><i style="width: {{.Pct}}%"></i></span><span>{{.Value}}</span></span>{{end}}{{end}}
+
+{{/* stamp: the freshness stamp (components 9.1). It is rendered before page content so it exists on error pages too. */}}
+{{define "stamp"}}<div id="freshness" class="fresh"{{if .OOB}} hx-swap-oob="outerHTML"{{end}} role="status" data-state="{{.State}}" data-zone="{{.Zone}}" title="{{.Tooltip}}">{{template "stampbody" .}}</div>{{end}}
+{{/* stampbody: the pill's contents, shared with the /design states matrix. fresh.js updates these nodes in place: .word, .t, .agents b. */}}
+{{define "stampbody"}}<i class="dot" aria-hidden="true"></i><span class="word" aria-live="polite">{{.Word}}</span><i class="sep" aria-hidden="true"></i><span class="t" data-at="{{.At}}">{{.Time}}</span>{{if .HasAgents}}<i class="sep" aria-hidden="true"></i><span class="agents"><b>{{.N}}</b> of <b>{{.M}}</b> agents</span>{{end}}{{end}}
+
+{{/* banners: the condition strip (components 9.2). Critical banners are never dismissible; beyond the third they collapse behind a button whose count is visible. */}}
+{{define "banners"}}<section id="banners" aria-label="System conditions"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>{{if or .Items .Extra}}<ul class="banners" role="status" aria-live="polite">
+{{range .Items}}<li class="banner {{.Class}}{{if eq .Class "warn"}} warn-item{{end}}"><span class="st {{.Class}}"><i aria-hidden="true"></i>{{.Label}}</span><div class="b-text"><span class="sr-only">{{if eq .Class "crit"}}Critical{{else}}Warning{{end}}: </span>{{.Text}}</div>{{if .Action}}<div class="act"><a class="btn sm" href="{{.Action.Href}}">{{.Action.Label}}</a></div>{{end}}</li>
+{{end}}{{if .Extra}}<li><details class="more-banners"><summary>and {{len .Extra}} more critical conditions</summary><ul class="banners">{{range .Extra}}<li class="banner {{.Class}}"><span class="st {{.Class}}"><i aria-hidden="true"></i>{{.Label}}</span><div class="b-text"><span class="sr-only">Critical: </span>{{.Text}}</div>{{if .Action}}<div class="act"><a class="btn sm" href="{{.Action.Href}}">{{.Action.Label}}</a></div>{{end}}</li>{{end}}</ul></details></li>{{end}}
+</ul>{{end}}</section>{{end}}
+
+{{/* strip: the ten-day strip (components 4.1). Every kind has its own shape, so colour is never the only carrier. */}}
+{{define "strip"}}{{if .Cells}}<a class="strip{{if .Panel}} panel{{end}}" href="{{.Href}}" aria-label="{{.Aria}}">{{range .Cells}}{{if $.Panel}}<span>{{end}}<i class="d-{{.Kind}}{{if .Today}} today{{end}}" title="{{.Title}}"></i>{{if $.Panel}}<small aria-hidden="true">{{.Day}}</small></span>{{end}}{{end}}</a>{{if .Note}}<span class="meta-mono"> {{.Note}}</span>{{end}}{{else}}<span class="meta-mono">history unavailable</span>{{end}}{{end}}
+
+{{/* panel_state: empty, no-data-alarm and partial panels (components 9.5). An empty fleet is an alarm, never a neutral blank. */}}
+{{define "panel_state"}}<section class="panel-state {{.Kind}}"{{if ne .Kind "neutral"}} role="alert"{{end}}><div>
+<svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg>
+<h2>{{if eq .Kind "alarm"}}<i class="g g-crit" aria-hidden="true"></i>{{else if eq .Kind "partial"}}<i class="g g-warn" aria-hidden="true"></i>{{end}}{{.Title}}</h2>
+<p>{{.Body}}</p>{{with .Link}}<a class="btn" href="{{.Href}}">{{.Label}}</a>{{end}}
+</div></section>{{end}}
+
+{{define "inline_banner"}}<div class="banner {{.Class}} dense"{{if eq .Class "crit"}} role="alert"{{else}} role="status"{{end}}><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+
+{{define "steps"}}<ol class="steps" aria-label="Progress">{{range .}}<li class="{{.State}}"{{if eq .State "on"}} aria-current="step"{{end}}><i aria-hidden="true">{{if eq .State "done"}}<svg width="11" height="11" aria-hidden="true"><use href="#i-check"/></svg>{{else}}{{.N}}{{end}}</i>{{.Label}}</li>{{end}}</ol>{{end}}
+
+{{/* run_progress: live run progress (components 4.8): running, scanning, stalled, done. */}}
+{{define "run_progress"}}<div id="{{.ID}}" class="prog{{if .Stalled}} stalled{{end}}{{if .Indeterminate}} indeterminate{{end}}" data-live data-poll hx-get="{{.PollHref}}" hx-trigger="cryo:poll" hx-swap="outerHTML">
+{{if .Done}}<div class="l"><span>{{template "chip" .Outcome}} {{.Summary}}</span></div>
+{{else}}<div class="l"><span>{{.Label}}</span><span class="mono">{{if .Indeterminate}}scanning{{else}}{{.Pct}}%{{end}}</span></div>
+<div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="100"{{if not .Indeterminate}} aria-valuenow="{{.Pct}}"{{end}} aria-valuetext="{{if .Indeterminate}}scanning, no total yet{{else}}{{.Pct}} percent{{range .Meta}}, {{.}}{{end}}{{end}}"><i style="width: {{.Pct}}%"></i></div>
+{{if .Meta}}<div class="meta">{{range .Meta}}<span>{{.}}</span>{{end}}</div>{{end}}
+{{if .Stalled}}<div class="meta"><span><i class="g g-warn" aria-hidden="true"></i> No progress for the stall limit</span></div>{{end}}
+{{end}}<span class="asof"></span></div>{{end}}

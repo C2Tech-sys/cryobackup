@@ -1,0 +1,2 @@
+{"message_type":"error","error":{"message":"open \\\\?\\C:\\fixture\\tree\\notes\\locked.docx: The process cannot access the file because it is being used by another process."},"during":"archival","item":"C:\\fixture\\tree\\notes\\locked.docx"}
+{"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}

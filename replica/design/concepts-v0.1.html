@@ -1,0 +1,710 @@
+<title>CryoBackup Design Concepts</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Sora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a design-review page. A quiet document frame with a sticky review bar; each mock is a framed "screen" rendered from the real product tokens, so what is approved is what ships. */
+:root {
+  --bg: #0B1220; --surface: #121C30; --surface-raised: #182642; --border: #243656; --border-input: #56709C;
+  --text: #E8F0FA; --text-muted: #93A6C6; --accent: #5CC9F5; --on-accent: #06111F;
+  --danger: #FF7A7A; --warning: #F5B547; --success: #48D597; --on-status: #06111F;
+  --accent-soft: rgba(92,201,245,.14); --danger-soft: rgba(255,122,122,.14); --warning-soft: rgba(245,181,71,.16); --success-soft: rgba(72,213,151,.14);
+  --font-display: 'Chakra Petch', 'Rajdhani', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-display-b: 'Sora', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius-xs: 4px; --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px;
+  --shadow-card: 0 1px 0 rgba(255,255,255,.03) inset, 0 1px 2px rgba(0,0,0,.35);
+  --shadow-pop: 0 16px 40px rgba(2,8,20,.55);
+  --glow: 0 0 0 1px rgba(92,201,245,.35), 0 0 24px rgba(92,201,245,.18);
+  --ease: cubic-bezier(.2,.8,.2,1);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #F3F7FC; --surface: #FFFFFF; --surface-raised: #FFFFFF; --border: #D5DFEE; --border-input: #7D90B0;
+    --text: #0E1A2E; --text-muted: #4D5F7E; --accent: #0A6FAE; --on-accent: #FFFFFF;
+    --danger: #B42323; --warning: #9A5A00; --success: #13743F; --on-status: #FFFFFF;
+    --accent-soft: rgba(10,111,174,.10); --danger-soft: rgba(180,35,35,.10); --warning-soft: rgba(154,90,0,.12); --success-soft: rgba(19,116,63,.10);
+    --shadow-card: 0 1px 2px rgba(14,26,46,.08); --shadow-pop: 0 16px 40px rgba(14,26,46,.18); --glow: 0 0 0 1px rgba(10,111,174,.35), 0 0 24px rgba(10,111,174,.14);
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #F3F7FC; --surface: #FFFFFF; --surface-raised: #FFFFFF; --border: #D5DFEE; --border-input: #7D90B0;
+  --text: #0E1A2E; --text-muted: #4D5F7E; --accent: #0A6FAE; --on-accent: #FFFFFF;
+  --danger: #B42323; --warning: #9A5A00; --success: #13743F; --on-status: #FFFFFF;
+  --accent-soft: rgba(10,111,174,.10); --danger-soft: rgba(180,35,35,.10); --warning-soft: rgba(154,90,0,.12); --success-soft: rgba(19,116,63,.10);
+  --shadow-card: 0 1px 2px rgba(14,26,46,.08); --shadow-pop: 0 16px 40px rgba(14,26,46,.18); --glow: 0 0 0 1px rgba(10,111,174,.35), 0 0 24px rgba(10,111,174,.14);
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font-sans); font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 0 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h2 { font: 600 20px/28px var(--font-display); letter-spacing: .02em; text-transform: uppercase; }
+h3 { font: 600 15px/22px var(--font-sans); }
+.eyebrow { font: 500 11px/16px var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text-muted); }
+.muted { color: var(--text-muted); }
+.mono { font-family: var(--font-mono); }
+section { margin-top: 48px; }
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 20px; }
+.sec-head p { margin: 0; max-width: 64ch; color: var(--text-muted); }
+
+/* review bar */
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+.bar .in { max-width: 1240px; margin: 0 auto; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.bar .meta { color: var(--text-muted); font-size: 12px; }
+.bar nav { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+.bar nav a { color: var(--text-muted); text-decoration: none; font-size: 12px; padding: 6px 10px; border-radius: var(--radius-sm); }
+.bar nav a:hover { color: var(--text); background: var(--surface); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.seg button { font: 500 12px/1 var(--font-sans); background: transparent; color: var(--text-muted); border: 0; padding: 8px 12px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* wordmark */
+.wordmark { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
+.wordmark .wm { font: 700 20px/1 var(--font-display); letter-spacing: .06em; }
+.wordmark .wm b { color: var(--accent); font-weight: 700; }
+.wordmark .wm span { font-weight: 500; color: var(--text); opacity: .9; }
+.wordmark.b .wm { font-family: var(--font-display-b); letter-spacing: .01em; }
+
+/* hero */
+.hero { padding-block: 40px 8px; display: grid; grid-template-columns: 1.2fr .8fr; gap: 32px; align-items: end; }
+.hero h1 { font: 600 clamp(28px, 4vw, 44px)/1.1 var(--font-display); letter-spacing: .02em; }
+.hero h1 em { font-style: normal; color: var(--accent); }
+.hero p { max-width: 60ch; color: var(--text-muted); margin: 12px 0 0; font-size: 15px; }
+.hero .side { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); padding: 16px 18px; box-shadow: var(--shadow-card); }
+.hero .side ol { margin: 8px 0 0; padding-left: 18px; color: var(--text-muted); }
+.hero .side li { margin: 4px 0; }
+.hero .side li b { color: var(--text); font-weight: 600; }
+@media (max-width: 900px) { .hero { grid-template-columns: 1fr; } }
+
+/* grids and cards */
+.grid { display: grid; gap: 16px; }
+.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 900px) { .g3, .g2 { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; box-shadow: var(--shadow-card); min-width: 0; }
+.card h3 { display: flex; align-items: center; gap: 8px; }
+.pick { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 22px; padding: 0 7px; border-radius: var(--radius-xs); font: 600 11px/1 var(--font-mono); background: var(--accent-soft); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.card p { margin: 8px 0 0; color: var(--text-muted); }
+
+/* marks */
+.markrow { display: flex; align-items: flex-end; gap: 22px; margin-top: 14px; flex-wrap: wrap; }
+.markrow figure { margin: 0; display: grid; justify-items: center; gap: 6px; }
+.markrow figcaption { font: 500 11px/1 var(--font-mono); color: var(--text-muted); }
+.tile { display: grid; place-items: center; border-radius: 22%; background: var(--surface-raised); border: 1px solid var(--border); }
+.tile.l { width: 96px; height: 96px; }
+.tile.m { width: 40px; height: 40px; border-radius: 10px; }
+.tile.s { width: 20px; height: 20px; border-radius: 5px; }
+.tile.ink { background: var(--accent); border-color: transparent; }
+.lockup { margin-top: 14px; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg); border: 1px dashed var(--border); }
+
+/* swatches */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.sw { border-radius: var(--radius-md); border: 1px solid var(--border); overflow: hidden; background: var(--surface); }
+.sw .chip { height: 56px; display: flex; align-items: flex-end; padding: 8px; font: 500 11px/1 var(--font-mono); }
+.sw .lab { padding: 8px 10px; display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.sw .lab b { font-weight: 600; }
+.sw .lab .r { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+
+/* type samples */
+.type-sample { display: grid; gap: 10px; margin-top: 12px; }
+.type-sample .h { font: 600 30px/1.1 var(--font-display); letter-spacing: .02em; }
+.type-sample.b .h { font-family: var(--font-display-b); letter-spacing: -.01em; }
+.type-sample .eyebrow { margin-top: 4px; }
+.type-sample .body { max-width: 56ch; }
+.type-sample .data { font: 500 13px/1.4 var(--font-mono); color: var(--text-muted); }
+.type-sample .data b { color: var(--text); }
+
+/* state chips */
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.st { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px 0 7px; border-radius: 999px; font: 600 11.5px/1 var(--font-sans); letter-spacing: .02em; border: 1px solid transparent; white-space: nowrap; }
+.st i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; flex: none; }
+.st.ok { color: var(--success); background: var(--success-soft); border-color: color-mix(in srgb, var(--success) 35%, transparent); }
+.st.crit { color: var(--danger); background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+.st.warn { color: var(--warning); background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.st.info { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.st.neutral { color: var(--text-muted); background: transparent; border-color: var(--border); }
+.st.crit i { border-radius: 2px; transform: rotate(45deg); }
+.st.warn i { border-radius: 1px; clip-path: polygon(50% 0, 100% 100%, 0 100%); width: 9px; height: 9px; }
+.st.info i { border-radius: 2px; }
+.st.neutral i { background: transparent; border: 1.5px solid currentColor; box-sizing: border-box; }
+.st.pulse i { box-shadow: 0 0 0 0 currentColor; animation: pulse 1.6s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 50%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }
+@media (prefers-reduced-motion: reduce) { .st.pulse i { animation: none; } }
+.legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px 20px; margin-top: 14px; font-size: 13px; color: var(--text-muted); }
+.legend b { color: var(--text); font-weight: 600; }
+
+/* screen frames */
+.frame { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-pop); }
+.frame .chrome { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface-raised); border-bottom: 1px solid var(--border); font: 500 11px/1 var(--font-mono); color: var(--text-muted); }
+.frame .chrome .dots { display: flex; gap: 5px; }
+.frame .chrome .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--border-input); opacity: .6; }
+.frame .chrome .url { margin-left: 8px; padding: 5px 10px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frame .scroll { overflow-x: auto; }
+.app { min-width: 980px; display: grid; grid-template-columns: 224px 1fr; min-height: 560px; background: var(--bg); }
+.app .nav { background: var(--surface); border-right: 1px solid var(--border); padding: 14px 12px; display: flex; flex-direction: column; gap: 4px; }
+.app .nav .wordmark { padding: 4px 8px 14px; }
+.app .nav a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: 13px; font-weight: 500; }
+.app .nav a svg { width: 16px; height: 16px; flex: none; }
+.app .nav a.on { background: var(--accent-soft); color: var(--accent); }
+.app .nav a .n { margin-left: auto; font: 600 10.5px/1 var(--font-mono); padding: 3px 6px; border-radius: 999px; background: var(--danger); color: var(--on-status); }
+.app .nav .sp { flex: 1; }
+.app .nav .sys { font-size: 11.5px; color: var(--text-muted); padding: 10px; border-top: 1px solid var(--border); display: grid; gap: 4px; }
+.app .nav .sys b { color: var(--success); font-weight: 600; }
+.app .main { min-width: 0; display: flex; flex-direction: column; }
+.topbar { display: flex; align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.topbar h1 { font: 600 16px/1.2 var(--font-display); letter-spacing: .03em; text-transform: uppercase; }
+.topbar .search { margin-left: 8px; flex: 1; max-width: 360px; height: 32px; border: 1px solid var(--border-input); border-radius: var(--radius-sm); background: var(--bg); display: flex; align-items: center; padding: 0 10px; gap: 8px; color: var(--text-muted); font-size: 12.5px; }
+.topbar .search kbd { margin-left: auto; font: 500 10px/1 var(--font-mono); border: 1px solid var(--border); border-radius: 4px; padding: 3px 5px; }
+.fresh { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font: 500 11.5px/1 var(--font-mono); color: var(--text-muted); }
+.fresh i { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px var(--success); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--radius-sm); font: 600 12.5px/1 var(--font-sans); border: 1px solid var(--border-input); background: var(--surface-raised); color: var(--text); cursor: pointer; white-space: nowrap; }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: var(--danger-soft); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+.btn.sm { height: 26px; padding: 0 9px; font-size: 11.5px; }
+.content { padding: 16px 18px 24px; display: grid; gap: 14px; }
+.banner { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-md); font-size: 13px; border: 1px solid; }
+.banner.warn { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 45%, transparent); color: var(--text); }
+.banner.crit { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: var(--text); }
+.banner b { font-weight: 600; }
+.banner .act { margin-left: auto; display: flex; gap: 6px; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; display: grid; gap: 4px; }
+.kpi .l { font: 500 11px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+.kpi .v { font: 600 26px/1.1 var(--font-display); letter-spacing: .01em; }
+.kpi .v small { font: 500 12px/1 var(--font-sans); color: var(--text-muted); margin-left: 6px; letter-spacing: 0; }
+.kpi.bad .v { color: var(--danger); }
+.kpi.warn .v { color: var(--warning); }
+.kpi.good .v { color: var(--success); }
+.kpi .spark { height: 22px; display: flex; align-items: flex-end; gap: 2px; margin-top: 4px; }
+.kpi .spark i { flex: 1; background: var(--border-input); border-radius: 2px 2px 0 0; opacity: .7; }
+.kpi .spark i.hi { background: var(--accent); opacity: 1; }
+.rings { display: grid; grid-template-columns: 1.3fr 1fr; gap: 12px; }
+.ringcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; display: grid; grid-template-columns: 120px 1fr; gap: 14px; align-items: center; }
+.ringcard svg { width: 120px; height: 120px; }
+.ringcard .lg { display: grid; gap: 6px; font-size: 12.5px; }
+.ringcard .lg div { display: flex; align-items: center; gap: 8px; }
+.ringcard .lg i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.ringcard .lg b { margin-left: auto; font-family: var(--font-mono); font-weight: 500; }
+.ringcard h4 { margin: 0 0 6px; font: 600 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); grid-column: 1 / -1; }
+table.fleet { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.fleet th { text-align: left; font: 500 10.5px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); padding: 8px 10px; border-bottom: 1px solid var(--border); }
+table.fleet td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+table.fleet tr.grp td { background: var(--surface); font-weight: 600; padding: 9px 10px; }
+table.fleet tr.grp td .cnt { margin-left: 8px; font: 500 11px/1 var(--font-mono); color: var(--text-muted); }
+table.fleet tr.grp td .roll { float: right; display: flex; gap: 6px; }
+table.fleet tr.grp.missing td { background: var(--danger-soft); border-left: 3px solid var(--danger); }
+table.fleet tr.grp.missing .st { vertical-align: middle; }
+table.fleet td.dev { font-weight: 500; }
+table.fleet td.dev small { display: block; color: var(--text-muted); font-weight: 400; font-size: 11px; font-family: var(--font-mono); }
+table.fleet tr:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.strip { display: inline-flex; gap: 3px; }
+.strip i { width: 10px; height: 10px; border-radius: 50%; background: var(--success); display: inline-block; }
+.strip i.m { background: var(--warning); } .strip i.x { background: var(--danger); } .strip i.n { background: transparent; border: 1.5px solid var(--border-input); box-sizing: border-box; } .strip i.mix { background: linear-gradient(135deg, var(--success) 50%, var(--danger) 50%); }
+.age { color: var(--text-muted); } .age.bad { color: var(--danger); font-weight: 600; } .age.warn { color: var(--warning); font-weight: 600; }
+.row-act { opacity: .55; }
+tr:hover .row-act { opacity: 1; }
+
+/* device panel */
+.panel { min-width: 980px; display: grid; grid-template-columns: 1fr 440px; min-height: 560px; background: var(--bg); position: relative; }
+.panel .dim { padding: 16px 18px; opacity: .45; filter: saturate(.6); pointer-events: none; }
+.side { background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; box-shadow: var(--shadow-pop); }
+.side .head { padding: 14px 16px 0; display: grid; gap: 10px; border-bottom: 1px solid var(--border); }
+.side .head .t { display: flex; align-items: center; gap: 10px; }
+.side .head h2 { font: 600 17px/1.2 var(--font-display); text-transform: none; letter-spacing: .01em; }
+.side .head .sub { font: 500 11.5px/1 var(--font-mono); color: var(--text-muted); display: flex; gap: 10px; flex-wrap: wrap; }
+.side .tabs { display: flex; gap: 2px; margin-top: 4px; overflow-x: auto; }
+.side .tabs a { padding: 8px 10px; font-size: 12px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap; }
+.side .tabs a.on { color: var(--accent); border-color: var(--accent); }
+.side .body { padding: 14px 16px; display: grid; gap: 14px; overflow: auto; }
+.kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 12.5px; }
+.kv dt { color: var(--text-muted); } .kv dd { margin: 0; }
+.prog { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; display: grid; gap: 8px; }
+.prog .l { display: flex; justify-content: space-between; font-size: 12px; }
+.prog .l b { color: var(--accent); }
+.prog .track { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.prog .track i { display: block; height: 100%; width: 62%; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, white)); border-radius: 3px; }
+.prog .meta { display: flex; gap: 14px; font: 500 11px/1 var(--font-mono); color: var(--text-muted); }
+.hist { display: grid; gap: 6px; }
+.hist .r { display: grid; grid-template-columns: 70px 1fr auto auto; gap: 10px; align-items: center; font-size: 12px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--bg); border: 1px solid var(--border); }
+.hist .r .d { font-family: var(--font-mono); color: var(--text-muted); font-size: 11px; }
+.hist .r .s { font-family: var(--font-mono); color: var(--text-muted); font-size: 11px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.side h4 { margin: 0; font: 600 11px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+
+/* wizard */
+.wiz { min-width: 980px; background: var(--bg); padding: 28px; min-height: 520px; display: grid; place-items: start center; }
+.wiz .box { width: 720px; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden; }
+.wiz .steps { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+.wiz .steps div { padding: 12px 16px; font-size: 12.5px; color: var(--text-muted); display: flex; align-items: center; gap: 10px; }
+.wiz .steps div i { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--border-input); display: grid; place-items: center; font: 600 11px/1 var(--font-mono); flex: none; }
+.wiz .steps div.done { color: var(--text); } .wiz .steps div.done i { background: var(--success); border-color: transparent; color: var(--on-status); }
+.wiz .steps div.on { color: var(--text); font-weight: 600; } .wiz .steps div.on i { background: var(--accent); border-color: transparent; color: var(--on-accent); }
+.wiz .in { padding: 20px 22px; display: grid; gap: 16px; }
+.wiz h3 { font: 600 18px/1.2 var(--font-display); letter-spacing: .01em; }
+.field { display: grid; gap: 6px; font-size: 12.5px; }
+.field label { font-weight: 600; }
+.field .ctl { height: 34px; border: 1px solid var(--border-input); border-radius: var(--radius-sm); background: var(--bg); display: flex; align-items: center; padding: 0 10px; gap: 8px; font-family: var(--font-mono); font-size: 12.5px; }
+.field .ctl.ro { color: var(--text-muted); }
+.field .help { color: var(--text-muted); font-size: 12px; }
+.frow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.opt { display: grid; gap: 8px; }
+.opt label { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); font-size: 12.5px; align-items: flex-start; }
+.opt label.on { border-color: var(--accent); background: var(--accent-soft); }
+.opt label i { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--border-input); flex: none; margin-top: 1px; }
+.opt label.on i { border: 5px solid var(--accent); }
+.opt label b { display: block; }
+.opt label span { color: var(--text-muted); }
+.opt label .warnline { color: var(--warning); font-weight: 600; }
+pre.code { margin: 0; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; font: 12px/1.55 var(--font-mono); color: var(--text); overflow-x: auto; }
+pre.code .c { color: var(--text-muted); } pre.code .k { color: var(--accent); } pre.code .s { color: var(--success); }
+.wiz .foot { display: flex; gap: 8px; justify-content: flex-end; padding: 14px 22px; border-top: 1px solid var(--border); background: var(--surface-raised); }
+
+/* email */
+.mail { min-width: 0; background: var(--bg); padding: 24px; }
+.mail .msg { max-width: 640px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.mail .hdr { padding: 14px 20px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-muted); display: grid; gap: 3px; }
+.mail .hdr b { color: var(--text); font-size: 14px; }
+.mail .brand { display: flex; align-items: center; gap: 10px; padding: 18px 20px 6px; }
+.mail .sum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 10px 20px; }
+.mail .sum div { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; }
+.mail .sum .n { font: 600 20px/1.1 var(--font-display); }
+.mail .sum .l { font-size: 11px; color: var(--text-muted); }
+.mail .sum .bad .n { color: var(--danger); } .mail .sum .warn .n { color: var(--warning); } .mail .sum .good .n { color: var(--success); }
+.mail .sec { padding: 10px 20px; }
+.mail .sec h4 { margin: 0 0 8px; font: 600 11px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+.mail .line { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 8px 10px; border-radius: var(--radius-sm); border-left: 3px solid var(--border); background: var(--bg); margin-bottom: 6px; font-size: 12.5px; }
+.mail .line.crit { border-left-color: var(--danger); } .mail .line.warn { border-left-color: var(--warning); }
+.mail .line small { display: block; color: var(--text-muted); font-size: 11.5px; }
+.mail .line .w { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); text-align: right; }
+.mail .ok { padding: 10px 20px 18px; font-size: 12.5px; color: var(--text-muted); }
+.mail .ok b { color: var(--success); }
+.mail .ft { padding: 12px 20px; border-top: 1px solid var(--border); font: 500 11px/1.5 var(--font-mono); color: var(--text-muted); }
+
+/* tray */
+.desk { min-width: 0; background: linear-gradient(160deg, #0d1a33, #06101f 60%, #0a1a2c); padding: 36px 24px 0; display: flex; justify-content: flex-end; align-items: flex-end; min-height: 380px; position: relative; }
+.taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: rgba(8,14,28,.9); border-top: 1px solid rgba(255,255,255,.08); display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 0 14px; font: 500 11px/1 var(--font-mono); color: #93a6c6; }
+.taskbar .ic { width: 18px; height: 18px; display: grid; place-items: center; }
+.pop { width: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); margin-bottom: 52px; overflow: hidden; }
+.pop .h { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.pop .h .wordmark .wm { font-size: 15px; }
+.pop .h .st { margin-left: auto; }
+.pop .b { padding: 12px 14px; display: grid; gap: 10px; font-size: 12.5px; }
+.pop .b .kv { grid-template-columns: 110px 1fr; }
+.pop .m { border-top: 1px solid var(--border); display: grid; }
+.pop .m a { padding: 9px 14px; font-size: 12.5px; color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 10px; }
+.pop .m a:hover { background: var(--accent-soft); }
+.pop .m a.dis { color: var(--text-muted); }
+.pop .m a svg { width: 14px; height: 14px; }
+
+/* decisions */
+.decide { display: grid; gap: 10px; }
+.decide .q { display: grid; grid-template-columns: 200px 1fr; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); font-size: 13px; align-items: start; }
+.decide .q b { font-weight: 600; }
+.decide .q span { color: var(--text-muted); }
+.decide .q .rec { color: var(--accent); font-weight: 600; }
+@media (max-width: 640px) { .decide .q { grid-template-columns: 1fr; } .kpis { grid-template-columns: repeat(2, 1fr); } .rings { grid-template-columns: 1fr; } .frow { grid-template-columns: 1fr; } .mail .sum { grid-template-columns: repeat(2,1fr); } }
+.note { font-size: 12.5px; color: var(--text-muted); margin-top: 10px; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+</style>
+
+<div class="bar"><div class="in">
+  <a class="wordmark" href="#top" aria-label="CryoBackup"><svg width="26" height="26" viewBox="0 0 64 64" aria-hidden="true"><use href="#mark-hex"/></svg><span class="wm"><b>CRYO</b><span>BACKUP</span></span></a>
+  <span class="meta">Design concepts · v0.1 · 2026-10-20 · for approval</span>
+  <div class="seg" role="group" aria-label="Preview theme"><button type="button" id="th-dark" aria-pressed="true">Dark</button><button type="button" id="th-light" aria-pressed="false">Light</button></div>
+  <nav><a href="#marks">Mark</a><a href="#palette">Palette</a><a href="#type">Type</a><a href="#states">States</a><a href="#fleet">Fleet board</a><a href="#device">Device</a><a href="#enroll">Enroll</a><a href="#digest">Digest</a><a href="#tray">Tray</a><a href="#decide">Decide</a></nav>
+</div></div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="mark-hex" viewBox="0 0 64 64">
+      <path d="M32 5 L55 18.5 V45.5 L32 59 L9 45.5 V18.5 Z" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linejoin="round"/>
+      <path d="M32 16 V48 M18.1 24 L45.9 40 M45.9 24 L18.1 40" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+      <path d="M32 16 l-4 4 M32 16 l4 4 M32 48 l-4 -4 M32 48 l4 -4 M18.1 24 l5.4 -1.4 M18.1 24 l1.4 5.4 M45.9 40 l-5.4 1.4 M45.9 40 l-1.4 -5.4 M45.9 24 l-5.4 -1.4 M45.9 24 l-1.4 5.4 M18.1 40 l5.4 1.4 M18.1 40 l1.4 -5.4" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="32" cy="32" r="4" fill="currentColor"/>
+    </symbol>
+    <symbol id="mark-shard" viewBox="0 0 64 64">
+      <path d="M32 4 L54 15 L50 44 L32 60 L14 44 L10 15 Z" fill="currentColor" opacity=".18"/>
+      <path d="M32 4 L54 15 L32 32 Z" fill="currentColor" opacity=".55"/>
+      <path d="M10 15 L32 32 L14 44 Z" fill="currentColor" opacity=".35"/>
+      <path d="M32 32 L50 44 L32 60 Z" fill="currentColor" opacity=".8"/>
+      <path d="M32 4 L54 15 L50 44 L32 60 L14 44 L10 15 Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M32 4 V60 M10 15 L50 44 M54 15 L14 44" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".9"/>
+    </symbol>
+    <symbol id="mark-cell" viewBox="0 0 64 64">
+      <rect x="5" y="5" width="54" height="54" rx="17" fill="none" stroke="currentColor" stroke-width="3.2"/>
+      <path d="M32 15 V49 M17.3 23.5 L46.7 40.5 M46.7 23.5 L17.3 40.5" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+      <circle cx="32" cy="15" r="3.4" fill="currentColor"/><circle cx="32" cy="49" r="3.4" fill="currentColor"/>
+      <circle cx="17.3" cy="23.5" r="3.4" fill="currentColor"/><circle cx="46.7" cy="40.5" r="3.4" fill="currentColor"/>
+      <circle cx="46.7" cy="23.5" r="3.4" fill="currentColor"/><circle cx="17.3" cy="40.5" r="3.4" fill="currentColor"/>
+      <circle cx="32" cy="32" r="5.2" fill="var(--bg)" stroke="currentColor" stroke-width="3"/>
+    </symbol>
+    <symbol id="i-grid" viewBox="0 0 16 16"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-pc" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 13.5h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-users" viewBox="0 0 16 16"><circle cx="6" cy="5.5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.8 13c.4-2.4 2-3.5 4.2-3.5s3.8 1.1 4.2 3.5M11 6.5a2 2 0 1 0 0-4M12 9.6c1.4.4 2.2 1.4 2.4 3.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 1 1 8 0v4l1.2 1.5H2.8zM6.5 14h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-run" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.5V8l2.3 1.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-policy" viewBox="0 0 16 16"><path d="M3 2h7l3 3v9H3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 11h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-db" viewBox="0 0 16 16"><ellipse cx="8" cy="4" rx="5.5" ry="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 4v8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V4M2.5 8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-key" viewBox="0 0 16 16"><circle cx="5.5" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8.5 8h5.5v2.5M11.5 8v2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-cog" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 16 16"><path d="M5 3.5v9M11 3.5v9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 16 16"><path d="M3 8a5 5 0 1 0 1.5-3.6M3 2.5v3h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-out" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<main class="wrap" id="top">
+  <div class="hero">
+    <div>
+      <div class="eyebrow">Replica · design stage · concepts before build</div>
+      <h1>A console that looks as cold and precise as the name. <em>Nothing goes quietly green.</em></h1>
+      <p>Everything below is rendered from the real token file (dark-first, light mirrored, every text pair passes WCAG AA). Pick a mark, pick a type pairing, flag anything that feels off, and the same tokens become the shipped CSS.</p>
+    </div>
+    <aside class="side">
+      <div class="eyebrow">What to decide</div>
+      <ol>
+        <li><b>Mark</b> — M1, M2 or M3</li>
+        <li><b>Type pairing</b> — A (HUD) or B (soft)</li>
+        <li><b>Palette</b> — keep, or steer a hue</li>
+        <li><b>Density</b> — the fleet table as shown, or tighter</li>
+        <li>Anything in the five mocks that reads wrong</li>
+      </ol>
+    </aside>
+  </div>
+
+  <!-- MARKS -->
+  <section id="marks">
+    <div class="sec-head"><h2>1 · Mark</h2><p>Three directions, all original geometry, all legible at 16 px. The ice crystal is the shared idea: six axes, one centre, data frozen in place.</p></div>
+    <div class="grid g3">
+      <div class="card">
+        <h3><span class="pick">M1</span> Hex crystal</h3>
+        <p>A hexagon cell with a six-spoke crystal inside. Reads as "storage cell" and "snowflake" at once; the strongest favicon of the three.</p>
+        <div class="markrow">
+          <figure><div class="tile l" style="color:var(--accent)"><svg width="68" height="68"><use href="#mark-hex"/></svg></div><figcaption>96 px</figcaption></figure>
+          <figure><div class="tile m" style="color:var(--accent)"><svg width="28" height="28"><use href="#mark-hex"/></svg></div><figcaption>40</figcaption></figure>
+          <figure><div class="tile s" style="color:var(--accent)"><svg width="14" height="14"><use href="#mark-hex"/></svg></div><figcaption>16</figcaption></figure>
+          <figure><div class="tile m ink" style="color:var(--on-accent)"><svg width="28" height="28"><use href="#mark-hex"/></svg></div><figcaption>app icon</figcaption></figure>
+        </div>
+        <div class="lockup"><svg width="30" height="30" viewBox="0 0 64 64" style="color:var(--accent)"><use href="#mark-hex"/></svg><span class="wordmark"><span class="wm"><b>CRYO</b><span>BACKUP</span></span></span></div>
+      </div>
+      <div class="card">
+        <h3><span class="pick">M2</span> Faceted shard</h3>
+        <p>A single shard of ice, faceted like a cut stone, shield-shaped. More "vault", more premium; the facets flatten at 16 px into a plain shield.</p>
+        <div class="markrow">
+          <figure><div class="tile l" style="color:var(--accent)"><svg width="68" height="68"><use href="#mark-shard"/></svg></div><figcaption>96 px</figcaption></figure>
+          <figure><div class="tile m" style="color:var(--accent)"><svg width="28" height="28"><use href="#mark-shard"/></svg></div><figcaption>40</figcaption></figure>
+          <figure><div class="tile s" style="color:var(--accent)"><svg width="14" height="14"><use href="#mark-shard"/></svg></div><figcaption>16</figcaption></figure>
+          <figure><div class="tile m ink" style="color:var(--on-accent)"><svg width="28" height="28"><use href="#mark-shard"/></svg></div><figcaption>app icon</figcaption></figure>
+        </div>
+        <div class="lockup"><svg width="30" height="30" viewBox="0 0 64 64" style="color:var(--accent)"><use href="#mark-shard"/></svg><span class="wordmark"><span class="wm"><b>CRYO</b><span>BACKUP</span></span></span></div>
+      </div>
+      <div class="card">
+        <h3><span class="pick">M3</span> Cryo cell</h3>
+        <p>A rounded pod with the crystal's six nodes dotted like a cluster diagram: one centre, six devices. The friendliest of the three; closest to a modern app icon.</p>
+        <div class="markrow">
+          <figure><div class="tile l" style="color:var(--accent)"><svg width="68" height="68"><use href="#mark-cell"/></svg></div><figcaption>96 px</figcaption></figure>
+          <figure><div class="tile m" style="color:var(--accent)"><svg width="28" height="28"><use href="#mark-cell"/></svg></div><figcaption>40</figcaption></figure>
+          <figure><div class="tile s" style="color:var(--accent)"><svg width="14" height="14"><use href="#mark-cell"/></svg></div><figcaption>16</figcaption></figure>
+          <figure><div class="tile m ink" style="color:var(--on-accent)"><svg width="28" height="28"><use href="#mark-cell"/></svg></div><figcaption>app icon</figcaption></figure>
+        </div>
+        <div class="lockup"><svg width="30" height="30" viewBox="0 0 64 64" style="color:var(--accent)"><use href="#mark-cell"/></svg><span class="wordmark"><span class="wm"><b>CRYO</b><span>BACKUP</span></span></span></div>
+      </div>
+    </div>
+    <p class="note">The wordmark sets <b>CRYO</b> in ice blue and BACKUP in frost white; the short name "Cryo" stands alone in the tray and the agent. Tagline, used sparingly: <i>Frozen in time. Back in seconds.</i></p>
+  </section>
+
+  <!-- PALETTE -->
+  <section id="palette">
+    <div class="sec-head"><h2>2 · Palette</h2><p>Deep navy ground, ice-blue accent, frost-white type. Warm colours are reserved for state: amber warns, coral is critical, mint is healthy. Nothing else on the page is warm, so an alarm is the warmest thing in view.</p></div>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:var(--bg);color:var(--text-muted)">bg</div><div class="lab"><b>Ground</b><span class="r" data-hex="bg">#0B1220</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--surface);color:var(--text-muted)">surface</div><div class="lab"><b>Surface</b><span class="r" data-hex="surface">#121C30</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--surface-raised);color:var(--text-muted)">surface-raised</div><div class="lab"><b>Raised</b><span class="r" data-hex="surface-raised">#182642</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--border);color:var(--text)">border</div><div class="lab"><b>Border</b><span class="r" data-hex="border">#243656</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--text);color:var(--bg)">text</div><div class="lab"><b>Frost</b><span class="r" data-hex="text">#E8F0FA · 16.3:1</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--text-muted);color:var(--bg)">text-muted</div><div class="lab"><b>Muted</b><span class="r" data-hex="text-muted">#93A6C6 · 7.6:1</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--accent);color:var(--on-accent)">accent</div><div class="lab"><b>Ice</b><span class="r" data-hex="accent">#5CC9F5 · 9.9:1</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--success);color:var(--on-status)">success</div><div class="lab"><b>Healthy</b><span class="r" data-hex="success">#48D597 · 10.0:1</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--warning);color:var(--on-status)">warning</div><div class="lab"><b>Amber</b><span class="r" data-hex="warning">#F5B547 · 10.3:1</span></div></div>
+      <div class="sw"><div class="chip" style="background:var(--danger);color:var(--on-status)">danger</div><div class="lab"><b>Critical</b><span class="r" data-hex="danger">#FF7A7A · 7.4:1</span></div></div>
+    </div>
+    <p class="note">Ratios are against the ground in the theme you are previewing (dark values shown). The light theme uses deeper versions of the same hues; both pass AA on every pair, and the console ships dark by default with light as a user setting.</p>
+  </section>
+
+  <!-- TYPE -->
+  <section id="type">
+    <div class="sec-head"><h2>3 · Type</h2><p>Two pairings. Both use IBM Plex Sans for interface text (excellent numerals, open licence) and IBM Plex Mono for data. They differ only in the display face used for headings, the wordmark and big numbers.</p></div>
+    <div class="grid g2">
+      <div class="card">
+        <h3><span class="pick">A</span> Chakra Petch + IBM Plex Sans <span class="muted" style="font-weight:400">· HUD</span></h3>
+        <div class="type-sample">
+          <div class="h">Fleet health · 212 devices</div>
+          <div class="eyebrow">Last successful poll 13:42:10 · America/Chicago</div>
+          <div class="body">Squared, slightly sci-fi, unmistakably "ops console". Used only at display sizes, so the body text stays calm. This is the pairing the mocks below use.</div>
+          <div class="data">FRONTDESK-01 · <b>2h 14m</b> ago · 38.2 GB · agent 1.4.2</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3><span class="pick">B</span> Sora + IBM Plex Sans <span class="muted" style="font-weight:400">· soft</span></h3>
+        <div class="type-sample b">
+          <div class="h">Fleet health · 212 devices</div>
+          <div class="eyebrow">Last successful poll 13:42:10 · America/Chicago</div>
+          <div class="body">Geometric and rounded, closer to a modern SaaS product. Friendlier, less "command deck". Same interface and data faces, so switching later is a one-line change.</div>
+          <div class="data">FRONTDESK-01 · <b>2h 14m</b> ago · 38.2 GB · agent 1.4.2</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATES -->
+  <section id="states">
+    <div class="sec-head"><h2>4 · State language</h2><p>Seventeen device states collapse into four visual classes. Shape carries the meaning as well as colour, so the board still reads for colour-blind operators and in print.</p></div>
+    <div class="chip-row">
+      <span class="st ok"><i></i>OK</span>
+      <span class="st info pulse"><i></i>RUNNING 62%</span>
+      <span class="st info"><i></i>PENDING FIRST · 41h left</span>
+      <span class="st info"><i></i>DEFERRED · battery</span>
+      <span class="st warn"><i></i>MISSED RUN</span>
+      <span class="st warn"><i></i>PARTIAL · 23 files</span>
+      <span class="st warn"><i></i>OUTDATED 1.3.0</span>
+      <span class="st warn"><i></i>ESCROW UNVERIFIED</span>
+      <span class="st crit"><i></i>STALE 4d</span>
+      <span class="st crit"><i></i>UNSEEN 9d</span>
+      <span class="st crit"><i></i>FAILED ×3</span>
+      <span class="st crit"><i></i>BLANK · never backed up</span>
+      <span class="st crit"><i></i>STUCK 76h</span>
+      <span class="st crit"><i></i>UNKNOWN · facts unavailable</span>
+      <span class="st crit"><i></i>IDENTITY CONFLICT</span>
+      <span class="st crit"><i></i>MISSING CUSTOMER</span>
+      <span class="st neutral"><i></i>PARKED · until Fri 18:00</span>
+      <span class="st neutral"><i></i>RETIRED</span>
+    </div>
+    <div class="legend">
+      <div><b>Mint dot</b> — healthy. The only green on the page.</div>
+      <div><b>Ice square</b> — informational and in progress. Never counts as healthy.</div>
+      <div><b>Amber triangle</b> — warning. Early signal; becomes critical on its own if ignored.</div>
+      <div><b>Coral diamond</b> — critical. Alarms, notifies, and sits at the top of every list.</div>
+      <div><b>Hollow ring</b> — intentionally out of service (parked, retired). Listed, never hidden.</div>
+      <div><b>Pulse</b> — a live run. Reduced-motion users see a static square.</div>
+    </div>
+  </section>
+
+  <!-- FLEET BOARD -->
+  <section id="fleet">
+    <div class="sec-head"><h2>5 · Fleet health board <span class="muted" style="font-weight:400;font-size:13px;text-transform:none;letter-spacing:0">B01 · the home screen</span></h2><p>Exceptions first, grouped by customer. Every number on this screen is computed at read time from timestamps and policy; the freshness stamp and the banner are the first things rendered.</p></div>
+    <div class="frame"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">console.example-msp.internal/fleet</div></div>
+    <div class="scroll"><div class="app">
+      <nav class="nav" aria-label="Console navigation">
+        <a class="wordmark" href="#fleet"><svg width="24" height="24" viewBox="0 0 64 64" style="color:var(--accent)"><use href="#mark-hex"/></svg><span class="wm"><b>CRYO</b><span>BACKUP</span></span></a>
+        <a class="on" href="#fleet"><svg><use href="#i-grid"/></svg>Fleet <span class="n">11</span></a>
+        <a href="#fleet"><svg><use href="#i-users"/></svg>Customers</a>
+        <a href="#fleet"><svg><use href="#i-pc"/></svg>Devices</a>
+        <a href="#fleet"><svg><use href="#i-run"/></svg>Runs</a>
+        <a href="#fleet"><svg><use href="#i-bell"/></svg>Alarms <span class="n">4</span></a>
+        <a href="#fleet"><svg><use href="#i-policy"/></svg>Policies</a>
+        <a href="#fleet"><svg><use href="#i-db"/></svg>Storage</a>
+        <a href="#fleet"><svg><use href="#i-key"/></svg>Keys</a>
+        <a href="#fleet"><svg><use href="#i-cog"/></svg>Settings</a>
+        <div class="sp"></div>
+        <div class="sys">Gateway <b>reachable</b> · Storage <b>probe ok</b> · SMTP <b>ok</b> · Maintenance <b>idle</b> · v1.4.2</div>
+      </nav>
+      <div class="main">
+        <div class="topbar"><h1>Fleet health</h1><div class="search"><svg width="14" height="14"><use href="#i-search"/></svg>Search devices, customers, states… <kbd>/</kbd></div><div class="fresh"><i></i>polled 13:42:10 · 212 of 212 agents in view</div><button class="btn">Saved views</button><button class="btn primary">+ Enroll devices</button></div>
+        <div class="content">
+          <div class="banner crit"><span class="st crit"><i></i>MISSING CUSTOMER</span><div><b>Blue Ridge Accounting</b> is marked expected but has <b>zero active devices</b> — every machine there is unmonitored.</div><div class="act"><button class="btn sm">Acknowledge</button><button class="btn sm">Open customer</button></div></div>
+          <div class="kpis">
+            <div class="kpi"><div class="l">Devices</div><div class="v">212<small>5 customers</small></div><div class="spark"><i style="height:60%"></i><i style="height:70%"></i><i style="height:65%"></i><i style="height:80%"></i><i style="height:78%"></i><i style="height:90%"></i><i class="hi" style="height:100%"></i></div></div>
+            <div class="kpi good"><div class="l">Within SLA</div><div class="v">94.3<small>%</small></div><div class="spark"><i style="height:85%"></i><i style="height:80%"></i><i style="height:60%"></i><i style="height:70%"></i><i style="height:88%"></i><i style="height:92%"></i><i class="hi" style="height:94%"></i></div></div>
+            <div class="kpi bad"><div class="l">Critical</div><div class="v">7</div><div class="spark"><i style="height:30%"></i><i style="height:20%"></i><i style="height:60%"></i><i style="height:50%"></i><i style="height:25%"></i><i style="height:40%"></i><i class="hi" style="height:70%"></i></div></div>
+            <div class="kpi warn"><div class="l">Warnings</div><div class="v">5</div><div class="spark"><i style="height:50%"></i><i style="height:40%"></i><i style="height:45%"></i><i style="height:70%"></i><i style="height:35%"></i><i style="height:40%"></i><i class="hi" style="height:50%"></i></div></div>
+            <div class="kpi"><div class="l">Backed up today</div><div class="v">188<small>+ 4 running</small></div><div class="spark"><i style="height:90%"></i><i style="height:95%"></i><i style="height:30%"></i><i style="height:88%"></i><i style="height:92%"></i><i style="height:90%"></i><i class="hi" style="height:89%"></i></div></div>
+          </div>
+          <div class="rings">
+            <div class="ringcard"><h4>Last successful backup</h4>
+              <svg viewBox="0 0 120 120" role="img" aria-label="Backup age ring"><circle cx="60" cy="60" r="46" fill="none" stroke="var(--border)" stroke-width="14"/><circle cx="60" cy="60" r="46" fill="none" stroke="var(--success)" stroke-width="14" stroke-dasharray="243 289" transform="rotate(-90 60 60)" stroke-linecap="butt"/><circle cx="60" cy="60" r="46" fill="none" stroke="var(--warning)" stroke-width="14" stroke-dasharray="18 289" stroke-dashoffset="-243" transform="rotate(-90 60 60)"/><circle cx="60" cy="60" r="46" fill="none" stroke="var(--danger)" stroke-width="14" stroke-dasharray="20 289" stroke-dashoffset="-261" transform="rotate(-90 60 60)"/><text x="60" y="56" text-anchor="middle" font-family="Chakra Petch, sans-serif" font-size="22" font-weight="600" fill="var(--text)">94%</text><text x="60" y="72" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="var(--text-muted)">&lt; 24 h</text></svg>
+              <div class="lg"><div><i style="background:var(--success)"></i>under 24 h <b>199</b></div><div><i style="background:var(--warning)"></i>24–72 h <b>6</b></div><div><i style="background:var(--danger)"></i>over 72 h or never <b>7</b></div><div><i style="background:transparent;border:1.5px solid var(--border-input)"></i>parked / retired <b>3</b></div></div>
+            </div>
+            <div class="ringcard"><h4>Customer health</h4>
+              <svg viewBox="0 0 120 120" role="img" aria-label="Customers within SLA"><circle cx="60" cy="60" r="46" fill="none" stroke="var(--border)" stroke-width="14"/><circle cx="60" cy="60" r="46" fill="none" stroke="var(--accent)" stroke-width="14" stroke-dasharray="173 289" transform="rotate(-90 60 60)"/><text x="60" y="56" text-anchor="middle" font-family="Chakra Petch, sans-serif" font-size="22" font-weight="600" fill="var(--text)">3/5</text><text x="60" y="72" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="var(--text-muted)">all green</text></svg>
+              <div class="lg"><div><i style="background:var(--accent)"></i>fully within SLA <b>3</b></div><div><i style="background:var(--warning)"></i>has warnings <b>1</b></div><div><i style="background:var(--danger)"></i>has critical <b>1</b></div></div>
+            </div>
+          </div>
+          <table class="fleet">
+            <thead><tr><th style="width:34%">Device</th><th>State</th><th>Last success</th><th>Last 10 days</th><th>Size</th><th>Agent</th><th></th></tr></thead>
+            <tbody>
+              <tr class="grp missing"><td colspan="7"><span class="st crit"><i></i>MISSING</span> &nbsp;Blue Ridge Accounting <span class="cnt">0 devices · expected</span><span class="roll"><button class="btn sm">Acknowledge</button></span></td></tr>
+              <tr class="grp"><td colspan="7">Summit Eye Care <span class="cnt">31 devices</span><span class="roll"><span class="st crit"><i></i>3</span><span class="st warn"><i></i>1</span><span class="st ok"><i></i>27</span></span></td></tr>
+              <tr><td class="dev">LAB-RETINA-02<small>Windows 10 Pro · workstation</small></td><td><span class="st crit"><i></i>UNSEEN 9d</span></td><td class="age bad">11 d ago</td><td><span class="strip"><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i></i></span></td><td class="mono">212 GB</td><td class="mono">1.4.2</td><td class="row-act"><button class="btn sm ghost">⋯</button></td></tr>
+              <tr><td class="dev">FRONTDESK-01<small>Windows 11 Pro · desktop</small></td><td><span class="st crit"><i></i>FAILED ×3</span></td><td class="age bad">3 d ago</td><td><span class="strip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="x"></i><i class="x"></i><i class="x"></i></span></td><td class="mono">38.2 GB</td><td class="mono">1.4.2</td><td class="row-act"><button class="btn sm ghost">⋯</button></td></tr>
+              <tr><td class="dev">LT-OPTOM-04<small>Windows 11 Pro · laptop</small></td><td><span class="st crit"><i></i>STALE 4d</span></td><td class="age bad">4 d ago</td><td><span class="strip"><i></i><i></i><i></i><i></i><i></i><i></i><i class="m"></i><i class="m"></i><i class="m"></i><i class="m"></i></span></td><td class="mono">61.0 GB</td><td class="mono">1.4.2</td><td class="row-act"><button class="btn sm ghost">⋯</button></td></tr>
+              <tr><td class="dev">RECEPTION-2<small>Windows 11 Pro · desktop</small></td><td><span class="st warn"><i></i>PARTIAL · 23 files</span></td><td class="age warn">6 h ago</td><td><span class="strip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="mix"></i><i class="mix"></i></span></td><td class="mono">12.7 GB</td><td class="mono">1.4.2</td><td class="row-act"><button class="btn sm ghost">⋯</button></td></tr>
+              <tr><td class="dev">DR-OFFICE-PC<small>Windows 11 Pro · desktop</small></td><td><span class="st info pulse"><i></i>RUNNING 62%</span></td><td class="age">22 h ago</td><td><span class="strip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></td><td class="mono">94.1 GB</td><td class="mono">1.4.2</td><td class="row-act"><button class="btn sm ghost">⋯</button></td></tr>
+              <tr class="grp"><td colspan="7">Harbor Family Practice <span class="cnt">58 devices</span><span class="roll"><span class="st info"><i></i>2</span><span class="st ok"><i></i>56</span></span></td></tr>
+              <tr><td class="dev">NEW-EXAM-6<small>Windows 11 Pro · desktop</small></td><td><span class="st info"><i></i>PENDING FIRST · 41h left</span></td><td class="age">never · enrolled 31 h ago</td><td><span class="strip"><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i><i class="n"></i></span></td><td class="mono">—</td><td class="mono">1.4.2</td><td class="row-act"><button class="btn sm ghost">⋯</button></td></tr>
+              <tr><td class="dev">LT-BILLING-1<small>Windows 11 Pro · laptop</small></td><td><span class="st info"><i></i>DEFERRED · battery 14%</span></td><td class="age">19 h ago</td><td><span class="strip"><i></i><i></i><i></i><i class="m"></i><i></i><i></i><i></i><i></i><i></i><i></i></span></td><td class="mono">22.4 GB</td><td class="mono">1.4.2</td><td class="row-act"><button class="btn sm ghost">⋯</button></td></tr>
+              <tr class="grp"><td colspan="7">Northwind Dental <span class="cnt">44 devices</span><span class="roll"><span class="st neutral"><i></i>1</span><span class="st ok"><i></i>43</span></span></td></tr>
+              <tr><td class="dev">XRAY-OLD-01<small>Windows 10 Pro · desktop</small></td><td><span class="st neutral"><i></i>PARKED · until Fri 18:00</span></td><td class="age">2 d ago</td><td><span class="strip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="n"></i><i class="n"></i></span></td><td class="mono">8.9 GB</td><td class="mono">1.4.2</td><td class="row-act"><button class="btn sm ghost">⋯</button></td></tr>
+              <tr class="grp"><td colspan="7">Pinecrest Legal <span class="cnt">79 devices</span><span class="roll"><span class="st ok"><i></i>79</span></span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div></div></div>
+    <p class="note">Healthy customers collapse to a single green row; only exceptions expand. The MISSING row is the "18 days of silence" lesson made structural: an expected customer with no devices is red before anything else loads.</p>
+  </section>
+
+  <!-- DEVICE PANEL -->
+  <section id="device">
+    <div class="sec-head"><h2>6 · Device panel <span class="muted" style="font-weight:400;font-size:13px;text-transform:none;letter-spacing:0">B07 · slides over the board</span></h2><p>Every question about one machine answered without a shell: state and why, the live run, the last ten runs with error classes (never paths), keys, policy, audit.</p></div>
+    <div class="frame"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">console.example-msp.internal/fleet?device=01J9…  ·  FRONTDESK-01</div></div>
+    <div class="scroll"><div class="panel">
+      <div class="dim">
+        <div class="kpis" style="margin-bottom:14px"><div class="kpi"><div class="l">Devices</div><div class="v">212</div></div><div class="kpi good"><div class="l">Within SLA</div><div class="v">94.3<small>%</small></div></div><div class="kpi bad"><div class="l">Critical</div><div class="v">7</div></div><div class="kpi warn"><div class="l">Warnings</div><div class="v">5</div></div><div class="kpi"><div class="l">Today</div><div class="v">188</div></div></div>
+        <table class="fleet"><thead><tr><th>Device</th><th>State</th><th>Last success</th></tr></thead><tbody><tr class="grp"><td colspan="3">Summit Eye Care</td></tr><tr><td class="dev">LAB-RETINA-02</td><td><span class="st crit"><i></i>UNSEEN 9d</span></td><td class="age bad">11 d ago</td></tr><tr style="background:var(--accent-soft)"><td class="dev">FRONTDESK-01</td><td><span class="st crit"><i></i>FAILED ×3</span></td><td class="age bad">3 d ago</td></tr><tr><td class="dev">LT-OPTOM-04</td><td><span class="st crit"><i></i>STALE 4d</span></td><td class="age bad">4 d ago</td></tr><tr><td class="dev">RECEPTION-2</td><td><span class="st warn"><i></i>PARTIAL</span></td><td class="age warn">6 h ago</td></tr><tr><td class="dev">DR-OFFICE-PC</td><td><span class="st info"><i></i>RUNNING</span></td><td>22 h ago</td></tr></tbody></table>
+      </div>
+      <aside class="side" aria-label="Device detail">
+        <div class="head">
+          <div class="t"><svg width="22" height="22"><use href="#i-pc"/></svg><h2>FRONTDESK-01</h2><span class="st crit" style="margin-left:auto"><i></i>FAILED ×3</span></div>
+          <div class="sub"><span>Summit Eye Care</span><span>Windows 11 Pro 23H2</span><span>desktop</span><span>agent 1.4.2</span><span>online · seen 40 s ago</span></div>
+          <div class="tabs"><a class="on" href="#device">Summary</a><a href="#device">History</a><a href="#device">Errors</a><a href="#device">Keys</a><a href="#device">Policy</a><a href="#device">Restore</a><a href="#device">Audit</a></div>
+        </div>
+        <div class="body">
+          <div class="banner crit" style="padding:8px 10px"><div><b>Three consecutive failures</b> since Fri 02:10 · class <span class="mono">vss_snapshot</span> on volume C: — restic fell back to live reads and locked files failed. <a href="#device">Why this happens →</a></div></div>
+          <div class="actions"><button class="btn primary sm"><svg width="12" height="12"><use href="#i-play"/></svg>Back up now</button><button class="btn sm"><svg width="12" height="12"><use href="#i-restore"/></svg>Restore…</button><button class="btn sm"><svg width="12" height="12"><use href="#i-pause"/></svg>Park</button><button class="btn sm">Refresh policy</button><button class="btn sm ghost">Acknowledge</button><button class="btn sm ghost">More ▾</button></div>
+          <div class="prog"><div class="l"><span>Live · <b>backup · scheduled</b> · started 13:40</span><span class="mono">62%</span></div><div class="track"><i></i></div><div class="meta"><span>23,418 / 37,902 files</span><span>4.1 GB processed</span><span>1.3 GB new</span><span>12 MB/s</span><span>ETA 6 min</span></div></div>
+          <h4>Last ten runs</h4>
+          <div class="hist">
+            <div class="r"><span class="d">Sat 02:10</span><span><span class="st crit"><i></i>FAILED</span> &nbsp;vss_snapshot · 1 volume</span><span class="s">exit 3</span><span class="s">2m 04s</span></div>
+            <div class="r"><span class="d">Fri 02:10</span><span><span class="st crit"><i></i>FAILED</span> &nbsp;vss_snapshot · 1 volume</span><span class="s">exit 3</span><span class="s">1m 58s</span></div>
+            <div class="r"><span class="d">Thu 02:10</span><span><span class="st crit"><i></i>FAILED</span> &nbsp;vss_snapshot · 1 volume</span><span class="s">exit 3</span><span class="s">2m 11s</span></div>
+            <div class="r"><span class="d">Wed 02:10</span><span><span class="st ok"><i></i>SUCCESS</span> &nbsp;312 new · 1.1 GB added</span><span class="s">exit 0</span><span class="s">14m 40s</span></div>
+            <div class="r"><span class="d">Tue 02:10</span><span><span class="st ok"><i></i>SUCCESS</span> &nbsp;288 new · 0.9 GB added</span><span class="s">exit 0</span><span class="s">13m 02s</span></div>
+            <div class="r"><span class="d">Mon 02:10</span><span><span class="st warn"><i></i>PARTIAL</span> &nbsp;4 files unreadable · under tolerance</span><span class="s">exit 3</span><span class="s">15m 18s</span></div>
+          </div>
+          <h4>Facts</h4>
+          <dl class="kv"><dt>Policy</dt><dd>Summit · Workstation (v12) <span class="muted">· 1 override: window</span></dd><dt>Schedule</dt><dd class="mono">every 4h in Mon-Fri/7-19;Sat/8-14 · catch-up on</dd><dt>Repository</dt><dd class="mono">38.2 GB · 61 snapshots · prune in 12 d</dd><dt>Key custody</dt><dd><span class="st ok" style="height:20px"><i></i>escrowed · verified 6 d ago</span></dd><dt>Enrolled</dt><dd>2026-03-14 · token <span class="mono">summit-2026Q1</span></dd><dt>Device id</dt><dd class="mono">01J9Y4K3…7QF</dd></dl>
+        </div>
+      </aside>
+    </div></div></div>
+  </section>
+
+  <!-- ENROLLMENT WIZARD -->
+  <section id="enroll">
+    <div class="sec-head"><h2>7 · Enrollment wizard <span class="muted" style="font-weight:400;font-size:13px;text-transform:none;letter-spacing:0">B16 · once per customer, never per device</span></h2><p>Three steps: who, how the keys are held, and the script to paste into the RMM. Devices then appear on their own as "pending first backup" and turn green without a click.</p></div>
+    <div class="frame"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">console.example-msp.internal/customers/summit-eye-care/enroll</div></div>
+    <div class="scroll"><div class="wiz"><div class="box">
+      <div class="steps"><div class="done"><i><svg width="11" height="11"><use href="#i-check"/></svg></i>Customer &amp; policy</div><div class="on"><i>2</i>Key custody</div><div><i>3</i>Deployment script</div></div>
+      <div class="in">
+        <h3>Who holds the encryption keys for Summit Eye Care?</h3>
+        <div class="opt">
+          <label class="on"><i></i><div><b>Escrowed on this console <span class="pick" style="margin-left:6px">recommended</span></b><span>Each device gets its own key. A wrapped copy is kept here under the console master key, verified after the first backup, and revealed only with fresh MFA and an audit entry. Technician restore and server-side retention work.</span></div></label>
+          <label><i></i><div><b>Customer holds the key</b><span>The key is shown once at enrollment and never stored here.</span><span class="warnline">No server-side retention, no technician restore, no escrow check. If the key is lost, the data is lost. Growth is reported but not controlled.</span></div></label>
+        </div>
+        <div class="frow">
+          <div class="field"><label>Enrollment token</label><div class="ctl ro">summit-2026Q4 · expires in 30 days · unlimited uses</div><div class="help">Scoped to this customer and policy. Revoke it any time; enrolled devices are unaffected.</div></div>
+          <div class="field"><label>Device class default</label><div class="ctl">Detect (laptop vs desktop from battery) ▾</div><div class="help">Laptops get catch-up, run-on-wake and battery rules from the policy.</div></div>
+        </div>
+        <div class="field"><label>Preview · what the RMM script does</label>
+<pre class="code"><span class="c"># CryoBackup silent enrollment - idempotent, discovery first</span>
+<span class="k">$Server</span> = <span class="s">"https://backup.example-msp.com"</span>      <span class="c"># override via RMM variable</span>
+<span class="k">$Token</span>  = <span class="s">"summit-2026Q4-…"</span>
+msiexec /i CryoBackupAgent-1.4.2.msi /qn SERVER=<span class="k">$Server</span> TOKEN=<span class="k">$Token</span>
+<span class="c"># verify: service running, device registered, exit 0</span></pre></div>
+      </div>
+      <div class="foot"><button class="btn ghost">Back</button><button class="btn primary">Continue to script →</button></div>
+    </div></div></div></div>
+  </section>
+
+  <!-- DIGEST -->
+  <section id="digest">
+    <div class="sec-head"><h2>8 · Daily digest <span class="muted" style="font-weight:400;font-size:13px;text-transform:none;letter-spacing:0">06:30 in the operator's timezone</span></h2><p>Exceptions first, grouped by customer; silence is listed before failures because it is worse. Healthy customers get one line. Inline CSS, no images except the mark, readable in plain text.</p></div>
+    <div class="frame"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">mail · CryoBackup &lt;backups@example-msp.com&gt; → ops@example-msp.com</div></div>
+    <div class="mail"><div class="msg">
+      <div class="hdr"><b>Backup digest · Tue 20 Oct · 7 critical, 5 warnings, 1 customer missing</b><span>From CryoBackup · to ops@example-msp.com · 06:30 America/Chicago</span></div>
+      <div class="brand"><svg width="26" height="26" viewBox="0 0 64 64" style="color:var(--accent)"><use href="#mark-hex"/></svg><span class="wordmark"><span class="wm" style="font-size:16px"><b>CRYO</b><span>BACKUP</span></span></span><span class="muted" style="margin-left:auto;font-size:12px">polled 06:29:40 · 212/212 agents</span></div>
+      <div class="sum"><div class="bad"><div class="n">7</div><div class="l">critical</div></div><div class="warn"><div class="n">5</div><div class="l">warnings</div></div><div class="bad"><div class="n">1</div><div class="l">customer missing</div></div><div class="good"><div class="n">199</div><div class="l">healthy</div></div></div>
+      <div class="sec"><h4>Silence</h4>
+        <div class="line crit"><div><b>Blue Ridge Accounting</b> — expected customer, 0 active devices<small>Nothing from this customer is being backed up. Acknowledged by nobody.</small></div><div class="w">MISSING</div></div>
+        <div class="line crit"><div><b>LAB-RETINA-02</b> · Summit Eye Care<small>No heartbeat for 9 days; last success 11 days ago. Likely offline or blocked.</small></div><div class="w">UNSEEN 9d</div></div>
+      </div>
+      <div class="sec"><h4>Failures and staleness</h4>
+        <div class="line crit"><div><b>FRONTDESK-01</b> · Summit Eye Care<small>3 consecutive failures · vss_snapshot on 1 volume · last success 3 d ago</small></div><div class="w">FAILED ×3</div></div>
+        <div class="line crit"><div><b>LT-OPTOM-04</b> · Summit Eye Care<small>Missed 4 runs in a row; laptop seen daily. Window may be too narrow.</small></div><div class="w">STALE 4d</div></div>
+        <div class="line warn"><div><b>RECEPTION-2</b> · Summit Eye Care<small>23 files unreadable (over tolerance 20) · class locked_file</small></div><div class="w">PARTIAL</div></div>
+        <div class="line warn"><div><b>XRAY-OLD-01</b> · Northwind Dental<small>Parked until Fri 18:00 by j.doe: "awaiting replacement". Retention still runs.</small></div><div class="w">PARKED</div></div>
+      </div>
+      <div class="ok"><b>All green:</b> Harbor Family Practice (58) · Pinecrest Legal (79) · Northwind Dental (43 of 44). Retention ran on 61 repositories; 2 deferred (lock held), none failed. Escrow verified on every active device.</div>
+      <div class="ft">Open the fleet board → console.example-msp.internal/fleet · This digest is sent even when everything is green; a missing digest is itself an alarm.</div>
+    </div></div></div>
+  </section>
+
+  <!-- TRAY -->
+  <section id="tray">
+    <div class="sec-head"><h2>9 · Agent tray <span class="muted" style="font-weight:400;font-size:13px;text-transform:none;letter-spacing:0">A14 / B14 · the only UI on the endpoint</span></h2><p>A status icon whose colour is the device state, and a popover that answers "is my computer backed up?" in one glance. No settings on the endpoint; policy lives in the console.</p></div>
+    <div class="grid g2">
+      <div class="frame"><div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url">Windows 11 · notification area</div></div>
+        <div class="desk">
+          <div class="pop" role="dialog" aria-label="Cryo status">
+            <div class="h"><svg width="20" height="20" viewBox="0 0 64 64" style="color:var(--accent)"><use href="#mark-hex"/></svg><span class="wordmark"><span class="wm"><b>CRYO</b></span></span><span class="st ok"><i></i>PROTECTED</span></div>
+            <div class="b"><dl class="kv"><dt>Last backup</dt><dd>Today 02:10 · 14 min · <b>succeeded</b></dd><dt>Next</dt><dd>Today 06:10 <span class="muted">(every 4 h, Mon–Fri 7–19)</span></dd><dt>Managed by</dt><dd>Example MSP · Summit · Workstation</dd><dt>Agent</dt><dd class="mono">1.4.2 · service running</dd></dl></div>
+            <div class="m"><a href="#tray"><svg><use href="#i-play"/></svg>Back up now</a><a href="#tray"><svg><use href="#i-restore"/></svg>Restore my files…</a><a href="#tray"><svg><use href="#i-run"/></svg>Check in with console</a><a class="dis" href="#tray"><svg><use href="#i-out"/></svg>Open status page</a></div>
+          </div>
+          <div class="taskbar"><span class="ic" style="color:var(--success)"><svg width="16" height="16" viewBox="0 0 64 64"><use href="#mark-hex"/></svg></span><span>▲</span><span>13:42</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Icon states</h3>
+        <p>The tray icon is the mark, tinted by state. Users learn one glyph; the colour tells the story.</p>
+        <div class="markrow" style="gap:18px">
+          <figure><div class="tile m" style="color:var(--success)"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-hex"/></svg></div><figcaption>protected</figcaption></figure>
+          <figure><div class="tile m" style="color:var(--accent)"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-hex"/></svg></div><figcaption>running</figcaption></figure>
+          <figure><div class="tile m" style="color:var(--warning)"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-hex"/></svg></div><figcaption>deferred</figcaption></figure>
+          <figure><div class="tile m" style="color:var(--danger)"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-hex"/></svg></div><figcaption>attention</figcaption></figure>
+          <figure><div class="tile m" style="color:var(--text-muted)"><svg width="24" height="24" viewBox="0 0 64 64"><use href="#mark-hex"/></svg></div><figcaption>parked</figcaption></figure>
+        </div>
+        <p style="margin-top:14px">"Restore my files" opens a minimal local wizard (snapshot → folder → destination). Everything else is read-only. A user cannot change schedule, selection or retention from the endpoint; a technician can, from the console, with an audit entry.</p>
+        <h3 style="margin-top:18px">Tone</h3>
+        <p>Plain, specific, calm. "Backed up today at 02:10." Never "Your data is safe!" Errors say what happened and what happens next: "Waiting for power — will back up when plugged in, or at 18:00 at the latest."</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- DECIDE -->
+  <section id="decide">
+    <div class="sec-head"><h2>10 · Decisions</h2><p>Reply with the letters and anything to change. Each has a recommendation; none blocks the build of the state engine, which has no UI.</p></div>
+    <div class="decide">
+      <div class="q"><b>Mark</b><div>M1 hex crystal · M2 faceted shard · M3 cryo cell &nbsp;<span class="rec">→ M1</span><br><span>Strongest at 16 px, works tinted as the tray icon, and the six-spoke crystal becomes a motif (loading spinner, empty states).</span></div></div>
+      <div class="q"><b>Type pairing</b><div>A Chakra Petch (HUD) · B Sora (soft) &nbsp;<span class="rec">→ A</span><br><span>Matches "sci-fi, geeky" without tipping into gamer; used only for headings, the wordmark and big numbers.</span></div></div>
+      <div class="q"><b>Palette</b><div>Keep as shown, or steer: colder (more cyan), deeper navy, or a touch of violet in the ground. &nbsp;<span class="rec">→ keep</span><br><span>Every pair already passes AA in both themes; a hue steer is a token edit, not a redesign.</span></div></div>
+      <div class="q"><b>Default theme</b><div>Dark by default, light as a per-user setting. &nbsp;<span class="rec">→ dark</span></div></div>
+      <div class="q"><b>Density</b><div>Fleet table rows as shown (40 px), or compact (32 px) with the ten-day strip hidden until hover. &nbsp;<span class="rec">→ as shown, with a compact toggle</span></div></div>
+      <div class="q"><b>Mocks</b><div>Anything in sections 5–9 that reads wrong, is missing, or you want to see before build (calendar matrix, policy editor, restore wizard, key reveal dialog are the next candidates).</div></div>
+    </div>
+  </section>
+
+  <footer><span>CryoBackup · design concepts v0.1 · tokens: replica/design/tokens.json</span><span>All names and figures are examples. No vendor assets; marks and icons are original.</span></footer>
+</main>
+
+<script>
+(function(){
+  var root=document.documentElement, d=document.getElementById('th-dark'), l=document.getElementById('th-light');
+  var hex={dark:{bg:'#0B1220',surface:'#121C30','surface-raised':'#182642',border:'#243656',text:'#E8F0FA · 16.3:1','text-muted':'#93A6C6 · 7.6:1',accent:'#5CC9F5 · 9.9:1',success:'#48D597 · 10.0:1',warning:'#F5B547 · 10.3:1',danger:'#FF7A7A · 7.4:1'},
+           light:{bg:'#F3F7FC',surface:'#FFFFFF','surface-raised':'#FFFFFF',border:'#D5DFEE',text:'#0E1A2E · 16.2:1','text-muted':'#4D5F7E · 6.0:1',accent:'#0A6FAE · 5.0:1',success:'#13743F · 5.4:1',warning:'#9A5A00 · 5.1:1',danger:'#B42323 · 6.1:1'}};
+  function set(t){ root.setAttribute('data-theme',t); d.setAttribute('aria-pressed',t==='dark'); l.setAttribute('aria-pressed',t==='light');
+    document.querySelectorAll('[data-hex]').forEach(function(e){ var k=e.getAttribute('data-hex'); if(hex[t][k]) e.textContent=hex[t][k]; });
+    try{ localStorage.setItem('cryo-design-theme',t); }catch(e){} }
+  d.addEventListener('click',function(){set('dark')}); l.addEventListener('click',function(){set('light')});
+  var saved=null; try{ saved=localStorage.getItem('cryo-design-theme'); }catch(e){}
+  var attr=root.getAttribute('data-theme');
+  if(saved==='light'||saved==='dark') set(saved); else if(attr==='light'||attr==='dark') set(attr); else set('dark');
+})();
+</script>

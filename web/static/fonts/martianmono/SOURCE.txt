@@ -1,0 +1,10 @@
+Martian Mono, Evil Martians (https://github.com/evilmartians/mono), SIL Open Font License 1.1.
+Release: v1.1.0 (2025-02-10), https://github.com/evilmartians/mono/releases/tag/v1.1.0
+Asset:   martian-mono-1.1.0-variable.zip
+         sha256 b87730975931dc2dbf0129ecf392ccaf8d29f46bc05e995703da4155db510867
+File:    MartianMonoVF.woff2 from that zip, stored unmodified as MartianMono-var.woff2
+         sha256 7cdf8e985a4872246d8c2a19333bcc5e8cbcf512746128823f35c1c43aac238a
+         axes wght 100-800 (default 400), wdth 75-112.5 (default 112.5); fonts.css pins wdth to 100 (Standard)
+Licence: OFL.txt, from the repository tag v1.1.0 (raw OFL.txt)
+         sha256 ddafd2c3f37ef1d83ef284ca63e159befd3820850c5e9eded14ca52eee92c256
+The hashes are computed locally from the downloaded files; GitHub publishes no digest for these assets.

@@ -1,0 +1,5 @@
+{"message_type":"error","error":{"message":"open \\\\?\\C:\\fixture\\PHI-sentinel\\patient-record.docx: The process cannot access the file because it is being used by another process."},"during":"archival","item":"C:\\fixture\\PHI-sentinel\\patient-record.docx"}
+{"message_type":"error","message":"pack data for C:\\fixture\\PHI-sentinel\\patient-record.docx is damaged"}
+C:\fixture\PHI-sentinel\patient-record.docx does not exist, skipping
+{"message_type":"exit_error","code":3,"message":"Warning: C:\\fixture\\PHI-sentinel\\patient-record.docx could not be read"}
+{"message_type":"error","error":{"message":"open \\\\?\\C:\\fixture\\PHI-sentinel\\patient-record.docx: The process cannot access the file because it is being used by another process."},"during":"C:\\fixture\\PHI-sentinel\\patient-record.docx","item":"C:\\fixture\\PHI-sentinel\\patient-record.docx"}

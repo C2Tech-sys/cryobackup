@@ -1,0 +1,51 @@
+{{/* S01 variant - set a password through a one-time reset link (M2-W1A). Anonymous; the link token travels
+     in the form body, never in a log. Bare centred shell like the sign-in page. */}}
+{{define "bare"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="referrer" content="no-referrer">
+<title>{{.Title}} · CryoBackup</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="{{asset "fonts.css"}}">
+<link rel="stylesheet" href="{{asset "tokens.css"}}">
+<link rel="stylesheet" href="{{asset "app.css"}}">
+<script src="{{asset "js/theme.js"}}"></script>
+</head>
+<body>
+{{template "icons"}}
+<main class="login" id="main">
+  <div class="box">
+    <div class="brandrow">
+      <svg aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg>
+      <div class="t-hero-wordmark wm" role="img" aria-label="CryoBackup"><b>CRYO</b><span>BACKUP</span></div>
+      <h1 class="sr-only">{{.Title}}</h1>
+    </div>
+    <section class="card" aria-labelledby="reset-h">
+      <h2 id="reset-h">{{.Title}}</h2>
+      {{if .Fixtures}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>Fixtures mode.</b> The fleet is fictional and nothing leaves this machine.</div></div>{{end}}
+      {{if .Invalid}}
+      <div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><span class="sr-only">Error: </span><b>This link does not work.</b> It was used, replaced by a newer link or has expired (links last 24 hours and end when the console restarts). Ask an owner for a new one.</div></div>
+      <a class="btn" href="/login">Go to sign-in</a>
+      {{else if .Done}}
+      <div class="banner ok dense" role="status"><i class="g g-ok" aria-hidden="true"></i><div class="b-text"><b>Password set for {{.Username}}.</b> Every earlier session was signed out and every API token of the account was revoked. Sign in with the new password; the next step asks for your authenticator (or sets one up).</div></div>
+      <a class="btn primary lg" href="/login">Sign in</a>
+      {{else}}
+      <p class="lead">Choose a password for <b>{{.Username}}</b>. Use at least 12 characters; a passphrase of several words is easiest to remember.</p>
+      {{template "acct_note" .Error}}
+      <form method="post" action="/login/reset" autocomplete="off">
+        {{if .Nonce}}<input type="hidden" name="login_nonce" value="{{.Nonce}}">{{end}}
+        <input type="hidden" name="token" value="{{.Token}}">
+        <input type="text" name="username" value="{{.Username}}" autocomplete="username" hidden>
+        <div class="field"><label for="password">New password</label><input class="input lg" id="password" name="password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required autofocus></div>
+        <div class="field"><label for="confirm">Repeat the new password</label><input class="input lg" id="confirm" name="confirm" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></div>
+        <button class="btn primary lg" type="submit">Set password</button>
+      </form>
+      {{end}}
+    </section>
+  </div>
+</main>
+</body>
+</html>{{end}}

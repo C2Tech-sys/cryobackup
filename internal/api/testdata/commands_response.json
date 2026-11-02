@@ -1,0 +1,23 @@
+{
+  "commands": [
+    {
+      "created_at": "2026-10-22T14:03:09.512Z",
+      "expires_at": "2026-10-22T15:03:09.512Z",
+      "id": "01JAZK3Q8W5N6X7Y8Z9A0B1C2D",
+      "params": {
+        "until": "2026-10-22T15:00:00Z"
+      },
+      "type": "hold"
+    },
+    {
+      "created_at": "2026-10-22T14:03:09.512Z",
+      "expires_at": "2026-10-22T16:03:09.512Z",
+      "id": "01JAZK3Q8W5N6X7Y8Z9A0B1C2E",
+      "params": {
+        "restore_request_id": "01JAZK3Q8W5N6X7Y8Z9A0B1C2F"
+      },
+      "type": "restore"
+    }
+  ],
+  "server_time": "2026-10-22T14:03:09.512Z"
+}

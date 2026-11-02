@@ -1,0 +1,40 @@
+{{/* B17 - technician restore wizard, M0: one file from a snapshot as a zip. The listing is the single place the console shows names from a client machine: it is rendered once, never cached or logged, and the path travels in POST bodies only. */}}
+{{define "restore_box"}}<form id="restore-box" class="wiz" method="post" action="/ui/devices/{{.DeviceID}}/restore" hx-post="/ui/devices/{{.DeviceID}}/restore" hx-target="#restore-box" hx-swap="outerHTML">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<input type="hidden" name="cur" value="{{.Dir}}">
+{{template "steps" .Steps}}
+<div class="in">
+  <h2>Which file do you need back from {{.Host}}?</h2>
+  {{with .Blocked}}{{template "inline_banner" .}}{{else}}
+  {{if .Error}}{{template "inline_banner" .Error}}{{end}}
+  {{if .NoSnaps}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>No snapshots are cached for this device.</b> The agent uploads its snapshot list after each successful backup; until then there is nothing to browse.</div></div>
+  {{else}}
+  <div class="field"><label for="snapshot">Snapshot</label>
+    <select class="input" id="snapshot" name="snapshot" hx-post="/ui/devices/{{.DeviceID}}/restore" hx-trigger="change" hx-target="#restore-box" hx-swap="outerHTML" hx-include="closest form" hx-vals='{"action":"snapshot"}'>
+      {{range .Snapshots}}<option value="{{.ID}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+    <span class="help">The newest snapshot is selected. Changing it returns to the snapshot root.</span></div>
+  <div class="browse" role="group" aria-label="Snapshot contents">
+    <div class="crumbs">{{range .Crumbs}}<button type="submit" name="dir" value="{{.Path}}" formaction="/ui/devices/{{$.DeviceID}}/restore" aria-label="Open {{.Label}}"><span aria-hidden="true">{{.Label}}</span></button><span aria-hidden="true">/</span>{{end}}</div>
+    {{if .Entries}}<ul>{{range .Entries}}<li>
+      {{if eq .Kind "dir"}}<button type="submit" name="dir" value="{{.Path}}"><svg aria-hidden="true"><use href="#i-folder"/></svg><span>{{.Name}}</span><span class="when">{{.When}}</span></button>
+      {{else if .Select}}<label><input type="radio" name="path" value="{{.Path}}" required><svg aria-hidden="true"><use href="#i-file"/></svg><span>{{.Name}}</span><span class="size">{{.Size}}</span><span class="when">{{.When}}</span></label>
+      {{else}}<span class="muted ui pad-h">{{.Name}} (not restorable here)</span>{{end}}
+    </li>{{end}}</ul>
+    {{else}}<p class="muted ui pad-a">This folder is empty.</p>{{end}}
+  </div>
+  {{if .Truncated}}<p class="meta-mono">Showing the first 500 entries of this folder. Open a subfolder to narrow it.</p>{{end}}
+  <fieldset class="opt plain"><legend class="h-label">Mode</legend>
+    <label><input type="radio" name="mode" value="download_zip" checked><div><b>Download as a zip</b><span>The zip streams from the snapshot straight to your browser. Nothing is stored on the server. The download link works once.</span></div></label>
+  </fieldset>
+  {{end}}
+  {{end}}
+</div>
+<div class="foot"><a class="btn ghost" href="/devices/{{.DeviceID}}">Cancel</a>{{if .CanSubmit}}<button class="btn primary" type="submit" name="action" value="submit">Continue</button>{{end}}</div>
+</form>{{end}}
+
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <a href="/devices/{{.DeviceID}}">{{.Host}}</a> / <span>Restore</span></nav>
+<div class="row"><div class="muted ui">{{.Customer}}</div></div>
+{{template "restore_box" .}}
+{{end}}

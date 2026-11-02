@@ -1,0 +1,21 @@
+{{/* B01 - the fleet health board. Everything inside #board is live: the SSE hub re-renders it (fleet.state), the 30 s poll refetches it, and fresh.js marks it "as of" when updates stop. */}}
+{{define "board"}}<div id="board" class="stack" data-live data-poll hx-get="/ui/partials/board{{.QS}}" hx-trigger="cryo:poll" hx-swap="outerHTML">
+<span class="asof" aria-live="polite"></span>
+{{if .Empty}}{{template "panel_state" .Empty}}{{end}}
+{{template "kpis" .KPIs}}
+<div class="rings">{{range .Rings}}{{template "ring" .}}{{end}}</div>
+{{if .Filter.Active}}<div class="chipbar" role="status"><span>Showing {{.Filter.Shown}} of {{.Filter.Total}}</span><span class="fchip">State: {{.Filter.Label}}<a href="/" aria-label="Remove filter: State {{.Filter.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span><a class="btn ghost sm" href="/">Clear all</a></div>{{end}}
+{{if .Groups}}<div class="table-wrap" role="region" aria-label="Devices" tabindex="0">
+<table class="fleet board">
+<caption>Devices, grouped by customer, exceptions first</caption>
+<thead><tr><th scope="col">Device</th><th scope="col">State</th><th scope="col">Last success</th><th scope="col">Last 10 days</th><th scope="col">Agent</th></tr></thead>
+{{range .Groups}}{{template "group" .}}{{end}}
+</table></div>
+<p class="meta-mono">{{if .Filter.Active}}{{.Filter.Shown}} of {{.Filter.Total}} devices{{else}}{{(index .KPIs 0).SR}}{{end}} · exceptions first · computed {{.AsOf}} ({{.Zone}})</p>
+{{end}}
+</div>{{end}}
+
+{{define "board_partial"}}{{template "banners" .Banners}}{{template "stamp" .Stamp}}{{template "board" .}}{{end}}
+
+{{define "title"}}Fleet health{{end}}
+{{define "content"}}{{template "board" .}}{{end}}

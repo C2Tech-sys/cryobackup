@@ -1,0 +1,24 @@
+# CryoBackup exclude patterns for restic --iexclude-file.
+# Generated from the policy; changes are overwritten.
+# Backslash separators; matched case-insensitively; the last matching line wins.
+
+# mandatory
+C:\ProgramData\CryoBackup
+pagefile.sys
+hiberfil.sys
+swapfile.sys
+DumpStack.log.tmp
+$$Recycle.Bin
+System Volume Information
+
+# baseline
+C:\Windows\Temp
+C:\Windows\Prefetch
+thumbcache_*.db
+Thumbs.db
+# omitted: profile-relative patterns need profile directories; none supplied
+
+# preset dev_caches
+node_modules
+__pycache__
+# omitted: profile-relative patterns need profile directories; none supplied

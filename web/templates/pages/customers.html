@@ -1,0 +1,35 @@
+{{/* S03 - customer list with rollups, filters and sort (M2-W1C). */}}
+{{define "title"}}Customers{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Customers</span></nav>
+<section class="stack" aria-label="Customers">
+<div class="toolbar">
+  <form class="filters grow" method="get" action="/customers" role="search" aria-label="Filter customers">
+    <div class="field grow"><label for="c-q">Search</label><input class="input" id="c-q" name="q" type="search" value="{{.Form.Q}}" placeholder="Name or slug" autocomplete="off" spellcheck="false"></div>
+    <div class="field"><label for="c-health">State</label><select class="input" id="c-health" name="health">{{range .Form.Health}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+    <div class="field"><label for="c-exp">Expected</label><select class="input" id="c-exp" name="expected">{{range .Form.Expected}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+    <label class="check"><input type="checkbox" name="archived" value="1"{{if .Form.Archived}} checked{{end}}>Include archived</label>
+    {{if .Form.Sort}}<input type="hidden" name="sort" value="{{.Form.Sort}}">{{end}}{{if .Form.Desc}}<input type="hidden" name="dir" value="desc">{{end}}{{if ne .Form.Size 50}}<input type="hidden" name="size" value="{{.Form.Size}}">{{end}}
+    <button class="btn sm" type="submit">Apply</button>
+  </form>
+  {{if .CanCreate}}<a class="btn primary" href="/ui/customers/new"><svg width="12" height="12" aria-hidden="true"><use href="#i-folder"/></svg>Add customer</a>{{end}}
+</div>
+{{if .Chips}}<div class="chipbar" role="status"><span>{{.Summary}}</span>{{range .Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}<a class="btn ghost sm" href="{{.ClearHref}}">Clear all</a></div>{{end}}
+{{with .Empty}}{{template "panel_state" .}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Customers" tabindex="0">
+<table class="fleet custtable">
+<caption>Customers, {{.Summary}}</caption>
+<thead><tr>{{range .Heads}}<th scope="col" aria-sort="{{.Sort}}"><a class="sortlink" href="{{.Href}}">{{.Label}}{{if eq .Sort "ascending"}}<span class="sortmark" aria-hidden="true"> &#9650;</span><span class="sr-only"> (sorted ascending)</span>{{else if eq .Sort "descending"}}<span class="sortmark" aria-hidden="true"> &#9660;</span><span class="sr-only"> (sorted descending)</span>{{end}}</a></th>{{end}}<th scope="col">Policy</th></tr></thead>
+<tbody>{{range .Rows}}<tr id="cust-{{.ID}}" class="dev{{if eq .Variant "missing"}} missing-row{{end}}">
+<td class="dev-cell"><a class="hostname" href="/customers/{{.ID}}" aria-label="{{.Aria}}">{{.Name}}</a><small>{{.Slug}}</small></td>
+<td class="state-cell">{{with .Status}}{{template "chip" .}} {{end}}{{range .Extra}}{{template "chip" .}} {{end}}{{template "roll" .Roll}}{{with .Gauge}}{{template "gauge" .}}{{end}}</td>
+<td>{{.Devices}}</td>
+<td class="age{{if .LastClass}} {{.LastClass}}{{end}}">{{if .LastGlyph}}<i class="g g-{{.LastGlyph}}" aria-hidden="true"></i>{{end}}{{.LastText}}</td>
+<td>{{if .Expected}}<span class="st info sm"><i aria-hidden="true"></i>EXPECTED</span>{{if .Onboarding}}<small class="meta-mono">onboarding until {{.Onboarding}}</small>{{end}}{{else}}<span class="muted">not expected</span>{{end}}</td>
+<td>{{.Policy}}</td>
+</tr>{{end}}</tbody></table></div>
+{{template "pager" .Pager}}
+<p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Exceptions first: missing, unknown, alarm, warning, ok, onboarding, then customers with no devices.</p>
+{{end}}
+</section>
+{{end}}

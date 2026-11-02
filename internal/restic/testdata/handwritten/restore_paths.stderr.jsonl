@@ -1,0 +1,5 @@
+{"message_type":"error","error":{"message":"failed to restore timestamp of \"C:\\\\Restore\\\\proxy\\\\C\\\\Data\\\\x\": Access is denied."},"during":"restore","item":"\\C\\Data\\x"}
+{"message_type":"error","error":{"message":"failed to restore timestamp of \"D:\\\\restore vss\\\\certificate\\\\a.docx\": Access is denied."},"during":"restore","item":"\\a.docx"}
+{"message_type":"error","error":{"message":"open \\\\?\\C:\\Restore\\proxy\\a.docx: There is not enough space on the disk."},"during":"restore","item":"\\a.docx"}
+{"message_type":"error","error":{"message":"open \\\\?\\C:\\Restore\\tls x509\\a.docx: The process cannot access the file because it is being used by another process."},"during":"restore","item":"\\a.docx"}
+{"message_type":"exit_error","code":1,"message":"Fatal: There were 4 errors"}

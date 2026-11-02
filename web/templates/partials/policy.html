@@ -1,0 +1,162 @@
+{{/* policy.html - M2-W2A: the policy controls, the blast-radius review, the effective-policy table and the customer and device Policy tabs.
+     Controls are described once in internal/console/ui/policy_fields.go; every section is a server-rendered form, validated by the server (components 2.4, 7.4, 8.1 to 8.3). */}}
+
+{{/* pol_grid: the server's reading of a window: the 7x24 grid and canonical text, or the parser's own error with its position (components 8.1). */}}
+{{define "pol_grid"}}{{with .}}{{if .Err}}<p class="err" role="alert">{{.Err}}</p>{{if .Caret}}<pre class="caretline" aria-hidden="true">{{.Echo}}
+{{.Caret}}</pre>{{end}}
+{{else if .Blank}}<p class="meta-mono">No window set.</p>
+{{else}}<p class="meta-mono"><i class="g g-ok" aria-hidden="true"></i> {{.Summary}}{{if .Canonical}} <span class="muted">· normal form <code>{{.Canonical}}</code></span>{{end}}</p>
+<table class="wg" aria-hidden="true"><thead><tr><th></th>{{range .HeadHours}}<th>{{.}}</th>{{end}}<th></th></tr></thead>
+<tbody>{{range .Rows}}<tr><th>{{.Day}}</th>{{range .Cells}}<td{{if .}} class="on"{{end}}></td>{{end}}<td class="wh">{{.Hours}}</td></tr>{{end}}</tbody></table>
+{{end}}{{end}}{{end}}
+
+{{define "pol_window_result"}}{{template "pol_grid" .Grid}}{{end}}
+
+{{/* pol_errsummary: every error of a form, each a link that moves focus to its control (components 2.4). */}}
+{{define "pol_errsummary"}}{{if .}}<div class="banner crit dense" role="alert" tabindex="-1"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>Fix {{len .}} {{if eq (len .) 1}}problem{{else}}problems{{end}}:</b>
+<ul class="errlist">{{range .}}<li><a href="#{{.Anchor}}">{{.Label}}</a>: {{.Msg}}</li>{{end}}</ul></div></div>{{end}}{{end}}
+
+{{/* pol_control: the control of one field, by kind. */}}
+{{define "pol_control"}}{{$d := print .ID "-help" }}
+{{if eq .Kind "bool"}}<label class="check" for="{{.ID}}"><input type="checkbox" id="{{.ID}}" name="{{.Name}}" value="1"{{if .Checked}} checked{{end}}{{if .Err}} aria-invalid="true"{{end}} aria-describedby="{{$d}}{{if .Err}} {{.ID}}-err{{end}}"> {{.Label}}</label>
+{{else if eq .Kind "int"}}<div class="field"><label for="{{.ID}}">{{.Label}}{{if .Unit}} <span class="muted">({{.Unit}})</span>{{end}}</label>
+  <input class="input mono" id="{{.ID}}" name="{{.Name}}" type="text" inputmode="numeric" autocomplete="off" value="{{.Value}}"{{if .Err}} aria-invalid="true"{{end}} aria-describedby="{{$d}}{{if .Err}} {{.ID}}-err{{end}}"></div>
+{{else if eq .Kind "float"}}<div class="field"><label for="{{.ID}}">{{.Label}}{{if .Unit}} <span class="muted">({{.Unit}})</span>{{end}}</label>
+  <input class="input mono" id="{{.ID}}" name="{{.Name}}" type="text" inputmode="decimal" autocomplete="off" value="{{.Value}}"{{if .Err}} aria-invalid="true"{{end}} aria-describedby="{{$d}}{{if .Err}} {{.ID}}-err{{end}}"></div>
+{{else if eq .Kind "rate"}}<div class="field"><label for="{{.ID}}">{{.Label}} <span class="muted">(KiB/s)</span></label>
+  <input class="input mono" id="{{.ID}}" name="{{.Name}}" type="text" autocomplete="off" value="{{.Value}}"{{if .Err}} aria-invalid="true"{{end}} aria-describedby="{{$d}}{{if .Err}} {{.ID}}-err{{end}}"></div>
+{{else if eq .Kind "text"}}<div class="field"><label for="{{.ID}}">{{.Label}}{{if .Optional}} <span class="muted">(optional)</span>{{end}}</label>
+  <input class="input mono" id="{{.ID}}" name="{{.Name}}" type="text" autocomplete="off" value="{{.Value}}"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Err}} aria-invalid="true"{{end}} aria-describedby="{{$d}}{{if .Err}} {{.ID}}-err{{end}}"></div>
+{{else if or (eq .Kind "select") (eq .Kind "tri")}}<div class="field"><label for="{{.ID}}">{{.Label}}</label>
+  <select class="input" id="{{.ID}}" name="{{.Name}}"{{if .Err}} aria-invalid="true"{{end}} aria-describedby="{{$d}}{{if .Err}} {{.ID}}-err{{end}}">{{range .Opts}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+{{else if eq .Kind "window"}}<div class="field"><label for="{{.ID}}">{{.Label}}{{if .Optional}} <span class="muted">(optional)</span>{{end}}</label>
+  <input class="input mono" id="{{.ID}}" name="{{.Name}}" type="text" autocomplete="off" spellcheck="false" value="{{.Value}}"{{if .Err}} aria-invalid="true"{{end}} aria-describedby="{{$d}}{{if .Err}} {{.ID}}-err{{end}} win-{{.ID}}"
+    hx-post="/ui/policy/window/validate" hx-trigger="input changed delay:250ms" hx-target="#win-{{.ID}}" hx-swap="innerHTML" hx-include="this, [name='csrf_token']"{{if .Optional}} hx-vals='{"optional":"1"}'{{end}}>
+  <div class="winres" id="win-{{.ID}}" aria-live="polite">{{template "pol_grid" .Grid}}</div></div>
+{{else if or (eq .Kind "lines") (eq .Kind "tw")}}<div class="field"><label for="{{.ID}}">{{.Label}}</label>
+  <textarea class="input mono" id="{{.ID}}" name="{{.Name}}" rows="3" spellcheck="false" autocomplete="off"{{if .Err}} aria-invalid="true"{{end}} aria-describedby="{{$d}}{{if .Err}} {{.ID}}-err{{end}}">{{.Lines}}</textarea></div>
+{{else if eq .Kind "presets"}}<fieldset class="opt plainset" aria-describedby="{{$d}}"><legend class="lbl">{{.Label}}</legend>
+  {{range .Checks}}<label><input type="checkbox" name="{{.Name}}" value="{{.Value}}"{{if .Checked}} checked{{end}}><span><b>{{.Label}}</b></span></label>{{end}}</fieldset>
+{{else if eq .Kind "excl"}}<fieldset class="opt plainset" aria-describedby="{{$d}}"><legend class="lbl">{{.Label}}</legend>
+  {{range .Checks}}<label><input type="checkbox" name="{{.Name}}" value="{{.Value}}"{{if .Checked}} checked{{end}}><span>{{.Label}}</span></label>{{end}}
+  <div class="field"><label for="{{.ID}}">Your own exclude patterns <span class="muted">(one per line)</span></label>
+  <textarea class="input mono" id="{{.ID}}" name="{{.CustomName}}" rows="3" spellcheck="false" autocomplete="off"{{if .Err}} aria-invalid="true"{{end}}>{{.Custom}}</textarea></div></fieldset>
+{{else if eq .Kind "ret"}}{{template "pol_retention" .}}{{end}}
+{{if and .Help (ne .Kind "bool")}}<span class="help" id="{{$d}}">{{.Help}}</span>{{else if .Help}}<span class="help" id="{{$d}}">{{.Help}}</span>{{else}}<span class="sr-only" id="{{$d}}">{{.Label}}</span>{{end}}
+{{end}}
+
+{{/* pol_retention: preset cards or custom rules, with the required keep-within (components 8.3). */}}
+{{define "pol_retention"}}{{with .Ret}}<fieldset class="retset plainset" id="{{$.ID}}"><legend class="lbl">{{$.Label}}</legend>
+  <div class="opt retmode"><label><input type="radio" name="{{.ModeName}}" value="preset"{{if eq .Mode "preset"}} checked{{end}}><span><b>A named preset</b></span></label>
+  <label><input type="radio" name="{{.ModeName}}" value="rules"{{if eq .Mode "rules"}} checked{{end}}><span><b>Custom rules</b></span></label></div>
+  <div class="retpresets opt" role="radiogroup" aria-label="Retention preset">{{range .Presets}}<label><input type="radio" name="{{$.Ret.PresetName}}" value="{{.Value}}"{{if .Selected}} checked{{end}}><span><b>{{.Label}}</b>{{.Detail}}</span></label>{{end}}</div>
+  <div class="retrules" role="group" aria-label="Custom keep rules">{{range .Rules}}<div class="field"><label for="{{.Name}}">{{.Label}}</label><input class="input mono" id="{{.Name}}" name="{{.Name}}" type="text" inputmode="numeric" autocomplete="off" value="{{.Value}}"></div>{{end}}</div>
+  <p class="help">Rules combine with OR. 0 leaves a rule unused, -1 keeps every one. The newest successful snapshot is never removed.</p>
+  <div class="frow"><div class="field"><label for="{{.KeepWithinName}}">Keep within <span class="muted">(required)</span></label>
+    <input class="input mono" id="{{.KeepWithinName}}" name="{{.KeepWithinName}}" type="text" autocomplete="off" value="{{.KeepWithin}}" placeholder="14d"{{if $.Err}} aria-invalid="true"{{end}} aria-describedby="{{$.ID}}-err"></div>
+  <div class="field"><label for="{{.KeepTagName}}">Always keep snapshots tagged <span class="muted">(one per line)</span></label>
+    <textarea class="input mono" id="{{.KeepTagName}}" name="{{.KeepTagName}}" rows="2" spellcheck="false">{{.KeepTag}}</textarea></div></div>
+</fieldset>{{end}}{{end}}
+
+{{/* pol_field: a control with its error and, on the device form, the inherit/override switch (components 7.4). */}}
+{{define "pol_field"}}<div class="pfield{{if .Err}} invalid{{end}}{{if .Flag}} flagged{{end}}{{if .Ov}} ovrow{{if .Ov.On}} on{{end}}{{end}}{{if or (eq .Kind "ret") (eq .Kind "excl") (eq .Kind "presets") (eq .Kind "window") (eq .Kind "tw")}} wide{{end}}" id="{{.ID}}-wrap">
+{{if .Ov}}<div class="ovbar"><label class="check ovsw"><input type="checkbox" name="{{.Ov.Name}}" value="1"{{if .Ov.On}} checked{{end}} aria-label="Override {{.Label}}"> Override this setting</label>
+  <span class="src"><span class="st {{if eq .Ov.Source "override"}}info{{else}}neutral{{end}} sm"><i aria-hidden="true"></i>{{if eq .Ov.Source "override"}}OVERRIDE{{else if eq .Ov.Source "policy"}}POLICY{{else}}DEFAULT{{end}}</span> now from {{.Ov.SourceText}}</span></div>{{end}}
+{{with .Flag}}<div class="banner warn dense flagnote" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Stored value not usable.</b> {{.}} The default is shown here; saving replaces the stored value.</div></div>{{end}}
+{{template "pol_control" .}}
+{{with .Err}}<span class="err" id="{{$.ID}}-err">{{.}}</span>{{end}}
+</div>{{end}}
+
+{{/* pol_sections: the nine sections of a policy; collapsed except those with an error, an override, or the first. */}}
+{{define "pol_sections"}}{{range .}}<section class="polsec" id="{{.ID}}" aria-labelledby="{{.ID}}-h">
+<details{{if .Open}} open{{end}}><summary><h3 id="{{.ID}}-h">{{.Title}}</h3>
+  <span class="row">{{if .Flags}}<span class="st warn sm"><i aria-hidden="true"></i>{{.Flags}} NOT USABLE</span>{{end}}{{if .Errs}}<span class="st crit sm"><i aria-hidden="true"></i>{{.Errs}} {{if eq .Errs 1}}ERROR{{else}}ERRORS{{end}}</span>{{end}}{{if .Overrides}}<span class="st info sm"><i aria-hidden="true"></i>{{.Overrides}} OVERRIDDEN</span>{{end}}</span></summary>
+<p class="lead">{{.Lead}}</p>
+{{range .FlagNotes}}<div class="banner warn dense flagnote" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Stored value not usable.</b> {{.}} The default is shown; saving replaces the stored value.</div></div>{{end}}
+<div class="pgrid">{{range .Fields}}{{template "pol_field" .}}{{end}}</div>
+{{if .Baseline}}<div class="baseline"><h4 class="h-label">Published exclusion baseline <span class="st neutral sm"><i aria-hidden="true"></i>READ-ONLY</span></h4>
+  <p class="help">Always excluded; you can only add to it. <code>$</code> and the profile folders are expanded by the agent.</p>
+  <ul class="baselist mono">{{range .Baseline}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{if .Adv}}<details class="adv"{{if .Errs}} open{{end}}><summary>Advanced</summary><div class="pgrid">{{range .Adv}}{{template "pol_field" .}}{{end}}</div></details>{{end}}
+</details></section>{{end}}{{end}}
+
+{{/* pol_review: the blast-radius step before a save, an assignment or a delete (components 6.2 "Blast-radius dialog"). */}}
+{{define "pol_review"}}<section class="review stack" aria-labelledby="rev-h">
+  <div class="banner {{if .Unchanged}}info{{else}}warn{{end}} dense" role="status"><i class="g g-{{if .Unchanged}}info{{else}}warn{{end}}" aria-hidden="true"></i><div class="b-text"><b id="rev-h">{{.Headline}}.</b> {{.Lead}}</div></div>
+  {{if and (not .Unchanged) (gt .Population 0)}}<dl class="kv blast"><dt>Devices that run under it</dt><dd class="mono">{{.Population}}</dd><dt>Devices whose policy changes</dt><dd class="mono"><b>{{.Devices}}</b></dd>
+    {{if gt .Held 0}}<dt>Keep their own override</dt><dd class="mono">{{.Held}} <small class="muted">(the changed fields are overridden on the device)</small></dd>{{end}}</dl>{{end}}
+  {{if or .Changes .Name}}<h3 class="h-label">What changes <span class="count">{{len .Changes}}</span></h3>
+  <div class="table-wrap" role="region" aria-label="Changed fields" tabindex="0"><table class="fleet compact"><caption class="sr-only">Changed fields, old value to new value</caption>
+    <thead><tr><th scope="col">Setting</th><th scope="col">Now</th><th scope="col">After</th></tr></thead>
+    <tbody>{{with .Name}}<tr><td>{{.Section}} · {{.Label}}</td><td class="mono wrap chg-old">{{.Old}}</td><td class="mono wrap chg-new">{{.New}}</td></tr>{{end}}
+    {{range .Changes}}<tr><td>{{.Section}} · {{.Label}}</td><td class="mono wrap chg-old">{{.Old}}</td><td class="mono wrap chg-new">{{.New}}</td></tr>{{end}}</tbody></table></div>
+  {{else if not .Unchanged}}{{if eq .Kind "update"}}<p class="meta-mono">No setting changes.</p>{{end}}{{end}}
+  {{if .Dropped}}<h3 class="h-label">Not carried over <span class="count">{{len .Dropped}}</span></h3>
+  <p class="meta-mono">Stored settings that do not work. Saving drops them; the policy then has the value shown under After.</p>
+  <div class="table-wrap" role="region" aria-label="Stored settings that are dropped" tabindex="0"><table class="fleet compact"><caption class="sr-only">Stored settings that are dropped, with the reason and the value that replaces them</caption>
+    <thead><tr><th scope="col">Setting</th><th scope="col">Stored</th><th scope="col">Why it is dropped</th><th scope="col">After</th></tr></thead>
+    <tbody>{{range .Dropped}}<tr class="dropped"><td>{{.Section}} · {{.Label}}</td><td class="mono wrap chg-old">{{.Stored}}</td><td class="wrap">{{.Reason}}</td><td class="mono wrap chg-new">{{.After}}</td></tr>{{end}}</tbody></table></div>{{end}}
+  {{if .Customers}}<h3 class="h-label">Customers affected <span class="count">{{len .Customers}}</span></h3>
+  <div class="table-wrap" role="region" aria-label="Customers affected" tabindex="0"><table class="fleet compact"><caption class="sr-only">Customers affected</caption>
+    <thead><tr><th scope="col">Customer</th><th scope="col">Devices</th><th scope="col">Change</th></tr></thead>
+    <tbody>{{range .Customers}}<tr><td><a href="{{.Href}}">{{.Name}}</a></td><td class="mono">{{.Devices}}</td><td class="mono">{{.Changing}} {{if eq .Changing 1}}changes{{else}}change{{end}}</td></tr>{{end}}</tbody></table></div>{{end}}
+  {{if .Blockers}}<h3 class="h-label">Assigned to <span class="count">{{len .Blockers}}</span></h3>
+  <div class="table-wrap" role="region" aria-label="Customers using this policy" tabindex="0"><table class="fleet compact"><caption class="sr-only">Customers using this policy</caption>
+    <thead><tr><th scope="col">Customer</th><th scope="col">Devices</th><th scope="col">Where to change it</th></tr></thead>
+    <tbody>{{range .Blockers}}<tr><td>{{.Name}}</td><td class="mono">{{.Devices}}</td><td><a href="{{.Href}}">{{.Name}} · Policy tab</a></td></tr>{{end}}</tbody></table></div>{{end}}
+  {{if .Token}}<p class="meta-mono">This preview is bound to exactly what is shown and expires at {{.Expires}}. If the policy changes first, you are asked to review again.</p>{{end}}
+</section>{{end}}
+
+{{/* eff_groups: an effective policy, every field with its source (components 7.4 "source label"). */}}
+{{define "eff_groups"}}{{range .}}<section class="effgrp" aria-labelledby="eg-{{.Key}}"><h4 class="h-label" id="eg-{{.Key}}">{{.Title}}{{if .Set}} <span class="count">{{.Set}} not from the default</span>{{end}}</h4>
+<div class="table-wrap flat" role="region" aria-label="{{.Title}}" tabindex="0"><table class="fleet compact eff"><caption class="sr-only">{{.Title}}: effective values and where each comes from</caption>
+<thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Source</th></tr></thead>
+<tbody>{{range .Rows}}<tr class="src-{{.Source}}"><td>{{.Label}}</td><td class="mono wrap">{{.Value}}</td><td class="srccell"><span class="st {{.SrcClass}} sm"><i aria-hidden="true"></i>{{.SrcLabel}}</span> <small>{{.SourceTxt}}{{if .Inherited}} · {{.Inherited}}{{end}}</small></td></tr>{{end}}</tbody></table></div></section>{{end}}{{end}}
+
+{{/* customer_policy: the Policy tab of the customer page (S17). */}}
+{{define "customer_policy"}}<div class="stack" id="customer-policy">
+{{with .Err}}<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text">{{.}}</div></div>{{end}}
+{{if eq .Mode "review"}}
+  {{with .Review}}{{template "pol_review" .}}
+  <form class="row end" method="post" action="{{$.ConfirmTo}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+    {{range $.Hidden}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}<input type="hidden" name="impact_token" value="{{.Token}}">
+    <a class="btn" href="/customers/{{$.CustomerID}}/policy">Cancel</a>{{if not .Unchanged}}<button class="btn primary" type="submit">{{.Confirm}}</button>{{end}}</form>{{end}}
+{{else}}
+  {{if .Broken}}<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>The assigned policy does not compose with the default policy.</b> This customer's devices cannot be served a valid policy. Open the policy and fix it, or assign another one below; either change is allowed and reviewed as usual.</div></div>{{end}}
+  <section aria-labelledby="h-assigned"><h3 class="h-label" id="h-assigned">Assigned policy</h3>
+    <div class="polcard"><div><b class="polname">{{.Assigned}}</b> <span class="st neutral sm"><i aria-hidden="true"></i>{{if .IsDefault}}DEFAULT{{else}}ASSIGNED{{end}}</span><br><span class="meta-mono">{{.AssignedMeta}} · {{.Devices}}</span>{{with .Overridden}}<br><span class="meta-mono">{{.}}. {{$.OverrideNote}}</span>{{end}}</div>
+    <a class="btn sm" href="{{.AssignedHref}}">Open in the editor</a></div></section>
+  <section aria-labelledby="h-change"><h3 class="h-label" id="h-change">Change the assignment</h3>
+    <form class="formcard" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <div class="field"><label for="cp-policy">Policy</label><select class="input" id="cp-policy" name="policy_id" aria-describedby="cp-help">{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        <span class="help" id="cp-help">You see how many devices change, and which settings, before anything is saved.</span></div>
+      <div class="row end"><a class="btn" href="{{.NewHref}}">New policy for this customer</a><button class="btn primary" type="submit">Review the change</button></div>
+    </form></section>
+  {{if not .Broken}}<section aria-labelledby="h-eff"><h3 class="h-label" id="h-eff">Effective settings <span class="count">{{.Set}} not from the default</span></h3>
+    <p class="meta-mono">What a device of this customer runs, before any per-device override. Each setting names where it comes from.</p>
+    {{template "eff_groups" .Groups}}</section>{{end}}
+{{end}}
+</div>{{end}}
+
+{{/* device_policy: the Policy tab of the device panel (B07/B12). */}}
+{{define "device_policy"}}<div class="stack" id="device-policy">
+<p class="polmeta">Following <a href="{{.PolicyHref}}">{{.PolicyText}}</a> <span class="meta-mono">{{.PolicyMeta}} · fingerprint {{.ETag}}</span></p>
+{{with .Override}}<div class="banner {{if .Expired}}warn{{else}}info{{end}} dense" role="status"><i class="g g-{{if .Expired}}warn{{else}}info{{end}}" aria-hidden="true"></i><div class="b-text"><b>{{if .Expired}}This override has expired and no longer applies.{{else}}This device has an override.{{end}}</b>
+  “{{.Reason}}” set by {{.By}} on <time datetime="{{.ISO}}">{{.When}}</time>{{with .Expires}}, {{if $.Override.Expired}}expired{{else}}expires{{end}} {{.}}{{end}}. Overridden: {{range $i, $f := .Fields}}{{if $i}}, {{end}}{{$f}}{{end}}.</div></div>
+{{if $.CanEdit}}<form class="row end" method="post" action="{{$.ClearAction}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="btn danger sm" type="submit">Clear override</button></form>{{end}}
+{{else}}<p class="meta-mono"><i class="g g-ok" aria-hidden="true"></i> No override: every value below comes from the policy.</p>{{end}}
+{{template "eff_groups" .Groups}}
+{{if .Form}}{{with .Form}}<details class="ovform formcard" id="override-form"{{if .Open}} open{{end}}><summary><h3>Override settings for this device</h3></summary>
+  <form method="post" action="{{.Action}}" class="stack" aria-label="Device override"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+    {{template "pol_errsummary" .Summary}}
+    <p class="help">Tick a setting to give this device its own value; everything unticked keeps following the policy. The override is stored as only those settings, with the reason and who set it. The next agent check-in picks it up.</p>
+    <div class="frow"><div class="field"><label for="ov-reason">Reason <span class="muted">(required)</span></label>
+      <input class="input" id="ov-reason" name="reason" type="text" maxlength="200" autocomplete="off" value="{{.Reason}}"{{if .ReasonErr}} aria-invalid="true" aria-describedby="ov-reason-err"{{end}}>{{with .ReasonErr}}<span class="err" id="ov-reason-err">{{.}}</span>{{end}}</div>
+    <div class="field"><label for="ov-exp">Expires <span class="muted">(optional, {{.Zone}})</span></label>
+      <input class="input mono" id="ov-exp" name="expires_at" type="datetime-local" value="{{.Expires}}"{{if .ExpiresErr}} aria-invalid="true" aria-describedby="ov-exp-err"{{end}}>{{with .ExpiresErr}}<span class="err" id="ov-exp-err">{{.}}</span>{{end}}</div></div>
+    {{with .PatchErr}}<span class="err">{{.}}</span>{{end}}
+    {{template "pol_sections" .Sections}}
+    <div class="row end"><button class="btn primary" type="submit">Save override</button></div>
+  </form></details>{{end}}
+{{else if .Why}}<p class="meta-mono">{{.Why}}</p>{{end}}
+</div>{{end}}

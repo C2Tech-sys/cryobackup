@@ -1,0 +1,11 @@
+{"message_type":"error","error":{"message":"open D:\\Clinic Share\\Jane Q. Doe\\Patient Charts\\ZQ7-Smith, John (DOB 1961).docx: Access is denied."},"during":"archival","item":"D:\\Clinic Share\\Jane Q. Doe\\Patient Charts\\ZQ7-Smith, John (DOB 1961).docx"}
+{"message_type":"error","error":{"message":"open \\\\fileserver01\\clinic$\\HR\\ZQ7-salaries 2026.xlsx: The network path was not found."},"during":"archival","item":"\\\\fileserver01\\clinic$\\HR\\ZQ7-salaries 2026.xlsx"}
+{"message_type":"error","error":{"message":"open \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy12\\Data\\jane\\ZQ7-notes.txt: The process cannot access the file because it is being used by another process."},"during":"archival","item":"C:\\Data\\jane\\ZQ7-notes.txt"}
+{"message_type":"error","error":{"message":"file \"ZQ7 Jane's \\\"private\\\" notes.docx\" blob 0 not found in index"},"during":"archival","item":"ZQ7 Jane's \"private\" notes.docx"}
+{"message_type":"error","error":{"message":"directory \"D:\\\\Data\\\\jane\\\\ZQ7 dir\" changed type, refusing to archive"},"during":"archival","item":"D:\\Data\\jane\\ZQ7 dir"}
+{"message_type":"error","error":{"message":"open /mnt/d/clinic/jane/ZQ7-export.csv: permission denied"},"during":"archival","item":"/mnt/d/clinic/jane/ZQ7-export.csv"}
+{"message_type":"error","error":{"message":"incomplete metadata for \\\\?\\D:\\Patients\\Zoë Müller\\ZQ7-résumé.docx: Access is denied."},"during":"archival","item":"\\\\?\\D:\\Patients\\Zoë Müller\\ZQ7-résumé.docx"}
+ignoring error for D:\Data\jane\ZQ7-locked.pst: The process cannot access the file because it is being used by another process.
+ZQ7-bare-name.docx: The system cannot find the file specified.
+Fatal-looking text that quotes \\fileserver01\clinic$\HR\ZQ7-salaries 2026.xlsx and D:\Clinic Share\Jane Q. Doe
+{"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}

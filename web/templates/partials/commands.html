@@ -1,0 +1,87 @@
+{{/* commands.html - the device action menu, the identity-conflict panel and the Commands tab (M2-W2C; components 7.1, architecture S07/S08).
+     Path-free: command names, states, times and fixed result phrases only. Every action is a plain form post (no script needed);
+     unavailable actions say why in text, never by colour or a dead button alone. */}}
+
+{{/* dev_action: one entry of the action menu: enabled (a form), in flight (state chip, note, Undo while still queued) or unavailable (reason). */}}
+{{define "dev_action"}}<span class="act-item" id="{{.ID}}">
+{{- if .Enabled}}
+  {{- if .Confirm}}
+  <details class="rowmenu act-confirm"><summary class="btn sm danger">{{.Label}}…</summary>
+    <div class="rowmenu-pop" role="group" aria-label="{{.Label}}">
+      <form method="post" action="{{.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="key" value="{{.IdemKey}}">
+        <p>{{.Confirm}}</p>
+        <div class="actions"><button class="btn sm danger-solid" type="submit">{{.ConfirmBtn}}</button></div>
+      </form>
+    </div>
+  </details>
+  {{- else}}
+  <span class="act-row"><form class="inl" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="key" value="{{.IdemKey}}"><button class="btn sm{{if .Primary}} primary{{end}}" type="submit"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</button></form>
+  {{- with .Suffix}} {{template "chip" .}}{{end}}</span>
+  {{- end}}
+  {{- if .Hint}}<span class="meta-mono act-note" id="{{.ID}}-hint">{{.Hint}}</span>{{end}}
+{{- else if .State}}
+  <span class="act-row"><span class="btn sm" role="link" aria-disabled="true" aria-describedby="{{.ID}}-why">{{.Label}}</span> {{template "chip" .State}}
+  {{- if .Undo}}<form class="inl" method="post" action="{{.Undo}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn sm" type="submit" aria-label="Undo {{.Label}}">Undo</button></form>{{end}}</span>
+  <span class="meta-mono act-note" id="{{.ID}}-why">{{.StateNote}}</span>
+{{- else}}
+  <span class="act-row"><span class="btn sm" role="link" aria-disabled="true" aria-describedby="{{.ID}}-why">{{.Label}}</span></span><span class="meta-mono act-note" id="{{.ID}}-why">{{.Why}}</span>
+{{- end}}
+</span>{{end}}
+
+{{/* dev_identity: the identity-conflict banner with the resolve control (critical, never dismissible). */}}
+{{define "dev_identity"}}<section class="banner crit idc" role="alert" aria-labelledby="idc-h"><i class="g g-crit" aria-hidden="true"></i>
+  <div class="b-text"><b id="idc-h">Resolve this identity conflict.</b> Two machines have used this device's identity (a clone or a restored image), flagged <time datetime="{{.ISO}}">{{.Since}}</time>. Keep the identity if you know why; retire it to lock both machines out and enroll the real one again.</div>
+  <div class="act">
+  {{- if .CanResolve}}
+    <details class="rowmenu"><summary class="btn sm danger">Resolve conflict…</summary>
+      <div class="rowmenu-pop" role="group" aria-label="Resolve identity conflict">
+        <form method="post" action="{{.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.CSRF}}">
+          <fieldset class="plain stack"><legend class="h-label">Decision</legend>
+            <label class="check"><input type="radio" name="action" value="keep" checked>Keep this identity. The second sighting was a hardware change, or that machine is gone. Nothing is rotated.</label>
+            <label class="check"><input type="radio" name="action" value="retire">Retire this identity. Its credentials are revoked, so neither machine can back up; enroll the real machine again as a new device.</label>
+          </fieldset>
+          <div class="field"><label for="idc-reason">Reason (audited)</label><input class="input" id="idc-reason" name="reason" type="text" maxlength="500" required autocomplete="off"><span class="help">One line. No file paths.</span></div>
+          <div class="field"><label for="idc-confirm">To retire, type <b>{{.Host}}</b></label><input class="input" id="idc-confirm" name="confirm" type="text" autocomplete="off" spellcheck="false"></div>
+          <div class="actions"><button class="btn sm danger-solid" type="submit">Resolve conflict</button></div>
+        </form>
+      </div>
+    </details>
+  {{- else}}<span class="meta-mono">{{.Why}}</span>{{end}}
+  </div>
+</section>{{end}}
+
+{{/* dev_actions: the notice of the last action, the identity panel, and the action menu. #dev-actions is what the Commands tab refreshes out of band. */}}
+{{define "dev_actions"}}{{with .Notice}}<div class="banner {{.Class}} dense" role="status"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+{{with .Identity}}{{template "dev_identity" .}}{{end}}
+<div id="dev-actions" class="actionbar" role="group" aria-label="Actions for {{.Host}}">{{template "dev_actionbar_items" .}}</div>{{end}}
+
+{{define "dev_actionbar_items"}}
+  {{- range .Items}}{{template "dev_action" .}}{{end}}
+  {{- if .More}}<details class="rowmenu act-more"><summary class="btn sm">More</summary>
+    <div class="rowmenu-pop" role="group" aria-label="More actions">{{range .More}}{{template "dev_action" .}}{{end}}</div>
+  </details>{{end}}
+{{- end}}
+
+{{/* device_commands_poll: what the in-flight refresh gets back: the list, and the action menu swapped out of band. */}}
+{{define "device_commands_poll"}}{{template "device_commands" .Commands}}{{with .Actions}}<div id="dev-actions" class="actionbar" role="group" aria-label="Actions for {{.Host}}" hx-swap-oob="true">{{template "dev_actionbar_items" .}}</div>{{end}}{{end}}
+
+{{/* device_commands: the Commands tab. While a command is in flight the list refreshes itself every 5 s, and the action menu with it. */}}
+{{define "device_commands"}}<div class="stack" id="device-commands"{{if .Pending}} data-fast-poll hx-get="{{.Poll}}" hx-trigger="cryo:poll" hx-swap="outerHTML"{{end}}>
+<form class="filters" method="get" action="{{.Action}}" role="search" aria-label="Filter commands">
+  <div class="field"><label for="c-status">Status</label><select class="input" id="c-status" name="status">{{range .Form}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <button class="btn sm" type="submit">Apply</button>
+</form>
+{{if .Chips}}<div class="chipbar" role="status"><span>{{.Summary}}</span>{{range .Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}<a class="btn ghost sm" href="{{.Clear}}">Clear all</a></div>{{end}}
+{{if .Pending}}<p class="meta-mono" role="status">A command is in flight. This list refreshes every 5 seconds until it finishes.</p>{{end}}
+{{with .Empty}}{{template "panel_state" .}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Commands" tabindex="0">
+<table class="fleet">
+<caption>Commands for this device, newest first, {{.Summary}}</caption>
+<thead><tr><th scope="col">Queued</th><th scope="col">Command</th><th scope="col">Status</th><th scope="col">What happened</th><th scope="col">By</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+<tbody>{{range .Rows}}<tr id="cmd-{{.ID}}">
+<td><time datetime="{{.ISO}}">{{.When}}</time></td><td>{{.Label}}</td><td>{{template "chip" .Chip}}</td><td class="wrap">{{.Detail}}{{if .Timing}}<small>{{.Timing}}</small>{{end}}</td><td>{{.By}}</td>
+<td class="act">{{if .Undo}}<form class="inl" method="post" action="{{.Undo}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn ghost sm" type="submit" aria-label="Undo {{.Label}} queued {{.When}}">Undo</button></form>{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+{{template "pager" .Pager}}{{end}}
+<p class="meta-mono">A queued command waits until the device checks in or until it expires, whichever comes first. Expired commands never run. Undo works only before delivery; to stop a running backup, use Cancel run.</p>
+</div>{{end}}

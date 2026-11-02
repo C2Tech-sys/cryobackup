@@ -1,0 +1,9 @@
+{{/* S04 - add a customer (M2-W1C). Admin only. */}}
+{{define "title"}}New customer{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/customers">Customers</a> / <span>New customer</span></nav>
+<div class="formwrap">
+  <h2 class="form-title">Add a customer</h2>
+  {{template "customer_form" .Form}}
+</div>
+{{end}}

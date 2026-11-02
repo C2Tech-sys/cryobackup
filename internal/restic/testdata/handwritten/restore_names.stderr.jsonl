@@ -1,0 +1,3 @@
+{"message_type":"error","error":{"message":"invalid child node name ../proxy"},"during":"restore","item":"/data"}
+{"message_type":"error","error":{"message":"invalid child node name vss\\certificate.docx"},"during":"restore","item":"/data"}
+{"message_type":"exit_error","code":1,"message":"Fatal: There were 2 errors"}

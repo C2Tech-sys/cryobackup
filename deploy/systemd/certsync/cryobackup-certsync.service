@@ -1,0 +1,37 @@
+# Optional: copy an ACME client's certificates into /etc/cryobackup/tls and restart
+# the unit that uses a pair only when it changed. Started by cryobackup-certsync.timer.
+# Install: see README.md in this directory.
+
+[Unit]
+Description=CryoBackup certificate sync (ACME client to /etc/cryobackup/tls)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# /etc/cryobackup/certsync.env names the two hosts and the ACME client's file layout
+# (see certsync.env.example). It carries no secret.
+EnvironmentFile=/etc/cryobackup/certsync.env
+ExecStart=/usr/local/sbin/cryobackup-certsync
+UMask=0077
+LimitCORE=0
+
+# Runs as root: it reads the ACME client's private keys and sets root:cryobackup on
+# the copies. It writes only to the tls directory (and the ACME tree is read-only here).
+ProtectSystem=strict
+ReadWritePaths=/etc/cryobackup/tls
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# systemctl talks to systemd over a unix socket; nothing here uses the network.
+RestrictAddressFamilies=AF_UNIX

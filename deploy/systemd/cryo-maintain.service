@@ -1,0 +1,73 @@
+# cryo-console maintain --loop: the admin path (init, cat config, ls, find, dump,
+# stats, unlock over the unix socket) and the maintenance scheduler.
+# Holds the storage ADMIN credential (rclone-admin.conf, the [admin] remote only) and
+# reads the master key. It is the only process that can delete repository data
+# (architecture 7.1, 8.1). Outbound to storage only; no listening port.
+# Install: see README.md in this directory.
+
+[Unit]
+Description=CryoBackup maintenance worker (admin path and scheduler)
+After=network-online.target cryo-console.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryobackup
+Group=cryobackup
+# /etc/cryobackup/maintain.env holds CRYO_MAINTAIN_BUCKET, CRYO_MAINTAIN_PREFIX and, optionally,
+# CRYO_MAINTAIN_RESTIC_SHA256 (see maintain.env.example in the README). It carries no secret.
+EnvironmentFile=/etc/cryobackup/maintain.env
+Environment=RCLONE_CONFIG=/etc/cryobackup/rclone-admin.conf
+Environment=CRYO_MAINTAIN_RESTIC=/usr/local/bin/restic
+Environment=CRYO_MAINTAIN_RCLONE=/usr/local/bin/rclone
+Environment=CRYO_MAINTAIN_REMOTE=admin
+# ADR 0008: restic's and rclone's temp and cache files live in memory only.
+# /run is a tmpfs; the worker creates tmp/ and rclone/ there, empties them at
+# start and narrows the directory to 0700 itself. There is no persistent state
+# directory: the worker's bookkeeping is in the database.
+Environment=CRYO_MAINTAIN_SCRATCH_DIR=/run/cryo-maintain
+ExecStart=/usr/local/bin/cryo-console maintain --loop --config /etc/cryobackup/config.json
+Restart=on-failure
+RestartSec=5s
+UMask=0027
+# No crash dumps (ADR 0008): a core file could hold repository data or keys.
+LimitCORE=0
+
+# cryobackup: the socket directory, also created by cryo-console.service.
+# cryo-maintain: the scratch tmpfs (CRYO_MAINTAIN_SCRATCH_DIR). One mode applies
+# to both; the worker chmods its scratch directory to 0700 before using it.
+RuntimeDirectory=cryobackup cryo-maintain
+RuntimeDirectoryPreserve=yes
+RuntimeDirectoryMode=0770
+StateDirectory=cryobackup
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/cryobackup /run/cryobackup /run/cryo-maintain
+ConfigurationDirectory=cryobackup
+ConfigurationDirectoryMode=0750
+
+# Hardening. MemoryDenyWriteExecute is left off in this unit because it starts restic
+# and rclone as children and that restriction has not been verified for them (the
+# console and gateway units, which run one Go binary each, set it).
+# Credential isolation: even as the same user, this worker cannot open the gateway's
+# credential (a leading "-" ignores a path that is not there).
+InaccessiblePaths=-/etc/cryobackup/rclone-gateway.conf
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

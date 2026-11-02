@@ -1,0 +1,82 @@
+{{/* base.html - the console shell (components 1.5 to 1.7, 9.1). Pages define "title" and "content".
+     S01 (login) sets .Bare and gets no sidebar or topbar. Everything on this page is first-party:
+     fonts, tokens, css and scripts come from /static, nothing from a CDN. */}}
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="referrer" content="same-origin">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"historyCacheSize":0,"refreshOnHistoryMiss":true}'>
+<title>{{block "title" .}}{{.Title}}{{end}} · CryoBackup</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="{{asset "fonts.css"}}">
+<link rel="stylesheet" href="{{asset "tokens.css"}}">
+<link rel="stylesheet" href="{{asset "app.css"}}">
+<script src="{{asset "js/theme.js"}}"></script>
+<script src="{{asset "js/htmx.min.js"}}" defer></script>
+<script src="{{asset "js/fresh.js"}}" defer></script>
+<script src="{{asset "js/copy.js"}}" defer></script>
+<script src="{{asset "js/states.js"}}" defer></script>
+{{block "head" .}}{{end}}
+<noscript><meta http-equiv="refresh" content="{{.Refresh}}"></noscript>
+</head>
+<body data-refresh="{{.Refresh}}"{{if .Events}} data-events="{{.Events}}"{{end}} data-drawer="closed">
+{{template "icons"}}
+<a class="skip" href="#main">Skip to content</a>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/" aria-label="CryoBackup"><svg aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg><span class="t-wordmark wm"><b>CRYO</b><span>BACKUP</span></span></a>
+    <nav aria-label="Console navigation"><ul>
+      <li><a class="navlink" href="/"{{if eq .Nav "fleet"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-grid"/></svg><span class="lbl">Fleet</span></a></li>
+      <li><a class="navlink" href="/customers"{{if eq .Nav "customers"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-folder"/></svg><span class="lbl">Customers</span></a></li>
+      <li><a class="navlink" href="/devices"{{if eq .Nav "devices"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-pc"/></svg><span class="lbl">Devices</span></a></li>
+      <li><a class="navlink" href="/policies"{{if eq .Nav "policies"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-file"/></svg><span class="lbl">Policies</span></a></li>
+      {{if and .User (or (eq .User.Role "admin") (eq .User.Role "owner"))}}{{/* M2-W2B: enrollment and downloads are admin pages (architecture 5.3) */}}
+      <li><a class="navlink" href="/enroll"{{if eq .Nav "enroll"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-file"/></svg><span class="lbl">Enroll</span></a></li>
+      <li><a class="navlink" href="/downloads"{{if eq .Nav "downloads"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-download"/></svg><span class="lbl">Downloads</span></a></li>
+      <li><a class="navlink" href="/audit"{{if eq .Nav "audit"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-list"/></svg><span class="lbl">Audit log</span></a></li>
+      <li><a class="navlink" href="/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-sliders"/></svg><span class="lbl">Settings</span></a></li>
+      {{end}}
+    </ul></nav>
+    <div class="sp"></div>
+    {{if .Sys}}
+    <div class="sys"><span class="label-mono">System</span>
+      <ul>{{range .Sys}}<li><i class="g g-{{.Class}}" aria-hidden="true"></i><span>{{.Label}}: <b>{{.Value}}</b></span></li>{{end}}</ul>
+    </div>
+    {{end}}
+    <div class="themesw"><div class="seg" role="group" aria-label="Theme">
+      <button type="button" data-theme-set="system" aria-pressed="true">System</button><button type="button" data-theme-set="dark" aria-pressed="false">Dark</button><button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+    </div></div>
+    {{if .User}}
+    <div class="who"><svg aria-hidden="true" width="16" height="16"><use href="#i-user"/></svg><span title="{{.User.Role}}">{{.User.Username}} · {{.User.Role}}</span>
+      <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="iconbtn sm" type="submit" aria-label="Sign out {{.User.Username}}" title="Sign out"><svg aria-hidden="true"><use href="#i-out"/></svg></button></form>
+    </div>
+    {{end}}
+  </aside>
+  <div class="scrim"></div>
+  <div class="main">
+    <header class="topbar">
+      <button type="button" class="iconbtn menu-btn" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar"><svg aria-hidden="true"><use href="#i-menu"/></svg></button>
+      <h1 class="t-page-title" title="{{.Title}}">{{.Title}}</h1>
+      {{if .Stamp.At}}{{template "stamp" .Stamp}}{{end}}
+      {{if .User}}<details class="usermenu">{{/* M2-W1A: user menu (components 2.10 "user menu", disclosure pattern; no script) */}}
+        <summary class="btn ghost" aria-label="Account menu for {{.User.Username}}"><svg width="16" height="16" aria-hidden="true"><use href="#i-user"/></svg><span class="um-name">{{.User.Username}}</span></summary>
+        <nav class="um-pop" aria-label="Account"><ul>
+          <li><a href="/account"{{if eq .Nav "account"}} aria-current="page"{{end}}>My account</a></li>
+          {{if or (eq .User.Role "admin") (eq .User.Role "owner")}}<li><a href="/settings/accounts"{{if eq .Nav "accounts"}} aria-current="page"{{end}}>Accounts and roles</a></li>{{end}}
+          <li><form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button type="submit">Sign out</button></form></li>
+        </ul></nav>
+      </details>{{end}}
+    </header>
+    <main id="main" class="content" tabindex="-1">
+      <div class="banner-strip" data-region="banners">{{template "banners" .Banners}}</div>
+      {{template "content" .}}
+      <noscript><p class="banner warn dense" role="status"><span class="st warn"><i aria-hidden="true"></i>JAVASCRIPT OFF</span> Live updates need JavaScript. Data as of {{.Stamp.At}}; this page reloads every {{.Refresh}} seconds.</p></noscript>
+    </main>
+  </div>
+</div>
+<div class="toasts" id="toasts" role="region" aria-label="Notifications"></div>
+</body>
+</html>{{end}}

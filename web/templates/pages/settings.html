@@ -1,0 +1,44 @@
+{{/* S26 - settings (M2-W3A). Admins see every setting; the owner changes the editable ones, which post to /ui/settings and write one audit row each. */}}
+{{define "title"}}Settings{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Settings</span></nav>
+<div class="page-head"><div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-file"/></svg><h2>Settings</h2><span class="meta-mono">Console-wide</span></div>
+  <div class="sub"><span>Non-secret values only. Credentials live in the environment or in mounted files, never here.</span></div></div>
+{{template "acct_note" .Notice}}
+{{if .PrefsNote}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Stored display settings were not used.</b> {{.PrefsNote}} Save a valid value below to repair it.</div></div>{{end}}
+{{range .ConfigNotes}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>The saved value wins.</b> {{.}} Editing config.json does not change it; save a value here instead.</div></div>{{end}}
+{{if not .CanEdit}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>View only.</b> Changing settings needs the owner role.</div></div>{{end}}
+
+{{if .ListErr}}
+<section class="panel-state alarm" role="alert"><div><svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg><h2><i class="g g-crit" aria-hidden="true"></i>Settings unavailable</h2><p>The settings could not be read. This is an alarm, not an empty page: the console always has settings. Reload the page, then check the database.</p></div></section>
+{{else}}
+<form class="formcard settingsform" method="post" action="/ui/settings" id="settings-form" novalidate aria-labelledby="set-display">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <h3 id="set-display" class="h-label">Display</h3>
+  {{template "acct_note" .FormErr}}
+  <fieldset class="plainset"{{if not .CanEdit}} disabled{{end}}>
+    <div class="field"><label for="set-zone">Display time zone</label>
+      <input class="input mono" id="set-zone" name="display_timezone" type="text" list="set-zones" value="{{.ZoneIn}}" autocomplete="off" spellcheck="false" maxlength="64"{{if .ZoneErr}} aria-invalid="true" aria-describedby="set-zone-help set-zone-err"{{else}} aria-describedby="set-zone-help"{{end}}>
+      <datalist id="set-zones">{{range .Zones}}<option value="{{.}}">{{end}}</datalist>
+      {{with .ZoneErr}}<span class="err" id="set-zone-err">{{.}}</span>{{end}}
+      <span class="help" id="set-zone-help">An IANA zone name, for example America/Chicago. Every page and every API time uses it from the next request. Times stay stored in UTC. It is now {{.ZoneNow}} there.{{with .ZoneBy}} {{.}}.{{end}}</span></div>
+    <div class="field"><label for="set-refresh">Refresh interval <span class="muted">(seconds)</span></label>
+      <input class="input mono" id="set-refresh" name="refresh_interval_s" type="text" inputmode="numeric" value="{{.RefreshIn}}" autocomplete="off" maxlength="5"{{if .RefreshErr}} aria-invalid="true" aria-describedby="set-refresh-help set-refresh-err"{{else}} aria-describedby="set-refresh-help"{{end}}>
+      {{with .RefreshErr}}<span class="err" id="set-refresh-err">{{.}}</span>{{end}}
+      <span class="help" id="set-refresh-help">How often open pages re-read the fleet, from {{.RefreshMin}} to {{.RefreshMax}}. A page that gets nothing for twice this long says so.{{with .RefreshBy}} {{.}}.{{end}}</span></div>
+  </fieldset>
+  {{if .CanEdit}}<div class="actions"><button class="btn primary" type="submit">Save settings</button></div>{{end}}
+</form>
+
+<section class="stack" aria-labelledby="set-others">
+  <h3 class="h-label" id="set-others">Retention and schedule <span class="count">{{len .Others}}</span></h3>
+  <div class="table-wrap" role="region" aria-label="Other settings" tabindex="0"><table class="fleet compact"><caption class="sr-only">Settings that are shown but not editable yet</caption>
+    <thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead>
+    <tbody>{{range .Others}}<tr><td class="wrap"><b>{{.Label}}</b><small>{{.Help}}</small></td><td class="mono">{{.Value}}</td><td class="wrap">{{if eq .Since "system"}}<span class="st neutral sm"><i aria-hidden="true"></i>SET BY THE CONSOLE</span>{{else}}<span class="st neutral sm"><i aria-hidden="true"></i>NOT EDITABLE YET</span><small>Becomes effective with milestone {{.Since}}</small>{{end}}</td></tr>{{end}}</tbody></table></div>
+</section>
+
+<section class="stack" aria-labelledby="set-more"><h3 class="h-label" id="set-more">Elsewhere</h3>
+  <ul class="notes"><li><a href="/audit">Audit log</a>: every change made on this page is one row there.</li>
+  <li><a href="/settings/accounts">Accounts and roles</a>: who can change settings (owners) and who can read them (admins).</li></ul></section>
+{{end}}
+{{end}}

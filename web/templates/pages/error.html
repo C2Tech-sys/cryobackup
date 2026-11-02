@@ -1,0 +1,8 @@
+{{define "content"}}
+<section class="panel-state {{if ge .Status 500}}alarm{{else}}neutral{{end}}"{{if ge .Status 500}} role="alert"{{end}}><div>
+<svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg>
+<h2>{{if ge .Status 500}}<i class="g g-crit" aria-hidden="true"></i>{{end}}{{.Title}}</h2>
+<p>{{.Body}}</p>
+<a class="btn" href="/">Back to the fleet board</a>
+</div></section>
+{{end}}

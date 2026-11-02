@@ -1,0 +1,27 @@
+.env
+.env.*
+!.env.example
+data/
+dist/
+bin/
+*.exe
+*.log
+__pycache__/
+node_modules/
+.venv/
+
+replica/screens/
+Thumbs.db
+*.test
+*.out
+coverage/
+.go-build/
+
+# Operator working notes stay local (the build ledger and tickets, session
+# handoffs, business research) and never go into the public repository.
+.foreman/
+.remember/
+.claude/
+docs/handoff/
+docs/research/
+CLAUDE.local.md

@@ -1,0 +1,4 @@
+unable to create lock in backend: repository is already locked by PID 12176 on fixture-host by fixture-user (UID 0, GID 0)
+lock was created at 2026-10-22 12:18:21 (2.4040687s ago)
+storage ID 43baff1d
+the `unlock` command can be used to remove stale locks

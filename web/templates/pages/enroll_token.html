@@ -1,0 +1,37 @@
+{{/* B16 - one enrollment token: usage, the devices that enrolled through it, revoke (M2-W2B). The value is never here. */}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <a href="/enroll">Enroll devices</a> / <span>{{.Token.Label}}</span></nav>
+<div class="page-head">
+  <div class="t"><h2>{{.Token.Label}}</h2>{{template "chip" .Token.Status}}</div>
+  <div class="sub"><span>for <a href="/customers/{{.Token.CustomerID}}">{{.Token.Customer}}</a></span></div>
+</div>
+{{if .Saved}}<div class="banner ok dense" role="status"><i class="g g-ok" aria-hidden="true"></i><div class="b-text">{{.Saved}}</div></div>{{end}}
+
+<section class="card flow" aria-labelledby="f-h">
+  <h3 id="f-h">Usage</h3>
+  <dl class="kv">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{with .Chip}}{{template "chip" .}}{{else}}{{.Value}}{{end}}</dd>{{end}}</dl>
+  <p class="meta-mono">The token value is not stored and cannot be shown again. To deploy more devices, create a new token.</p>
+</section>
+
+{{if .CanRevoke}}<section class="card flow" aria-labelledby="r-h">
+  <h3 id="r-h">Revoke</h3>
+  <p class="muted ui">Revoking stops this token from enrolling any more devices, at once. Devices that already enrolled keep working. This cannot be undone; create a new token if you need one.</p>
+  <form method="post" action="/ui/enroll/tokens/{{.TokenID}}/revoke"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn danger" type="submit">Revoke this token</button></form>
+</section>{{end}}
+
+<section class="stack" aria-labelledby="d-h">
+<h3 class="h-label" id="d-h">Devices enrolled with this token <span class="count">{{len .Devices}}</span></h3>
+{{if .DevicesErr}}
+<section class="panel-state alarm" role="alert"><div><svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg><h2><i class="g g-crit" aria-hidden="true"></i>Devices unavailable</h2><p>The devices of this token could not be loaded. This is an alarm, not an empty list. Reload the page.</p></div></section>
+{{else if .Devices}}
+<div class="table-wrap" role="region" aria-label="Devices enrolled with this token" tabindex="0">
+<table class="fleet">
+<caption>Devices enrolled with this token, newest first</caption>
+<thead><tr><th scope="col">Device</th><th scope="col">Enrolled</th></tr></thead>
+<tbody>{{range .Devices}}<tr{{if .Retired}} class="retired"{{end}}><td class="dev-cell"><a class="hostname" href="/devices/{{.ID}}">{{.Hostname}}</a>{{if .Retired}} <span class="st sm neutral"><i aria-hidden="true"></i>RETIRED</span>{{end}}</td><td>{{.Enrolled}}</td></tr>{{end}}</tbody></table></div>
+{{else}}
+{{if .Token.Active}}<section class="panel-state neutral"><div><svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg><h2>No device has enrolled yet</h2><p>This token has not been used. Once an installer carrying it runs, the device appears here and on the fleet board as pending its first backup.</p></div></section>
+{{else}}<section class="panel-state partial" role="alert"><div><svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg><h2><i class="g g-warn" aria-hidden="true"></i>This token was never used</h2><p>No device enrolled with it before it stopped working. If you expected machines to enroll, check the deployment and the public URL.</p></div></section>{{end}}
+{{end}}
+</section>
+{{end}}

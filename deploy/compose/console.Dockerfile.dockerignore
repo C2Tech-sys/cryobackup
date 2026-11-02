@@ -1,0 +1,28 @@
+# Build context hygiene for console.Dockerfile (BuildKit reads this file next to the
+# Dockerfile). Secrets and operator state never enter a build context.
+.git
+.github
+.foreman
+.claude
+docs
+replica
+test
+bin
+dist
+data
+*.exe
+*.test
+*.out
+
+# deploy/: only the Dockerfiles' own directory is irrelevant to the Go build
+deploy
+
+# belt and braces: nothing secret, anywhere
+**/.env
+**/.env.*
+**/rclone*.conf
+**/config.json
+**/*.crt
+**/*.key
+**/*.pem
+**/secrets

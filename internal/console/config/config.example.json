@@ -1,0 +1,58 @@
+{
+  "data_dir": "/var/lib/cryobackup",
+  "db_path": "/var/lib/cryobackup/console.db",
+  "master_key_path": "/run/secrets/cryo_master_key",
+  "agent_listen": ":8443",
+  "admin_listen": "127.0.0.1:8080",
+  "admin_allow_public": false,
+  "insecure_http_for_lab": false,
+  "tls": {
+    "cert": "/etc/cryobackup/tls/agent.crt",
+    "key": "/etc/cryobackup/tls/agent.key"
+  },
+  "admin": {
+    "tls": {
+      "cert": "",
+      "key": ""
+    }
+  },
+  "public_url": "https://backup.example.com:8443",
+  "gateway_url": "https://backup.example.com:9443",
+  "gateway_auth_dir": "/var/lib/cryobackup/gateway-auth",
+  "artifacts_dir": "/var/lib/cryobackup/artifacts",
+  "adminpath_socket": "/var/lib/cryobackup/adminpath/adminpath.sock",
+  "display_timezone": "America/Chicago",
+  "refresh_interval_s": 30,
+  "session": {
+    "idle_h": 12,
+    "absolute_h": 168
+  },
+  "rate_limits": {
+    "enroll_per_min_per_ip": 10,
+    "failed_auth_per_min_per_ip": 30,
+    "heartbeat_interval_s": 20,
+    "runs_per_min": 30,
+    "snapshots_per_min": 6,
+    "policy_per_min": 6,
+    "login_per_min_per_ip": 10,
+    "max_conns": 1024,
+    "max_block_minutes": 15,
+    "login_lock_after": 5,
+    "login_lock_minutes": 15,
+    "commands_long_poll_max_s": 30
+  },
+  "restore_stream": {
+    "min_bytes": 65536,
+    "window_s": 120,
+    "first_byte_s": 300
+  },
+  "smtp": {
+    "host": "",
+    "port": 587,
+    "security": "starttls",
+    "username": "",
+    "password_file": "",
+    "from": ""
+  },
+  "fixtures": false
+}

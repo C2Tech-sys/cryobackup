@@ -1,0 +1,92 @@
+# rclone configuration for CryoBackup (architecture 7.1, 8.2; engine 3.1, 4.4).
+#
+# SPLIT THIS FILE. It holds two remotes with different powers and they must never
+# live in the same mounted file:
+#
+#   [store]  the GATEWAY credential. Mounted into the gateway container only, as
+#            rclone.gateway.conf. Append-only is enforced by rclone's command-line
+#            flag, which is an application-layer guard only; at the storage layer the
+#            protection is bucket versioning plus the key scoping described at [store].
+#   [admin]  the ADMIN credential (delete-capable). Mounted into the maintenance
+#            container only, as rclone.admin.conf. It is the only place that can
+#            forget, prune or overwrite repository data.
+#
+# If the gateway could read [admin], a compromised gateway could delete history and
+# append-only would mean nothing. Keep each section in its own file (the markers
+# below show where to cut), mode 0400, owned by uid 10001, git-ignored.
+#
+# no_check_bucket = true on [store]: the gateway key has no CreateBucket permission and
+# `rclone serve restic` creates repositories with Mkdir (engine 3.1, 4.4). Without it the
+# gateway fails with 403 on first use.
+#
+# no_check_bucket = true on [admin] too: the maintenance worker creates every device
+# repository (restic init through rclone's Mkdir). Without it rclone first sends
+# CreateBucket for a bucket that already exists, and Wasabi answers a region-specific
+# endpoint with 400 IllegalLocationConstraintException, so every enrollment fails with
+# 503 (`restic could not reach the storage`, class storage). MinIO accepts the probe,
+# which is why the lab did not show it. Found on the first production install, 2026-10-30.
+#
+# Replace every <placeholder>. Nothing here is a real credential.
+
+# ======================= rclone.gateway.conf (gateway container only) =======================
+# SCOPE THIS CREDENTIAL (the [store] key): s3:GetObject, s3:PutObject and s3:ListBucket on
+# <bucket>/<prefix>/*, s3:DeleteObject only on <bucket>/<prefix>/*/locks/*, and NOT
+# s3:DeleteObjectVersion, s3:PutLifecycleConfiguration, s3:PutBucketVersioning or
+# s3:BypassGovernanceRetention. The bucket must have VERSIONING ENABLED: --append-only is
+# only an application-layer guard, and versioning is what keeps history recoverable if the
+# gateway host is compromised and this key overwrites an object. Lifecycle and
+# version-delete rights belong to the [admin] credential alone.
+[store]
+type = s3
+provider = Wasabi
+access_key_id = <gateway access key>
+secret_access_key = <gateway secret key>
+endpoint = s3.<region>.wasabisys.com
+region = <region>
+no_check_bucket = true
+
+# ======================= rclone.admin.conf (maintenance container only) =======================
+[admin]
+type = s3
+provider = Wasabi
+access_key_id = <admin access key>
+secret_access_key = <admin secret key>
+endpoint = s3.<region>.wasabisys.com
+region = <region>
+no_check_bucket = true
+
+# ------------------------------------------------------------------------------------------------
+# Provider examples: replace the provider, endpoint and region lines of BOTH sections.
+# Pricing and policies change; re-check minimum storage duration before choosing (engine 4.1, 4.2).
+#
+# Backblaze B2 (S3 API; keep versions: use a lifecycle rule that hides or deletes old versions
+# only after N days, never "keep only the last version" for this bucket; engine 4.3):
+#   provider = Other
+#   endpoint = s3.<region>.backblazeb2.com
+#   region = <region>
+#
+# IDrive e2:
+#   provider = IDrive
+#   endpoint = <your e2 endpoint>
+#   region = <region>
+#
+# AWS S3:
+#   provider = AWS
+#   region = <region>
+#   (omit endpoint)
+#
+# MinIO or another S3-compatible server (the lab profile uses the keys of .env):
+#   provider = Minio
+#   endpoint = http://minio:9000
+#   access_key_id = <LAB_GATEWAY_ACCESS_KEY or LAB_ADMIN_ACCESS_KEY>
+#   secret_access_key = <LAB_GATEWAY_SECRET_KEY or LAB_ADMIN_SECRET_KEY>
+#   (no region needed)
+#
+# Scoping the gateway key at the provider (REQUIRED together with bucket versioning):
+# allow GetObject, PutObject and ListBucket on <bucket>/<prefix>/*, and DeleteObject only on
+# <bucket>/<prefix>/*/locks/* (restic removes its own lock files; engine 3.4); never
+# DeleteObjectVersion, lifecycle, versioning or governance-bypass rights.
+# The lab profile's minio-init.sh creates exactly that policy; read it as a template.
+#
+# Object Lock governance: the maintenance remote would add --s3-bypass-governance-retention
+# through restic's rclone.args (architecture 7.3 step 10). Not enabled in v0; gated on L-GOV-1.

@@ -1,0 +1,1 @@
+{"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked by PID 12176 on fixture-host by fixture-user (UID 0, GID 0)\nlock was created at 2026-10-22 12:18:21 (1.3568625s ago)\nstorage ID 43baff1d\nthe `unlock` command can be used to remove stale locks"}

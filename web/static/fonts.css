@@ -1,0 +1,28 @@
+/* Vendored fonts (SIL OFL 1.1, licences beside each file). No remote font is ever requested.
+   Orbitron is the display face and is rationed to the five .t-* roles in tokens.css.
+   IBM Plex Sans is a variable font (wght 100-700). Martian Mono (the data face, --font-mono) is one
+   variable file (wght 100-800, wdth 75-112.5); font-stretch: 100% pins the width axis to Standard.
+   Orbitron and IBM Plex Sans are subset to Latin, Latin-1, Latin Extended-A and general punctuation
+   (web/README.md); Martian Mono is the unmodified release file (fonts/martianmono/SOURCE.txt). */
+@font-face {
+  font-family: 'Orbitron';
+  src: url('/static/fonts/orbitron/Orbitron-var.woff2') format('woff2');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/static/fonts/ibmplexsans/IBMPlexSans-var.woff2') format('woff2');
+  font-weight: 100 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Martian Mono';
+  src: url('/static/fonts/martianmono/MartianMono-var.woff2') format('woff2');
+  font-weight: 100 800;
+  font-stretch: 100%;
+  font-style: normal;
+  font-display: swap;
+}

@@ -1,0 +1,19 @@
+# Secrets and operator state never enter the repository (CLAUDE.md). The root
+# .gitignore already ignores .env and .env.*; these are the deploy-specific ones.
+# The .example templates are committed.
+.env
+.env.*
+!.env.example
+
+rclone.conf
+rclone.*.conf
+!rclone.conf.example
+
+config.json
+!config.example.json
+
+*.crt
+*.key
+*.pem
+secrets/
+tls/

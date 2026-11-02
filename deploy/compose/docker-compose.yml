@@ -1,0 +1,282 @@
+# CryoBackup reference stack (architecture 7.1, DH18).
+#
+#   console      cryo-console serve        agent API (public), admin UI (loopback or mesh); holds NO storage credential
+#   gateway      rclone serve restic       append-only, private repos, TLS >= 1.2; holds only the GATEWAY credential
+#   maintenance  cryo-console maintain     admin path + scheduler; holds the ADMIN credential and the master key
+#   minio, minio-init                      lab only (profile "lab"): a throw-away S3 target with split credentials
+#
+# Every value comes from .env (copy .env.example). Nothing here is specific to an
+# installation. Run `docker compose config` to see the resolved file; the stack is
+# started with `docker compose up -d` (add `--profile lab` for MinIO).
+#
+# Trust boundary (architecture 8.1): the gateway and the maintenance worker use
+# DIFFERENT rclone.conf files. The gateway's file holds the [store] remote only;
+# the maintenance file holds the [admin] remote only. Never mount a file that
+# contains [admin] into the gateway: a compromised gateway would then be able to
+# delete history, and append-only would mean nothing.
+#
+# The gateway command line is the one of architecture 7.1. --append-only is a
+# command-line flag and must never be moved to an environment variable (engine 3.2:
+# the environment form has failed to enforce before). deploy/rclone/append-only-test.sh
+# (L-APPEND-1) proves the deployed gateway on every release.
+#
+# No data at rest (ADR 0008): the host keeps no backup payload on persistent disk.
+# Technician restores stream from restic through the admin-path socket to the browser and
+# are never staged; the maintenance worker runs restic with --no-cache and keeps its temp
+# files on a tmpfs; no service may write a core dump (ulimits core 0). Swap on the host must
+# be off or encrypted (`cryo-console doctor` reports it). See README "No data at rest".
+
+name: cryobackup
+
+services:
+  console:
+    image: ${CONSOLE_IMAGE:-cryobackup/console}:${CRYO_VERSION:-dev}
+    build:
+      context: ../..
+      dockerfile: deploy/compose/console.Dockerfile
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.26.10-bookworm}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:12.11-slim}
+        RESTIC_VERSION: ${RESTIC_VERSION:-0.19.1}
+        RESTIC_SHA256: ${RESTIC_SHA256:?set RESTIC_SHA256 in .env (see .env.example)}
+        RCLONE_VERSION: ${RCLONE_VERSION:-1.75.1}
+        RCLONE_SHA256: ${RCLONE_SHA256:?set RCLONE_SHA256 in .env (see .env.example)}
+        VERSION: ${CRYO_VERSION:-dev}
+    command:
+      - serve
+      - --config
+      - /config/config.json
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    ports:
+      - "${AGENT_PORT:-8443}:8443"
+      - "${ADMIN_BIND:-127.0.0.1}:${ADMIN_PORT:-8080}:8080"
+    volumes:
+      - db:/data
+      - gateway-auth:/auth
+      # Reserved for agent releases (M11). Restores never write here (ADR 0008); the console
+      # only deletes restore archives that a version before ADR 0008 staged here.
+      - artifacts:/artifacts
+      - adminpath:/run/cryo
+      - ${CONFIG_FILE:-./config.json}:/config/config.json:ro
+      - ${MASTER_KEY_DIR:-./secrets}:/run/keys:ro
+      - ${TLS_DIR:-./tls}:/tls:ro
+    healthcheck:
+      # Works with the admin listener in either mode: plain HTTP first; if admin.tls is set the
+      # listener answers that with an error, so the second curl asks over TLS. -k only skips
+      # name verification on this loopback call to the container's own listener (the certificate
+      # is issued for the mesh name, not 127.0.0.1); it proves liveness and sends nothing secret.
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:8080/healthz || curl -fskS --max-time 5 https://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  gateway:
+    image: ${GATEWAY_IMAGE:-cryobackup/gateway}:${CRYO_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: gateway.Dockerfile
+      args:
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:12.11-slim}
+        RCLONE_VERSION: ${RCLONE_VERSION:-1.75.1}
+        RCLONE_SHA256: ${RCLONE_SHA256:?set RCLONE_SHA256 in .env (see .env.example)}
+    command:
+      - serve
+      - restic
+      - --addr
+      - ":${GATEWAY_PORT:-9443}"
+      - --cert
+      - /tls/gateway.crt
+      - --key
+      - /tls/gateway.key
+      - --min-tls-version
+      - tls1.2
+      - --htpasswd
+      - /auth/htpasswd
+      - --append-only
+      - --private-repos
+      - store:${BUCKET:?set BUCKET in .env}/${PREFIX:-}
+    environment:
+      RCLONE_CONFIG: /config/rclone.conf
+      HOME: /tmp
+      GATEWAY_PORT: ${GATEWAY_PORT:-9443}
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    ports:
+      - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-9443}:${GATEWAY_PORT:-9443}"
+    volumes:
+      - gateway-auth:/auth:ro
+      - ${RCLONE_GATEWAY_CONF:-./rclone.gateway.conf}:/config/rclone.conf:ro
+      - ${TLS_DIR:-./tls}:/tls:ro
+    depends_on:
+      console:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+        required: false
+    healthcheck:
+      # Any HTTP answer proves TLS and the listener; the gateway answers 401 without a login.
+      test: ["CMD-SHELL", "curl -ksS -o /dev/null --max-time 5 -w '%{http_code}' https://127.0.0.1:$${GATEWAY_PORT}/ | grep -qx 401"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  maintenance:
+    image: ${CONSOLE_IMAGE:-cryobackup/console}:${CRYO_VERSION:-dev}
+    build:
+      context: ../..
+      dockerfile: deploy/compose/console.Dockerfile
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.26.10-bookworm}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:12.11-slim}
+        RESTIC_VERSION: ${RESTIC_VERSION:-0.19.1}
+        RESTIC_SHA256: ${RESTIC_SHA256:?set RESTIC_SHA256 in .env (see .env.example)}
+        RCLONE_VERSION: ${RCLONE_VERSION:-1.75.1}
+        RCLONE_SHA256: ${RCLONE_SHA256:?set RCLONE_SHA256 in .env (see .env.example)}
+        VERSION: ${CRYO_VERSION:-dev}
+    command:
+      - maintain
+      - --loop
+      - --config
+      - /config/config.json
+    environment:
+      RCLONE_CONFIG: /config/rclone.conf
+      CRYO_MAINTAIN_RESTIC: /usr/local/bin/restic
+      CRYO_MAINTAIN_RESTIC_SHA256_FILE: /usr/local/share/cryobackup/restic.sha256
+      CRYO_MAINTAIN_RCLONE: /usr/local/bin/rclone
+      CRYO_MAINTAIN_REMOTE: admin
+      CRYO_MAINTAIN_BUCKET: ${BUCKET:?set BUCKET in .env}
+      CRYO_MAINTAIN_PREFIX: ${PREFIX:-}
+      CRYO_MAINTAIN_SCRATCH_DIR: /tmp/cryo-maintain
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # restic's and rclone's temp files (CRYO_MAINTAIN_SCRATCH_DIR) live in memory, never on
+    # disk (ADR 0008). 512m holds the pack files a prune or repack has in flight (16 MiB
+    # each, a few per run, at most 4 runs at once) plus rclone's temp files; restic's index
+    # stays in process memory (--no-cache). Raise it for larger packs or more concurrency.
+    # tmpfs pages count against the container's memory and can be swapped out: swap must be
+    # off or encrypted on the host.
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    volumes:
+      - db:/data
+      - adminpath:/run/cryo
+      - ${CONFIG_FILE:-./config.json}:/config/config.json:ro
+      - ${RCLONE_ADMIN_CONF:-./rclone.admin.conf}:/config/rclone.conf:ro
+      - ${MASTER_KEY_DIR:-./secrets}:/run/keys:ro
+    healthcheck:
+      # The admin-path socket answers GET /v1/ping while the worker is alive.
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "--unix-socket", "/run/cryo/adminpath.sock", "http://worker/v1/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---- lab profile: a throw-away S3 target. Production composes omit it. ----
+
+  minio:
+    profiles:
+      - lab
+    # MinIO no longer publishes images or binaries (community edition: source only, archived
+    # upstream), so the lab builds the last pinned release from the Go module proxy.
+    image: ${MINIO_LAB_IMAGE:-cryobackup/minio-lab}:${CRYO_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: minio.Dockerfile
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.26.10-bookworm}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:12.11-slim}
+        MINIO_MODULE_VERSION: ${MINIO_MODULE_VERSION:-v0.0.0-20250907161309-07c3a429bfed}
+        MC_MODULE_VERSION: ${MC_MODULE_VERSION:-v0.0.0-20250813083541-7394ce0dd2a8}
+    command:
+      - server
+      - /data
+      - --console-address
+      - ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    restart: unless-stopped
+    ports:
+      - "${MINIO_BIND:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_BIND:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      # MinIO's documented liveness endpoint (no credentials needed).
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  minio-init:
+    profiles:
+      - lab
+    # The same image as minio: it carries mc as well.
+    image: ${MINIO_LAB_IMAGE:-cryobackup/minio-lab}:${CRYO_VERSION:-dev}
+    entrypoint:
+      - /bin/sh
+      - /minio-init.sh
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+      BUCKET: ${BUCKET:?set BUCKET in .env}
+      PREFIX: ${PREFIX:-}
+      LAB_GATEWAY_ACCESS_KEY: ${LAB_GATEWAY_ACCESS_KEY:-}
+      LAB_GATEWAY_SECRET_KEY: ${LAB_GATEWAY_SECRET_KEY:-}
+      LAB_ADMIN_ACCESS_KEY: ${LAB_ADMIN_ACCESS_KEY:-}
+      LAB_ADMIN_SECRET_KEY: ${LAB_ADMIN_SECRET_KEY:-}
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./minio-init.sh:/minio-init.sh:ro
+    healthcheck:
+      # The script touches this file as its last step.
+      test: ["CMD", "test", "-f", "/tmp/minio-init.done"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  db:
+  gateway-auth:
+  # Agent releases (M11) only; never restore data (ADR 0008). Nothing uses it in M1.
+  artifacts:
+  adminpath:
+  minio-data:

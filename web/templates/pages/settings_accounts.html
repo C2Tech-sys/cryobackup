@@ -1,0 +1,89 @@
+{{/* S32 - Accounts and roles (M2-W1A). Admins see the list; owners change it. Every change posts to
+     /ui/accounts/* (the same auth.Manager operations as /api/v1/admins) and writes one audit row.
+     A reset link is shown once in the response of the post that issued it. */}}
+{{define "content"}}
+<div class="page-head">
+  <div class="t"><h2>Accounts and roles</h2><span class="meta-mono">{{len .Rows}} account{{if ne (len .Rows) 1}}s{{end}} · {{.Owners}} enabled owner{{if ne .Owners 1}}s{{end}}</span></div>
+  <div class="sub"><span>Owner: everything, including accounts. Admin: configuration and keys. Operator: day-to-day actions. Read-only: view. Operators and read-only accounts can be limited to customers.</span></div>
+</div>
+{{template "acct_note" .Notice}}
+{{if not .CanEdit}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>View only.</b> Changing accounts needs the owner role.</div></div>{{end}}
+
+{{with .Link}}<section class="card raised once" aria-labelledby="link-h">
+  <h3 id="link-h">{{if eq .What "created"}}Set-password link for {{.Username}}{{else}}Password-reset link for {{.Username}}{{end}}</h3>
+  <div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Copy this link now.</b> It is shown once, works once and expires {{.Expires}} or when the console restarts.</div></div>
+  <div class="copybar">{{copybtn "cp-reset-link" "Copy the one-time link"}}</div>
+  <pre class="code secret" id="cp-reset-link" tabindex="0" role="region" aria-label="One-time link, shown once">{{.URL}}</pre>
+</section>{{end}}
+
+{{if .ListErr}}
+<section class="panel-state alarm" role="alert"><div><svg class="mark" aria-hidden="true" viewBox="0 0 64 64"><use href="#mark-hex"/></svg><h2><i class="g g-crit" aria-hidden="true"></i>Accounts unavailable</h2><p>The account list could not be loaded. This is an alarm, not an empty list: the console always has at least one owner. Reload the page.</p></div></section>
+{{else}}
+<div class="table-wrap">
+<table class="fleet accounts">
+  <caption>Console accounts, by username</caption>
+  <thead><tr><th scope="col">Account</th><th scope="col">Role</th><th scope="col">Customers</th><th scope="col">MFA</th><th scope="col">State</th><th scope="col">Last sign-in</th>{{if .CanEdit}}<th scope="col"><span class="sr-only">Actions</span></th>{{end}}</tr></thead>
+  <tbody>
+  {{range .Rows}}<tr id="acct-{{.ID}}"{{if .Disabled}} class="off"{{end}}>
+    <td class="dev-cell"><b>{{.Username}}</b>{{if .Self}} <span class="st sm info"><i aria-hidden="true"></i>YOU</span>{{end}}<small>{{.Email}}</small></td>
+    <td>{{.RoleLabel}}</td>
+    <td class="wrap">{{.Scope}}</td>
+    <td>{{template "acct_badge" .MFA}}</td>
+    <td>{{template "acct_badge" .State}}</td>
+    <td>{{template "acct_when" .LastLogin}}</td>
+    {{if $.CanEdit}}<td class="act">{{if .Self}}{{template "acct_note" .Err}}<a class="btn sm ghost" href="/account">My account</a>{{else}}
+      <details class="rowmenu"{{if .Err}} open{{end}}>
+        <summary class="btn sm" aria-label="Manage {{.Username}}">Manage…</summary>
+        <div class="rowmenu-pop" role="group" aria-label="Manage {{.Username}}">
+          {{template "acct_note" .Err}}
+          <form method="post" action="/ui/accounts/{{.ID}}/role" class="stack">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <div class="field"><label for="role-{{.ID}}">Role</label><select class="input" id="role-{{.ID}}" name="role">{{range .Roles}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+            {{if .Customers}}<fieldset class="plain scopepick"><legend class="h-label">Customers</legend>
+              <label class="check"><input type="checkbox" name="limit" value="1"{{if .Scoped}} checked{{end}}>Limit to the customers ticked below (operator and read-only only)</label>
+              <div class="scopelist">{{range .Customers}}<label class="check"><input type="checkbox" name="customer" value="{{.ID}}"{{if .Checked}} checked{{end}}>{{.Name}}</label>{{end}}</div>
+            </fieldset>{{end}}
+            <div class="actions"><button class="btn sm primary" type="submit">Save role</button></div>
+          </form>
+          <hr>
+          <div class="actions">
+            <form method="post" action="/ui/accounts/{{.ID}}/reset-password"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button class="btn sm" type="submit">Reset password…</button></form>
+            <form method="post" action="/ui/accounts/{{.ID}}/reset-mfa"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="reason" value="lost authenticator"><button class="btn sm" type="submit">Reset MFA</button></form>
+            {{if .Disabled}}<form method="post" action="/ui/accounts/{{.ID}}/enable"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button class="btn sm" type="submit">Enable</button></form>
+            {{else}}<form method="post" action="/ui/accounts/{{.ID}}/disable"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button class="btn sm danger" type="submit">Disable</button></form>{{end}}
+          </div>
+          <form method="post" action="/ui/accounts/{{.ID}}/delete" class="stack danger-zone">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <div class="field"><label for="del-{{.ID}}">Delete: type <b>{{.Username}}</b> to confirm</label><input class="input" id="del-{{.ID}}" name="confirm" type="text" autocomplete="off" spellcheck="false" required></div>
+            <div class="actions"><button class="btn sm danger-solid" type="submit">Delete {{.Username}}</button></div>
+          </form>
+        </div>
+      </details>{{end}}</td>{{end}}
+  </tr>{{end}}
+  </tbody>
+</table>
+</div>
+<p class="meta-mono">Showing all {{len .Rows}} accounts.</p>
+{{end}}
+
+{{if .CanEdit}}
+<section class="card" aria-labelledby="new-h">
+  <h3 id="new-h">+ Add an account</h3>
+  <p class="muted ui">The new user gets a one-time link to set their own password, then sets up an authenticator at their first sign-in. Nobody else ever knows the password.</p>
+  {{template "acct_note" .FormErr}}
+  <form method="post" action="/ui/accounts" class="stack" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <div class="frow">
+      <div class="field"><label for="new-user">Username</label><input class="input" id="new-user" name="username" type="text" maxlength="100" value="{{.Form.Username}}" autocapitalize="none" spellcheck="false" required></div>
+      <div class="field"><label for="new-email">E-mail</label><input class="input" id="new-email" name="email" type="email" value="{{.Form.Email}}" required></div>
+    </div>
+    <div class="field"><label for="new-role">Role</label><select class="input" id="new-role" name="role">{{range .Roles}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+    {{if .Customers}}<fieldset class="plain scopepick"><legend class="h-label">Customers</legend>
+      <label class="check"><input type="checkbox" name="limit" value="1"{{if .Form.Scope}} checked{{end}}>Limit to the customers ticked below (operator and read-only only)</label>
+      <div class="scopelist">{{range .Customers}}<label class="check"><input type="checkbox" name="customer" value="{{.ID}}"{{if .Checked}} checked{{end}}>{{.Name}}</label>{{end}}</div>
+    </fieldset>{{else}}<p class="meta-mono">No customers yet: the account sees all customers.</p>{{end}}
+    <div class="actions"><button class="btn primary" type="submit">Add account</button></div>
+  </form>
+</section>
+{{end}}
+{{end}}

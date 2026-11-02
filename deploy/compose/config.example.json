@@ -1,0 +1,31 @@
+{
+  "data_dir": "/data",
+  "db_path": "/data/cryobackup.db",
+  "master_key_path": "/run/keys/master.key",
+  "agent_listen": ":8443",
+  "admin_listen": "0.0.0.0:8080",
+  "admin_allow_public": true,
+  "tls": {
+    "cert": "/tls/agent.crt",
+    "key": "/tls/agent.key"
+  },
+  "admin": {
+    "tls": {
+      "cert": "",
+      "key": ""
+    }
+  },
+  "public_url": "https://backup.example.net:8443",
+  "gateway_url": "https://gateway.example.net:9443",
+  "gateway_auth_dir": "/auth",
+  "artifacts_dir": "/artifacts",
+  "adminpath_socket": "/run/cryo/adminpath.sock",
+  "display_timezone": "UTC",
+  "refresh_interval_s": 30,
+  "session": {
+    "idle_h": 12,
+    "absolute_h": 168
+  },
+  "rate_limits": {},
+  "fixtures": false
+}
