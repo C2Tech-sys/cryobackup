@@ -1,6 +1,9 @@
 # CryoBackup build entry points. Everything is plain `go`; no code generation yet.
 MODULE   := github.com/c2tech-sys/cryobackup
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# A release is built with CRYO_MSI_VERSION=X.Y.Z[.N] (the same variable
+# deploy/windows/build.ps1 reads): every binary then reports exactly that
+# version. Without it the stamp is the git describe string of a dev build.
+VERSION  ?= $(or $(CRYO_MSI_VERSION),$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w -X $(MODULE)/internal/buildinfo.Version=$(VERSION) -X $(MODULE)/internal/buildinfo.Commit=$(COMMIT) -X $(MODULE)/internal/buildinfo.Date=$(DATE)

@@ -87,7 +87,16 @@ if (-not $MsiVersion) {
 if ($MsiVersion -notmatch '^(\d+)\.(\d+)\.(\d+)(\.(\d+))?$' -or [int]$Matches[1] -gt 255 -or [int]$Matches[2] -gt 255 -or [int]$Matches[3] -gt 65535) {
     Die 2 "MSI version '$MsiVersion' is not X.Y.Z[.N] with X,Y <= 255 and Z <= 65535"
 }
-Say "version $MsiVersion (agent build $describe, commit $commit)"
+
+# The version the agent reports (cryo-agent status, "version", the enrollment and
+# every heartbeat). A release is built with an explicit CRYO_MSI_VERSION: the
+# agent then reports exactly that version, so the binary, the console and the MSI
+# agree (M2 lab finding F6: the 0.2.0 MSI's agent reported its git describe,
+# v0.1.0-83-g...). A build without one is a dev build and keeps the git describe
+# string, which says which commit it is.
+$AgentVersion = $describe
+if ($env:CRYO_MSI_VERSION) { $AgentVersion = $MsiVersion }
+Say "version $MsiVersion (agent reports $AgentVersion, git $describe, commit $commit)"
 
 # ---- verify restic -----------------------------------------------------------
 $got = (Get-FileHash -LiteralPath $ResticExe -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -110,7 +119,7 @@ try {
 if ($LASTEXITCODE -ne 0) { Die 4 'the Event Log message table did not compile (eventlog\build-messages.ps1)' }
 
 $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-$ldflags = "-s -w -X $Module/internal/buildinfo.Version=$describe -X $Module/internal/buildinfo.Commit=$commit -X $Module/internal/buildinfo.Date=$date -X $Module/internal/agent.PinnedResticSHA256=$($pin.exe_sha256)"
+$ldflags = "-s -w -X $Module/internal/buildinfo.Version=$AgentVersion -X $Module/internal/buildinfo.Commit=$commit -X $Module/internal/buildinfo.Date=$date -X $Module/internal/agent.PinnedResticSHA256=$($pin.exe_sha256)"
 $saved = @{ GOOS = $env:GOOS; GOARCH = $env:GOARCH; CGO_ENABLED = $env:CGO_ENABLED }
 $env:GOOS = 'windows'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
 Push-Location $RepoRoot

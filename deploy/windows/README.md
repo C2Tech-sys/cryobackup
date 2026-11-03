@@ -117,6 +117,17 @@ msiexec /x cryobackup-agent.msi /qn /l*v C:\Windows\Temp\cryobackup-remove.log
 | `CRYO_INSECURE_LAB=1` | Lab only. It allows an `http://` SERVER and turns off TLS verification. The agent warns about it on every start. |
 | `CRYO_REPAIR_ACL=1` | If the existing state directory is untrusted, move it aside to `<name>.quarantine-…` and start fresh, as `cryo-agent install --repair-acl` does. The device must then be enrolled again. If the install fails after the move, see **Rollback**. |
 
+**Enrollment retries.** A console that is busy (HTTP 429: it admits one enrollment per token at a time, so an RMM that pushes the MSI to a whole site at once gets the machines in a queue), temporarily unavailable (503, 502, 504) or not answering (a network error or timeout) is retried for up to 3 minutes, honouring the console's `Retry-After`, with the same enrollment nonce every time, so a retry never creates a second device. Each retry is a line in the MSI log (the status and the wait: no token, no path). A refusal a retry cannot change (a wrong or used token, a bad request, a TLS or pin failure) fails at once. `CRYO_ENROLL_RETRY_SECONDS` changes the budget, for `cryo-agent msi-configure` and `cryo-agent enroll`:
+
+| `CRYO_ENROLL_RETRY_SECONDS` | Effect |
+|---|---|
+| unset | 3 minutes (the default) |
+| `0` | one attempt, no retry (a console that is deliberately unreachable: tests, CI) |
+| `1` to `600` | that many seconds |
+| anything else | ignored, with a warning on stderr; the default applies |
+
+The install's configure action runs inside the Windows Installer service, which does not see the environment of the shell that started `msiexec`. To change the budget for an MSI install, set the variable in the service's own environment (a `REG_MULTI_SZ` value `Environment` under `HKLM\SYSTEM\CurrentControlSet\Services\msiserver`, then restart the service); `deploy/windows/ci/smoke.ps1` does this for its deliberately failing installs. For `cryo-agent enroll` it is an ordinary environment variable of that process.
+
 The token on an `msiexec` command line can be read by administrators while msiexec runs. The RMM wrapper avoids that: it calls the Windows Installer API in-process, so the token is on no command line at all. For a device that is already installed but not enrolled, the wrapper writes the token to the stdin of `cryo-agent.exe msi-configure`, the same channel the MSI uses; the wrapper never puts it in an environment variable or a file. If the RMM hands the token to the script in `CRYO_ENROLL_TOKEN` (instead of a script variable), that environment variable is the RMM's; the wrapper reads it once and clears it before it starts any child process.
 
 ```powershell

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -53,6 +54,20 @@ type EnrollOptions struct {
 	Clock func() time.Time
 	// HTTPClient replaces the built client (tests).
 	HTTPClient *http.Client
+	// Log, when set, receives one line per enrollment retry (the uplink error's
+	// fixed vocabulary and the wait: no path, no token). Callers give it their
+	// stderr, which the MSI log captures.
+	Log io.Writer
+
+	// RetryBudget bounds the time Enroll spends retrying answers that mean "try
+	// again later" (enroll_retry.go): zero means EnrollRetryBudget (3 minutes),
+	// negative means a single attempt. The commands set it from
+	// CRYO_ENROLL_RETRY_SECONDS.
+	RetryBudget time.Duration
+
+	// Test seams for the retry loop: the sleep and the random source.
+	sleep func(context.Context, time.Duration) error
+	rand  func() float64
 }
 
 // EnrollResult summarises a successful enrollment (nothing secret).
@@ -84,6 +99,8 @@ type EnrollResult struct {
 // agent.json (written last, so a device id means a complete enrollment). A
 // retry after a lost response reuses the nonce; the console then issues a
 // fresh device token and revokes the earlier one, and the latest response wins.
+// Enroll itself retries the answers that mean "try again later" (enroll_retry.go),
+// each with that same nonce.
 func Enroll(ctx context.Context, o EnrollOptions) (EnrollResult, error) {
 	var res EnrollResult
 	if o.StateDir == "" {
@@ -150,7 +167,11 @@ func Enroll(ctx context.Context, o EnrollOptions) (EnrollResult, error) {
 		DeviceClass: h.Class, HWFingerprint: h.HWFingerprint, AgentVersion: buildinfo.Version,
 		ResticVersion: supervisor.PinnedVersion,
 	}
-	resp, err := client.Enroll(ctx, o.Token, req)
+	// Answers that mean "try again later" (429, 503, 502/504, transport
+	// failures) are retried for a bounded time with the same request, nonce
+	// included (enroll_retry.go).
+	resp, err := enrollRetrier{budget: o.RetryBudget, clock: clock, sleep: o.sleep, rand: o.rand, log: o.Log}.call(ctx,
+		func(ctx context.Context) (api.EnrollResponse, error) { return client.Enroll(ctx, o.Token, req) })
 	if err != nil {
 		return res, err
 	}
