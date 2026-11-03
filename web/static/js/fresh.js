@@ -163,6 +163,7 @@
     });
   }
   window.cryoFresh = {
+    tipPlace: function () { return tipPlace.apply(null, arguments); },
     live: function () { return live; },
     isStale: function () { return stale; },
     forceStale: function (on) { forced = !!on; if (!on) { last = Date.now(); setStale(false); } else setStale(true, 'age'); },
@@ -226,6 +227,32 @@
   });
   document.addEventListener('mouseout', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) tw.removeAttribute('data-tip-off'); });
   document.addEventListener('focusout', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) tw.removeAttribute('data-tip-off'); });
+
+  /* ---- tooltips above their container (M2-FIX-C, F10) ----
+     A .tip is position:absolute inside its .tipwrap, so inside a table's overflow box it was clipped and made
+     the box scroll. On hover or focus the tip is placed with position:fixed from the chip's on-screen
+     rectangle: fixed boxes are not clipped by an overflow ancestor and add nothing to its scroll size. Without
+     script the tip keeps the absolute placement. tipPlace is pure so the simulation can test it. */
+  function tipPlace(a, w, h, vw, vh, right) {
+    var m = 8, gap = 6;
+    var left = right ? a.right - w : a.left;
+    left = Math.max(m, Math.min(left, vw - w - m));
+    var top = a.bottom + gap;
+    if (top + h > vh - m && a.top - gap - h >= m) top = a.top - gap - h; /* no room below: open above */
+    return { left: left, top: top };
+  }
+  var tipOpen = null;
+  function placeTip(tw) {
+    var tip = tw && tw.querySelector ? tw.querySelector('.tip') : null; if (!tip) return;
+    var a = tw.getBoundingClientRect(), r = tip.getBoundingClientRect();
+    var p = tipPlace(a, r.width, r.height, document.documentElement.clientWidth, document.documentElement.clientHeight, tw.classList.contains('right'));
+    tip.style.position = 'fixed'; tip.style.right = 'auto'; tip.style.left = p.left + 'px'; tip.style.top = p.top + 'px';
+    tipOpen = tw;
+  }
+  document.addEventListener('mouseover', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) placeTip(tw); });
+  document.addEventListener('focusin', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) placeTip(tw); });
+  window.addEventListener('scroll', function () { if (tipOpen && tipOpen.isConnected) placeTip(tipOpen); }, true);
+  window.addEventListener('resize', function () { if (tipOpen && tipOpen.isConnected) placeTip(tipOpen); });
 
   /* ---- toasts (HX-Trigger: {"toast": {"level": "...", "text": "..."}}) ---- */
   document.body.addEventListener('toast', function (e) {

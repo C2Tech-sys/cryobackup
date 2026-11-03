@@ -80,6 +80,7 @@ function run(name, steps) {
     es: () => streams[streams.length - 1],
     streams: () => streams.length,
     stale: () => ctx.cryoFresh.isStale(),
+    tipPlace: (...a) => ctx.cryoFresh.tipPlace(...a),
     word: () => stampKids['.word'].textContent,
     state: () => stampAttrs['data-state'],
     fireWin: (n, ev) => (winListeners[n] || []).forEach((f) => f(ev || {})),
@@ -183,4 +184,27 @@ run('a page restored from the back-forward cache reconnects', (s) => {
   s.es().emit('error');
   s.advance(35000);
   s.expect(s.stale(), 'a real outage after a restore must still show');
+});
+
+// F10: tooltip placement. The chip's rectangle is in viewport pixels; the tip is placed with position:fixed.
+run('a tooltip opens below its chip, left-aligned', (s) => {
+  const p = s.tipPlace({ left: 100, right: 180, top: 200, bottom: 224 }, 200, 48, 1360, 800, false);
+  s.expect(p.left === 100 && p.top === 230, 'got ' + JSON.stringify(p));
+});
+
+run('a tooltip near the bottom opens above its chip', (s) => {
+  const p = s.tipPlace({ left: 100, right: 180, top: 760, bottom: 784 }, 200, 48, 1360, 800, false);
+  s.expect(p.top === 760 - 6 - 48, 'got ' + JSON.stringify(p));
+});
+
+run('a tooltip stays inside the viewport at phone width', (s) => {
+  const wide = s.tipPlace({ left: 300, right: 380, top: 100, bottom: 124 }, 320, 40, 390, 800, false);
+  s.expect(wide.left === 390 - 320 - 8, 'right edge not clamped: ' + JSON.stringify(wide));
+  const edge = s.tipPlace({ left: 2, right: 40, top: 100, bottom: 124 }, 320, 40, 390, 800, true);
+  s.expect(edge.left === 8, 'left edge not clamped: ' + JSON.stringify(edge));
+});
+
+run('a right-aligned tooltip ends at the right edge of its chip', (s) => {
+  const p = s.tipPlace({ left: 1000, right: 1060, top: 100, bottom: 120 }, 200, 30, 1360, 800, true);
+  s.expect(p.left === 860, 'got ' + JSON.stringify(p));
 });
