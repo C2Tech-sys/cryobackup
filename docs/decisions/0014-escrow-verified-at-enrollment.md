@@ -29,7 +29,12 @@ not exist yet.
   else (storage unreachable, a timeout, a busy worker) records only the attempt, so the device stays "never
   verified". A key verified once is not checked again by this path. No migration backfills `verified_at`: the
   only trace of the earlier check is the `agent.enroll` audit row, which says the enrollment finished but not
-  which key opened which repository, and a real check costs one cat config per device, once.
+  which key opened which repository, and a real check costs one cat config per device, once. Each pass starts at
+  most 5 such checks, never-attempted keys first, and none after 2 minutes, so a fleet of never-verified devices
+  or an unreachable storage endpoint cannot hold the pass past the scheduler lease.
+- **Related (same fix batch, finding F9, not an escrow matter):** while a device has an open identity conflict,
+  its heartbeat limit is 4 per 20 s instead of 1, so a cloned pair sharing one device token is not refused
+  (ADR 0011: detection never locks anyone out). See `internal/console/agentapi` doc.go.
 
 ## Consequences
 

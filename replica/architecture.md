@@ -531,7 +531,7 @@ Layout: `internal/state/classify_test.go` (A, B), `fleet_test.go` (C), `rollup_t
 | B34 | escrow_unverified_after_grace | escrowed, never verified, 30 h after enroll | ESCROW_UNVERIFIED |
 | B35 | escrow_within_grace_ok | 2 h after enroll | OK |
 | B36 | escrow_customer_held_no_alarm | custody customer_held | OK + attribute customer-held |
-| B37 | escrow_recheck_overdue | verified 40 d ago, recheck 30 d | ESCROW_UNVERIFIED |
+| B37 | escrow_recheck_overdue | verified 40 d ago, recheck 30 d | ESCROW_UNVERIFIED (suspended until the M5 verification job by ADR 0014: OK while `state.EscrowRecheckEnforced` is false) |
 | B38 | identity_conflict_outranks_pending | conflict + pending first | IDENTITY_CONFLICT |
 | B39 | clock_skew_does_not_change_state | device clock +3 h, runs stored offset-corrected | state unchanged, attribute clock skew |
 | B40 | future_dated_success_clamped | finished_at beyond received_at | clamped; STALE computed from received_at |
@@ -991,7 +991,7 @@ Agents live behind customer NATs, so **per-IP limits would punish a whole office
 | --- | --- | --- |
 | `/enroll`, `/enroll/lobby*` (unauthenticated or token-gated) | 10 requests/min/IP; 1 in-flight per token; body <= 4 KiB | 429 + `Retry-After`; counted into the audit log (`agent.enroll.denied`) |
 | failed device-token authentications | 30/min/IP, then exponential block up to 15 min | 429; one audit row per block, not per request |
-| `/heartbeat` | 1 per 20 s per device | 429 + `Retry-After`; agent honours it |
+| `/heartbeat` | 1 per 20 s per device; up to 4 per 20 s while the device has an open identity conflict, so machines sharing its token are not refused (M2 lab F9; ADR 0014, `internal/console/agentapi` doc.go) | 429 + `Retry-After`; agent honours it |
 | `/runs` | 30/min per device, body <= 512 KiB | 429 |
 | `/snapshots` | 6/min per device, body <= 2 MiB | 429 |
 | `/progress` | 1 per 5 s per device | 429 |

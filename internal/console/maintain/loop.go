@@ -57,6 +57,9 @@ type CycleReport struct {
 	EscrowVerified int
 	// EscrowUnverified is the number of those verifications that did not succeed.
 	EscrowUnverified int
+	// EscrowDeferred is the number of due verifications left for a later pass
+	// by the per-pass bound (escrowVerifyPerPass, escrowVerifyBudget).
+	EscrowDeferred int
 	// ErrorClass is the dominant failure class (path-free), "" when none.
 	ErrorClass restic.ErrorClass
 }
@@ -147,6 +150,8 @@ func (w *Worker) RunOnce(ctx context.Context) (CycleReport, error) {
 		w.recordJob(ctx, "error", string(restic.ClassInternal), start)
 		return rep, w.storeErr(ctx, err)
 	}
+	// Never-verified escrowed keys first, bounded in count and time (verifyEscrows).
+	w.verifyEscrows(ctx, cands, &rep)
 	classes := make(restic.ErrorCounts)
 	for _, c := range cands {
 		if ctx.Err() != nil {
@@ -258,8 +263,8 @@ func (w *Worker) candidates(ctx context.Context) ([]candidate, error) {
 	return out, err
 }
 
-// step applies steps 1, 2 and 8 to one candidate, verifies a never-verified
-// escrowed key, and counts the M5 operations that are due.
+// step applies steps 1, 2 and 8 to one candidate and counts the M5 operations
+// that are due.
 func (w *Worker) step(ctx context.Context, c candidate, rep *CycleReport, classes restic.ErrorCounts) {
 	now := w.clock()
 	rep.Considered++
@@ -267,9 +272,6 @@ func (w *Worker) step(ctx context.Context, c candidate, rep *CycleReport, classe
 		if !n.Valid || n.Int64 <= now.UnixMilli() {
 			rep.M5Due++
 		}
-	}
-	if escrowVerifyDue(c, now) {
-		w.verifyEscrow(ctx, c.deviceID, rep)
 	}
 	usageDue := !c.lastUsageSample.Valid || now.Sub(time.UnixMilli(c.lastUsageSample.Int64)) >= w.cfg.UsageInterval
 	if !usageDue {
