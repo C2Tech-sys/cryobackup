@@ -164,7 +164,7 @@ App shell
   tokens    bg --bg, content ground = dot grid (radial-gradient of --accent at 9% over 22px, from tokens surface.content-ground) on the content area only, sidebar bg --surface with border-right --border, topbar bg --surface with hairline shadow (--accent at 22%)
   a11y      landmarks: <header>, <nav aria-label="Console navigation">, <main id="main">, skip link "Skip to content" as the first focusable element; banner strip region sits inside <main> before the h1 content
   used on   every console screen (S01 uses a bare centred shell with no sidebar)
-  notes     Order inside <main>: condition banners (sticky), page content. The freshness stamp lives in the topbar so it is on every page. Concept uses a 224px sidebar and tighter content padding; tokens (240px, 24px) govern.
+  notes     Order inside <main>: condition banners (in the flow, not sticky: ADR 0015), page content. The freshness stamp lives in the topbar so it is on every page. Concept uses a 224px sidebar and tighter content padding; tokens (240px, 24px) govern.
 ```
 
 ### 1.6 Sidebar navigation
@@ -373,7 +373,7 @@ Device state chip
 | 1 | RETIRED | `RETIRED` | `RETIRED . since 2 Oct` | neutral | none | "Retired. Excluded from rings and rollups." |
 | 2 | PAUSED | `PARKED` | `PARKED . until Fri 18:00` or `PARKED . indefinite` | neutral | none (suppresses 6-9, 10-11, 14-16) | `Parked by {user}: "{reason}". Retention still runs.` |
 | 3 | UNKNOWN | `UNKNOWN` | `UNKNOWN . facts unavailable` | crit, dashed border | critical | "Could not load this device's facts ({error class}). Counted as unhealthy until it loads." |
-| 4 | IDENTITY_CONFLICT | `IDENTITY CONFLICT` | none | crit | critical | "A second machine presented this device's identity. Resolve it to continue." |
+| 4 | IDENTITY_CONFLICT | `IDENTITY CONFLICT` | none | crit | critical | "A second machine presented this device's identity. Backups continue; resolve it to choose which machine keeps it." |
 | 5 | PENDING_FIRST | `PENDING FIRST` | `PENDING FIRST . 41h left` or `PENDING FIRST . 62%` while running | info | none | "Waiting for the first backup. Grace ends {T}. {n} attempts, last error class {class}." |
 | 6 | BLANK | `NEVER BACKED UP` | reason chip `never reported`, `no successful run` or `only failures` plus error class | crit | critical | "No successful backup since enrollment and the grace period ended {T}." |
 | 7 | STUCK | `STUCK` | `STUCK . running 76 h (limit 12 h)` | crit | critical | "The run has exceeded its limit. 100% done is not health." |
@@ -868,7 +868,7 @@ Freshness stamp
 Condition banner
   variants  console conditions C01 to C16 plus C04b (table below; C04, C04b and the agent half of C05 per ADR 0013), entity banners (MISSING customer, customer-wide silence), each at level critical or warn
   sizes     full width of the content area; padding 10px 12px; radius md; gap 10px; leading status chip md; body ui 13px; actions right-aligned sm buttons; one line at 900px and wider, wraps below
-  states    critical (crit class: --danger-soft background, 1px border --danger at 45%; sticky below the topbar so scrolling never hides it); warn (warn class; not sticky; collapsible to a one-line summary for the session, never removable); appearing (instant); updating (text refreshes in place); resolved (removed by the server on the next banner.update; no "dismissed" state exists); stacked (all critical banners render fully; if more than 3 are active the fourth onward collapse into "and N more critical conditions", a button that expands them inline, with the count always visible); stale (client adds C10)
+  states    critical (crit class: --danger-soft background, 1px border --danger at 45%; in the page flow, scrolls with the page; the sticky topbar pill carries loss of data at any scroll position: ADR 0015); warn (warn class; not sticky; collapsible to a one-line summary for the session, never removable); appearing (instant); updating (text refreshes in place); resolved (removed by the server on the next banner.update; no "dismissed" state exists); stacked (all critical banners render fully; if more than 3 are active the fourth onward collapse into "and N more critical conditions", a button that expands them inline, with the count always visible); stale (client adds C10)
   tokens    bg --danger-soft | --warning-soft, border 1px (--danger | --warning) at 45% via color-mix, text --text, bold subject weight 600, leading chip per Device state chip (crit or warn), "since hh:mm" meta-mono 11.5px --text-muted
   a11y      the strip is <section id="banners" aria-label="System conditions"> with a polite live region; a newly inserted critical banner carries role="alert" once; each banner is a list item with the level in words ("Critical: ..."); actions are links or buttons with names; collapse control is a <button aria-expanded>
   used on   every console screen (above page content); B01 B08 (entity banners)
