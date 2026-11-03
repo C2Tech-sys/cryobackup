@@ -29,8 +29,8 @@
         <span id="f-policy-now">{{range .Policies}}{{if .Selected}}{{.Label}}{{end}}{{end}}</span>
         <span class="help" id="f-policy-help">{{if .PolicyHref}}Change it on the <a href="{{.PolicyHref}}">Policy tab</a>, which shows the devices affected before anything is saved.{{else}}Changing the policy needs the admin role and the Policy tab.{{end}}</span></div>{{end}}
       <div class="field"><label for="f-tz">Display time zone <span class="muted">(optional)</span></label>
-        <input class="input mono" id="f-tz" name="display_tz" type="text" value="{{.TZ}}" placeholder="America/Chicago" autocomplete="off" spellcheck="false" aria-describedby="f-tz-help{{if .HasErr "display_tz"}} f-tz-err{{end}}"{{if .HasErr "display_tz"}} aria-invalid="true"{{end}}>
-        <span class="help" id="f-tz-help">An IANA zone name. Empty uses the console's zone.</span>{{with .Err "display_tz"}}<span class="err" id="f-tz-err">{{.}}</span>{{end}}</div>
+        <select class="input mono" id="f-tz" name="display_tz" aria-describedby="f-tz-help{{if .HasErr "display_tz"}} f-tz-err{{end}}"{{if .HasErr "display_tz"}} aria-invalid="true"{{end}}>{{template "zone_options" .ZoneGroups}}</select>
+        <span class="help" id="f-tz-help">Leave it on the console's zone unless this customer's times should show in another.</span>{{with .Err "display_tz"}}<span class="err" id="f-tz-err">{{.}}</span>{{end}}</div>
     </div>
     <fieldset class="plain stack contacts" aria-describedby="f-contacts-help"><legend class="lbl">Contacts <span class="muted">(optional)</span></legend>
       <span class="help" id="f-contacts-help">People to reach at this customer. Empty rows are ignored.</span>

@@ -8,14 +8,29 @@
    refresh interval, or the stream errored, the page says so (pill word "Polling" with
    "last hh:mm:ss", or "No data" with "since hh:mm:ss"; banner C10; "as of" markers on every
    live component). A page never
-   freezes looking fresh. */
+   freezes looking fresh.
+
+   A stream error alone is not an outage (M2-FIX-C, F13): the browser fires one when the page
+   navigates away, and a dropped connection often comes back within seconds. The stream must
+   stay down longer than DOWN_GRACE (two ping intervals; the server pings every 15 s) before the
+   page says "Live updates disconnected" / "No data", and an error caused by leaving the page
+   never counts. The grace governs while the stream is down whatever the refresh setting (the
+   2 x refresh rule never fires faster than two pings either). After the grace, a successful poll since the
+   drop means the data is current: the pill reads "Polling" (never "Live"), with no NO DATA and no banner;
+   with no poll, the page shows NO DATA and the banner. A stream event or reconnect clears the clock, and the
+   warning clears itself on recovery. */
 (function () {
   'use strict';
   var body = document.body;
   var refresh = Math.max(5, parseInt(body.getAttribute('data-refresh') || '30', 10));
   var eventsURL = body.getAttribute('data-events') || '';
   var zone = (document.getElementById('freshness') || body).getAttribute('data-zone') || undefined;
+  var PING = 15000, DOWN_GRACE = 2 * PING;
   var last = Date.now(), live = false, forced = false, dropped = false, stale = false, staleSince = '', es = null, retry = null;
+  var tipOpen = null; /* the .tipwrap whose tip is open (placed); null when none */
+  var downSince = 0, unloading = false; /* downSince: when the stream first errored and has not been heard from since (0 = up) */
+  var pollAt = 0, polling = false; /* pollAt: last successful poll; polling: stream down, but polls prove the data is current */
+  var STALE_AFTER = Math.max(2 * refresh * 1000, DOWN_GRACE); /* the stream's heartbeat is a ping every 15 s: never judge a quiet stream faster than two of them, whatever the refresh setting */
 
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function clock(d) {
@@ -63,7 +78,7 @@
     var s = stamp(); if (!s) return;
     var t = $('.t', s), at = t && t.getAttribute('data-at');
     if (at && at.charAt(0) !== '-') lastAt = at;
-    if (stale) paint(curState); else curState = s.getAttribute('data-state') || 'fresh';
+    if (stale || polling) paint(curState); else curState = s.getAttribute('data-state') || 'fresh';
   }
   function setStamp(state) { paint(state); }
   function renderC10() {
@@ -88,7 +103,13 @@
     });
   }
   function setStale(on, why) {
-    if (on === stale) { if (on) { renderC10(); markLive(); } return; }
+    if (on === stale) {
+      if (on) {
+        if (why === 'drop' && curState !== 'unreachable') { setStamp('unreachable'); } /* already stale for another reason: a real outage reads NO DATA */
+        renderC10(); markLive();
+      }
+      return;
+    }
     stale = on;
     if (on) {
       staleSince = clock(new Date()); setStamp(why === 'drop' ? 'unreachable' : 'stale');
@@ -102,19 +123,40 @@
     if (!window.htmx) return;
     $$('[data-poll]').forEach(function (el) { window.htmx.trigger(el, 'cryo:poll'); });
   }
+  /* Polling state: the stream is down but successful polls keep the data current. The pill must not claim
+     "Live" (it says "Polling" with the time of the last data) and no NO DATA stamp or banner is raised. */
+  function setPolling(on) {
+    if (on === polling) return;
+    polling = on;
+    if (on) paint('stale'); else if (!stale) setStamp('fresh');
+  }
+  /* mark: the stream spoke (event, ping, open). markPoll: a poll succeeded; that proves the data is current
+     but says nothing about the stream, so it does not clear the stream's down clock. */
   function mark() {
-    last = Date.now();
+    last = Date.now(); downSince = 0; setPolling(false);
+    if (stale && !forced && !dropped) { poll(); setStale(false); }
+  }
+  function markPoll() {
+    last = pollAt = Date.now();
     if (stale && !forced && !dropped) { poll(); setStale(false); }
   }
   setInterval(function () {
     if (!stamp()) return;
     if (forced || dropped) { setStale(true, dropped ? 'drop' : 'age'); return; }
-    if (Date.now() - last > 2 * refresh * 1000) setStale(true, 'age');
+    var now = Date.now();
+    if (downSince && !unloading) {
+      /* While the stream is down the grace governs, whatever the refresh interval: nothing is said until it has
+         been down DOWN_GRACE. After that, a recent successful poll means "Polling"; none means NO DATA. */
+      if (now - downSince <= DOWN_GRACE) return;
+      if (pollAt > downSince && now - pollAt <= STALE_AFTER) { if (stale) setStale(false); setPolling(true); return; }
+      setPolling(false); setStale(true, 'drop'); return;
+    }
+    if (now - last > STALE_AFTER) setStale(true, 'age');
   }, 1000);
   setInterval(function () { if (!live && !forced) poll(); }, refresh * 1000);
   document.addEventListener('htmx:afterRequest', function (e) {
     var el = e.detail && e.detail.elt;
-    if (el && el.hasAttribute && el.hasAttribute('data-poll') && e.detail.successful) mark();
+    if (el && el.hasAttribute && el.hasAttribute('data-poll') && e.detail.successful) markPoll();
   });
   document.addEventListener('htmx:afterSwap', function () { syncStamp(); applyGroups(); renderC10(); markLive(); });
 
@@ -135,23 +177,25 @@
       lastAt = j.at;
       var t = $('.t', s); if (t) t.setAttribute('data-at', j.at);
       setAgents(j.n, j.m);
-      if (!stale) setStamp(j.n < j.m ? 'partial' : 'fresh'); else paint(curState);
+      if (!stale && !polling) setStamp(j.n < j.m ? 'partial' : 'fresh'); else paint(curState);
     } catch (e) { /* ignore a malformed stamp */ }
   }
   function connect() {
     if (!eventsURL || !window.EventSource || dropped) return;
     if (es) { es.close(); }
     es = new EventSource(eventsURL);
-    es.addEventListener('open', function () { live = true; last = Date.now(); if (stale && !forced) { poll(); setStale(false); } });
+    es.addEventListener('open', function () { live = true; last = Date.now(); downSince = 0; setPolling(false); if (stale && !forced) { poll(); setStale(false); } });
     ['fleet.state', 'run.progress', 'banner.update'].forEach(function (n) { es.addEventListener(n, function (e) { mark(); swap(e.data); }); });
     es.addEventListener('freshness', function (e) { mark(); onFresh(e.data); });
     es.addEventListener('ping', function () { mark(); });
     es.addEventListener('error', function () {
-      live = false; setStale(true, 'drop');
+      if (unloading) return; /* the browser errors every open stream when the page is left */
+      live = false; if (!downSince) { downSince = Date.now(); poll(); } /* ask once now: a poll that works means the console is up and only the stream broke */
       if (es && es.readyState === 2 && !dropped) { clearTimeout(retry); retry = setTimeout(connect, 3000); }
     });
   }
   window.cryoFresh = {
+    tipPlace: function () { return tipPlace.apply(null, arguments); },
     live: function () { return live; },
     isStale: function () { return stale; },
     forceStale: function (on) { forced = !!on; if (!on) { last = Date.now(); setStale(false); } else setStale(true, 'age'); },
@@ -161,6 +205,10 @@
       else { connect(); last = Date.now(); }
     }
   };
+  /* Leaving the page: stop the stream quietly. A page restored from the back/forward cache starts it again. */
+  window.addEventListener('pagehide', function () { unloading = true; clearTimeout(retry); if (es) es.close(); });
+  /* No beforeunload hook: a download response fires it and the page stays, which would silence real outages. */
+  window.addEventListener('pageshow', function (e) { if (e && e.persisted) { unloading = false; downSince = 0; last = Date.now(); setPolling(false); connect(); } });
   syncStamp();
   connect();
 
@@ -207,10 +255,36 @@
     if (e.key !== 'Escape') return;
     if (body.getAttribute('data-drawer') === 'open') { setDrawer(false); var mb = $('.menu-btn'); if (mb) mb.focus(); return; }
     var tw = document.activeElement && document.activeElement.closest && document.activeElement.closest('.tipwrap');
-    if (tw) tw.setAttribute('data-tip-off', '');
+    if (tw) { tw.setAttribute('data-tip-off', ''); if (tipOpen === tw) tipOpen = null; }
   });
-  document.addEventListener('mouseout', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) tw.removeAttribute('data-tip-off'); });
-  document.addEventListener('focusout', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) tw.removeAttribute('data-tip-off'); });
+  function tipClosed(tw) { tw.removeAttribute('data-tip-off'); if (tipOpen === tw) tipOpen = null; } /* a closed tip is not tracked: scrolling costs nothing again */
+  document.addEventListener('mouseout', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) tipClosed(tw); });
+  document.addEventListener('focusout', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) tipClosed(tw); });
+
+  /* ---- tooltips above their container (M2-FIX-C, F10) ----
+     A .tip is position:absolute inside its .tipwrap, so inside a table's overflow box it was clipped and made
+     the box scroll. On hover or focus the tip is placed with position:fixed from the chip's on-screen
+     rectangle: fixed boxes are not clipped by an overflow ancestor and add nothing to its scroll size. Without
+     script the tip keeps the absolute placement. tipPlace is pure so the simulation can test it. */
+  function tipPlace(a, w, h, vw, vh, right) {
+    var m = 8, gap = 6;
+    var left = right ? a.right - w : a.left;
+    left = Math.max(m, Math.min(left, vw - w - m));
+    var top = a.bottom + gap;
+    if (top + h > vh - m && a.top - gap - h >= m) top = a.top - gap - h; /* no room below: open above */
+    return { left: left, top: top };
+  }
+  function placeTip(tw) {
+    var tip = tw && tw.querySelector ? tw.querySelector('.tip') : null; if (!tip) return;
+    var a = tw.getBoundingClientRect(), r = tip.getBoundingClientRect();
+    var p = tipPlace(a, r.width, r.height, document.documentElement.clientWidth, document.documentElement.clientHeight, tw.classList.contains('right'));
+    tip.style.position = 'fixed'; tip.style.right = 'auto'; tip.style.left = p.left + 'px'; tip.style.top = p.top + 'px';
+    tipOpen = tw;
+  }
+  document.addEventListener('mouseover', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) placeTip(tw); });
+  document.addEventListener('focusin', function (e) { var tw = e.target.closest && e.target.closest('.tipwrap'); if (tw) placeTip(tw); });
+  window.addEventListener('scroll', function () { if (tipOpen && tipOpen.isConnected) placeTip(tipOpen); }, true);
+  window.addEventListener('resize', function () { if (tipOpen && tipOpen.isConnected) placeTip(tipOpen); });
 
   /* ---- toasts (HX-Trigger: {"toast": {"level": "...", "text": "..."}}) ---- */
   document.body.addEventListener('toast', function (e) {
