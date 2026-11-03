@@ -990,7 +990,7 @@ Agents live behind customer NATs, so **per-IP limits would punish a whole office
 
 | route class | limit | on exceed |
 | --- | --- | --- |
-| `/enroll`, `/enroll/lobby*` (unauthenticated or token-gated) | 10 requests/min/IP; 1 in-flight per token; body <= 4 KiB | 429 + `Retry-After`; counted into the audit log (`agent.enroll.denied`) |
+| `/enroll`, `/enroll/lobby*` (unauthenticated or token-gated) | 10 requests/min/IP; one enrollment at a time per token, later ones wait up to 20 s (M2-FIX-B1, F4); body <= 4 KiB | 429 + `Retry-After`; counted into the audit log (`agent.enroll.denied`) |
 | failed device-token authentications | 30/min/IP, then exponential block up to 15 min | 429; one audit row per block, not per request |
 | `/heartbeat` | 1 per 20 s per device; up to 4 per 20 s while the device has an open identity conflict, so machines sharing its token are not refused (M2 lab F9; ADR 0014, `internal/console/agentapi` doc.go) | 429 + `Retry-After`; agent honours it |
 | `/runs` | 30/min per device, body <= 512 KiB | 429 |
