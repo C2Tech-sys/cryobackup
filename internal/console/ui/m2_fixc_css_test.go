@@ -25,6 +25,15 @@ func mustMatchCSS(t *testing.T, name, css, pattern string) {
 	}
 }
 
+// F8: the banner strip takes space in the flow; nothing may scroll underneath it.
+func TestFixCBannerStripIsInTheFlow(t *testing.T) {
+	css := newEnv(t).appCSS(t)
+	mustMatchCSS(t, "F8 in flow", css, `\.banner-strip \{ position: static; \}`)
+	if regexp.MustCompile(`\.banner-strip \{[^}]*position: sticky`).MatchString(css) {
+		t.Error("F8: the banner strip must not be sticky (content scrolls under translucent banners)")
+	}
+}
+
 // F2: fields of one form row start on the same line.
 func TestFixCFormRowFieldsAlignAtTheTop(t *testing.T) {
 	css := newEnv(t).appCSS(t)

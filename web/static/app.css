@@ -246,7 +246,11 @@ html.reduce-motion .fresh .dot { box-shadow: none; }
 .banner .act { margin-left: auto; display: flex; gap: 6px; }
 .banner.dense { padding: 8px 10px; }
 .banner .b-text { flex: 1; min-width: 200px; }
-.banner-strip { position: sticky; top: var(--layout-header); z-index: 15; }
+/* M2-FIX-C (F8): the strip takes its own space in the flow above the page content and scrolls with it. It used to be
+   sticky under the topbar; the banner backgrounds are translucent, so the content scrolled visibly underneath, the
+   sticky toolbar of the device list hid beneath it, and three critical banners at phone width could cover half the
+   screen. The freshness pill in the sticky topbar still shows a lost feed wherever the page is scrolled. */
+.banner-strip { position: static; }
 .banner-strip:empty { display: none; }
 .banner-strip .banners > li.warn-item { position: static; }
 details.more-banners > summary { cursor: pointer; font: 600 12.5px/1 var(--font-sans); color: var(--danger); padding: 6px 2px; min-height: 32px; display: flex; align-items: center; }
