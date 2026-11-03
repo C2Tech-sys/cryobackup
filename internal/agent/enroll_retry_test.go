@@ -344,7 +344,7 @@ func TestEnrollRetriesCanBeDisabled(t *testing.T) {
 	front := newEnrollFront(t, fc, true, enrollAnswer{status: 429, code: api.CodeRateLimited, retryAfter: 1})
 	clk := newRetryClock()
 	o, _ := retryOpts(t, front.srv.URL, clk, nil)
-	o.retryBudget = -1
+	o.RetryBudget = -1
 	if _, err := Enroll(context.Background(), o); err == nil {
 		t.Fatal("Enroll succeeded")
 	}

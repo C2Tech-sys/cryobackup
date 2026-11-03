@@ -62,7 +62,7 @@ func TestEnrollStoresEverythingAndRetriesWithTheSameNonce(t *testing.T) {
 	opts := EnrollOptions{
 		StateDir: dir, ServerURL: fc.URL(), Token: testEnrollToken, InsecureLab: true, InsecurePlaintextSecrets: plainSecrets(),
 		AllowUnprotectedState: true,
-		retryBudget:           -1, // this test drives the retry itself, across two calls; enroll_retry_test.go covers the in-call retry
+		RetryBudget:           -1, // this test drives the retry itself, across two calls; enroll_retry_test.go covers the in-call retry
 	}
 	layout := config.Layout{Root: dir}
 

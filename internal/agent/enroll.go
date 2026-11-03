@@ -59,12 +59,15 @@ type EnrollOptions struct {
 	// stderr, which the MSI log captures.
 	Log io.Writer
 
-	// Test seams for the retry loop (enroll_retry.go): the total budget (zero
-	// means EnrollRetryBudget, negative disables retries), the sleep and the
-	// random source.
-	retryBudget time.Duration
-	sleep       func(context.Context, time.Duration) error
-	rand        func() float64
+	// RetryBudget bounds the time Enroll spends retrying answers that mean "try
+	// again later" (enroll_retry.go): zero means EnrollRetryBudget (3 minutes),
+	// negative means a single attempt. The commands set it from
+	// CRYO_ENROLL_RETRY_SECONDS.
+	RetryBudget time.Duration
+
+	// Test seams for the retry loop: the sleep and the random source.
+	sleep func(context.Context, time.Duration) error
+	rand  func() float64
 }
 
 // EnrollResult summarises a successful enrollment (nothing secret).
@@ -167,7 +170,7 @@ func Enroll(ctx context.Context, o EnrollOptions) (EnrollResult, error) {
 	// Answers that mean "try again later" (429, 503, 502/504, transport
 	// failures) are retried for a bounded time with the same request, nonce
 	// included (enroll_retry.go).
-	resp, err := enrollRetrier{budget: o.retryBudget, clock: clock, sleep: o.sleep, rand: o.rand, log: o.Log}.call(ctx,
+	resp, err := enrollRetrier{budget: o.RetryBudget, clock: clock, sleep: o.sleep, rand: o.rand, log: o.Log}.call(ctx,
 		func(ctx context.Context) (api.EnrollResponse, error) { return client.Enroll(ctx, o.Token, req) })
 	if err != nil {
 		return res, err

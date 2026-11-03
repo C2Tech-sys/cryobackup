@@ -87,6 +87,31 @@ function CheckRemoved($label) {
     Check ((Installed).Count -eq 0) "$label - no CryoBackup product registered"
 }
 
+# The configure action runs "cryo-agent msi-configure" inside the Windows
+# Installer service, which does not see this script's environment. Enrollment
+# retries a busy or unreachable console for 3 minutes by default; the steps that
+# deliberately point SERVER at a closed port (1 and 4b) would each wait that
+# out, so they set CRYO_ENROLL_RETRY_SECONDS=0 (one attempt) in the service's
+# own environment (HKLM\...\Services\msiserver\Environment, applied when the
+# service starts) and restart the service around them. Best effort: if the
+# service cannot be restarted the steps still pass, only slower.
+$MsiServiceKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\msiserver'
+function Set-MsiServiceEnv($seconds) {
+    try {
+        if ($null -eq $seconds) {
+            Remove-ItemProperty -LiteralPath $MsiServiceKey -Name Environment -ErrorAction SilentlyContinue
+        } else {
+            New-ItemProperty -LiteralPath $MsiServiceKey -Name Environment -PropertyType MultiString `
+                -Value @("CRYO_ENROLL_RETRY_SECONDS=$seconds") -Force -ErrorAction Stop | Out-Null
+        }
+        $svc = Get-Service -Name msiserver -ErrorAction Stop
+        if ($svc.Status -ne 'Stopped') {
+            Stop-Service -Name msiserver -Force -ErrorAction Stop
+            $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
+        }
+    } catch { Say "could not set the Windows Installer service environment ($($_.Exception.Message)); the next step may be slow" }
+}
+
 # ---- discovery ---------------------------------------------------------------
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Say 'must run elevated'; exit 1 }
@@ -104,7 +129,9 @@ $pin = Read-ResticPin (Join-Path $PSScriptRoot '..\restic.pin')
 Check ($LASTEXITCODE -eq 0) 'the RMM wrapper applies a higher four-part version, refuses a lower one and treats an equal one as current (wrapper-version.ps1)'
 
 # ---- 1: enrollment failure on a clean machine rolls everything back -----------
+Set-MsiServiceEnv 0
 $r = Invoke-Msi '01-enroll-fails' "/i `"$Msi1`" TOKEN=$BadToken SERVER=https://127.0.0.1:9"
+Set-MsiServiceEnv $null
 Check ($r.Code -eq 1603) "enroll failure fails the install (1603, got $($r.Code))"
 Check (LogHas $r 'error class: network') 'the log names the error class'
 Check (LogHas $r 'CryoBackup: cryo-agent msi-configure failed') 'the log says the configure action failed'
@@ -137,7 +164,9 @@ Check ([bool](Svc)) 'service still exists'
 
 # ---- 4b: a failed upgrade rolls back to the installed version -------------------
 # The enrollment fails after the old version was removed inside the transaction.
+Set-MsiServiceEnv 0
 $r = Invoke-Msi '04b-upgrade-fails' "/i `"$Msi2`" TOKEN=$BadToken SERVER=https://127.0.0.1:9"
+Set-MsiServiceEnv $null
 Check ($r.Code -eq 1603) "an upgrade whose enrollment fails is rolled back (1603, got $($r.Code))"
 $v = Installed
 Check ($v.Count -eq 1 -and $v[0] -eq '0.0.1') "0.0.1 is still the installed version (have: $($v -join ', '))"

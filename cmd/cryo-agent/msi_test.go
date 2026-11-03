@@ -250,6 +250,7 @@ func TestMSIStaleMarkerAndEarlyRefusalKeepState(t *testing.T) {
 // Every early exit of configure, followed by that run's rollback, leaves an
 // existing state directory (with a stale marker in it) untouched.
 func TestMSIEveryEarlyExitThenRollbackKeepsState(t *testing.T) {
+	t.Setenv(enrollRetryEnvVar, "0") // the unreachable-console case must not wait out the default 3-minute retry budget
 	for _, tc := range []struct {
 		name string
 		run  func(dir string) int
@@ -334,6 +335,7 @@ func TestMSIConfigureEnrolls(t *testing.T) {
 // in the output, never the token, and removes the state directory the install
 // created.
 func TestMSIConfigureEnrollFailure(t *testing.T) {
+	t.Setenv(enrollRetryEnvVar, "0") // the unreachable-console case must not wait out the default 3-minute retry budget
 	srv := msiConsole(t)
 	const wrong = "wrong-token-1b2c3d"
 	dir := filepath.Join(t.TempDir(), "state")
