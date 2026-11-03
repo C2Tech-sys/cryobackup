@@ -265,7 +265,7 @@ func reasonLine(ds state.DeviceState, c fmtCtx) string {
 		}
 		return "Could not load this device's facts (" + cl + "). Counted as unhealthy until it loads."
 	case state.StateIdentityConflict:
-		return "A second machine presented this device's identity. Resolve it to continue."
+		return "A second machine presented this device's identity. Backups continue; resolve it to choose which machine keeps it."
 	case state.StatePendingFirst:
 		s := "Waiting for the first backup."
 		if !d.GraceDeadline.IsZero() {

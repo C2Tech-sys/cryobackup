@@ -30,7 +30,7 @@
 
 {{/* dev_identity: the identity-conflict banner with the resolve control (critical, never dismissible). */}}
 {{define "dev_identity"}}<section class="banner crit idc" role="alert" aria-labelledby="idc-h"><i class="g g-crit" aria-hidden="true"></i>
-  <div class="b-text"><b id="idc-h">Resolve this identity conflict.</b> Two machines have used this device's identity (a clone or a restored image), flagged <time datetime="{{.ISO}}">{{.Since}}</time>. Keep the identity if you know why; retire it to lock both machines out and enroll the real one again.</div>
+  <div class="b-text"><b id="idc-h">Resolve this identity conflict.</b> Two machines have used this device's identity (a clone or a restored image), flagged <time datetime="{{.ISO}}">{{.Since}}</time>. Backups continue while this stands. Keep the identity if you know why; retire it to lock both machines out and enroll the real one again.</div>
   <div class="act">
   {{- if .CanResolve}}
     <details class="rowmenu"><summary class="btn sm danger">Resolve conflict…</summary>
