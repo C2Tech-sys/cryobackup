@@ -153,6 +153,13 @@ commands:
                                 quarantine). While the verdict exists every start refuses.
   version    print the build stamp
 
+environment:
+  CRYO_ENROLL_TOKEN           enrollment token for "enroll" (instead of --token / --token-file)
+  CRYO_ENROLL_RETRY_SECONDS   how long "enroll" and the MSI's msi-configure retry a busy or unreachable
+                              console (429, 503, 502, 504, network errors): unset = 180 (3 minutes),
+                              0 = a single attempt, 1 to 600 = that many seconds; other values are
+                              ignored with a warning
+
 exit codes: 0 ok, 2 usage, 3 not implemented, 4 configuration or state error, 5 console unreachable or refused
 `)
 }

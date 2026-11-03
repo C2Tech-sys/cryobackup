@@ -58,6 +58,7 @@ func TestEnrollUsageErrors(t *testing.T) {
 }
 
 func TestExitCodesForStateAndNetwork(t *testing.T) {
+	t.Setenv(enrollRetryEnvVar, "0") // the unreachable-console case below must not wait out the default 3-minute retry budget
 	dir := filepath.Join(t.TempDir(), "state")
 	// Not enrolled: status says so (exit 0), run and check-in refuse (exit 4).
 	if code, out, _ := do("status", "--state-dir", dir); code != exitOK || !strings.Contains(out, "enrolled:") || !strings.Contains(out, "no") {

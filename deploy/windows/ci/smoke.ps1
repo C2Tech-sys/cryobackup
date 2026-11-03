@@ -90,26 +90,49 @@ function CheckRemoved($label) {
 # The configure action runs "cryo-agent msi-configure" inside the Windows
 # Installer service, which does not see this script's environment. Enrollment
 # retries a busy or unreachable console for 3 minutes by default; the steps that
-# deliberately point SERVER at a closed port (1 and 4b) would each wait that
-# out, so they set CRYO_ENROLL_RETRY_SECONDS=0 (one attempt) in the service's
-# own environment (HKLM\...\Services\msiserver\Environment, applied when the
-# service starts) and restart the service around them. Best effort: if the
-# service cannot be restarted the steps still pass, only slower.
+# deliberately point SERVER at a closed port (1, 4b and 15b) would each wait that
+# out, so Invoke-MsiOneEnrollAttempt runs them with CRYO_ENROLL_RETRY_SECONDS=0
+# (one attempt) in the service's own environment (the REG_MULTI_SZ value
+# HKLM\...\Services\msiserver\Environment, applied when the service starts).
+# Any value the machine already had is saved and put back; the registry is
+# restored and the service stopped again in a finally block, so the 0 never
+# outlives its step. If the service cannot be stopped (so it might keep the 0),
+# or the saved value cannot be restored, the script fails loudly (exit 6).
 $MsiServiceKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\msiserver'
-function Set-MsiServiceEnv($seconds) {
+function Stop-MsiServer {
+    $svc = Get-Service -Name msiserver -ErrorAction Stop
+    if ($svc.Status -ne 'Stopped') {
+        Stop-Service -Name msiserver -Force -ErrorAction Stop
+        $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
+    }
+    if ((Get-Service -Name msiserver).Status -ne 'Stopped') { throw 'the Windows Installer service did not stop' }
+}
+function Invoke-MsiOneEnrollAttempt($name, $msiArgs) {
+    $r = $null
+    $failure = $null
+    $saved = $null
     try {
-        if ($null -eq $seconds) {
-            Remove-ItemProperty -LiteralPath $MsiServiceKey -Name Environment -ErrorAction SilentlyContinue
-        } else {
-            New-ItemProperty -LiteralPath $MsiServiceKey -Name Environment -PropertyType MultiString `
-                -Value @("CRYO_ENROLL_RETRY_SECONDS=$seconds") -Force -ErrorAction Stop | Out-Null
+        $saved = (Get-ItemProperty -LiteralPath $MsiServiceKey -Name Environment -ErrorAction SilentlyContinue).Environment
+        $mine = @(@($saved) | Where-Object { $_ -and $_ -notlike 'CRYO_ENROLL_RETRY_SECONDS=*' }) + 'CRYO_ENROLL_RETRY_SECONDS=0'
+        New-ItemProperty -LiteralPath $MsiServiceKey -Name Environment -PropertyType MultiString -Value $mine -Force -ErrorAction Stop | Out-Null
+        Stop-MsiServer
+        $r = Invoke-Msi $name $msiArgs
+    } catch {
+        $failure = "could not set up the one-attempt enrollment for $name ($($_.Exception.Message))"
+    } finally {
+        try {
+            if ($null -ne $saved) {
+                New-ItemProperty -LiteralPath $MsiServiceKey -Name Environment -PropertyType MultiString -Value @($saved) -Force -ErrorAction Stop | Out-Null
+            } else {
+                Remove-ItemProperty -LiteralPath $MsiServiceKey -Name Environment -ErrorAction SilentlyContinue
+            }
+            Stop-MsiServer
+        } catch {
+            $failure = "the Windows Installer service environment was not restored after $name ($($_.Exception.Message)); the service may still hold CRYO_ENROLL_RETRY_SECONDS=0"
         }
-        $svc = Get-Service -Name msiserver -ErrorAction Stop
-        if ($svc.Status -ne 'Stopped') {
-            Stop-Service -Name msiserver -Force -ErrorAction Stop
-            $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
-        }
-    } catch { Say "could not set the Windows Installer service environment ($($_.Exception.Message)); the next step may be slow" }
+    }
+    if ($failure) { Bad $failure; Say 'stopping: the machine state is not what the next steps expect'; exit 6 }
+    return $r
 }
 
 # ---- discovery ---------------------------------------------------------------
@@ -129,9 +152,7 @@ $pin = Read-ResticPin (Join-Path $PSScriptRoot '..\restic.pin')
 Check ($LASTEXITCODE -eq 0) 'the RMM wrapper applies a higher four-part version, refuses a lower one and treats an equal one as current (wrapper-version.ps1)'
 
 # ---- 1: enrollment failure on a clean machine rolls everything back -----------
-Set-MsiServiceEnv 0
-$r = Invoke-Msi '01-enroll-fails' "/i `"$Msi1`" TOKEN=$BadToken SERVER=https://127.0.0.1:9"
-Set-MsiServiceEnv $null
+$r = Invoke-MsiOneEnrollAttempt '01-enroll-fails' "/i `"$Msi1`" TOKEN=$BadToken SERVER=https://127.0.0.1:9"
 Check ($r.Code -eq 1603) "enroll failure fails the install (1603, got $($r.Code))"
 Check (LogHas $r 'error class: network') 'the log names the error class'
 Check (LogHas $r 'CryoBackup: cryo-agent msi-configure failed') 'the log says the configure action failed'
@@ -164,9 +185,7 @@ Check ([bool](Svc)) 'service still exists'
 
 # ---- 4b: a failed upgrade rolls back to the installed version -------------------
 # The enrollment fails after the old version was removed inside the transaction.
-Set-MsiServiceEnv 0
-$r = Invoke-Msi '04b-upgrade-fails' "/i `"$Msi2`" TOKEN=$BadToken SERVER=https://127.0.0.1:9"
-Set-MsiServiceEnv $null
+$r = Invoke-MsiOneEnrollAttempt '04b-upgrade-fails' "/i `"$Msi2`" TOKEN=$BadToken SERVER=https://127.0.0.1:9"
 Check ($r.Code -eq 1603) "an upgrade whose enrollment fails is rolled back (1603, got $($r.Code))"
 $v = Installed
 Check ($v.Count -eq 1 -and $v[0] -eq '0.0.1') "0.0.1 is still the installed version (have: $($v -join ', '))"
@@ -316,7 +335,7 @@ try {
     Check (LogHas $r 'refusing the state directory') 'the log says the state directory is refused'
     Check (-not (Svc)) 'no service after the refused install'
     Check (Test-Path -LiteralPath (Join-Path $StateDir 'planted.txt')) 'the refused directory is left as it was'
-    $r = Invoke-Msi '15b-repair-fails' "/i `"$Msi2`" CRYO_REPAIR_ACL=1 TOKEN=$BadToken SERVER=https://127.0.0.1:9"
+    $r = Invoke-MsiOneEnrollAttempt '15b-repair-fails' "/i `"$Msi2`" CRYO_REPAIR_ACL=1 TOKEN=$BadToken SERVER=https://127.0.0.1:9"
     Check ($r.Code -eq 1603) "a repair install whose enrollment fails is rolled back (1603, got $($r.Code))"
     Check (LogHas $r 'it stays there (the rollback does not move it back') 'the log says the quarantine stays and how to recover'
     $q = @(Get-ChildItem -LiteralPath $env:ProgramData -Directory -Filter 'CryoBackup.quarantine-*')
