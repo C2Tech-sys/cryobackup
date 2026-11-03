@@ -1,0 +1,2 @@
+{{/* zone_options: the <option>s of a time zone select (M2-FIX-C, F12). Data: []ui.ZoneGroup. A group without a label is rendered bare; the current value is always one of the options and is selected. */}}
+{{define "zone_options"}}{{range .}}{{if .Label}}<optgroup label="{{.Label}}">{{end}}{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}{{if .Label}}</optgroup>{{end}}{{end}}{{end}}

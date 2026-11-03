@@ -18,10 +18,9 @@
   {{template "acct_note" .FormErr}}
   <fieldset class="plainset"{{if not .CanEdit}} disabled{{end}}>
     <div class="field"><label for="set-zone">Display time zone</label>
-      <input class="input mono" id="set-zone" name="display_timezone" type="text" list="set-zones" value="{{.ZoneIn}}" autocomplete="off" spellcheck="false" maxlength="64"{{if .ZoneErr}} aria-invalid="true" aria-describedby="set-zone-help set-zone-err"{{else}} aria-describedby="set-zone-help"{{end}}>
-      <datalist id="set-zones">{{range .Zones}}<option value="{{.}}">{{end}}</datalist>
+      <select class="input mono" id="set-zone" name="display_timezone"{{if .ZoneErr}} aria-invalid="true" aria-describedby="set-zone-help set-zone-err"{{else}} aria-describedby="set-zone-help"{{end}}>{{template "zone_options" .ZoneGroups}}</select>
       {{with .ZoneErr}}<span class="err" id="set-zone-err">{{.}}</span>{{end}}
-      <span class="help" id="set-zone-help">An IANA zone name, for example America/Chicago. Every page and every API time uses it from the next request. Times stay stored in UTC. It is now {{.ZoneNow}} there.{{with .ZoneBy}} {{.}}.{{end}}</span></div>
+      <span class="help" id="set-zone-help">Pick the zone every page shows times in. Every page and every API time uses it from the next request. Times stay stored in UTC. It is now {{.ZoneNow}} there.{{with .ZoneBy}} {{.}}.{{end}}</span></div>
     <div class="field"><label for="set-refresh">Refresh interval <span class="muted">(seconds)</span></label>
       <input class="input mono" id="set-refresh" name="refresh_interval_s" type="text" inputmode="numeric" value="{{.RefreshIn}}" autocomplete="off" maxlength="5"{{if .RefreshErr}} aria-invalid="true" aria-describedby="set-refresh-help set-refresh-err"{{else}} aria-describedby="set-refresh-help"{{end}}>
       {{with .RefreshErr}}<span class="err" id="set-refresh-err">{{.}}</span>{{end}}
