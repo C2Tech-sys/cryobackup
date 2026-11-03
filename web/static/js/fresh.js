@@ -8,14 +8,23 @@
    refresh interval, or the stream errored, the page says so (pill word "Polling" with
    "last hh:mm:ss", or "No data" with "since hh:mm:ss"; banner C10; "as of" markers on every
    live component). A page never
-   freezes looking fresh. */
+   freezes looking fresh.
+
+   A stream error alone is not an outage (M2-FIX-C, F13): the browser fires one when the page
+   navigates away, and a dropped connection often comes back within seconds. The stream must
+   stay down longer than DOWN_GRACE (two ping intervals; the server pings every 15 s) before the
+   page says "Live updates disconnected" / "No data", and an error caused by leaving the page
+   never counts. Any event, a successful poll or a reconnect clears the clock, and the warning
+   clears itself on recovery. */
 (function () {
   'use strict';
   var body = document.body;
   var refresh = Math.max(5, parseInt(body.getAttribute('data-refresh') || '30', 10));
   var eventsURL = body.getAttribute('data-events') || '';
   var zone = (document.getElementById('freshness') || body).getAttribute('data-zone') || undefined;
+  var PING = 15000, DOWN_GRACE = 2 * PING;
   var last = Date.now(), live = false, forced = false, dropped = false, stale = false, staleSince = '', es = null, retry = null;
+  var downSince = 0, unloading = false; /* downSince: when the stream first errored and has not been heard from since (0 = up) */
 
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function clock(d) {
@@ -103,12 +112,13 @@
     $$('[data-poll]').forEach(function (el) { window.htmx.trigger(el, 'cryo:poll'); });
   }
   function mark() {
-    last = Date.now();
+    last = Date.now(); downSince = 0;
     if (stale && !forced && !dropped) { poll(); setStale(false); }
   }
   setInterval(function () {
     if (!stamp()) return;
     if (forced || dropped) { setStale(true, dropped ? 'drop' : 'age'); return; }
+    if (downSince && !unloading && Date.now() - downSince > DOWN_GRACE) { setStale(true, 'drop'); return; }
     if (Date.now() - last > 2 * refresh * 1000) setStale(true, 'age');
   }, 1000);
   setInterval(function () { if (!live && !forced) poll(); }, refresh * 1000);
@@ -142,12 +152,13 @@
     if (!eventsURL || !window.EventSource || dropped) return;
     if (es) { es.close(); }
     es = new EventSource(eventsURL);
-    es.addEventListener('open', function () { live = true; last = Date.now(); if (stale && !forced) { poll(); setStale(false); } });
+    es.addEventListener('open', function () { live = true; last = Date.now(); downSince = 0; if (stale && !forced) { poll(); setStale(false); } });
     ['fleet.state', 'run.progress', 'banner.update'].forEach(function (n) { es.addEventListener(n, function (e) { mark(); swap(e.data); }); });
     es.addEventListener('freshness', function (e) { mark(); onFresh(e.data); });
     es.addEventListener('ping', function () { mark(); });
     es.addEventListener('error', function () {
-      live = false; setStale(true, 'drop');
+      if (unloading) return; /* the browser errors every open stream when the page is left */
+      live = false; if (!downSince) downSince = Date.now();
       if (es && es.readyState === 2 && !dropped) { clearTimeout(retry); retry = setTimeout(connect, 3000); }
     });
   }
@@ -161,6 +172,10 @@
       else { connect(); last = Date.now(); }
     }
   };
+  /* Leaving the page: stop the stream quietly. A page restored from the back/forward cache starts it again. */
+  window.addEventListener('pagehide', function () { unloading = true; clearTimeout(retry); if (es) es.close(); });
+  /* No beforeunload hook: a download response fires it and the page stays, which would silence real outages. */
+  window.addEventListener('pageshow', function (e) { if (e && e.persisted) { unloading = false; downSince = 0; connect(); } });
   syncStamp();
   connect();
 

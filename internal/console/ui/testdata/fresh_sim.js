@@ -1,0 +1,186 @@
+// fresh_sim.js - drives web/static/js/fresh.js against a fake DOM, a fake clock and a fake
+// EventSource (M2-FIX-C, F13). Run by TestFixCFreshStreamGrace with: node fresh_sim.js <path to fresh.js>.
+// Prints one "ok <name>" line per scenario and exits 1 on the first failure. No dependencies.
+'use strict';
+const fs = require('fs');
+const vm = require('vm');
+
+const src = fs.readFileSync(process.argv[2], 'utf8');
+
+function run(name, steps) {
+  let now = 1000000000000;
+  const timers = [];
+  let nextId = 1;
+  class FakeDate extends Date {
+    constructor(...a) { if (a.length) super(...a); else super(now); }
+    static now() { return now; }
+  }
+  const stampAttrs = { 'data-state': 'fresh', 'data-zone': 'UTC' };
+  const stampKids = { '.word': { textContent: 'Live' }, '.t': { textContent: '1:00:00 PM', attrs: {}, getAttribute(k) { return this.attrs[k] || null; }, setAttribute(k, v) { this.attrs[k] = v; } } };
+  const stampEl = {
+    getAttribute: (k) => (k in stampAttrs ? stampAttrs[k] : null),
+    setAttribute: (k, v) => { stampAttrs[k] = v; },
+    querySelector: (sel) => stampKids[sel] || null,
+    querySelectorAll: () => [],
+    appendChild() {},
+  };
+  const bodyAttrs = { 'data-refresh': '30', 'data-events': '/ui/events' };
+  const body = {
+    getAttribute: (k) => (k in bodyAttrs ? bodyAttrs[k] : null),
+    setAttribute: (k, v) => { bodyAttrs[k] = v; },
+    appendChild() {},
+    closest: () => null,
+  };
+  const docAttrs = {};
+  const docListeners = {};
+  const document = {
+    body,
+    hidden: false,
+    documentElement: { setAttribute: (k, v) => { docAttrs[k] = v; }, removeAttribute: (k) => { delete docAttrs[k]; } },
+    getElementById: (id) => (id === 'freshness' ? stampEl : null),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: () => ({ setAttribute() {}, appendChild() {}, style: {}, classList: { contains: () => false } }),
+    addEventListener: (n, f) => { (docListeners[n] = docListeners[n] || []).push(f); },
+    activeElement: null,
+  };
+  body.addEventListener = document.addEventListener;
+  const winListeners = {};
+  const streams = [];
+  class FakeES {
+    constructor(url) { this.url = url; this.readyState = 0; this.l = {}; this.closed = false; streams.push(this); }
+    addEventListener(n, f) { (this.l[n] = this.l[n] || []).push(f); }
+    close() { this.closed = true; this.readyState = 2; }
+    emit(n, data) { (this.l[n] || []).forEach((f) => f({ data })); }
+  }
+  const ctx = {
+    document,
+    Date: FakeDate,
+    Intl,
+    JSON,
+    Math,
+    parseInt,
+    console,
+    Array,
+    Object,
+    sessionStorage: { getItem: () => null, setItem() {} },
+    EventSource: FakeES,
+    setInterval: (f, ms) => { timers.push({ id: nextId, f, every: ms, due: now + ms }); return nextId++; },
+    setTimeout: (f, ms) => { timers.push({ id: nextId, f, every: 0, due: now + ms }); return nextId++; },
+    clearTimeout: (id) => { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); },
+    clearInterval: (id) => { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); },
+  };
+  ctx.window = ctx;
+  ctx.cryoTheme = { get: () => 'dark', set() {} };
+  ctx.addEventListener = (n, f) => { (winListeners[n] = winListeners[n] || []).push(f); };
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx, { filename: 'fresh.js' });
+
+  const sim = {
+    es: () => streams[streams.length - 1],
+    streams: () => streams.length,
+    stale: () => ctx.cryoFresh.isStale(),
+    word: () => stampKids['.word'].textContent,
+    state: () => stampAttrs['data-state'],
+    fireWin: (n, ev) => (winListeners[n] || []).forEach((f) => f(ev || {})),
+    advance(ms) { // 100 ms steps keep timer order faithful
+      const end = now + ms;
+      while (now < end) {
+        now += 100;
+        for (const t of timers.slice()) {
+          if (t.due <= now) {
+            if (t.every) t.due += t.every; else timers.splice(timers.indexOf(t), 1);
+            t.f();
+          }
+        }
+      }
+    },
+    fail(msg) { console.error('FAIL ' + name + ': ' + msg); process.exit(1); },
+    expect(cond, msg) { if (!cond) this.fail(msg); },
+  };
+  steps(sim);
+  console.log('ok ' + name);
+}
+
+const open = (s) => { s.es().readyState = 1; s.es().emit('open'); };
+const drop = (s) => { s.es().readyState = 0; s.es().emit('error'); }; // the browser keeps retrying: CONNECTING
+
+run('a healthy stream is live', (s) => {
+  open(s);
+  s.advance(5000);
+  s.es().emit('ping');
+  s.expect(!s.stale(), 'stale on a healthy stream');
+});
+
+run('an error that reconnects within seconds shows nothing', (s) => {
+  open(s);
+  s.advance(5000);
+  drop(s);
+  s.advance(4000);
+  s.expect(!s.stale(), 'stale 4 s into a blip');
+  open(s);
+  s.advance(60000);
+  s.es().emit('ping');
+  s.expect(!s.stale(), 'stale after the blip recovered');
+  s.expect(s.state() === 'fresh', 'stamp is not fresh: ' + s.state());
+});
+
+run('an error during navigation is ignored', (s) => {
+  open(s);
+  s.advance(5000);
+  s.fireWin('pagehide', {});
+  s.expect(s.es().closed, 'pagehide must close the stream');
+  s.es().emit('error');
+  s.advance(50000); // past the grace, short of the 2 x refresh age rule
+  s.expect(!s.stale(), 'stale because the page was being left');
+});
+
+run('a real outage shows after two ping intervals, and only then', (s) => {
+  open(s);
+  s.advance(5000);
+  drop(s);
+  s.advance(25000);
+  s.expect(!s.stale(), 'stale before two ping intervals (25 s)');
+  s.advance(10000); // 35 s down
+  s.expect(s.stale(), 'not stale after 35 s down');
+  s.expect(s.word() === 'No data' && s.state() === 'unreachable', 'stamp says ' + s.word() + '/' + s.state());
+});
+
+run('repeated errors do not restart the clock', (s) => {
+  open(s);
+  drop(s);
+  for (let i = 0; i < 8; i++) { s.advance(4000); drop(s); } // EventSource retry errors every few seconds
+  s.expect(s.stale(), 'retry errors kept resetting the down clock');
+});
+
+run('recovery clears the warning by itself', (s) => {
+  open(s);
+  drop(s);
+  s.advance(40000);
+  s.expect(s.stale(), 'precondition: stale');
+  open(s);
+  s.expect(!s.stale(), 'still stale after the stream reopened');
+  s.advance(10000);
+  s.expect(!s.stale() && s.state() === 'fresh', 'did not stay clear: ' + s.state());
+});
+
+run('a closed stream is reopened after 3 s', (s) => {
+  open(s);
+  const n = s.streams();
+  s.es().readyState = 2;
+  s.es().emit('error');
+  s.advance(3500);
+  s.expect(s.streams() === n + 1, 'no reconnect attempt');
+});
+
+run('a page restored from the back-forward cache reconnects', (s) => {
+  open(s);
+  s.fireWin('pagehide', {});
+  const n = s.streams();
+  s.fireWin('pageshow', { persisted: true });
+  s.expect(s.streams() === n + 1, 'no new stream after pageshow');
+  open(s);
+  s.es().emit('error');
+  s.advance(35000);
+  s.expect(s.stale(), 'a real outage after a restore must still show');
+});
