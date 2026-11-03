@@ -20,6 +20,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
+	"github.com/c2tech-sys/cryobackup/internal/console/probe"
 	"github.com/c2tech-sys/cryobackup/internal/console/restores"
 	"github.com/c2tech-sys/cryobackup/internal/console/server"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
@@ -56,6 +57,8 @@ type App struct {
 	Admin    *adminapi.Service
 	UI       *ui.Service
 	Probe    *Probe
+	// Endpoint is the self-probe of the public agent endpoint (ADR 0013, banners C04, C05, C17).
+	Endpoint *probe.Prober
 	Htpasswd *jobs.HtpasswdSync
 	// Display is the live display zone and refresh interval (M2-W3A) shared by the UI and the API.
 	Display *store.DisplayPrefs
@@ -168,7 +171,8 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	a.Display = disp
 
 	a.Probe = NewProbe(a.Backend, a.clock, fix)
-	fleet := &health.Evaluator{Store: a.Store, Clock: a.clock, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status}
+	a.Endpoint = newEndpointProbe(cfg, a.clock, a.log)
+	fleet := &health.Evaluator{Store: a.Store, Clock: a.clock, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status, Endpoint: a.Endpoint.Status}
 	idle := time.Duration(cfg.Session.IdleH) * time.Hour
 	abs := time.Duration(cfg.Session.AbsoluteH) * time.Hour
 	a.Auth = auth.NewManager(a.Store, idle, abs, cfg.RateLimits.LoginPerMinPerIP, cfg.RateLimits.LoginLockAfter,
@@ -236,9 +240,10 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); a.Hub.Run(ctx) }()
 	go func() { defer wg.Done(); a.Probe.Run(ctx) }()
+	go func() { defer wg.Done(); a.Endpoint.Run(ctx) }() // after Listen: the first probe meets a bound listener
 	a.Runner.Start(ctx)
 	err := a.Server.Serve(ctx)
 	a.Runner.Stop()

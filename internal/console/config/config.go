@@ -71,6 +71,23 @@ type RestoreStream struct {
 	FirstByteS int `json:"first_byte_s"`
 }
 
+// AgentProbe tunes the console's self-probe of its own public agent endpoint
+// (ADR 0013): every IntervalS seconds (default 180, 30 to 3600) the console
+// resolves the public_url host, connects, verifies TLS and the certificate and
+// checks that the answer is this console's agent API, the way an agent would.
+// CAFile is an optional PEM bundle of extra roots for a deployment whose agent
+// certificate comes from a private CA (empty: the system roots).
+// ConnectAddress is an optional host:port dialled instead of the resolved
+// addresses, for a console behind NAT that cannot reach its own public
+// address (no hairpin); DNS, TLS and the host name are still checked against
+// public_url. With public_url unset the probe does not run and the console
+// shows a warning saying so.
+type AgentProbe struct {
+	IntervalS      int    `json:"interval_s"`
+	CAFile         string `json:"ca_file"`
+	ConnectAddress string `json:"connect_address"`
+}
+
 // SMTP is accepted and validated in M0 but not used until M4. The password is
 // never in this file: password_file names a mounted file.
 type SMTP struct {
@@ -108,6 +125,7 @@ type Config struct {
 	RateLimits       RateLimits    `json:"rate_limits"`
 	RestoreStream    RestoreStream `json:"restore_stream"`
 	SMTP             SMTP          `json:"smtp"`
+	AgentProbe       AgentProbe    `json:"agent_probe"`
 	Fixtures         bool          `json:"fixtures"`
 }
 
@@ -139,6 +157,7 @@ func Default() Config {
 		},
 		RestoreStream: RestoreStream{MinBytes: 64 << 10, WindowS: 120, FirstByteS: 300},
 		SMTP:          SMTP{Security: "starttls"},
+		AgentProbe:    AgentProbe{IntervalS: 180},
 	}
 }
 
@@ -384,6 +403,15 @@ func (c Config) Validate() error {
 	}
 	if c.RestoreStream.FirstByteS < 10 || c.RestoreStream.FirstByteS > 3600 {
 		add("restore_stream.first_byte_s must be between 10 and 3600")
+	}
+	if c.AgentProbe.IntervalS < 30 || c.AgentProbe.IntervalS > 3600 {
+		add("agent_probe.interval_s must be between 30 and 3600")
+	}
+	if a := c.AgentProbe.ConnectAddress; a != "" {
+		h, p, err := net.SplitHostPort(a)
+		if n, perr := strconv.Atoi(p); err != nil || h == "" || perr != nil || n < 1 || n > 65535 {
+			add("agent_probe.connect_address must be host:port")
+		}
 	}
 	if c.SMTP.Host != "" {
 		if c.SMTP.Port < 1 || c.SMTP.Port > 65535 {

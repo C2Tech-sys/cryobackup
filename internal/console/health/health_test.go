@@ -78,17 +78,17 @@ func TestConsoleBanners(t *testing.T) {
 		t.Fatalf("unprobed worker must raise nothing: %s", ids(f.View.Banners))
 	}
 
-	// Twenty minutes of silence from every agent: C04 with the minute count.
-	c.t = c.t.Add(20 * time.Minute)
-	f, _ = e.Fleet(ctx, store.ScopeAll())
-	var c04 *state.Banner
-	for i := range f.View.Banners {
-		if f.View.Banners[i].ID == "C04" {
-			c04 = &f.View.Banners[i]
+	// ADR 0013 (F5): silence from every agent, for 20 minutes or over a weekend,
+	// raises no critical console banner. Devices change only their own state;
+	// C04 comes from the self-probe of the agent endpoint.
+	for _, quiet := range []time.Duration{20 * time.Minute, 4 * time.Hour, 60 * time.Hour} {
+		c.t = fixtures.Now().Add(quiet)
+		f, _ = e.Fleet(ctx, store.ScopeAll())
+		for _, b := range f.View.Banners {
+			if b.ID == "C04" || b.Severity >= state.SeverityCritical {
+				t.Fatalf("fleet silent for %v: %s %q", quiet, b.ID, b.Text)
+			}
 		}
-	}
-	if c04 == nil || c04.Severity != state.SeverityCritical || c04.Count < 20 || !strings.Contains(c04.Text, "No agent has checked in for") {
-		t.Fatalf("C04: %+v (%s)", c04, ids(f.View.Banners))
 	}
 	c.t = fixtures.Now()
 
