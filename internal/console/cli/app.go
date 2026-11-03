@@ -57,7 +57,7 @@ type App struct {
 	Admin    *adminapi.Service
 	UI       *ui.Service
 	Probe    *Probe
-	// Endpoint is the self-probe of the public agent endpoint (ADR 0013, banners C04, C05, C17).
+	// Endpoint is the self-probe of the public agent endpoint (ADR 0013, banners C04, C05, C04b).
 	Endpoint *probe.Prober
 	Htpasswd *jobs.HtpasswdSync
 	// Display is the live display zone and refresh interval (M2-W3A) shared by the UI and the API.

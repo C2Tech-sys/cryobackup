@@ -229,7 +229,16 @@ func (s *Service) designData(ctx context.Context, only string) DesignData {
 		{Stamp{State: "unreachable", At: at}, "No data: polls failing, rendered client-side; time is since when"},
 		{Stamp{State: "loading", At: "--:--:--"}, "first paint: neutral ring, never a green dot"},
 	}
+	// The agent endpoint conditions (ADR 0013) render every variant: C04 at
+	// each failing stage, C05 warn and critical, and the C04b not-checked
+	// warning, in place of the single canned C04 and C05.
+	cb := health.EndpointExamples(now)
 	for _, b := range fixtures.Banners(now) {
+		if b.ID != health.BannerEndpointFailing && b.ID != health.BannerCertExpiring {
+			cb = append(cb, b)
+		}
+	}
+	for _, b := range health.SortBanners(cb) {
 		d.CBanners = append(d.CBanners, bannerView(b))
 	}
 	d.Entity = BannersView{Items: []BannerView{

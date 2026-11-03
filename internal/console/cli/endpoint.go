@@ -30,6 +30,6 @@ func newEndpointProbe(cfg config.Config, clock func() time.Time, log *logx.Logge
 		return probe.Fixed(probe.Status{Runs: true, Host: host, Interval: probe.DefaultInterval, Started: now, Known: true, LastOK: now,
 			Last: probe.Result{At: now, OK: true, NotAfter: now.Add(FixturesCertDays*24*time.Hour + time.Hour)}})
 	}
-	return probe.New(probe.Settings{PublicURL: cfg.PublicURL, CAFile: cfg.AgentProbe.CAFile, ConnectAddress: cfg.AgentProbe.ConnectAddress,
+	return probe.New(probe.Settings{PublicURL: cfg.PublicURL, CAFile: cfg.AgentProbe.CAFile, ConnectAddress: cfg.AgentProbe.ConnectAddress, SPKIPin: cfg.AgentProbe.SPKIPin,
 		Interval: time.Duration(cfg.AgentProbe.IntervalS) * time.Second}, clock, log)
 }

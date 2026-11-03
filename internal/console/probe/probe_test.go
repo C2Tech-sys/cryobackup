@@ -6,9 +6,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"math/big"
@@ -202,6 +204,63 @@ func TestStagesFailAndPass(t *testing.T) {
 				t.Fatalf("got %+v, want stage %s class %s", r, c.stage, c.class)
 			}
 		})
+	}
+}
+
+func pinOf(c cert) string {
+	sum := sha256.Sum256(c.x509.RawSubjectPublicKeyInfo)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+// agent_probe.spki_pin is enforced like an agent's spki_pin: in addition to
+// the chain, and a different key fails the TLS stage.
+func TestSPKIPin(t *testing.T) {
+	good := newCert(t, time.Now().Add(90*24*time.Hour), "agents.test")
+	other := newCert(t, time.Now().Add(90*24*time.Hour), "agents.test")
+	srv := tlsServer(t, good, agentAPI)
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	run := func(pin string) (Result, Status) {
+		p := New(Settings{PublicURL: "https://agents.test:" + port, SPKIPin: pin}, time.Now, nil)
+		p.Lookup = func(context.Context, string) ([]string, error) { return []string{"127.0.0.1"}, nil }
+		p.Roots = roots(good)
+		if !p.Status().Runs {
+			return Result{}, p.Status()
+		}
+		return p.Once(context.Background()), p.Status()
+	}
+	if r, _ := run(pinOf(good)); !r.OK {
+		t.Fatalf("matching pin: %+v", r)
+	}
+	if r, _ := run(pinOf(other)); r.OK || r.Stage != StageTLS || r.Class != "pin_mismatch" || r.NotAfter.IsZero() {
+		t.Fatalf("pin of another key: %+v", r)
+	}
+	for _, bad := range []string{"not base64!", base64.StdEncoding.EncodeToString([]byte("short"))} {
+		if _, st := run(bad); st.Runs || st.Limit != LimitSPKIPin {
+			t.Fatalf("unusable pin %q: %+v", bad, st)
+		}
+	}
+	if _, err := ParseSPKIPin("not base64!"); err == nil || strings.Contains(err.Error(), "not base64") {
+		t.Fatalf("ParseSPKIPin: %v", err)
+	}
+}
+
+// The responder stage has its own bound: an endpoint that accepts the request
+// and never answers fails at the responder stage within one stage timeout.
+func TestResponderHasItsOwnBound(t *testing.T) {
+	good := newCert(t, time.Now().Add(90*24*time.Hour), "agents.test")
+	release := make(chan struct{})
+	srv := tlsServer(t, good, func(w http.ResponseWriter, r *http.Request) { <-release })
+	t.Cleanup(func() { close(release) }) // registered after the server's Close, so it runs first
+	p := prober(t, srv, "https", time.Now, nil)
+	p.Roots = roots(good)
+	p.StageTimeout = 300 * time.Millisecond
+	start := time.Now()
+	r := p.Once(context.Background())
+	if r.OK || r.Stage != StageResponder || r.Class != "timeout" {
+		t.Fatalf("silent responder: %+v", r)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the responder stage took %v, not one stage timeout", took)
 	}
 }
 

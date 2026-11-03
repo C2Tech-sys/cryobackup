@@ -5,11 +5,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
+	"html"
 	"math/big"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +23,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/cli"
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
+	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/probe"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/console/ui"
@@ -67,7 +72,7 @@ func freePort(t *testing.T) string {
 // Against the real agent listener (TLS from a private CA given as
 // agent_probe.ca_file, public_url naming localhost) the probe passes every
 // stage, including "this console's agent API answered", and the certificate's
-// remaining 10 days surface as the C05 warning, with no C04 and no C17.
+// remaining 10 days surface as the C05 warning, with no C04 and no C04b.
 func TestServeProbesItsOwnAgentEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
@@ -84,6 +89,14 @@ func TestServeProbesItsOwnAgentEndpoint(t *testing.T) {
 	cfg.TLS = config.TLS{Cert: certPath, Key: keyPath}
 	cfg.PublicURL = "https://localhost:" + port
 	cfg.AgentProbe.CAFile = certPath
+	pemBytes, _ := os.ReadFile(certPath)
+	blk, _ := pem.Decode(pemBytes)
+	leaf, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	cfg.AgentProbe.SPKIPin = base64.StdEncoding.EncodeToString(sum[:]) // the agents' spki_pin, matching
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +137,7 @@ func TestServeProbesItsOwnAgentEndpoint(t *testing.T) {
 	var c05 *state.Banner
 	for i, b := range f.View.Banners {
 		switch b.ID {
-		case "C04", "C17", "C18":
+		case "C04", "C04b":
 			t.Errorf("unexpected %s: %s", b.ID, b.Text)
 		case "C05":
 			c05 = &f.View.Banners[i]
@@ -146,7 +159,7 @@ func TestServeProbesItsOwnAgentEndpoint(t *testing.T) {
 }
 
 // Without public_url the probe cannot run: serve starts normally and the
-// console says so with one warning (C17), never a critical banner.
+// console says so with one warning (C04b), never a critical banner.
 func TestServeWithoutPublicURLWarnsOnce(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
@@ -188,11 +201,11 @@ func TestServeWithoutPublicURLWarnsOnce(t *testing.T) {
 	var got []string
 	for _, b := range f.View.Banners {
 		got = append(got, b.ID)
-		if b.Severity >= state.SeverityCritical && (b.ID == "C04" || b.ID == "C17") {
+		if b.Severity >= state.SeverityCritical && (b.ID == "C04" || b.ID == "C04b") {
 			t.Fatalf("critical %s: %s", b.ID, b.Text)
 		}
 	}
-	if strings.Join(got, ",") != "C17" || !strings.Contains(f.View.Banners[0].Text, "public_url is not set") {
+	if strings.Join(got, ",") != "C04b" || !strings.Contains(f.View.Banners[0].Text, "public_url is not set") {
 		t.Fatalf("banners %v", got)
 	}
 }
@@ -220,9 +233,32 @@ func TestFixturesShowTheEndpointBanner(t *testing.T) {
 	if strings.Join(ids, ",") != "C05" || f.View.Banners[0].Text != "Agent listener certificate expires in 12 days." {
 		t.Fatalf("fixtures banners: %v %+v", ids, f.View.Banners)
 	}
-	for id, want := range map[string]string{"C04": "AGENT API UNREACHABLE", "C05": "CERTIFICATE EXPIRING", "C17": "AGENT API NOT CHECKED", "C18": "AGENTS STOPPED TOGETHER"} {
+	for id, want := range map[string]string{"C04": "AGENT API UNREACHABLE", "C05": "CERTIFICATE EXPIRING", "C04b": "AGENT API NOT CHECKED"} {
 		if got := ui.BannerLabel(id); got != want {
 			t.Errorf("label %s: %q, want %q", id, got, want)
+		}
+	}
+
+	// /design renders every ADR 0013 variant and none of the superseded copy.
+	rec := httptest.NewRecorder()
+	app.Server.AdminHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/design", nil))
+	page := html.UnescapeString(rec.Body.String())
+	if rec.Code != 200 {
+		t.Fatalf("/design: %d", rec.Code)
+	}
+	for _, b := range health.EndpointExamples(fixtures.Now()) {
+		if !strings.Contains(page, b.Text) {
+			t.Errorf("/design lacks %s %q", b.ID, b.Text)
+		}
+	}
+	for _, want := range []string{"AGENT API UNREACHABLE", "AGENT API NOT CHECKED", "CERTIFICATE EXPIRING", "(DNS)", "(connect)", "(TLS)", "wrong responder", "spki_pin"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("/design lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"No agent has checked in", "AGENT API SILENT", "Gateway certificate expires", "STOPPED TOGETHER"} {
+		if strings.Contains(page, gone) {
+			t.Errorf("/design still shows %q", gone)
 		}
 	}
 }

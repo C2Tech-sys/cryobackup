@@ -3,8 +3,11 @@ package probe
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -39,6 +42,8 @@ const (
 	LimitNoPublicURL = "no_public_url"
 	// LimitCAFile: agent_probe.ca_file is set but cannot be read or holds no certificate.
 	LimitCAFile = "ca_file_unusable"
+	// LimitSPKIPin: agent_probe.spki_pin is set but is not a base64 SHA-256.
+	LimitSPKIPin = "spki_pin_unusable"
 	// LimitPlainHTTP: public_url is http:// (a lab): DNS, connect and the
 	// responder are probed, TLS and the certificate cannot be.
 	LimitPlainHTTP = "plain_http"
@@ -90,7 +95,20 @@ type Settings struct {
 	PublicURL      string
 	CAFile         string
 	ConnectAddress string
-	Interval       time.Duration
+	// SPKIPin is the optional base64 SHA-256 of the agent listener's
+	// SubjectPublicKeyInfo, the same format as the agent's spki_pin.
+	SPKIPin  string
+	Interval time.Duration
+}
+
+// ParseSPKIPin decodes a pin in the agent's spki_pin format: the standard
+// base64 of a SHA-256 digest. The error never echoes the value.
+func ParseSPKIPin(s string) ([]byte, error) {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil || len(b) != sha256.Size {
+		return nil, errors.New("probe: the SPKI pin must be the base64 of a SHA-256 digest")
+	}
+	return b, nil
 }
 
 // Prober runs the self-probe and keeps the last Status.
@@ -111,6 +129,7 @@ type Prober struct {
 
 	scheme, host, port string
 	fixed              bool
+	pin                []byte // SHA-256 of the expected SubjectPublicKeyInfo, nil when no pin
 
 	mu sync.Mutex
 	st Status
@@ -159,6 +178,14 @@ func New(s Settings, clock func() time.Time, log *logx.Logger) *Prober {
 			return p
 		}
 		p.Roots = pool
+	}
+	if s.SPKIPin != "" {
+		pin, err := ParseSPKIPin(s.SPKIPin)
+		if err != nil {
+			p.st.Limit = LimitSPKIPin
+			return p
+		}
+		p.pin = pin
 	}
 	p.st.Runs = true
 	if p.scheme == "http" {
@@ -328,14 +355,29 @@ func (p *Prober) check(ctx context.Context) Result {
 			}
 			return fail(StageTLS, handshakeClass(err), time.Time{})
 		}
-		if cs := tc.ConnectionState(); len(cs.PeerCertificates) > 0 {
-			notAfter = cs.PeerCertificates[0].NotAfter.UTC()
+		cs := tc.ConnectionState()
+		if len(cs.PeerCertificates) == 0 {
+			return fail(StageTLS, "no_certificate", time.Time{})
+		}
+		leaf := cs.PeerCertificates[0]
+		notAfter = leaf.NotAfter.UTC()
+		// The SPKI pin, when configured, is checked in addition to the chain,
+		// exactly as an agent with spki_pin does (internal/agent/uplink).
+		if p.pin != nil {
+			sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+			if subtle.ConstantTimeCompare(sum[:], p.pin) != 1 {
+				return fail(StageTLS, "pin_mismatch", notAfter)
+			}
 		}
 		rw = tc
 	}
 
-	// 5. responder
-	if r := p.responder(ctx, rw); r != "" {
+	// 5. responder, with its own bound: the request and the answer must come
+	// within one stage timeout, whatever is left of the run.
+	_ = conn.SetDeadline(time.Now().Add(p.stageTimeout()))
+	rctx, rcancel := context.WithTimeout(ctx, p.stageTimeout())
+	defer rcancel()
+	if r := p.responder(rctx, rw); r != "" {
 		return fail(StageResponder, r, notAfter)
 	}
 	return Result{OK: true, NotAfter: notAfter}
@@ -355,10 +397,16 @@ func (p *Prober) responder(ctx context.Context, rw io.ReadWriter) string {
 	req.Close = true
 	req.Header.Set("User-Agent", "cryo-console-self-probe")
 	if err := req.Write(rw); err != nil {
+		if isTimeout(err) {
+			return "timeout"
+		}
 		return "write"
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(rw), req)
 	if err != nil {
+		if isTimeout(err) {
+			return "timeout"
+		}
 		return "not_http"
 	}
 	defer resp.Body.Close()

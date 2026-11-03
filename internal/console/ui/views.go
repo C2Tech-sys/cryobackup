@@ -114,8 +114,8 @@ var bannerLabels = map[string]string{
 	"C05": "CERTIFICATE EXPIRING", "C06": "ALERTING STALLED", "C07": "MAINTENANCE WORKER DOWN", "C08": "NO ACTIVE DEVICES",
 	"C09": "PARTIAL DATA", "C10": "LIVE UPDATES DISCONNECTED", "C11": "DATABASE NEEDS ATTENTION", "C12": "MASTER KEY UNAVAILABLE",
 	"C13": "CLOCK SUSPECT", "C14": "DIGEST NOT SENT", "C15": "STORAGE QUOTA", "C16": "RELEASE MANIFEST REJECTED",
-	// ADR 0013 (M2-FIX-B2): C04 is now the self-probe of the agent endpoint; C17 and C18 are its warnings.
-	"C17": "AGENT API NOT CHECKED", "C18": "AGENTS STOPPED TOGETHER",
+	// ADR 0013 (M2-FIX-B2): C04 is now the self-probe of the agent endpoint; C04b is its not-checked warning.
+	"C04b": "AGENT API NOT CHECKED",
 }
 
 // BannerLabel returns the chip label of a C-id.

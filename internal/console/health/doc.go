@@ -4,9 +4,8 @@
 // health state is never stored (D10).
 //
 // M0 banners: C08 and C09 come from state.Evaluate; this package adds C04, C05
-// and C17 from the self-probe of the public agent endpoint and the C18 warning
-// for devices that all stopped together (endpoint.go, ADR 0013: fleet silence
-// alone is no longer a console banner), C06 (only when an
+// and C04b from the self-probe of the public agent endpoint (endpoint.go, ADR
+// 0013: devices being offline never raise a console banner), C06 (only when an
 // alarm-evaluator job_state row exists; the evaluator is M3/M4), C07 (the
 // maintenance worker did not answer its last adminpath probe) and C12 (no master
 // key). C10 is raised client-side by fresh.js. The probe-driven C01-C03, the

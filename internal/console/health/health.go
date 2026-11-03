@@ -38,8 +38,8 @@ type Evaluator struct {
 	// which raises nothing: the prober is M3.
 	Maintain func() MaintainStatus
 	// Endpoint reports the self-probe of the public agent endpoint (C04, C05,
-	// C17; ADR 0013). Nil means "not wired" (unit tests), which raises nothing;
-	// serve always wires it, and a probe that cannot run says so (C17).
+	// C04b; ADR 0013). Nil means "not wired" (unit tests), which raises nothing;
+	// serve always wires it, and a probe that cannot run says so (C04b).
 	Endpoint func() probe.Status
 	// Extra supplies banners that cannot be derived here (fixtures mode shows the
 	// full C01-C16 set; the M3/M4 probers will feed the real ones).
@@ -74,7 +74,6 @@ func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error)
 
 	f := Fleet{View: view, Computed: now, Jobs: jobs}
 	var active int
-	var lastSeen []time.Time
 	for i := range view.Devices {
 		d := &view.Devices[i]
 		if d.Primary == state.StateRetired {
@@ -86,7 +85,6 @@ func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error)
 		}
 		if d.Primary != state.StatePaused {
 			active++
-			lastSeen = append(lastSeen, d.Detail.LastSeen)
 			if d.Detail.LastSeen.After(f.LastHeartbeat) {
 				f.LastHeartbeat = d.Detail.LastSeen
 			}
@@ -94,21 +92,11 @@ func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error)
 	}
 
 	var extra []state.Banner
-	// C04, C05, C17 (ADR 0013): from the self-probe of the agent endpoint. Fleet
-	// silence alone raises no console banner: a sleeping fleet is normal, and
-	// each silent device is its own UNSEEN/STALE row.
-	probeFailing := false
+	// C04, C05, C04b (ADR 0013): from the self-probe of the agent endpoint only.
+	// Devices being offline raise no console banner, however many and however
+	// long: each is its own UNSEEN/STALE row.
 	if e.Endpoint != nil {
-		for _, b := range EndpointBanners(e.Endpoint(), now) {
-			extra = append(extra, b)
-			probeFailing = probeFailing || b.ID == "C04"
-		}
-	}
-	// C18: the weak signal: devices that were checking in all stopped together.
-	if active > 0 && w.LoadComplete {
-		if b, ok := QuietBanner(lastSeen, now, probeFailing); ok {
-			extra = append(extra, b)
-		}
+		extra = append(extra, EndpointBanners(e.Endpoint(), now)...)
 	}
 	// C06: only when an evaluator job exists (it arrives at M3/M4).
 	if jerr == nil {

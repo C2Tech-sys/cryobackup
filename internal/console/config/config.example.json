@@ -57,7 +57,8 @@
   "agent_probe": {
     "interval_s": 180,
     "ca_file": "",
-    "connect_address": ""
+    "connect_address": "",
+    "spki_pin": ""
   },
   "fixtures": false
 }

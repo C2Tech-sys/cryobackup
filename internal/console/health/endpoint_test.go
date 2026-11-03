@@ -50,6 +50,7 @@ func TestEndpointStagesNameTheFailure(t *testing.T) {
 		{probe.StageTLS, "untrusted", "is not trusted (TLS)"},
 		{probe.StageTLS, "hostname", "does not match agents.example.com:8443 (TLS)"},
 		{probe.StageTLS, "handshake", "the TLS handshake with agents.example.com:8443 fails (TLS)"},
+		{probe.StageTLS, "pin_mismatch", "does not match agent_probe.spki_pin, so pinned agents refuse it (TLS)"},
 		{probe.StageCertExpired, "expired", "certificate has expired"},
 		{probe.StageResponder, "status_502", "not as this console's agent API (wrong responder)"},
 	} {
@@ -97,63 +98,27 @@ func TestEndpointCertificateExpiring(t *testing.T) {
 }
 
 func TestEndpointCannotRunIsAWarning(t *testing.T) {
-	only(t, EndpointBanners(probe.Status{Limit: probe.LimitNoPublicURL}, t0), "C17", state.SeverityAlarm, "public_url is not set")
-	only(t, EndpointBanners(probe.Status{Limit: probe.LimitCAFile}, t0), "C17", state.SeverityAlarm, "agent_probe.ca_file")
+	only(t, EndpointBanners(probe.Status{Limit: probe.LimitNoPublicURL}, t0), "C04b", state.SeverityAlarm, "public_url is not set")
+	only(t, EndpointBanners(probe.Status{Limit: probe.LimitCAFile}, t0), "C04b", state.SeverityAlarm, "agent_probe.ca_file")
+	only(t, EndpointBanners(probe.Status{Limit: probe.LimitSPKIPin}, t0), "C04b", state.SeverityAlarm, "agent_probe.spki_pin")
 	st := healthy(t0, 0)
 	st.Limit, st.Last.NotAfter = probe.LimitPlainHTTP, time.Time{}
-	only(t, EndpointBanners(st, t0), "C17", state.SeverityAlarm, "plain HTTP")
+	only(t, EndpointBanners(st, t0), "C04b", state.SeverityAlarm, "plain HTTP")
 	// Started but never completed, or stopped completing: say so.
 	st = probe.Status{Runs: true, Interval: probe.DefaultInterval, Started: t0.Add(-20 * time.Minute)}
-	only(t, EndpointBanners(st, t0), "C17", state.SeverityAlarm, "has not completed for 20 min")
+	only(t, EndpointBanners(st, t0), "C04b", state.SeverityAlarm, "has not completed for 20 min")
 	st = healthy(t0.Add(-15*time.Minute), 90*24*time.Hour)
-	only(t, EndpointBanners(st, t0), "C17", state.SeverityAlarm, "has not completed for 16 min")
+	only(t, EndpointBanners(st, t0), "C04b", state.SeverityAlarm, "has not completed for 16 min")
 	// Just started, first run in flight: nothing yet.
 	if b := EndpointBanners(probe.Status{Runs: true, Interval: probe.DefaultInterval, Started: t0.Add(-5 * time.Second)}, t0); len(b) != 0 {
 		t.Fatalf("first run in flight: %+v", b)
 	}
 }
 
-func seenAt(offsets ...time.Duration) []time.Time {
-	out := make([]time.Time, len(offsets))
-	for i, o := range offsets {
-		out[i] = t0.Add(-o)
-	}
-	return out
-}
-
-func TestQuietBanner(t *testing.T) {
-	m := time.Minute
-	// Five steady devices cut off together 30 min ago: a warning.
-	together := seenAt(30*m, 31*m, 32*m, 34*m, 36*m)
-	b, ok := QuietBanner(together, t0, false)
-	if !ok || b.ID != "C18" || b.Severity != state.SeverityAlarm || b.Count != 5 || !strings.Contains(b.Text, "30 min ago") {
-		t.Fatalf("stopped together: %v %+v", ok, b)
-	}
-	// ...plus devices silent for days: still together (they were not checking in).
-	if _, ok := QuietBanner(append(seenAt(3*24*time.Hour, 9*24*time.Hour), together...), t0, false); !ok {
-		t.Fatal("long-silent devices must not mask it")
-	}
-	// The probe already failing: C04 says it, no C18.
-	if _, ok := QuietBanner(together, t0, true); ok {
-		t.Fatal("C18 beside a failing probe")
-	}
-	for name, seen := range map[string][]time.Time{
-		"the lab case: one PC asleep for four hours": seenAt(4 * time.Hour),
-		"four devices are too few":                   seenAt(30*m, 31*m, 32*m, 33*m),
-		"a fleet going to sleep over the evening":    seenAt(20*m, 25*m, 50*m, 70*m, 2*time.Hour, 3*time.Hour),
-		"one trickled off in the hour before":        seenAt(30*m, 31*m, 32*m, 34*m, 36*m, 75*m),
-		"still checking in":                          seenAt(10*time.Second, 30*m, 31*m, 32*m, 33*m, 34*m),
-		"fresh silence under 15 min":                 seenAt(14*m, 14*m, 15*m, 16*m, 17*m),
-	} {
-		if b, ok := QuietBanner(seen, t0, false); ok {
-			t.Errorf("%s: %+v", name, b)
-		}
-	}
-}
-
-// The evaluator wires the probe: a failing probe is C04 and suppresses C18, a
-// healthy one raises nothing, and the frozen fixture fleet 20 minutes on (every
-// agent cut off at the same instant) is the C18 warning, never a critical.
+// The evaluator wires the probe: a healthy probe raises nothing, not even when
+// every agent went silent at the same instant (the frozen fixture fleet hours
+// on: a scheduled shutdown, a console restart, a site outage); a failing probe
+// is C04.
 func TestFleetUsesTheProbe(t *testing.T) {
 	ctx := context.Background()
 	e, c := newEval(t)
@@ -163,11 +128,12 @@ func TestFleetUsesTheProbe(t *testing.T) {
 	if len(f.View.Banners) != 0 {
 		t.Fatalf("healthy probe: %s", ids(f.View.Banners))
 	}
-	c.t = fixtures.Now().Add(20 * time.Minute)
-	st = healthy(c.t, 90*24*time.Hour)
-	f, _ = e.Fleet(ctx, store.ScopeAll())
-	if ids(f.View.Banners) != "C18" || f.View.Banners[0].Severity != state.SeverityAlarm {
-		t.Fatalf("fleet cut off together, probe healthy: %s", ids(f.View.Banners))
+	for _, quiet := range []time.Duration{20 * time.Minute, 40 * time.Minute, 14 * time.Hour} {
+		c.t = fixtures.Now().Add(quiet)
+		st = healthy(c.t, 90*24*time.Hour)
+		if f, _ = e.Fleet(ctx, store.ScopeAll()); len(f.View.Banners) != 0 {
+			t.Fatalf("every agent offline for %v, probe healthy: %s", quiet, ids(f.View.Banners))
+		}
 	}
 	st = failing(c.t, probe.StageTLS, "untrusted", 3, 10*time.Minute)
 	f, _ = e.Fleet(ctx, store.ScopeAll())
@@ -179,7 +145,7 @@ func TestFleetUsesTheProbe(t *testing.T) {
 	}
 	st = probe.Status{Limit: probe.LimitNoPublicURL}
 	c.t = fixtures.Now()
-	if f, _ = e.Fleet(ctx, store.ScopeAll()); ids(f.View.Banners) != "C17" {
+	if f, _ = e.Fleet(ctx, store.ScopeAll()); ids(f.View.Banners) != "C04b" {
 		t.Fatalf("no public_url: %s", ids(f.View.Banners))
 	}
 }
@@ -192,8 +158,11 @@ func TestEndpointExamplesCoverEveryKind(t *testing.T) {
 			t.Fatalf("empty text: %+v", b)
 		}
 	}
-	want := map[string]int{"C04/" + state.SeverityCritical.String(): 5, "C05/" + state.SeverityAlarm.String(): 1, "C05/" + state.SeverityCritical.String(): 1,
-		"C17/" + state.SeverityAlarm.String(): 1, "C18/" + state.SeverityAlarm.String(): 1}
+	want := map[string]int{"C04/" + state.SeverityCritical.String(): 6, "C05/" + state.SeverityAlarm.String(): 1, "C05/" + state.SeverityCritical.String(): 1,
+		"C04b/" + state.SeverityAlarm.String(): 1}
+	if len(got) != len(want) {
+		t.Errorf("kinds %v, want %v", got, want)
+	}
 	for k, n := range want {
 		if got[k] != n {
 			t.Errorf("%s: %d, want %d (all %v)", k, got[k], n, got)
