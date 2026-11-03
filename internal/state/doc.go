@@ -83,8 +83,9 @@
 // finish time of the newest failed run, which approximates the first failure of
 // the streak because the facts do not carry the streak start; PARTIAL that run's
 // finish time; UNSEEN last heartbeat plus unseen_after; STALE last success plus
-// stale_after; ESCROW_UNVERIFIED key creation plus the verify grace (or the last
-// verification plus the recheck interval); MAINT_FAILED the failing run's finish;
+// stale_after; ESCROW_UNVERIFIED key creation plus the verify grace (or, once
+// EscrowRecheckEnforced is on, the last verification plus the recheck
+// interval); MAINT_FAILED the failing run's finish;
 // MISSED the expected run time; DEFERRED the deferred run's start; OUTDATED zero;
 // OK the last success. A zero Since means the facts do not know.
 //

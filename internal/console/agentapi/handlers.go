@@ -93,7 +93,7 @@ type heartbeatProgress struct {
 // gateway_secret_acked flag erases the pending wrapped secret, and the response
 // carries the clock offset (DH5), whether commands wait and the current policy ETag.
 func (s *Service) handleHeartbeat(w http.ResponseWriter, r *http.Request, d device) {
-	if ok, wait := s.heartbeat.Allow(d.ID); s.limited(w, r, ok, wait) {
+	if ok, wait := s.heartbeatAllowed(r.Context(), d.ID); s.limited(w, r, ok, wait) {
 		return
 	}
 	var req api.HeartbeatRequest
@@ -140,6 +140,29 @@ func (s *Service) handleHeartbeat(w http.ResponseWriter, r *http.Request, d devi
 		s.Pub.RunProgress(d.ID, req.Progress.RunID)
 	}
 	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+// conflictHeartbeatMachines is how many machines may heartbeat at the normal
+// cadence with one device token while the device has an open identity conflict
+// (F9). ADR 0011: detection must never lock anyone out, and a cloned pair (or a
+// few copies of one image) shares the token and so the per-device bucket. A
+// flagged device gets this many heartbeats per interval instead of one; a single
+// client hammering faster than that is still refused.
+const conflictHeartbeatMachines = 4
+
+// heartbeatAllowed is the per-device heartbeat limit: one per interval, and up
+// to conflictHeartbeatMachines while identity_conflict_at is set. The device is
+// read only on the refusal path, so the normal heartbeat costs nothing extra.
+func (s *Service) heartbeatAllowed(ctx context.Context, deviceID string) (bool, time.Duration) {
+	ok, wait := s.heartbeat.Allow(deviceID)
+	if ok {
+		return true, 0
+	}
+	dev, err := s.Store.GetDevice(ctx, store.ScopeAll(), deviceID)
+	if err != nil || dev.IdentityConflictAt == nil {
+		return false, wait
+	}
+	return s.heartbeatConflict.Allow(deviceID)
 }
 
 // noteFingerprint compares the heartbeat's hardware fingerprint with the one

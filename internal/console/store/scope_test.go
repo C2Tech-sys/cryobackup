@@ -258,6 +258,9 @@ func matrix() map[string]matrixCase {
 			_, err := w.s.ActiveEscrow(w.ctx, sc, t.dev)
 			return nil, err
 		}},
+		"RecordEscrowVerification": {kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
+			return nil, w.s.RecordEscrowVerification(w.ctx, sc, t.dev, EscrowVerification{OK: true}) // M2-FIX-B1
+		}},
 		"GetMaintenanceSchedule": {kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
 			_, err := w.s.GetMaintenanceSchedule(w.ctx, sc, t.dev)
 			return nil, err

@@ -133,6 +133,15 @@
 //	step 8  usage refresh: stats --mode raw-data into usage_samples, one row per
 //	        device per hour bucket, when Config.UsageInterval has passed
 //
+// and, before those steps, an escrow phase (M2-FIX-B1, ADR 0014): a candidate
+// whose active escrowed key has never been verified (verified_at NULL, a device
+// enrolled before enrollment recorded the verification) gets one `cat config`
+// with that key, retried at most hourly. Success sets verified_at; wrong_password
+// or repo_missing is recorded as last_verify_error_class; any other failure
+// records only the attempt. The phase starts at most 5 checks per pass,
+// never-attempted keys first, and none after 2 minutes, so it ends well inside
+// the scheduler lease. It is not the 30-day recheck, which is M5's;
+//
 // and records the pass with store.RecordJobRun (job_state, which banner C07 reads).
 // Because C07 reads job_state, ONLY the lease holder writes it: a process that does
 // not get the lease logs the skip locally, returns CycleReport.Skipped and writes no

@@ -18,8 +18,9 @@
 //
 // # Enroll (DH17, DH22, §7.2)
 //
-// Per-IP limit (10/min, audit agent.enroll.denied), one in-flight enrollment per
-// token, body at most 4 KiB, api.EnrollRequest.Validate and api.AssertPathFree.
+// Per-IP limit (10/min, audit agent.enroll.denied), one enrollment at a time per
+// token (later ones wait up to 20 s for their turn, then 429 with Retry-After and
+// one agent.enroll.denied row, reason token_busy), body at most 4 KiB, api.EnrollRequest.Validate and api.AssertPathFree.
 // Without a master key the answer is 503 master_key_unavailable and nothing is
 // stored (banner C12). A customer-held customer is refused with 501
 // custody_customer_held. Otherwise: a device token, a gateway password (bcrypt
@@ -28,7 +29,8 @@
 // (store.EnrollInput.DeviceID), and store.AgentEnroll does the whole thing in
 // one transaction (spending a token use only on success). The repository is
 // created and its key verified through the admin path (adminpath Init, CatConfig; on
-// failure 503 with Retry-After, device left in place), htpasswd-sync is
+// failure 503 with Retry-After, device left in place), the successful CatConfig
+// is recorded as the escrow verification (verified_at, ADR 0014), htpasswd-sync is
 // signalled and the secrets are returned once. A retry with the same nonce
 // before the first heartbeat returns the same device and secrets with a fresh
 // device token; afterwards it is 409.
@@ -38,7 +40,8 @@
 // Policy is an ETag pull: 304 when If-None-Match matches and nothing else is
 // pending; a pending gateway secret (DH13) or a pause always travels in a 200,
 // and pausing changes the ETag so a 304 cannot hide it. Heartbeat (1 per 20 s
-// per device) stores presence and the 24 h ring, computes the clock offset
+// per device; up to 4 while the device has an open identity conflict, so a
+// cloned pair sharing the token is not refused, F9) stores presence and the 24 h ring, computes the clock offset
 // (DH5), confirms enrollment on the first call, acknowledges a delivered gateway
 // secret and reports pending commands. Runs (30/min, 512 KiB, 200 records)
 // validate each record on its own and ingest idempotently on the run id; the
