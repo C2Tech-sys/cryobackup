@@ -29,15 +29,16 @@ func (s *Service) audit(ctx context.Context, ev store.AuditEvent) {
 
 // handleEnroll is POST /api/v1/agent/enroll (architecture §5.1, §7.2, DH17, DH22).
 //
-// Order of work: per-IP limit, one in-flight enrollment per token, master key
+// Order of work: per-IP limit, one enrollment at a time per token (a later one
+// waits up to enrollWait, then 429), master key
 // present (else 503, C12: an unwrapped key is never stored), strict body checks
 // and AssertPathFree, token lookup, refusal of customer-held custody (501, DH22),
 // device id generation, secret generation and wrapping under that id,
 // store.AgentEnroll (one transaction that spends the token use, creates the
 // device under the given id, token, gateway login, escrow row and schedule),
 // repository init and a CatConfig confirmation through the admin path (503 with
-// Retry-After on failure, device left in place for the retry), the
-// htpasswd-sync signal and the response.
+// Retry-After on failure, device left in place for the retry), recorded as the
+// escrow verification, the htpasswd-sync signal and the response.
 func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	s.init()
 	ctx := r.Context()
@@ -59,9 +60,16 @@ func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tokenHash := enroll.HashToken(plain)
-	release, ok := s.enrollFlight.TryAcquire(tokenHash)
+	// One enrollment at a time per token: later ones wait their turn (F4: an RMM
+	// push of a site on one token arrives in the same second) and are refused
+	// only when the wait runs out.
+	release, ok := s.enrollQueue.acquire(ctx, tokenHash, s.enrollWait)
 	if !ok {
-		httpx.Problem(w, r, api.CodeRateLimited, time.Second)
+		if ctx.Err() == nil {
+			s.audit(ctx, store.AuditEvent{ActorType: "system", Method: "agent", SourceIP: ip, Action: "agent.enroll.denied", Result: "denied",
+				Severity: "warning", Details: []byte(`{"reason":"token_busy"}`)})
+		}
+		httpx.Problem(w, r, api.CodeRateLimited, enrollBusyRetry)
 		return
 	}
 	defer release()
@@ -211,6 +219,14 @@ func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		s.Log.Warn("enroll: repository check failed", logx.ID("device_id", dev.ID), logx.Class(backendClass(err)))
 		httpx.Problem(w, r, api.CodeUnavailable, enrollRetry)
 		return
+	}
+	// That cat config opened the repository with the escrowed key through the
+	// admin path: it is the escrow verification (F7, ADR 0014). No audit row of
+	// its own: agent.enroll below covers it. A failed write is logged and does
+	// not fail the enrollment; the device then shows ESCROW_UNVERIFIED after the
+	// grace, which is loud, and the maintenance tick verifies it again.
+	if err := s.Store.RecordEscrowVerification(context.WithoutCancel(ctx), store.ScopeAll(), dev.ID, store.EscrowVerification{OK: true}); err != nil {
+		s.Log.Error("enroll: escrow verification not recorded", logx.ID("device_id", dev.ID), logx.Err(err))
 	}
 
 	eff, err := s.Store.EffectivePolicyDoc(ctx, store.ScopeAll(), dev.ID)

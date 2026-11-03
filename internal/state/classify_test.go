@@ -798,11 +798,13 @@ func TestClassifyMatrix(t *testing.T) {
 			want: expectation{primary: StateOK, alarm: "none", attrs: []Attr{AttrCustomerHeldKey}},
 		},
 		{
-			name: "B37_escrow_recheck_overdue",
+			// The recheck rule is off until the M5 verification job exists
+			// (EscrowRecheckEnforced, ADR 0014); escrowIssueRecheck tests it on.
+			name: "B37_escrow_recheck_overdue_not_enforced_before_m5",
 			mod: func(f *DeviceFacts) {
 				f.Escrow = &EscrowFacts{Custody: "escrowed", CreatedAt: ago(90 * day), VerifiedAt: ago(40 * day)}
 			},
-			want: expectation{primary: StateEscrowUnverified, flags: []State{StateEscrowUnverified}, alarm: "alarm", reason: ReasonEscrowRecheckOverdue},
+			want: expectation{primary: StateOK, flags: []State{StateOK}, alarm: "none"},
 		},
 		{
 			name: "B38_identity_conflict_outranks_pending",

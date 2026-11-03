@@ -52,19 +52,23 @@ type Service struct {
 	Notifier *Notifier
 	Limits   config.RateLimits
 
-	once         sync.Once
-	ids          *ulid.Generator
-	enrollIP     *ratelimit.Bucket
-	enrollFlight *ratelimit.Flight
-	authFail     *ratelimit.Blocker
-	heartbeat    *ratelimit.Bucket
-	runs         *ratelimit.Bucket
-	snapshots    *ratelimit.Bucket
-	policy       *ratelimit.Bucket
-	leases       *ratelimit.Bucket
-	pollFlight   *ratelimit.Flight
-	touchMu      sync.Mutex
-	touched      map[string]time.Time
+	once        sync.Once
+	ids         *ulid.Generator
+	enrollIP    *ratelimit.Bucket
+	enrollQueue *tokenQueue
+	enrollWait  time.Duration // 0: defaultEnrollWait (tests shorten it)
+	authFail    *ratelimit.Blocker
+	heartbeat   *ratelimit.Bucket
+	// heartbeatConflict is the extra heartbeat allowance of a device with an
+	// open identity conflict (F9, see conflictHeartbeatMachines).
+	heartbeatConflict *ratelimit.Bucket
+	runs              *ratelimit.Bucket
+	snapshots         *ratelimit.Bucket
+	policy            *ratelimit.Bucket
+	leases            *ratelimit.Bucket
+	pollFlight        *ratelimit.Flight
+	touchMu           sync.Mutex
+	touched           map[string]time.Time
 }
 
 func (s *Service) init() {
@@ -86,9 +90,14 @@ func (s *Service) init() {
 		s.ids = ulid.NewGenerator(s.Clock, nil)
 		now := s.Clock
 		s.enrollIP = ratelimit.NewBucket(l.EnrollPerMinPerIP, time.Minute, l.EnrollPerMinPerIP, now)
-		s.enrollFlight = ratelimit.NewFlight()
+		s.enrollQueue = newTokenQueue()
+		if s.enrollWait <= 0 {
+			s.enrollWait = defaultEnrollWait
+		}
 		s.authFail = ratelimit.NewBlocker(l.FailedAuthPerMinIP, time.Minute, time.Duration(l.MaxBlockMinutes)*time.Minute, now)
 		s.heartbeat = ratelimit.NewBucket(1, time.Duration(l.HeartbeatIntervalS)*time.Second, 1, now)
+		extra := conflictHeartbeatMachines - 1
+		s.heartbeatConflict = ratelimit.NewBucket(extra, time.Duration(l.HeartbeatIntervalS)*time.Second, extra, now)
 		s.runs = ratelimit.NewBucket(l.RunsPerMin, time.Minute, l.RunsPerMin, now)
 		s.snapshots = ratelimit.NewBucket(l.SnapshotsPerMin, time.Minute, l.SnapshotsPerMin, now)
 		s.policy = ratelimit.NewBucket(l.PolicyPerMin, time.Minute, l.PolicyPerMin, now)

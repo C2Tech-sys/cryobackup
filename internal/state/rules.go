@@ -70,11 +70,30 @@ func custodyOf(f *DeviceFacts) string {
 	return custodyEscrowed
 }
 
+// EscrowRecheckEnforced says whether ESCROW_UNVERIFIED is raised for a
+// verification that is merely older than the recheck interval
+// (escrow_recheck_days, reason escrow_recheck_overdue). It is false until the
+// periodic escrow verification job exists (scheduled for M5): nothing re-runs
+// the verification before then, so every verified device would turn
+// ESCROW_UNVERIFIED on day 31 with no way to clear it (M2 lab finding F7,
+// ADR 0014). Set it to true in the change that adds that job;
+// TestEscrowRecheckIsNotEnforcedUntilTheVerifyJobExists documents the switch.
+// Missing escrow, a recorded verify failure and "never verified after the
+// grace" are raised either way.
+const EscrowRecheckEnforced = false
+
 // escrowIssue evaluates §4.2 row 12. For an escrowed key it reports a problem
 // when there is no active escrow row, the last verification failed, the key was
-// never verified and the grace is gone, or the verification is older than the
-// recheck interval. Customer-held keys never raise it (B36).
+// never verified and the grace is gone, or (only when EscrowRecheckEnforced) the
+// verification is older than the recheck interval. Customer-held keys never
+// raise it (B36).
 func escrowIssue(f *DeviceFacts, th Thresholds, now, enrolled time.Time, enrolledOK bool) (reason Reason, since time.Time, bad bool) {
+	return escrowIssueRecheck(f, th, now, enrolled, enrolledOK, EscrowRecheckEnforced)
+}
+
+// escrowIssueRecheck is escrowIssue with the recheck rule switched explicitly,
+// so the rule stays tested while it is off.
+func escrowIssueRecheck(f *DeviceFacts, th Thresholds, now, enrolled time.Time, enrolledOK, recheck bool) (reason Reason, since time.Time, bad bool) {
 	if custodyOf(f) == custodyCustomerHeld {
 		return "", time.Time{}, false
 	}
@@ -102,7 +121,7 @@ func escrowIssue(f *DeviceFacts, th Thresholds, now, enrolled time.Time, enrolle
 	if !verifiedOK {
 		return ReasonEscrowNeverVerified, since, true
 	}
-	if now.Sub(verified) > th.EscrowRecheck {
+	if recheck && now.Sub(verified) > th.EscrowRecheck {
 		return ReasonEscrowRecheckOverdue, verified.Add(th.EscrowRecheck), true
 	}
 	return "", time.Time{}, false
