@@ -2,6 +2,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,6 +73,44 @@ type RestoreStream struct {
 	FirstByteS int `json:"first_byte_s"`
 }
 
+// AgentProbe tunes the console's self-probe of its own public agent endpoint
+// (ADR 0013): every IntervalS seconds (default 180, 30 to 3600) the console
+// resolves the public_url host, connects, verifies TLS and the certificate and
+// checks that the answer is this console's agent API, the way an agent would.
+// CAFile is an optional PEM bundle of extra roots for a deployment whose agent
+// certificate comes from a private CA (empty: the system roots).
+// ConnectAddress is an optional host:port dialled instead of the resolved
+// addresses, for a console behind NAT that cannot reach its own public
+// address (no hairpin); DNS, TLS and the host name are still checked against
+// public_url. SPKIPin is optional: the base64 SHA-256 of the agent listener's
+// SubjectPublicKeyInfo, the same value and format as the agents' spki_pin;
+// when set, a certificate with any other key fails the probe at the TLS stage
+// as it would fail a pinned agent. With public_url unset the probe does not
+// run and the console shows a warning saying so.
+//
+// Each probe run is one unauthenticated request, counted by the agent
+// listener as one failed authentication from the console's own address.
+// Validate therefore requires that the probe's runs per minute use at most half
+// of rate_limits.failed_auth_per_min_per_ip, so the probe alone can never get
+// the console's address blocked.
+type AgentProbe struct {
+	IntervalS      int    `json:"interval_s"`
+	CAFile         string `json:"ca_file"`
+	ConnectAddress string `json:"connect_address"`
+	SPKIPin        string `json:"spki_pin"`
+}
+
+// ProbeRunsPerMinute is the most probe requests that can fall inside one
+// minute (the failed-auth window) with runs started intervalS seconds apart:
+// ceil(60/intervalS), plus one because a run's request lands anywhere inside
+// that run's own timeout, so two requests can be closer than the interval.
+func ProbeRunsPerMinute(intervalS int) int {
+	if intervalS < 1 {
+		return 60
+	}
+	return (60+intervalS-1)/intervalS + 1
+}
+
 // SMTP is accepted and validated in M0 but not used until M4. The password is
 // never in this file: password_file names a mounted file.
 type SMTP struct {
@@ -108,6 +148,7 @@ type Config struct {
 	RateLimits       RateLimits    `json:"rate_limits"`
 	RestoreStream    RestoreStream `json:"restore_stream"`
 	SMTP             SMTP          `json:"smtp"`
+	AgentProbe       AgentProbe    `json:"agent_probe"`
 	Fixtures         bool          `json:"fixtures"`
 }
 
@@ -139,6 +180,7 @@ func Default() Config {
 		},
 		RestoreStream: RestoreStream{MinBytes: 64 << 10, WindowS: 120, FirstByteS: 300},
 		SMTP:          SMTP{Security: "starttls"},
+		AgentProbe:    AgentProbe{IntervalS: 180},
 	}
 }
 
@@ -384,6 +426,23 @@ func (c Config) Validate() error {
 	}
 	if c.RestoreStream.FirstByteS < 10 || c.RestoreStream.FirstByteS > 3600 {
 		add("restore_stream.first_byte_s must be between 10 and 3600")
+	}
+	if c.AgentProbe.IntervalS < 30 || c.AgentProbe.IntervalS > 3600 {
+		add("agent_probe.interval_s must be between 30 and 3600")
+	}
+	if a := c.AgentProbe.ConnectAddress; a != "" {
+		h, p, err := net.SplitHostPort(a)
+		if n, perr := strconv.Atoi(p); err != nil || h == "" || perr != nil || n < 1 || n > 65535 {
+			add("agent_probe.connect_address must be host:port")
+		}
+	}
+	if p := c.AgentProbe.SPKIPin; p != "" {
+		if b, err := base64.StdEncoding.DecodeString(p); err != nil || len(b) != sha256.Size {
+			add("agent_probe.spki_pin must be the base64 of a SHA-256 digest (the agents' spki_pin format)")
+		}
+	}
+	if fa := c.RateLimits.FailedAuthPerMinIP; fa >= 1 && 2*ProbeRunsPerMinute(c.AgentProbe.IntervalS) > fa {
+		add("agent_probe.interval_s is too short for rate_limits.failed_auth_per_min_per_ip: the probe's runs per minute may use at most half of that allowance, or the probe could get the console's own address blocked")
 	}
 	if c.SMTP.Host != "" {
 		if c.SMTP.Port < 1 || c.SMTP.Port > 65535 {

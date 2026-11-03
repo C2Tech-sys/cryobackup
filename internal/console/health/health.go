@@ -6,13 +6,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/probe"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
-
-// AgentSilentAfter is the C04 threshold (architecture §4.6): no agent has
-// checked in for this long while at least one active device exists.
-const AgentSilentAfter = 15 * time.Minute
 
 // EvaluatorJob is the job_state row whose staleness raises C06.
 const EvaluatorJob = "alarm-evaluator"
@@ -40,6 +37,10 @@ type Evaluator struct {
 	// Maintain reports the maintenance worker probe (C07). Nil means "not probed",
 	// which raises nothing: the prober is M3.
 	Maintain func() MaintainStatus
+	// Endpoint reports the self-probe of the public agent endpoint (C04, C05,
+	// C04b; ADR 0013). Nil means "not wired" (unit tests), which raises nothing;
+	// serve always wires it, and a probe that cannot run says so (C04b).
+	Endpoint func() probe.Status
 	// Extra supplies banners that cannot be derived here (fixtures mode shows the
 	// full C01-C16 set; the M3/M4 probers will feed the real ones).
 	Extra func(now time.Time) []state.Banner
@@ -91,15 +92,11 @@ func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error)
 	}
 
 	var extra []state.Banner
-	// C04: the fleet has enrolled devices and none has checked in lately.
-	if (w.FleetEverEnrolled || len(w.Devices) > 0) && active > 0 && w.LoadComplete {
-		if f.LastHeartbeat.IsZero() {
-			extra = append(extra, state.Banner{ID: "C04", Severity: state.SeverityCritical,
-				Text: "No agent has checked in since enrollment: the agent listener, its certificate or DNS may be broken."})
-		} else if silent := now.Sub(f.LastHeartbeat); silent > AgentSilentAfter {
-			extra = append(extra, state.Banner{ID: "C04", Severity: state.SeverityCritical, Count: int(silent.Minutes()),
-				Text: fmt.Sprintf("No agent has checked in for %d min: the agent listener, its certificate or DNS may be broken.", int(silent.Minutes()))})
-		}
+	// C04, C05, C04b (ADR 0013): from the self-probe of the agent endpoint only.
+	// Devices being offline raise no console banner, however many and however
+	// long: each is its own UNSEEN/STALE row.
+	if e.Endpoint != nil {
+		extra = append(extra, EndpointBanners(e.Endpoint(), now)...)
 	}
 	// C06: only when an evaluator job exists (it arrives at M3/M4).
 	if jerr == nil {

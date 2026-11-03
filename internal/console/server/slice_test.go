@@ -338,9 +338,16 @@ func TestM0SliceInProcess(t *testing.T) {
 		t.Fatalf("a silent device must be UNSEEN, got %s", s)
 	}
 	_, page, _ = admin.do("GET", "/", nil)
-	for _, want := range []string{"UNSEEN", `class="st crit`, "AGENT API SILENT", "No agent has checked in for"} {
+	for _, want := range []string{"UNSEEN", `class="st crit`} {
 		if !strings.Contains(string(page), want) {
 			t.Errorf("board lacks %q after the agent went silent", want)
+		}
+	}
+	// ADR 0013 (F5): a device that merely went quiet changes only its own row; the
+	// console-level agent banner comes from the endpoint self-probe, not silence.
+	for _, not := range []string{"AGENT API UNREACHABLE", "No agent has checked in for"} {
+		if strings.Contains(string(page), not) {
+			t.Errorf("board shows %q although only one device is asleep", not)
 		}
 	}
 

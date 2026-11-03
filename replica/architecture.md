@@ -408,7 +408,7 @@ Non-primary **attributes** shown as badges but never changing the primary: `offl
 | customer `suspended` | notifications muted; states and alarms still computed and rendered with a "customer suspended" label (DH10). |
 | customer `onboarding_until > now` | suppresses only MISSING (§4.5). |
 | acknowledge / snooze | mutes notifications for that `(subject, alarm_type)`; the alarm stays visible, labelled; `snooze_until` expiry or `snooze_until_next_success` clearing is evaluated at read time, so an expired snooze re-raises with no job. |
-| customer-wide collapse | if >= 5 devices **and** >= 50 % of a customer's active devices are UNSEEN (or DEFERRED with reason gateway) at once, the UI shows one customer-level row ("customer-wide silence") and notifications collapse to one; the per-device rows remain listed underneath. Same rule fleet-wide produces banner C01 / C04 instead of N rows. |
+| customer-wide collapse | if >= 5 devices **and** >= 50 % of a customer's active devices are UNSEEN (or DEFERRED with reason gateway) at once, the UI shows one customer-level row ("customer-wide silence") and notifications collapse to one; the per-device rows remain listed underneath. Same rule fleet-wide for DEFERRED(gateway) produces banner C01 instead of N rows; fleet-wide silence produces no banner (ADR 0013: C04 comes from the agent endpoint self-probe). |
 | recovery | transition from an alarming state to a non-alarming one sends one recovery notice (if the rule asks for it) and writes a `recovery` row to `notification_log`; the dedupe key encodes the episode (`sha256(subject, alarm_type, since)`), so a flapping device does not re-page for the same episode. |
 
 ### 4.4 Run outcome to result class (backup runs)
@@ -446,8 +446,9 @@ Health % = `devices with a fresh success (age <= stale_after) and no critical/al
 | C01 | **Gateway unreachable** | `health-prober` TLS + authenticated `GET /probe/config` through the gateway as the reserved `probe` login (200 or 404 = healthy; 401, TLS error, timeout, 5xx = failed); also derived from many devices reporting DEFERRED(gateway) | 3 consecutive failures (about 3 min) or >= 50 % of reporting devices deferred(gateway) | "Gateway unreachable: no agent can back up. Last OK hh:mm." | critical |
 | C02 | **Storage probe failed** | `maintain` RPC: list prefix + `restic cat config` on the probe repo | 2 consecutive failures | "Storage unreachable from the admin path: retention, restore and usage are impaired." | critical |
 | C03 | **SMTP failing** | last 3 sends failed, or a test failed, or alerts pending with no successful send in 24 h | as stated | "Alert e-mail cannot be delivered: alarms may go unnoticed." | critical |
-| C04 | **Agent API silent** | fleet has ever enrolled devices and `max(device_presence.received_at)` older than the threshold while >= 1 non-paused, non-retired device exists | 15 min | "No agent has checked in for N min: the agent listener, its certificate or DNS may be broken." (the 18-day-outage class) | critical |
-| C05 | **Certificate expiring** | TLS dial of the agent listener and the gateway, `notAfter` | warn < 21 d, critical < 7 d | "Gateway certificate expires in N days." | warn / critical |
+| C04 | **Agent API unreachable** (ADR 0013; supersedes the fleet-silence rule: devices being offline never raise a console banner) | the console's self-probe of `public_url`, as an agent would: dns, connect, tls (chain and name against the system roots or `agent_probe.ca_file`, plus `agent_probe.spki_pin`), certificate expiry, and the agent API's own unauthenticated 401 answer (wrong responder) | 2 failed runs spanning 5 min; an expired certificate at once | "Agent API unreachable: {the failing stage}. No agent can check in or report. Failing for N min." (the 18-day-outage class) | critical |
+| C04b | **Agent API not checked** (ADR 0013) | the self-probe cannot run (`public_url` unset, `agent_probe.ca_file` or `spki_pin` unusable), runs without TLS (`http://` lab), or has not completed for 3 intervals | as stated | "Agent API not self-checked: {reason}, so a broken agent listener, certificate or DNS name would go unnoticed." | warn |
+| C05 | **Certificate expiring** | TLS dial of the agent listener (the ADR 0013 self-probe) and the gateway, `notAfter` | warn < 21 d, critical < 7 d | "{Agent listener or Gateway} certificate expires in N days." | warn / critical |
 | C06 | **Evaluator stalled** | `job_state.alarm_evaluator.last_finished_at` older than 3x its period | 3 min | "Alerting is stalled: this view and notifications may be stale." | critical |
 | C07 | **Maintenance worker down** | RPC socket unreachable or `maintenance_scheduler` last finished > 30 min | 30 min | "Maintenance worker is not running: retention, restore browsing and usage sampling are off." | critical |
 | C08 | **Empty fleet** | `fleet_ever_enrolled = true` and active devices = 0 (first run with the flag false shows a neutral "enroll your first customer" panel instead) | immediate | "No active devices enrolled." | critical |
@@ -553,8 +554,8 @@ Layout: `internal/state/classify_test.go` (A, B), `fleet_test.go` (C), `rollup_t
 | C08 | storage_probe_failed_banner | 2 failed probes | banner C02 |
 | C09 | smtp_failing_banner | 3 failed sends | banner C03 |
 | C10 | smtp_recovers_clears_banner | success after failures | banner gone |
-| C11 | agent_api_silent_banner | newest presence 18 min ago, devices active | banner C04 |
-| C12 | agent_api_silent_not_when_all_paused_or_empty | all devices paused / retired | no C04 |
+| C11 | agent_endpoint_probe_failing_banner (ADR 0013, superseding agent_api_silent_banner) | self-probe failing 2 runs over 5 min, at each stage | banner C04 naming the stage |
+| C12 | offline_fleet_raises_no_console_banner (ADR 0013, superseding agent_api_silent_not_when_all_paused_or_empty) | every device silent for 20 min to 60 h, probe healthy | no C04, no console banner; devices STALE/UNSEEN only |
 | C13 | evaluator_stalled_banner | evaluator finished 10 min ago, period 60 s | banner C06 |
 | C14 | maintenance_worker_down_banner | RPC unreachable | banner C07 |
 | C15 | cert_expiring_warn_and_critical | 20 d and 6 d | warn then critical |
@@ -1311,7 +1312,7 @@ Boundaries: (1) endpoint to internet: only outbound HTTPS to two ports, no inbou
 | **Webhook SSRF / header injection** | console makes requests into the operator's private network | destinations must resolve to public addresses unless an owner marks the rule `allow_private`; header values wrapped and validated |
 | **Spreadsheet injection in exports** | formula execution when an operator opens a CSV/XLSX | cells starting with `= + - @` are prefixed with `'` on export |
 | **Replay of agent requests** | duplicated runs/commands | idempotency keys (run id, command id), TLS, per-device nonce-free design relies on idempotency rather than replay windows |
-| **DoS on the public listener** | fleet cannot check in | per-device limits, small bodies, connection caps; the loss of check-ins is itself detected (C04) |
+| **DoS on the public listener** | fleet cannot check in | per-device limits, small bodies, connection caps; a listener that stops answering is detected by the agent endpoint self-probe (C04, ADR 0013); devices that cannot check in turn STALE/UNSEEN |
 
 ### 8.4 HIPAA path-free logging rule (design constraint)
 
@@ -1465,7 +1466,7 @@ Cumulative estimate: **29 weeks to PILOT-ABLE (M0-M6)**, 32 to every must row (M
 - **Feature rows delivered:** 20 (16 must, 3 should, 1 could) - by area: scheduling 1, monitoring 15, console 2, api 2; the rows are listed in §11
 - **Acceptance test:**
   - all of §4.8 (groups A-E) passes before the UI is wired; fixtures mode renders every state, every banner and a MISSING customer
-  - kill the gateway container: banner C01 within 3 minutes and `AllClear()` stays false; stop all heartbeats: C04; inject a facts-load failure: devices UNKNOWN + C09 (never green)
+  - kill the gateway container: banner C01 within 3 minutes and `AllClear()` stays false; stop all heartbeats: devices STALE/UNSEEN and no console banner, then stop the agent listener or break its certificate: C04 within about 5 to 8 minutes (ADR 0013, superseding "stop all heartbeats: C04"); inject a facts-load failure: devices UNKNOWN + C09 (never green)
   - lab dogfood on the operator's own test machines (not a customer pilot) for 7 days with induced outages: every one produces a visible alarm
 - **Estimate:** 4 engineer-weeks *(estimate)*
 

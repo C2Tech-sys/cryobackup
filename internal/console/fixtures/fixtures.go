@@ -45,8 +45,10 @@ func Banners(now time.Time) []state.Banner {
 		{ID: "C01", Severity: crit, Text: "Gateway unreachable: no agent can back up. Last OK " + hm(9*time.Minute) + "."},
 		{ID: "C02", Severity: crit, Text: "Storage unreachable from the admin path: retention, restore and usage are impaired. Last OK " + hm(14*time.Minute) + "."},
 		{ID: "C03", Severity: crit, Text: "Alert e-mail cannot be delivered: alarms may go unnoticed. Last send " + hm(26*time.Hour) + "."},
-		{ID: "C04", Severity: crit, Count: 23, Text: "No agent has checked in for 23 min: the agent listener, its certificate or DNS may be broken."},
-		{ID: "C05", Severity: warn, Count: 12, Text: "Gateway certificate expires in 12 days."},
+		// C04 and C05 follow ADR 0013 (the agent endpoint self-probe); /design shows
+		// every ADR 0013 variant from health.EndpointExamples.
+		{ID: "C04", Severity: crit, Count: 23, Text: "Agent API unreachable: agents.example.com:8443 does not resolve (DNS). No agent can check in or report. Failing for 23 min."},
+		{ID: "C05", Severity: warn, Count: 12, Text: "Agent listener certificate expires in 12 days."},
 		{ID: "C06", Severity: crit, Text: "Alerting is stalled: this view and notifications may be stale. Last evaluation " + hm(7*time.Minute) + "."},
 		{ID: "C07", Severity: crit, Text: "Maintenance worker is not running: retention, restore browsing and usage sampling are off."},
 		{ID: "C08", Severity: crit, Text: "No active devices enrolled. Nothing is being backed up."},
