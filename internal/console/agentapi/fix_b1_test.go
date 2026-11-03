@@ -60,6 +60,9 @@ func machineReq(i int) api.EnrollRequest {
 func TestFixB1ConcurrentEnrollmentsOnOneTokenAllSucceed(t *testing.T) {
 	h := newHarness(t)
 	h.svc.Backend = slowBackend{Backend: h.be, delay: 150 * time.Millisecond}
+	// This test is about serialising, not about the bound (the next test covers
+	// the bound): a long wait keeps it stable on a loaded CI machine under -race.
+	h.svc.enrollWait = 5 * time.Minute
 	plain, tok := h.mintUses(5)
 
 	const n = 5
