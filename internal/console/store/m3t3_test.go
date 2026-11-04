@@ -17,6 +17,9 @@ const matrixViewer = "01J9Y4K3A0B1C2D3E4F5G6H7AB" // an admin id that owns none 
 // struct is shared with other tickets' tests, so the id lives here).
 var m3Views = map[string]string{}
 
+// matrixHost is the hostname of each matrix target's device.
+var matrixHost = map[string]string{"A": "A-DESK-1", "B": "B-DESK-1"}
+
 // addM3T3Matrix adds the M3-T3 methods to the §3.5 scope matrix (matrix() in
 // scope_test.go calls it).
 func addM3T3Matrix(m map[string]matrixCase) {
@@ -24,22 +27,36 @@ func addM3T3Matrix(m map[string]matrixCase) {
 	// A shared view owned by the matrix admin that names the target's customer.
 	prepView := func(w *world, t *target) {
 		v, err := w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: uniq("view-" + t.name), Entity: "devices", Shared: true,
-			Filter: json.RawMessage(`{"all":[{"customer_id":"` + t.cust + `"}]}`)}, actor(w))
+			Filter: json.RawMessage(`{"op":"and","clauses":[{"field":"customer","op":"in","value":["` + t.cust + `"]},{"field":"hostname","op":"eq","value":"` + matrixHost[t.name] + `"}]}`)}, actor(w))
 		ok(w.t, err)
 		m3Views[t.name] = v.ID
 	}
 	m["ListSavedViews"] = matrixCase{kind: list, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		// One view that names the customer by id and one that names its device by hostname, per customer.
+		hostCust := map[string]string{matrixHost["A"]: w.custA.ID, matrixHost["B"]: w.custB.ID}
 		for _, c := range []Customer{w.custA, w.custB} {
-			_, err := w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: "list-" + c.ID, Entity: "customers", Shared: true,
-				Filter: json.RawMessage(`{"customer_id":"` + c.ID + `"}`)}, actor(w))
-			if err != nil && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrScope) {
-				return nil, err
+			host := matrixHost["A"]
+			if c.ID == w.custB.ID {
+				host = matrixHost["B"]
+			}
+			for name, f := range map[string]string{
+				"list-c-" + c.ID: `{"field":"customer","op":"in","value":["` + c.ID + `"]}`,
+				"list-h-" + c.ID: `{"op":"or","clauses":[{"field":"hostname","op":"starts_with","value":"` + host + `"}]}`,
+			} {
+				_, err := w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: name, Entity: "devices", Shared: true, Filter: json.RawMessage(f)}, actor(w))
+				if err != nil && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrScope) {
+					return nil, err
+				}
 			}
 		}
-		vs, err := w.s.ListSavedViews(w.ctx, sc, matrixViewer, "customers")
+		vs, err := w.s.ListSavedViews(w.ctx, sc, matrixViewer, "devices")
 		var rows []string
 		for _, v := range vs {
-			rows = append(rows, viewCustomerRefs(v.Filter)...)
+			refs, _, _ := parseViewFilter(v.Entity, v.Filter)
+			rows = append(rows, refs.Customers...)
+			for _, h := range refs.Hostnames {
+				rows = append(rows, hostCust[strings.ToUpper(strings.TrimSuffix(h.Value, "*"))])
+			}
 		}
 		return rows, err
 	}}
@@ -224,7 +241,7 @@ func TestSavedViewsOwnSharedAndScope(t *testing.T) {
 	owner, other := actorOf(w), AuditActor{AdminID: matrixViewer, Username: "other", Method: "api"}
 	mine := must[SavedView](t)(w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: "Mine", Entity: "devices"}, owner))
 	shared := must[SavedView](t)(w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: "Everyone", Entity: "devices", Shared: true,
-		Filter: json.RawMessage(`{"state":"STALE"}`), Columns: json.RawMessage(`["hostname","state"]`)}, owner))
+		Filter: json.RawMessage(`{"field":"state","op":"in","value":["STALE"]}`), Columns: json.RawMessage(`["hostname","state"]`)}, owner))
 	if string(mine.Filter) != "{}" || string(mine.Columns) != "[]" || string(mine.Sort) != "[]" || mine.Shared {
 		t.Fatalf("defaults: %+v", mine)
 	}
@@ -291,11 +308,11 @@ func TestSavedViewsOwnSharedAndScope(t *testing.T) {
 func TestSavedViewNamingAnotherCustomerIsHiddenFromAScopedCaller(t *testing.T) {
 	w := seed(t)
 	own := must[SavedView](t)(w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: "A only", Entity: "devices", Shared: true,
-		Filter: json.RawMessage(`{"all":[{"customer_id":"` + w.custA.ID + `"}]}`)}, actorOf(w)))
+		Filter: json.RawMessage(`{"field":"customer","op":"in","value":["` + w.custA.ID + `"]}`)}, actorOf(w)))
 	both := must[SavedView](t)(w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: "A and B", Entity: "devices", Shared: true,
-		Filter: json.RawMessage(`{"customer_ids":["` + w.custA.ID + `","` + w.custB.ID + `"]}`)}, actorOf(w)))
+		Filter: json.RawMessage(`{"field":"customer","op":"in","value":["` + w.custA.ID + `","` + w.custB.ID + `"]}`)}, actorOf(w)))
 	plain := must[SavedView](t)(w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: "Plain", Entity: "devices", Shared: true,
-		Filter: json.RawMessage(`{"state":"OK"}`)}, actorOf(w)))
+		Filter: json.RawMessage(`{"field":"state","op":"in","value":["OK"]}`)}, actorOf(w)))
 	vs := must[[]SavedView](t)(w.s.ListSavedViews(w.ctx, ScopeOf(w.custA.ID), matrixViewer, "devices"))
 	got := map[string]bool{}
 	for _, v := range vs {

@@ -460,15 +460,77 @@ func TestM3ACustomerScopedAccountSeesOnlyItsCustomer(t *testing.T) { // §3.5
 		t.Errorf("scoped share = %d, want 403", res.StatusCode)
 	}
 	owner := e.login("admin", pw)
-	if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: "summit only", Entity: "devices", Shared: true, Filter: json.RawMessage(`{"customer_id":"` + summit.ID + `"}`)}); res.StatusCode != 201 {
-		t.Fatalf("shared view: %d %s", res.StatusCode, b)
+	// H1: the clause-builder shapes {field, op, value} name Summit by id and by hostname.
+	hidden := map[string]string{
+		"Summit Eye Care exam rooms": `{"op":"and","clauses":[{"field":"customer","op":"in","value":["` + summit.ID + `"]},{"field":"hostname","op":"eq","value":"EXAM-ROOM-3"}]}`,
+		"Summit by id":               `{"field":"customer","op":"in","value":["` + summit.ID + `"]}`,
+		"One host":                   `{"field":"hostname","op":"eq","value":"EXAM-ROOM-3"}`,
+		"Rooms":                      `{"field":"hostname","op":"contains","value":"ROOM"}`,
+		"Not Summit":                 `{"op":"not","clauses":[{"field":"customer","op":"in","value":["` + summit.ID + `"]}]}`,
+	}
+	for name, f := range hidden {
+		if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: name, Entity: "devices", Shared: true, Filter: json.RawMessage(f)}); res.StatusCode != 201 {
+			t.Fatalf("shared view %s: %d %s", name, res.StatusCode, b)
+		}
 	}
 	if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: "everyone", Entity: "devices", Shared: true}); res.StatusCode != 201 {
 		t.Fatalf("shared view: %d %s", res.StatusCode, b)
 	}
-	vl := decode[ViewListResponse](t, mustGet(e, "/api/v1/views", sc))
-	if len(vl.Views) != 1 || vl.Views[0].Name != "everyone" {
-		t.Errorf("the scoped account sees %+v", vl.Views)
+	if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: "northwind", Entity: "devices", Shared: true, Filter: json.RawMessage(`{"field":"customer","op":"in","value":["` + nw.ID + `"]}`)}); res.StatusCode != 201 {
+		t.Fatalf("shared view: %d %s", res.StatusCode, b)
+	}
+	code, raw := e.get("/api/v1/views", sc)
+	vl := decode[ViewListResponse](t, raw)
+	var names []string
+	for _, v := range vl.Views {
+		names = append(names, v.Name)
+	}
+	if code != 200 || len(vl.Views) != 2 || strings.Join(names, ",") != "everyone,northwind" {
+		t.Errorf("the scoped account sees %v, want only everyone and northwind", names)
+	}
+	if strings.Contains(string(raw), summit.ID) || strings.Contains(string(raw), "EXAM-ROOM-3") {
+		t.Errorf("the list carries Summit's id or a Summit hostname: %s", raw)
+	}
+	// A hidden view cannot be reached by id either: 404, not 403.
+	all := decode[ViewListResponse](t, mustGet(e, "/api/v1/views?entity=devices", owner))
+	for _, v := range all.Views {
+		if _, ok := hidden[v.Name]; !ok {
+			continue
+		}
+		n := "renamed"
+		if res, _ := e.req("PATCH", "/api/v1/views/"+v.ID, sc, PatchViewRequest{Name: &n}); res.StatusCode != 404 {
+			t.Errorf("patching hidden view %q as the scoped account = %d, want 404", v.Name, res.StatusCode)
+		}
+		if res, _ := e.req("DELETE", "/api/v1/views/"+v.ID, sc, nil); res.StatusCode != 404 {
+			t.Errorf("deleting hidden view %q as the scoped account = %d, want 404", v.Name, res.StatusCode)
+		}
+	}
+}
+
+func TestM3ViewFiltersMustBeClauseTrees(t *testing.T) { // H1(b), L4
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	before := e.audits()
+	for name, f := range map[string]string{
+		"the old customer key":      `{"customer":"x"}`,
+		"an unknown field":          `{"field":"colour","op":"eq","value":"red"}`,
+		"an empty group":            `{"op":"and","clauses":[]}`,
+		"a value of the wrong type": `{"field":"customer","op":"in","value":"abc"}`,
+	} {
+		res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: "bad " + name, Entity: "devices", Filter: json.RawMessage(f)})
+		if res.StatusCode != 400 || problemFields(t, b)["filter"] == "" {
+			t.Errorf("%s: %d %s, want 400 naming the filter field", name, res.StatusCode, b)
+		}
+	}
+	res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: `C:\Users\someone`, Entity: "devices"})
+	if res.StatusCode != 400 || problemFields(t, b)["name"] == "" {
+		t.Errorf("a view named like a path: %d %s", res.StatusCode, b)
+	}
+	if e.audits() != before {
+		t.Errorf("rejected views wrote %d audit rows", e.audits()-before)
+	}
+	if vl := decode[ViewListResponse](t, mustGet(e, "/api/v1/views", owner)); len(vl.Views) != 0 {
+		t.Errorf("rejected views were stored: %+v", vl.Views)
 	}
 }
 
@@ -590,12 +652,12 @@ func TestM3SavedViewsThroughTheAPI(t *testing.T) { // F06
 	e.addAdmin("m3-ro2", "read_only", nil)
 	ro, ro2 := e.login("m3-ro", pw), e.login("m3-ro2", pw)
 
-	res, b := e.req("POST", "/api/v1/views", ro, CreateViewRequest{Name: "Stale devices", Entity: "devices", Filter: json.RawMessage(`{"state":["STALE"]}`), Columns: json.RawMessage(`["hostname","state"]`), Sort: json.RawMessage(`[{"column":"hostname","dir":"asc"}]`)})
+	res, b := e.req("POST", "/api/v1/views", ro, CreateViewRequest{Name: "Stale devices", Entity: "devices", Filter: json.RawMessage(`{"field":"state","op":"in","value":["STALE"]}`), Columns: json.RawMessage(`["hostname","state"]`), Sort: json.RawMessage(`[{"column":"hostname","dir":"asc"}]`)})
 	if res.StatusCode != 201 || res.Header.Get("Location") == "" {
 		t.Fatalf("create: %d %s", res.StatusCode, b)
 	}
 	mine := decode[ViewResponse](t, b)
-	if !mine.Mine || mine.Shared || mine.Owner != "m3-ro" || string(mine.Filter) != `{"state":["STALE"]}` {
+	if !mine.Mine || mine.Shared || mine.Owner != "m3-ro" || string(mine.Filter) != `{"field":"state","op":"in","value":["STALE"]}` {
 		t.Fatalf("created view: %+v", mine)
 	}
 	// Private to its owner.

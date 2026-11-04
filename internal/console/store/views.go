@@ -79,54 +79,27 @@ func scanView(sc scanner) (SavedView, error) {
 	return v, nil
 }
 
-// viewCustomerKeys are the filter keys that name customers.
-var viewCustomerKeys = map[string]bool{"customer": true, "customer_id": true, "customer_ids": true, "customers": true}
-
-// viewCustomerRefs lists every customer id a filter names, at any depth.
-func viewCustomerRefs(filter json.RawMessage) []string {
-	var doc any
-	if json.Unmarshal(filter, &doc) != nil {
-		return nil
-	}
-	var out []string
-	var walk func(v any, named bool)
-	walk = func(v any, named bool) {
-		switch x := v.(type) {
-		case map[string]any:
-			for k, e := range x {
-				walk(e, named || viewCustomerKeys[k])
-			}
-		case []any:
-			for _, e := range x {
-				walk(e, named)
-			}
-		case string:
-			if named && x != "" {
-				out = append(out, x)
-			}
-		}
-	}
-	walk(doc, false)
-	return out
-}
-
-// visibleView reports whether viewer (an admin id) may see v under scope.
-func visibleView(scope Scope, viewer string, v SavedView) bool {
+// visibleView reports whether viewer (an admin id) may see v under scope. The
+// owner sees their own view; an all-customer caller sees every shared view; any
+// other caller sees a shared view only when its filter parses and everything it
+// names (customers, devices, hostnames, customer names) resolves to something
+// inside scope. A filter that does not parse, or names something unresolvable,
+// is hidden: fail closed.
+func visibleView(tx *Tx, scope Scope, viewer string, v SavedView) (bool, error) {
 	if v.OwnerID != "" && v.OwnerID == viewer {
-		return true
+		return true, nil
 	}
 	if !v.Shared {
-		return false
+		return false, nil
 	}
 	if scope.All {
-		return true
+		return true, nil
 	}
-	for _, id := range viewCustomerRefs(v.Filter) {
-		if !scope.Allows(id) {
-			return false
-		}
+	refs, _, ok := parseViewFilter(v.Entity, v.Filter)
+	if !ok {
+		return false, nil
 	}
-	return true
+	return refs.allInScope(tx, scope)
 }
 
 // validateView checks the user-supplied parts. Rejected input is a
@@ -136,6 +109,8 @@ func validateView(name *string, entity string, filter, columns, sort *json.RawMe
 	if name != nil {
 		if n, ok := cleanLine(*name, 100); !ok || n == "" {
 			bad = append(bad, fieldf("name", "Use a name of 1 to 100 characters on one line."))
+		} else if looksLikePath(n) {
+			bad = append(bad, fieldf("name", "Name the view in words, without a file path."))
 		} else {
 			*name = n
 		}
@@ -157,6 +132,14 @@ func validateView(name *string, entity string, filter, columns, sort *json.RawMe
 	shape("filter", filter, '{', "a JSON object")
 	shape("columns", columns, '[', "a JSON array")
 	shape("sort", sort, '[', "a JSON array")
+	if len(bad) == 0 {
+		bad = append(bad, validateViewShape(columns, sort)...)
+		if entity != "" && filter != nil && len(*filter) > 0 {
+			if _, why, ok := parseViewFilter(entity, *filter); !ok {
+				bad = append(bad, viewFilterError(why))
+			}
+		}
+	}
 	return bad
 }
 
@@ -175,20 +158,25 @@ func (s *Store) ListSavedViews(ctx context.Context, scope Scope, viewer, entity 
 	if entity != "" {
 		q, args = q+` AND v.entity = ?`, append(args, entity)
 	}
-	var all []SavedView
+	out := []SavedView{}
 	err := s.Read(ctx, func(tx *Tx) error {
-		var err error
-		all, err = collect(tx, q+` ORDER BY v.entity, v.name COLLATE NOCASE, v.id`, args, scanView)
-		return err
+		all, err := collect(tx, q+` ORDER BY v.entity, v.name COLLATE NOCASE, v.id`, args, scanView)
+		if err != nil {
+			return err
+		}
+		for _, v := range all {
+			vis, err := visibleView(tx, scope, viewer, v)
+			if err != nil {
+				return err
+			}
+			if vis {
+				out = append(out, v)
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
-	}
-	out := make([]SavedView, 0, len(all))
-	for _, v := range all {
-		if visibleView(scope, viewer, v) {
-			out = append(out, v)
-		}
 	}
 	return out, nil
 }
@@ -201,14 +189,20 @@ func (s *Store) GetSavedView(ctx context.Context, scope Scope, viewer, id string
 	var v SavedView
 	err := s.Read(ctx, func(tx *Tx) error {
 		var err error
-		v, err = one(tx, `SELECT `+viewCols+viewFrom+` WHERE v.id = ?`, []any{id}, scanView)
-		return err
+		if v, err = one(tx, `SELECT `+viewCols+viewFrom+` WHERE v.id = ?`, []any{id}, scanView); err != nil {
+			return err
+		}
+		vis, err := visibleView(tx, scope, viewer, v)
+		if err != nil {
+			return err
+		}
+		if !vis {
+			return ErrNotFound
+		}
+		return nil
 	})
 	if err != nil {
 		return SavedView{}, err
-	}
-	if !visibleView(scope, viewer, v) {
-		return SavedView{}, ErrNotFound
 	}
 	return v, nil
 }
@@ -266,7 +260,11 @@ func editableView(tx *Tx, scope Scope, actor AuditActor, id string, asAdmin bool
 	if err != nil {
 		return SavedView{}, err
 	}
-	if !visibleView(scope, actor.AdminID, v) {
+	vis, err := visibleView(tx, scope, actor.AdminID, v)
+	if err != nil {
+		return SavedView{}, err
+	}
+	if !vis {
 		return SavedView{}, ErrNotFound
 	}
 	if !(v.OwnerID != "" && v.OwnerID == actor.AdminID) && !asAdmin {
@@ -293,6 +291,11 @@ func (s *Store) UpdateSavedViewAudited(ctx context.Context, scope Scope, id stri
 		cur, err := editableView(tx, scope, actor, id, asAdmin)
 		if err != nil {
 			return err
+		}
+		if p.Filter != nil && len(*p.Filter) > 0 {
+			if _, why, ok := parseViewFilter(cur.Entity, *p.Filter); !ok {
+				return validation([]FieldError{viewFilterError(why)})
+			}
 		}
 		sets, args, fields := []string{"updated_at = ?"}, []any{tx.nowMS()}, []string{}
 		set := func(col, field string, v any) {
