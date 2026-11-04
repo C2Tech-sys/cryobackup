@@ -53,6 +53,7 @@ func Patterns() []string {
 	p = append(p, commandPatterns()...)    // M2-W2C: commands, run cancel, identity resolve (commands.go)
 	p = append(p, auditPatterns()...)      // M2-W3A: audit trail (audit.go)
 	p = append(p, settingsPatterns()...)   // M2-W3A: console settings (settings.go)
+	p = append(p, m3Patterns()...)         // M3-T3: state, fleet, runs, views, system, status, events, metrics (m3*.go)
 	return p
 }
 
@@ -86,6 +87,15 @@ type Service struct {
 	// SyncGateway, when set, is called after a device is retired so the gateway's
 	// htpasswd file drops its login at once instead of at the next five-minute run.
 	SyncGateway func()
+	// Jobs is the console's job runner (jobs.Runner), for the job table and "run
+	// now" (M3-T3). Nil answers "run now" with 503 and lists only the job_state rows.
+	Jobs JobRunner
+	// Events is the SSE hub (ui.Hub) the admin event stream listens to (M3-T3). Nil
+	// leaves GET /api/v1/events on its refresh tick alone: the stream still
+	// delivers, just not on every device change.
+	Events EventSource
+	// sseRefresh and sseGap override the event stream's cadences (tests).
+	sseRefresh, sseGap time.Duration
 }
 
 func (s *Service) now() time.Time {
@@ -115,6 +125,7 @@ func (s *Service) Register(r httpx.Registrar) {
 	s.registerCommands(r) // M2-W2C (commands.go)
 	s.registerAudit(r)    // M2-W3A (audit.go)
 	s.registerSettings(r) // M2-W3A (settings.go)
+	s.registerM3(r)       // M3-T3 (m3.go)
 }
 
 // display is one consistent reading of the display zone (the live preference,

@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: CryoBackup Console API
   version: 0.2.0
-  summary: Agent API and admin API of the CryoBackup console, as built through milestone M2.
+  summary: Agent API and admin API of the CryoBackup console, as built through milestone M3.
   description: |
     Two route sets served by two listeners (architecture section 5). The agent API
     (`/api/v1/agent/*`) is on the public listener and authenticates with a device
@@ -10,7 +10,7 @@ info:
     private listener and authenticates with a session cookie plus CSRF, or with an API
     token (`Authorization: Bearer cbk_...`). The two route sets are disjoint.
 
-    This document lists exactly the routes the console registers through M2. A test
+    This document lists exactly the routes the console registers through M3 under /api/v1 (GET /metrics, the Prometheus text exposition for monitors, is on the admin listener too and is not listed here: it is not a JSON route). A test
     (`internal/console/server`, `TestOpenAPISpecMatchesTheRegisteredRoutes`) compares its
     paths and methods with the registered routes in both directions, so a route without an
     entry, or an entry without a route, fails the build. Routes of later milestones are
@@ -45,6 +45,9 @@ tags:
   - name: audit
   - name: settings
   - name: system
+  - name: fleet
+  - name: views
+  - name: monitoring
   - name: agent
 paths:
   /api/v1/agent/enroll:
@@ -1537,6 +1540,460 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/VersionResponse'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+  # ---- M3: state engine, fleet board, runs, views, system, status ----
+  /api/v1/fleet/summary:
+    get:
+      operationId: getFleetSummary
+      tags: [fleet]
+      summary: Fleet summary (rings, counts, banners, freshness stamp)
+      description: Computed from the one fleet view the board and the event stream render. `all_clear` is true only with no banner, nothing alarming, complete data and a non-empty fleet (or a first run). With `customer` the counts and rings narrow to that customer; the banners and `all_clear` stay console-wide.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/CustomerFilter'}
+      responses:
+        '200':
+          description: The summary.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FleetSummaryResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/fleet/banners:
+    get:
+      operationId: getFleetBanners
+      tags: [fleet]
+      summary: Console-level conditions and customer entity banners
+      description: Gateway, storage, SMTP, agent API, certificates, stalled jobs, partial data and the rest of architecture section 4.6, plus a banner per MISSING customer and per customer whose devices went silent together. An empty list is an answer only with `complete` true.
+      x-min-role: RO
+      responses:
+        '200':
+          description: The banners.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FleetBannersResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/fleet/overdue:
+    get:
+      operationId: getFleetOverdue
+      tags: [fleet]
+      summary: Overdue devices with reason chips
+      description: Devices that are STALE, MISSED or BLANK, never-succeeded first, then oldest success first.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/CustomerFilter'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: One page of overdue devices.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FleetOverdueResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/fleet/unseen:
+    get:
+      operationId: getFleetUnseen
+      tags: [fleet]
+      summary: Devices not seen, customer-wide silence collapsed
+      description: A customer with at least 5 active devices of which at least half are unseen (or deferred for the gateway) is one `customer_silence` row; its devices are not listed again.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/CustomerFilter'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: One page of rows.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FleetUnseenResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/fleet/ten-day:
+    get:
+      operationId: getFleetTenDay
+      tags: [fleet]
+      summary: Ten-day activity grid
+      description: One row per customer, each day folded over its devices. With `customer` (or `devices=true`) the device rows are included. Days are calendar days in the customer's zone.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/CustomerFilter'}
+        - {name: devices, in: query, required: false, schema: {type: boolean}}
+      responses:
+        '200':
+          description: The grid.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FleetTenDayResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/alarms:
+    get:
+      operationId: listAlarms
+      tags: [fleet]
+      summary: Everything alarming now, grouped by customer
+      description: Overdue, unseen, failed, escrow, maintenance, unknown and identity alarms per device; a MISSING customer; customer-wide silence as one entry. Console banners are listed apart. Acknowledged alarms are still listed (an acknowledgement mutes notifications, not the state).
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/CustomerFilter'}
+        - {name: severity, in: query, required: false, schema: {type: string, enum: [alarm, critical]}, description: The lowest severity listed; `alarm` (default) lists both.}
+      responses:
+        '200':
+          description: The alarms.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AlarmsResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/customers/{id}/health:
+    get:
+      operationId: getCustomerHealth
+      tags: [customers]
+      summary: Customer rollup with the MISSING flag and ten-day strip
+      description: Counts per state, health percentage (absent when there is no active device: n/a, never 100), the MISSING flag, customer-wide silence and the customer's ten-day strip.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The rollup.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CustomerHealthResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices/{id}/state:
+    get:
+      operationId: getDeviceState
+      tags: [devices]
+      summary: Computed state with reasons and inputs
+      description: For the explain tooltip. `explain` has one line per state the device is in, primary first; `inputs` are the facts the engine judged (counts, classes, versions and times, never a path).
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceStateResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices/{id}/heartbeats:
+    get:
+      operationId: getDeviceHeartbeats
+      tags: [devices]
+      summary: Heartbeat ring (24 hours)
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {name: range, in: query, required: false, schema: {type: string, enum: [1h, 6h, 24h]}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 2000}}
+      responses:
+        '200':
+          description: Heartbeats, newest first; `truncated` says older ones in the range were left out.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceHeartbeatsResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices/{id}/ten-day:
+    get:
+      operationId: getDeviceTenDay
+      tags: [devices]
+      summary: Ten-day strip
+      description: Ten cells, oldest first, success, mixed, failed, missed or none, in the customer's zone. A retired device has no strip.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The strip.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceTenDayResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices/{id}/pause:
+    post:
+      operationId: pauseDevice
+      tags: [devices]
+      summary: Pause a device
+      description: |
+        Console-owned pause (DH11). Give a reason and exactly one of `duration_hours` (1, 2, 4, 8 or 24), `until` (at least a minute away, at most a year) or `indefinite` (listed in every digest with its age). Pausing cancels a running backup (a cancel command is queued for it) and queues a policy refresh so the agent learns the pause now. One audit row. The same request again changes nothing. A retired device answers 409.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DevicePauseRequest'}
+      responses:
+        '200':
+          description: The pause, with `changed` false when it matched the current state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DevicePauseResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/devices/{id}/resume:
+    post:
+      operationId: resumeDevice
+      tags: [devices]
+      summary: End a pause early
+      description: A device that is not paused answers 200 with `changed` false and writes nothing.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '200':
+          description: The device after the resume.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DevicePauseResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/runs:
+    get:
+      operationId: searchRuns
+      tags: [runs]
+      summary: Search runs fleet-wide
+      description: The clause builder of the job logs page. Clauses narrow (AND); several values of one clause (comma separated or repeated) widen it (OR). Counts and error classes only, never a path.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, required: false, schema: {type: string}, description: 'success, partial, failed, cancelled, skipped, deferred, interrupted, abandoned or running (open runs).'}
+        - {name: kind, in: query, required: false, schema: {type: string}, description: 'backup, restore, forget, prune, check, unlock or maintenance.'}
+        - {name: customer, in: query, required: false, schema: {type: string}}
+        - {name: device, in: query, required: false, schema: {type: string}}
+        - {name: since, in: query, required: false, schema: {type: string, format: date-time}}
+        - {name: until, in: query, required: false, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: One page of runs, newest first. `total` counts the matches, `of` every run in scope.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RunListResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/runs/{id}:
+    get:
+      operationId: getRun
+      tags: [runs]
+      summary: Run detail
+      description: Timings, policy version, numeric stats and error classes with their counts. Text in the run's stats is dropped; no path or message is ever returned.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RunDetailResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/views:
+    get:
+      operationId: listViews
+      tags: [views]
+      summary: Saved views (own and shared)
+      x-min-role: RO
+      parameters:
+        - {name: entity, in: query, required: false, schema: {type: string, enum: [devices, runs, customers]}}
+      responses:
+        '200':
+          description: The views the caller may see.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ViewListResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      operationId: createView
+      tags: [views]
+      summary: Create a saved view
+      description: Only an account that sees every customer may share a view (403 otherwise). A second view of the same owner, entity and name answers 409.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateViewRequest'}
+      responses:
+        '201':
+          description: The view.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ViewResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/views/{id}:
+    patch:
+      operationId: patchView
+      tags: [views]
+      summary: Edit a saved view
+      description: The owner edits their own view; an admin edits any view they can see. Absent fields are unchanged. A patch that changes nothing writes no audit row.
+      x-min-role: SELF
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PatchViewRequest'}
+      responses:
+        '200':
+          description: The view.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ViewResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+    delete:
+      operationId: deleteView
+      tags: [views]
+      summary: Delete a saved view
+      description: The owner deletes their own view; an admin any view they can see.
+      x-min-role: SELF
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Deleted.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      tags: [monitoring]
+      summary: Machine status for external monitors
+      description: |
+        The state of every device and customer and one `overall` verdict: `ok` only when the engine says all clear, `critical` when anything is critical, `unknown` when the data is incomplete or an enrolled fleet is empty, otherwise `warning`. The HTTP status is 200 whatever the verdict, so a monitor can tell "the console says critical" from "the console is down". An API token of the read scope may call it; narrower token scopes (`status:read`) are not built yet.
+      x-min-role: RO
+      parameters:
+        - {$ref: '#/components/parameters/CustomerFilter'}
+      responses:
+        '200':
+          description: The status.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StatusResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/events:
+    get:
+      operationId: streamEvents
+      tags: [monitoring]
+      summary: Server-sent events
+      description: |
+        `fleet.state` (the fleet summary) on connect, on device changes and every refresh interval, `banner.update` when the banner set changes, `run.progress` for runs of devices the caller may see, `stream.error` when the fleet cannot be evaluated (the last state is stale), and `ping` every 15 seconds. `topics` narrows the stream to some of `fleet`, `banners` and `runs`.
+      x-min-role: RO
+      parameters:
+        - {name: topics, in: query, required: false, schema: {type: string}, description: 'Comma separated: fleet, banners, runs. Default all.'}
+      responses:
+        '200':
+          description: An event stream.
+          content:
+            text/event-stream:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/system/health:
+    get:
+      operationId: getSystemHealth
+      tags: [system]
+      summary: Probe results and versions
+      description: Gateway, storage, alert e-mail, certificates, agent API, maintenance worker, database, alarm evaluator, master key, jobs, clock and release manifest. A component is `ok` only on evidence; a probe that has not run is `not_checked`, never `ok`. `overall` is the worst component.
+      x-min-role: RO
+      responses:
+        '200':
+          description: The health.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SystemHealthResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/system/jobs:
+    get:
+      operationId: listJobs
+      tags: [system]
+      summary: Job table
+      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`.
+      x-min-role: AD
+      responses:
+        '200':
+          description: The jobs.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JobListResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/system/jobs/{name}/run:
+    post:
+      operationId: runJob
+      tags: [system]
+      summary: Run a job now
+      description: Lease-guarded. Answers 202 when the run was accepted (and audited); the outcome is the job's row in the job table. 409 while another holder has the lease, 404 for an unknown job, 503 when the console has no job runner.
+      x-min-role: AD
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '202':
+          description: Accepted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JobRunResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/storage-targets/{id}/probe:
+    post:
+      operationId: probeStorageTarget
+      tags: [system]
+      summary: Probe the gateway, storage and certificates now
+      description: Runs the health-prober job now (lease-guarded) and reads the checks from the banners it feeds. When the probe cannot run, every check is `not_checked` with the reason, never `ok`. One audit row for the attempt.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '200':
+          description: The probe result.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProbeResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
 security:
   - sessionCookie: []
   - apiToken: []
@@ -1589,6 +2046,12 @@ components:
       in: header
       required: false
       description: Optional on the commands routes; a key in the body must equal it.
+      schema: {type: string}
+    CustomerFilter:
+      name: customer
+      in: query
+      required: false
+      description: Narrow the answer to one customer (404 for one outside the caller's scope).
       schema: {type: string}
   responses:
     BadRequest:
@@ -2799,3 +3262,651 @@ components:
         lease_until: {$ref: '#/components/schemas/Timestamp'}
         retry_after_s: {type: integer, minimum: 60, maximum: 900, description: Only when granted is false.}
         server_time: {$ref: '#/components/schemas/Timestamp'}
+
+    # ---- M3: state engine, fleet board, runs, views, system, status ----
+    FleetStamp:
+      type: object
+      description: The freshness stamp of a fleet-derived answer. `complete` false means part of the facts load failed and every number is a lower bound.
+      required: [computed_at, loaded_at, complete]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        loaded_at: {$ref: '#/components/schemas/Timestamp'}
+        complete: {type: boolean}
+    Banner:
+      type: object
+      required: [id, severity, text]
+      properties:
+        id: {type: string, description: 'C01 to C16, or the id with a b suffix for a not-checked warning of that condition.'}
+        subject: {type: string, description: 'gateway or agent_listener for C05.'}
+        severity: {type: string, enum: [critical, warn]}
+        text: {type: string}
+        count: {type: integer}
+        at: {$ref: '#/components/schemas/Timestamp'}
+    FleetSummaryResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [all_clear, first_run, freshness, devices, states, age_ring, customer_ring, overdue, unseen, banners]
+          properties:
+            customer_id: {type: string}
+            all_clear: {type: boolean}
+            first_run: {type: boolean}
+            freshness:
+              type: object
+              required: [in_view, enrolled]
+              properties:
+                in_view: {type: integer, description: Devices classified without an UNKNOWN verdict.}
+                enrolled: {type: integer, description: Non-retired devices.}
+                last_heartbeat_at: {$ref: '#/components/schemas/Timestamp'}
+            devices:
+              type: object
+              required: [total, active, paused, healthy, critical, warnings, backed_up_24h]
+              properties:
+                total: {type: integer}
+                active: {type: integer}
+                paused: {type: integer}
+                healthy: {type: integer}
+                critical: {type: integer}
+                warnings: {type: integer}
+                backed_up_24h: {type: integer}
+                within_sla_pct: {type: number, description: Absent when there is no active device (n/a, never 100).}
+            states:
+              type: object
+              description: Non-retired devices per primary state.
+              additionalProperties: {type: integer}
+            age_ring:
+              type: object
+              required: [under_24h, between_24h_and_limit, over_limit_or_never, parked, stale_after_hours]
+              properties:
+                under_24h: {type: integer}
+                between_24h_and_limit: {type: integer}
+                over_limit_or_never: {type: integer}
+                parked: {type: integer}
+                stale_after_hours: {type: integer}
+            customer_ring:
+              type: object
+              required: [total, by_status, missing, silent, within_sla, warn, critical, onboarding_or_empty]
+              properties:
+                total: {type: integer}
+                by_status:
+                  type: object
+                  additionalProperties: {type: integer}
+                missing: {type: integer}
+                silent: {type: integer}
+                within_sla: {type: integer}
+                warn: {type: integer}
+                critical: {type: integer}
+                onboarding_or_empty: {type: integer}
+                within_sla_pct: {type: number}
+            overdue: {type: integer}
+            unseen: {type: integer}
+            banners:
+              type: array
+              items: {$ref: '#/components/schemas/Banner'}
+    FleetBannersResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [all_clear, banners, entity_banners]
+          properties:
+            all_clear: {type: boolean}
+            banners:
+              type: array
+              items: {$ref: '#/components/schemas/Banner'}
+            entity_banners:
+              type: array
+              items:
+                type: object
+                required: [kind, customer_id, customer]
+                properties:
+                  kind: {type: string, enum: [missing, silence]}
+                  customer_id: {type: string}
+                  customer: {type: string}
+                  silent: {type: integer}
+                  total: {type: integer}
+    FleetDevice:
+      type: object
+      description: A device row (the same shape as the device list).
+      required: [id, customer_id, customer, hostname, state, flags, severity, attributes, acknowledged]
+      properties:
+        id: {type: string}
+        customer_id: {type: string}
+        customer: {type: string}
+        hostname: {type: string}
+        state: {type: string}
+        flags:
+          type: array
+          items: {type: string}
+        severity: {type: string, enum: [none, alarm, critical]}
+        reason: {type: string}
+        since: {$ref: '#/components/schemas/Timestamp'}
+        attributes:
+          type: array
+          items: {type: string}
+        last_success_at: {$ref: '#/components/schemas/Timestamp'}
+        last_seen_at: {$ref: '#/components/schemas/Timestamp'}
+        acknowledged: {type: boolean}
+    FleetOverdueResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [total, truncated, devices]
+          properties:
+            total: {type: integer}
+            truncated: {type: boolean}
+            next_cursor: {type: string}
+            devices:
+              type: array
+              items:
+                allOf:
+                  - $ref: '#/components/schemas/FleetDevice'
+                  - type: object
+                    required: [chips]
+                    properties:
+                      chips:
+                        type: array
+                        items: {type: string, enum: [STALE, MISSED, BLANK]}
+                      last_success_age_s: {type: integer, description: Absent for a device that never succeeded.}
+    FleetUnseenResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [devices, total, truncated, rows]
+          properties:
+            devices: {type: integer, description: Unseen devices before the collapse.}
+            total: {type: integer, description: Rows after the collapse.}
+            truncated: {type: boolean}
+            next_cursor: {type: string}
+            rows:
+              type: array
+              items:
+                type: object
+                required: [kind, customer_id, customer]
+                properties:
+                  kind: {type: string, enum: [device, customer_silence]}
+                  customer_id: {type: string}
+                  customer: {type: string}
+                  device: {$ref: '#/components/schemas/FleetDevice'}
+                  affected: {type: integer}
+                  total: {type: integer}
+                  unseen: {type: integer}
+                  device_ids:
+                    type: array
+                    items: {type: string}
+                  covered: {type: boolean, description: The fleet-wide gateway banner already speaks for every affected device.}
+                  last_seen_at: {$ref: '#/components/schemas/Timestamp'}
+    TenDayCell:
+      type: object
+      required: [date, kind, success, failed]
+      properties:
+        date: {type: string, format: date}
+        kind: {type: string, enum: [success, mixed, failed, missed, none]}
+        success: {type: integer}
+        failed: {type: integer}
+    TenDayRollupDay:
+      type: object
+      required: [date, worst, success, mixed, failed, missed, none]
+      properties:
+        date: {type: string, format: date}
+        worst: {type: string, enum: [success, mixed, failed, missed, none]}
+        success: {type: integer}
+        mixed: {type: integer}
+        failed: {type: integer}
+        missed: {type: integer}
+        none: {type: integer}
+    FleetTenDayResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [customers]
+          properties:
+            customers:
+              type: array
+              items:
+                type: object
+                required: [id, name, status, days]
+                properties:
+                  id: {type: string}
+                  name: {type: string}
+                  status: {type: string}
+                  zone: {type: string}
+                  days:
+                    type: array
+                    items: {$ref: '#/components/schemas/TenDayRollupDay'}
+                  devices:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, hostname, state, days]
+                      properties:
+                        id: {type: string}
+                        hostname: {type: string}
+                        state: {type: string}
+                        days:
+                          type: array
+                          items: {$ref: '#/components/schemas/TenDayCell'}
+    AlarmsResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [total, critical, groups, banners]
+          properties:
+            total: {type: integer}
+            critical: {type: integer, description: Critical console banners.}
+            groups:
+              type: array
+              items:
+                type: object
+                required: [customer_id, customer, status, severity, alarms]
+                properties:
+                  customer_id: {type: string}
+                  customer: {type: string}
+                  status: {type: string}
+                  severity: {type: string}
+                  alarms:
+                    type: array
+                    items:
+                      type: object
+                      required: [kind, categories, severity]
+                      properties:
+                        kind: {type: string, enum: [device, customer, silence]}
+                        device_id: {type: string}
+                        hostname: {type: string}
+                        state: {type: string}
+                        flags:
+                          type: array
+                          items: {type: string}
+                        categories:
+                          type: array
+                          items: {type: string, enum: [overdue, unseen, failed, escrow, maintenance, unknown, identity, missing, other]}
+                        severity: {type: string, enum: [alarm, critical]}
+                        reason: {type: string}
+                        since: {$ref: '#/components/schemas/Timestamp'}
+                        acknowledged: {type: boolean}
+                        affected: {type: integer}
+                        total: {type: integer}
+            banners:
+              type: array
+              items: {$ref: '#/components/schemas/Banner'}
+    CustomerHealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [customer_id, name, missing, retired_devices, ten_day]
+          properties:
+            customer_id: {type: string}
+            name: {type: string}
+            archived: {type: boolean, description: An archived customer is not part of the evaluated view; no rollup is given.}
+            rollup: {$ref: '#/components/schemas/Rollup'}
+            missing: {type: boolean}
+            silence:
+              type: object
+              required: [silent, total]
+              properties:
+                silent: {type: integer}
+                total: {type: integer}
+            retired_devices: {type: integer}
+            ten_day:
+              type: array
+              items: {$ref: '#/components/schemas/TenDayRollupDay'}
+    DeviceStateResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [device_id, customer_id, customer, hostname, state, flags, severity, attributes, acknowledged, explain, inputs]
+          properties:
+            device_id: {type: string}
+            customer_id: {type: string}
+            customer: {type: string}
+            hostname: {type: string}
+            state: {type: string}
+            flags:
+              type: array
+              items: {type: string}
+            severity: {type: string, enum: [none, alarm, critical]}
+            reason: {type: string}
+            since: {$ref: '#/components/schemas/Timestamp'}
+            attributes:
+              type: array
+              items: {type: string}
+            acknowledged: {type: boolean}
+            muted: {type: boolean}
+            snoozed_until: {$ref: '#/components/schemas/Timestamp'}
+            explain:
+              type: array
+              items:
+                type: object
+                required: [state, alarming, text]
+                properties:
+                  state: {type: string}
+                  alarming: {type: boolean}
+                  text: {type: string}
+            inputs:
+              type: object
+              description: The facts the engine judged. Counts, classes, versions and times; never a path.
+              additionalProperties: true
+    DeviceHeartbeatsResponse:
+      type: object
+      required: [computed_at, device_id, since, count, truncated, heartbeats]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        device_id: {type: string}
+        since: {$ref: '#/components/schemas/Timestamp'}
+        count: {type: integer}
+        truncated: {type: boolean}
+        heartbeats:
+          type: array
+          items:
+            type: object
+            required: [received_at, service_state]
+            properties:
+              received_at: {$ref: '#/components/schemas/Timestamp'}
+              agent_version: {type: string}
+              uptime_s: {type: integer}
+              on_ac: {type: boolean}
+              battery_pct: {type: integer}
+              metered: {type: boolean}
+              vpn: {type: boolean}
+              queue_depth: {type: integer}
+              journal_depth: {type: integer}
+              clock_offset_ms: {type: integer}
+              service_state: {type: string, enum: [idle, running, paused, deferred]}
+              last_error_class: {type: string}
+    DeviceTenDayResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [device_id, state, days]
+          properties:
+            device_id: {type: string}
+            state: {type: string}
+            zone: {type: string}
+            days:
+              type: array
+              items: {$ref: '#/components/schemas/TenDayCell'}
+    DevicePauseRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      description: A reason and exactly one of `duration_hours`, `until` and `indefinite`.
+      properties:
+        reason: {type: string, maxLength: 200, description: One line, no file path.}
+        duration_hours: {type: integer, enum: [1, 2, 4, 8, 24]}
+        until: {type: string, format: date-time}
+        indefinite: {type: boolean}
+    DevicePauseResponse:
+      type: object
+      required: [computed_at, device_id, paused, indefinite, changed, queued_commands]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        device_id: {type: string}
+        paused: {type: boolean}
+        paused_at: {$ref: '#/components/schemas/Timestamp'}
+        paused_until: {$ref: '#/components/schemas/Timestamp'}
+        indefinite: {type: boolean}
+        reason: {type: string}
+        changed: {type: boolean}
+        cancelled_run_id: {type: string, description: The open backup run a cancel command was queued for.}
+        queued_commands: {type: integer}
+    RunRow:
+      type: object
+      description: A run with its customer and device. Counts and error classes, never a path.
+      required: [id, kind, trigger, origin, started_at, attempt, customer_id, customer, device_id, hostname]
+      properties:
+        id: {type: string}
+        kind: {type: string}
+        trigger: {type: string}
+        origin: {type: string}
+        started_at: {$ref: '#/components/schemas/Timestamp'}
+        finished_at: {$ref: '#/components/schemas/Timestamp'}
+        outcome: {type: string, description: Absent while the run is open.}
+        exit_code: {type: integer}
+        error_class: {type: string}
+        error_counts:
+          type: object
+          additionalProperties: {type: integer}
+        deferred_reason: {type: string}
+        attempt: {type: integer}
+        customer_id: {type: string}
+        customer: {type: string}
+        device_id: {type: string}
+        hostname: {type: string}
+        duration_ms: {type: integer}
+    RunListResponse:
+      type: object
+      required: [computed_at, total, of, truncated, runs]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        total: {type: integer}
+        of: {type: integer}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        runs:
+          type: array
+          items: {$ref: '#/components/schemas/RunRow'}
+    RunDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/RunRow'
+        - type: object
+          required: [computed_at, received_at, clock_offset_ms, stats, error_classes]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            received_at: {$ref: '#/components/schemas/Timestamp'}
+            clock_offset_ms: {type: integer}
+            snapshot_id: {type: string}
+            data_added_bytes: {type: integer}
+            policy_version: {type: integer}
+            agent_version: {type: string}
+            stats:
+              type: object
+              description: Numeric counters only.
+              additionalProperties: {type: number}
+            error_classes:
+              type: array
+              items:
+                type: object
+                required: [class, count]
+                properties:
+                  class: {type: string}
+                  count: {type: integer}
+    SavedView:
+      type: object
+      required: [id, mine, name, entity, filter, columns, sort, shared, created_at, updated_at]
+      properties:
+        id: {type: string}
+        owner_id: {type: string}
+        owner: {type: string}
+        mine: {type: boolean}
+        name: {type: string}
+        entity: {type: string, enum: [devices, runs, customers]}
+        filter: {type: object}
+        columns: {type: array, items: {type: string}}
+        sort: {type: array, items: {type: object}}
+        shared: {type: boolean}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    ViewListResponse:
+      type: object
+      required: [computed_at, views]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        views:
+          type: array
+          items: {$ref: '#/components/schemas/SavedView'}
+    ViewResponse:
+      allOf:
+        - $ref: '#/components/schemas/SavedView'
+        - type: object
+          required: [computed_at, changed]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            changed: {type: boolean}
+    CreateViewRequest:
+      type: object
+      required: [name, entity]
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        entity: {type: string, enum: [devices, runs, customers]}
+        filter: {type: object}
+        columns: {type: array, items: {type: string}}
+        sort: {type: array, items: {type: object}}
+        shared: {type: boolean, description: Needs an account that sees every customer.}
+    PatchViewRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        filter: {type: object}
+        columns: {type: array, items: {type: string}}
+        sort: {type: array, items: {type: object}}
+        shared: {type: boolean}
+    StatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [overall, all_clear, first_run, banners, customers, devices]
+          properties:
+            overall: {type: string, enum: [ok, warning, critical, unknown]}
+            all_clear: {type: boolean}
+            first_run: {type: boolean}
+            banners:
+              type: array
+              items: {$ref: '#/components/schemas/Banner'}
+            customers:
+              type: array
+              items:
+                type: object
+                required: [id, name, status, severity, active, paused, counts, muted]
+                properties:
+                  id: {type: string}
+                  name: {type: string}
+                  status: {type: string}
+                  severity: {type: string}
+                  active: {type: integer}
+                  paused: {type: integer}
+                  counts:
+                    type: object
+                    additionalProperties: {type: integer}
+                  health_pct: {type: number}
+                  muted: {type: boolean}
+            devices:
+              type: array
+              items:
+                type: object
+                required: [id, customer_id, hostname, state, flags, severity, acknowledged]
+                properties:
+                  id: {type: string}
+                  customer_id: {type: string}
+                  hostname: {type: string}
+                  state: {type: string}
+                  flags:
+                    type: array
+                    items: {type: string}
+                  severity: {type: string}
+                  since: {$ref: '#/components/schemas/Timestamp'}
+                  last_success_at: {$ref: '#/components/schemas/Timestamp'}
+                  last_seen_at: {$ref: '#/components/schemas/Timestamp'}
+                  acknowledged: {type: boolean}
+    SystemHealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/FleetStamp'
+        - type: object
+          required: [overall, components, banners, versions]
+          properties:
+            overall: {type: string, enum: [ok, not_checked, warn, failed]}
+            components:
+              type: array
+              items:
+                type: object
+                required: [id, label, status, banners]
+                properties:
+                  id: {type: string}
+                  label: {type: string}
+                  status: {type: string, enum: [ok, not_checked, warn, failed]}
+                  detail: {type: string}
+                  banners:
+                    type: array
+                    items: {type: string}
+                  checked_at: {$ref: '#/components/schemas/Timestamp'}
+            banners:
+              type: array
+              items: {$ref: '#/components/schemas/Banner'}
+            versions:
+              type: object
+              required: [console, commit, build_date, schema]
+              properties:
+                console: {type: string}
+                commit: {type: string}
+                build_date: {type: string}
+                schema: {type: integer}
+                maintain:
+                  type: object
+                  properties:
+                    reachable: {type: boolean}
+                    version: {type: string}
+                    master_key_loaded: {type: boolean}
+                    restic_version: {type: string}
+                    rclone_version: {type: string}
+    JobListResponse:
+      type: object
+      required: [computed_at, jobs]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        jobs:
+          type: array
+          items:
+            type: object
+            required: [name, registered, status, run_count, running, overdue]
+            properties:
+              name: {type: string}
+              registered: {type: boolean}
+              status: {type: string, enum: [running, ok, error, skipped, never_run]}
+              last_started_at: {$ref: '#/components/schemas/Timestamp'}
+              last_finished_at: {$ref: '#/components/schemas/Timestamp'}
+              last_duration_ms: {type: integer}
+              last_error_class: {type: string}
+              run_count: {type: integer}
+              next_due_at: {$ref: '#/components/schemas/Timestamp'}
+              running: {type: boolean}
+              overdue: {type: boolean}
+    JobRunResponse:
+      type: object
+      required: [computed_at, job, status]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        job: {type: string}
+        status: {type: string, enum: [accepted]}
+    ProbeResponse:
+      type: object
+      required: [computed_at, target_id, target, ran, checks]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        target_id: {type: string}
+        target: {type: string}
+        ran: {type: boolean}
+        reason: {type: string, description: Why the probe could not run; the checks are then not_checked.}
+        job:
+          type: object
+          properties:
+            status: {type: string}
+            error_class: {type: string}
+            duration_ms: {type: integer}
+        checks:
+          type: array
+          items:
+            type: object
+            required: [id, status, banners]
+            properties:
+              id: {type: string, enum: [gateway, storage, certificates]}
+              status: {type: string, enum: [ok, not_checked, warn, failed]}
+              detail: {type: string}
+              banners:
+                type: array
+                items: {type: string}
+        worker:
+          type: object
+          properties:
+            reachable: {type: boolean}
+            version: {type: string}
+            master_key_loaded: {type: boolean}
