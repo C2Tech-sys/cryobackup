@@ -1912,7 +1912,7 @@ paths:
       tags: [monitoring]
       summary: Server-sent events
       description: |
-        `fleet.state` (the fleet summary) on connect, on device changes and every refresh interval, `banner.update` when the banner set changes, `run.progress` for runs of devices the caller may see, `stream.error` when the fleet cannot be evaluated (the last state is stale), and `ping` every 15 seconds. `topics` narrows the stream to some of `fleet`, `banners` and `runs`.
+        `fleet.state` (the fleet summary) on connect, on device changes and every refresh interval, `banner.update` when the banner set changes, `run.progress` for runs of devices the caller may see, `stream.error` when the fleet cannot be evaluated (the last state is stale), and `ping` every 15 seconds. `topics` narrows the stream to some of `fleet`, `banners` and `runs`. Streams of one scope share one fleet evaluation per change. At most 32 streams may be open at once (a deployment can change the limit); over it the answer is 503 with `Retry-After`.
       x-min-role: RO
       parameters:
         - {name: topics, in: query, required: false, schema: {type: string}, description: 'Comma separated: fleet, banners, runs. Default all.'}
@@ -1924,6 +1924,7 @@ paths:
               schema: {type: string}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /api/v1/system/health:
     get:
       operationId: getSystemHealth

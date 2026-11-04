@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -94,8 +95,15 @@ type Service struct {
 	// leaves GET /api/v1/events on its refresh tick alone: the stream still
 	// delivers, just not on every device change.
 	Events EventSource
-	// sseRefresh and sseGap override the event stream's cadences (tests).
-	sseRefresh, sseGap time.Duration
+	// MaxEventStreams caps the open event streams; over it GET /api/v1/events answers
+	// 503 with Retry-After. Zero means DefaultMaxEventStreams, negative means no cap.
+	// (The console config key is not wired: config/** belongs to M3-T2.)
+	MaxEventStreams int
+	// sseRefresh, sseGap and sseShare override the event stream's cadences (tests).
+	sseRefresh, sseGap, sseShare time.Duration
+	eventStreams                 atomic.Int32
+	evalMu                       sync.Mutex
+	evals                        map[string]*sharedEval
 }
 
 func (s *Service) now() time.Time {

@@ -3,15 +3,20 @@ package adminapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/api"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
+	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
 	"github.com/c2tech-sys/cryobackup/internal/console/hubsig"
+	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
 
@@ -52,6 +57,17 @@ type EventSource interface {
 	DeviceChanged(deviceID string)
 }
 
+// DefaultMaxEventStreams is how many event streams may be open at once when
+// Service.MaxEventStreams is zero. Each stream holds a connection and, on a
+// change, shares one fleet evaluation with the others of its scope; the cap
+// keeps a runaway client (or a hundred browser tabs) from holding the
+// connections of the admin listener. A negative MaxEventStreams removes the cap.
+const DefaultMaxEventStreams = 32
+
+// sseShareDefault is how long one fleet evaluation may serve every stream of the
+// same scope: a change that fans out to N streams costs one evaluation, not N.
+const sseShareDefault = time.Second
+
 const (
 	ssePing        = 15 * time.Second
 	sseDefaultGap  = 2 * time.Second
@@ -73,6 +89,59 @@ func (s *Service) sseTimings() (refresh, gap time.Duration) {
 		gap = sseDefaultGap
 	}
 	return refresh, gap
+}
+
+// sharedEval is the newest evaluation of one scope, for every stream of it.
+type sharedEval struct {
+	mu    sync.Mutex
+	at    time.Time
+	fleet health.Fleet
+	ok    bool
+}
+
+// scopeKey names a scope the way the hub does, so equal scopes share.
+func scopeKey(sc store.Scope) string {
+	if sc.All {
+		return "all"
+	}
+	ids := append([]string(nil), sc.CustomerIDs...)
+	sort.Strings(ids)
+	return "ids:" + strings.Join(ids, ",")
+}
+
+// sharedFleet evaluates the fleet for scope, reusing the newest successful
+// evaluation of the same scope when it is younger than the share window.
+// Concurrent callers of one scope wait for the evaluation in flight instead of
+// starting their own. A failed evaluation is returned, never kept: the next
+// caller tries again.
+func (s *Service) sharedFleet(ctx context.Context, scope store.Scope) (health.Fleet, error) {
+	key := scopeKey(scope)
+	s.evalMu.Lock()
+	if s.evals == nil {
+		s.evals = map[string]*sharedEval{}
+	}
+	ev := s.evals[key]
+	if ev == nil {
+		ev = &sharedEval{}
+		s.evals[key] = ev
+	}
+	s.evalMu.Unlock()
+	window := s.sseShare
+	if window == 0 {
+		window = sseShareDefault
+	}
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if ev.ok && time.Since(ev.at) < window {
+		return ev.fleet, nil
+	}
+	f, err := s.Fleet.Fleet(ctx, scope)
+	if err != nil {
+		ev.ok = false
+		return health.Fleet{}, err
+	}
+	ev.fleet, ev.at, ev.ok = f, time.Now(), true
+	return f, nil
 }
 
 func writeSSE(w http.ResponseWriter, fl http.Flusher, name string, v any) error {
@@ -123,6 +192,17 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, api.CodeInternal, 0)
 		return
 	}
+	// Over the cap: refused, with Retry-After, before anything is held for the stream.
+	limit := s.MaxEventStreams
+	if limit == 0 {
+		limit = DefaultMaxEventStreams
+	}
+	if n := s.eventStreams.Add(1); limit > 0 && int(n) > limit {
+		s.eventStreams.Add(-1)
+		httpx.Problem(w, r, api.CodeUnavailable, 30*time.Second)
+		return
+	}
+	defer s.eventStreams.Add(-1)
 	// Watch before the first byte: a client that has seen the headers has a
 	// registered listener, so no signal after that point is lost.
 	var sigC <-chan Signal
@@ -144,14 +224,24 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 	fl.Flush()
 
 	refresh, gap := s.sseTimings()
-	refreshT, gapT, pingT := time.NewTicker(refresh), time.NewTicker(gap), time.NewTicker(ssePing)
+	// With a hub, its refresh tick drives the stream (a SignalRefresh marks it dirty) and the
+	// stream's own tick is only a watchdog at three intervals, so one tick is one evaluation, not
+	// two. Without a hub, or once it goes away, the own tick is the refresh.
+	period := func() time.Duration {
+		if sigC != nil {
+			return 3 * refresh
+		}
+		return refresh
+	}
+	refreshT, gapT, pingT := time.NewTicker(period()), time.NewTicker(gap), time.NewTicker(ssePing)
 	defer refreshT.Stop()
 	defer gapT.Stop()
 	defer pingT.Stop()
 
 	var lastBanners string
 	emit := func(ctx context.Context) bool {
-		f, err := s.Fleet.Fleet(ctx, p.Scope)
+		refreshT.Reset(period()) // an emit of any cause restarts the watchdog
+		f, err := s.sharedFleet(ctx, p.Scope)
 		if err != nil {
 			s.log().Warn("event stream: fleet not evaluated", logx.Class("fleet"))
 			return writeSSE(w, fl, "stream.error", StreamErrorJSON{ComputedAt: s.now(), Class: "fleet_unavailable"}) == nil
@@ -180,13 +270,22 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 
 	inScope := map[string]bool{} // device id -> may this caller see it
 	visible := func(id string) bool {
-		v, known := inScope[id]
-		if !known {
-			_, err := s.Store.GetDevice(r.Context(), p.Scope, id)
-			v = err == nil
-			inScope[id] = v
+		if v, known := inScope[id]; known {
+			return v
 		}
-		return v
+		_, err := s.Store.GetDevice(r.Context(), p.Scope, id)
+		switch {
+		case err == nil:
+			inScope[id] = true
+		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrScope):
+			inScope[id] = false // a real answer: outside the caller's scope, or gone
+		default:
+			// A database error says nothing about visibility. Do not remember it as "not
+			// visible": this event is dropped, the next one asks again. Nothing identifying is logged.
+			s.log().Warn("event stream: device scope not checked", logx.Class("device_lookup"))
+			return false
+		}
+		return inScope[id]
 	}
 	dirty := false
 	for {
@@ -195,7 +294,8 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 			return
 		case sg, open := <-sigC:
 			if !open {
-				sigC = nil // the source went away; the refresh tick keeps the stream alive
+				sigC = nil // the source went away; the own tick keeps the stream alive, at the refresh interval
+				refreshT.Reset(period())
 				continue
 			}
 			switch sg.Kind {

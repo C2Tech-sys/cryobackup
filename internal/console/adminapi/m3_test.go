@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1432,7 +1433,7 @@ func (f *fakeSource) send(sg Signal) {
 func TestM3EventStreamDeliversAndIsScoped(t *testing.T) { // F05 F18
 	e := newEnv(t)
 	src := &fakeSource{}
-	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap = src, time.Hour, 10*time.Millisecond
+	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = src, time.Hour, 10*time.Millisecond, time.Nanosecond
 	owner := e.login("admin", pw)
 
 	st, res := e.openStream("/api/v1/events", owner)
@@ -1537,4 +1538,126 @@ func TestM3EventStreamTakesAnAPIToken(t *testing.T) {
 		t.Errorf("stream without credentials = %d", res.StatusCode)
 	}
 	_ = io.Discard
+}
+
+// evalCounter counts fleet evaluations through the Evaluator's Extra hook, which
+// runs once per evaluation.
+func (e *env) evalCounter() *atomic.Int32 {
+	var n atomic.Int32
+	e.svc.Fleet.Extra = func(time.Time) []state.Banner { n.Add(1); return nil }
+	return &n
+}
+
+func TestM3EventStreamsOfOneScopeShareOneEvaluationPerChange(t *testing.T) { // L2
+	e := newEnv(t)
+	src := &fakeSource{}
+	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = src, time.Hour, 10*time.Millisecond, 2*time.Second
+	owner := e.login("admin", pw)
+	n := e.evalCounter()
+	var streams []*sseStream
+	for i := 0; i < 3; i++ {
+		st, _ := e.openStream("/api/v1/events?topics=fleet", owner)
+		st.next("fleet.state", 5*time.Second)
+		streams = append(streams, st)
+	}
+	if got := n.Load(); got != 1 {
+		t.Fatalf("three streams connecting inside the share window cost %d evaluations, want 1", got)
+	}
+	time.Sleep(2100 * time.Millisecond) // the window passes
+	src.send(Signal{Kind: SignalChange, DeviceID: e.dev.ID})
+	for _, st := range streams {
+		st.next("fleet.state", 5*time.Second)
+	}
+	if got := n.Load(); got != 2 {
+		t.Fatalf("one change fanned out to three streams cost %d evaluations in total, want 2 (one on connect, one for the change)", got)
+	}
+	// A different scope is its own evaluation.
+	nw := e.customerNamed("Northwind Dental")
+	e.addAdmin("m3-share-scoped", "read_only", []string{nw.ID})
+	sc := e.login("m3-share-scoped", pw)
+	scoped, _ := e.openStream("/api/v1/events?topics=fleet", sc)
+	scoped.next("fleet.state", 5*time.Second)
+	if got := n.Load(); got != 3 {
+		t.Errorf("a stream of another scope must not reuse the all-customer evaluation: %d evaluations", got)
+	}
+}
+
+func TestM3EventStreamsWithAHubTakeOneEvaluationPerTick(t *testing.T) { // L2: not a hub refresh and an own tick
+	e := newEnv(t)
+	src := &fakeSource{}
+	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = src, 200*time.Millisecond, 10*time.Millisecond, time.Nanosecond
+	owner := e.login("admin", pw)
+	n := e.evalCounter()
+	st, _ := e.openStream("/api/v1/events?topics=fleet", owner)
+	st.next("fleet.state", 5*time.Second)
+	for i := 0; i < 4; i++ { // the hub's refresh tick, at the stream's refresh interval
+		time.Sleep(200 * time.Millisecond)
+		src.send(Signal{Kind: SignalRefresh})
+		st.next("fleet.state", 5*time.Second)
+	}
+	if got := n.Load(); got > 6 {
+		t.Errorf("%d evaluations for 1 connect and 4 hub ticks; an own tick on top of the hub's would make it about 9", got)
+	}
+}
+
+func TestM3EventStreamCapAnswers503WithRetryAfter(t *testing.T) { // L2
+	e := newEnv(t)
+	e.svc.sseRefresh, e.svc.MaxEventStreams = time.Hour, 2
+	owner := e.login("admin", pw)
+	first, _ := e.openStream("/api/v1/events?topics=fleet", owner)
+	first.next("fleet.state", 5*time.Second)
+	second, _ := e.openStream("/api/v1/events?topics=fleet", owner)
+	second.next("fleet.state", 5*time.Second)
+	_, res := e.openStream("/api/v1/events?topics=fleet", owner)
+	if res.StatusCode != 503 || res.Header.Get("Retry-After") == "" {
+		t.Fatalf("the third stream = %d (Retry-After %q), want 503 with Retry-After", res.StatusCode, res.Header.Get("Retry-After"))
+	}
+	// A slot frees when a stream ends.
+	first.cancel()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		third, res := e.openStream("/api/v1/events?topics=fleet", owner)
+		if res.StatusCode == 200 {
+			third.next("fleet.state", 5*time.Second)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a freed slot was never given back: last answer %d", res.StatusCode)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The cap is the one a deployment can lift.
+	e.svc.MaxEventStreams = -1
+	for i := 0; i < 4; i++ {
+		st, res := e.openStream("/api/v1/events?topics=fleet", owner)
+		if res.StatusCode != 200 {
+			t.Fatalf("with no cap, stream %d = %d", i, res.StatusCode)
+		}
+		st.next("fleet.state", 5*time.Second)
+	}
+}
+
+func TestM3EventStreamDoesNotRememberADatabaseErrorAsNotVisible(t *testing.T) { // L2
+	e := newEnv(t)
+	src := &fakeSource{}
+	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = src, time.Hour, 10*time.Millisecond, time.Nanosecond
+	owner := e.login("admin", pw)
+	st, _ := e.openStream("/api/v1/events?topics=runs", owner)
+	// The device lookup fails with a database error (not "not found"): the event is dropped.
+	exec := func(q string) {
+		t.Helper()
+		if err := e.st.Write(context.Background(), func(tx *store.Tx) error { _, err := tx.Exec(q); return err }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`ALTER TABLE devices RENAME TO devices_held`)
+	src.send(Signal{Kind: SignalProgress, DeviceID: e.dev.ID, RunID: "01J9Y4K3A0B1C2D3E4F5G6H7M1"})
+	st.none("run.progress", 300*time.Millisecond)
+	exec(`ALTER TABLE devices_held RENAME TO devices`)
+	// The error was not cached as "not visible": the same device's next event is delivered.
+	src.send(Signal{Kind: SignalProgress, DeviceID: e.dev.ID, RunID: "01J9Y4K3A0B1C2D3E4F5G6H7M2"})
+	var rp RunProgressJSON
+	if err := json.Unmarshal([]byte(st.next("run.progress", 5*time.Second).Data), &rp); err != nil || rp.RunID != "01J9Y4K3A0B1C2D3E4F5G6H7M2" {
+		t.Fatalf("after the database came back: %+v %v", rp, err)
+	}
 }
