@@ -232,12 +232,12 @@ func gatewayBanners(g *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
 	}
 	na, ok := g.CertNotAfter.Time()
 	if !ok {
-		return []Banner{{ID: "C05b", Severity: SeverityAlarm,
+		return []Banner{{ID: "C05b", Subject: SubjectGateway, Severity: SeverityAlarm,
 			Text: "Gateway certificate not checked: the gateway probe recorded no certificate expiry, so an expiring gateway certificate would go unnoticed."}}
 	}
 	left := na.Sub(c.now)
 	if left <= 0 {
-		return []Banner{{ID: "C05", Severity: SeverityCritical, At: na,
+		return []Banner{{ID: "C05", Subject: SubjectGateway, Severity: SeverityCritical, At: na,
 			Text: "Gateway certificate has expired: agents cannot back up through it."}}
 	}
 	days := int(math.Floor(left.Hours() / 24))
@@ -251,9 +251,9 @@ func gatewayBanners(g *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
 	const day = 24 * time.Hour
 	switch {
 	case left < CertCritDays*day:
-		return []Banner{{ID: "C05", Severity: SeverityCritical, Count: days, At: na, Text: "Gateway certificate expires " + in + "."}}
+		return []Banner{{ID: "C05", Subject: SubjectGateway, Severity: SeverityCritical, Count: days, At: na, Text: "Gateway certificate expires " + in + "."}}
 	case left < CertWarnDays*day:
-		return []Banner{{ID: "C05", Severity: SeverityAlarm, Count: days, At: na, Text: "Gateway certificate expires " + in + "."}}
+		return []Banner{{ID: "C05", Subject: SubjectGateway, Severity: SeverityAlarm, Count: days, At: na, Text: "Gateway certificate expires " + in + "."}}
 	}
 	return nil
 }

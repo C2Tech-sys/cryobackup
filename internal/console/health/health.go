@@ -126,13 +126,15 @@ func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error)
 	return f, nil
 }
 
-// dedupe keeps the first banner of each id.
+// dedupe keeps the first banner of each (id, subject): the gateway and the
+// agent-listener C05 are different banners and both show.
 func dedupe(b []state.Banner) []state.Banner {
-	seen := map[string]bool{}
+	type key struct{ id, subject string }
+	seen := map[key]bool{}
 	out := b[:0:0]
 	for _, x := range b {
-		if !seen[x.ID] {
-			seen[x.ID] = true
+		if k := (key{x.ID, x.Subject}); !seen[k] {
+			seen[k] = true
 			out = append(out, x)
 		}
 	}

@@ -112,7 +112,10 @@ type CustomerState struct {
 type Banner struct {
 	// ID is the §4.6 id ("C01" to "C16"), or the id with a "b" suffix for a "not checked" warning of
 	// that condition ("C01b"), the pattern ADR 0013 set with C04b.
-	ID       string
+	ID string
+	// Subject names what the banner is about when one id covers several things: C05 is "gateway"
+	// or "agent_listener". Empty for single-subject banners. (ID, Subject) identifies a banner.
+	Subject  string
 	Severity Severity
 	Text     string
 	// Count is the number the text is about (devices, errors, days, percent).
@@ -121,6 +124,14 @@ type Banner struct {
 	// The text already renders it in World.DisplayZone; At lets a page re-render it.
 	At time.Time
 }
+
+// Banner subjects for the ids that cover more than one thing.
+const (
+	// SubjectGateway is the gateway half of C05 (raised here).
+	SubjectGateway = "gateway"
+	// SubjectAgentListener is the agent-listener half of C05 (ADR 0013, internal/console/health).
+	SubjectAgentListener = "agent_listener"
+)
 
 // FleetView is the result of Evaluate: everything a page, the API, the digest
 // or the alarm evaluator needs, stamped with when it was computed.
