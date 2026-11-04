@@ -379,14 +379,73 @@ func TestC23FreshnessStampInEveryFleetView(t *testing.T) {
 	}
 }
 
-// TestFleetCasesPendingLaterTicketItems keeps the ids of the 4.8 group C cases
-// that are not written yet visible.
-func TestFleetCasesPendingLaterTicketItems(t *testing.T) {
-	for _, name := range []string{
-		"C22_digest_lists_unknown_and_missing_even_when_rest_green",
-	} {
-		t.Run(name, func(t *testing.T) { t.Skip("M3-T1 later item") })
-	}
+// Group C cases that live outside this package: C11
+// (agent_endpoint_probe_failing_banner, ADR 0013) is the self-probe of
+// internal/console/health (endpoint.go, endpoint_test.go). C12 is here, as the
+// engine-side half: an offline fleet raises no console banner.
+
+func TestC22DigestListsUnknownAndMissing(t *testing.T) {
+	t.Run("C22_digest_lists_unknown_and_missing_even_when_rest_green", func(t *testing.T) {
+		w := healthyFleet(3, 4)
+		w.Customers = append(w.Customers, CustomerFacts{ID: custID(9), Name: "Fabrikam Auto", State: "active", Expected: true})
+		w.Devices[5].Complete, w.Devices[5].LoadErrorClass = false, "timeout"
+		v := Evaluate(w, t0)
+		d := DigestOf(v, t0)
+		if len(d.Lines) != 2 {
+			t.Fatalf("lines = %+v, want the MISSING customer and the UNKNOWN device", d.Lines)
+		}
+		if l := d.Lines[0]; l.Kind != DigestMissing || l.CustomerName != "Fabrikam Auto" || l.DeviceID != "" {
+			t.Errorf("first line %+v, want MISSING Fabrikam Auto", l)
+		}
+		if l := d.Lines[1]; l.Kind != DigestUnknown || l.DeviceID != devID(6) || l.State != StateUnknown || l.CustomerName != "Customer 02" {
+			t.Errorf("second line %+v, want the UNKNOWN device", l)
+		}
+		if d.AllClear || len(d.Banners) == 0 || d.Banners[0].ID != "C09" || !d.ComputedAt.Equal(t0) {
+			t.Errorf("allClear %v banners %v computed %v", d.AllClear, d.Banners, d.ComputedAt)
+		}
+	})
+	t.Run("C22_digest_of_a_green_fleet_is_empty_and_clear", func(t *testing.T) {
+		d := DigestOf(Evaluate(healthyFleet(2, 3), t0), t0)
+		if len(d.Lines) != 0 || len(d.Banners) != 0 || !d.AllClear {
+			t.Errorf("digest %+v", d)
+		}
+	})
+	t.Run("C22_digest_sections_in_order", func(t *testing.T) {
+		w := healthyFleet(1, 9)
+		w.Customers = append(w.Customers, CustomerFacts{ID: custID(8), Name: "Alpine Clinic", State: "active", Expected: true})
+		w.Devices = append(w.Devices, deviceOf(99, 7, "ws-orphan-01")) // customer 7 not loaded: UNKNOWN, still listed
+		w.Devices[0].PausedAt = ago(day)                               // parked, indefinite
+		w.Devices[1].LastSuccess, w.Devices[1].LastBackup = ago(100*hour), successRun(100*hour)
+		w.Devices[2].LastBackup, w.Devices[2].ConsecutiveFailures = failedRun(hour, "network"), 1
+		w.Devices[3].LastSeen = ago(200 * hour)
+		deferGateway(&w.Devices[4]) // deferred 1 h: not listed
+		deferGateway(&w.Devices[5])
+		w.Devices[5].LastBackup.StartedAt, w.Devices[5].LastBackup.FinishedAt = ago(30*hour), ago(30*hour)
+		w.Devices[5].LastSuccess = ago(40 * hour)
+		v := Evaluate(w, t0)
+		var got []DigestKind
+		for _, l := range DigestOf(v, t0).Lines {
+			got = append(got, l.Kind)
+		}
+		want := []DigestKind{DigestMissing, DigestUnknown, DigestUnseen, DigestFailed, DigestStale, DigestParked, DigestDeferred}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("sections = %v, want %v", got, want)
+		}
+		for _, l := range DigestOf(v, t0).Lines {
+			if l.Kind == DigestParked && !hasAttr(l.Attrs, AttrPausedIndefinite) {
+				t.Errorf("parked line does not flag the indefinite pause: %+v", l)
+			}
+		}
+	})
+	t.Run("C22_digest_suspended_customer_is_listed_and_labelled", func(t *testing.T) {
+		w := healthyFleet(1, 2)
+		w.Customers[0].State = "suspended"
+		w.Devices[0].LastBackup, w.Devices[0].ConsecutiveFailures = failedRun(hour, "network"), 1
+		d := DigestOf(Evaluate(w, t0), t0)
+		if len(d.Lines) != 1 || !d.Lines[0].Muted || d.Lines[0].Kind != DigestFailed {
+			t.Errorf("lines %+v", d.Lines)
+		}
+	})
 }
 
 // ---- probe-driven banners (architecture 4.6; 4.8 C06-C10, C13-C18, C25-C28) ----------

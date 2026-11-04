@@ -72,7 +72,7 @@
 // ends PENDING_FIRST at once, so BLANK and FAILED both show). Acknowledgements
 // and snoozes never change a state: they set Ack and the acknowledged or
 // snoozed attribute, and an expired snooze simply stops muting at read time.
-// The customer-wide collapse of 4.3 is a notification concern for M3.
+// The customer-wide collapse of 4.3 is in "Customers and the fleet" below.
 //
 // # What Since means
 //
@@ -119,19 +119,84 @@
 // ONBOARDING, EMPTY (SortKey 0 to 6). Evaluate adds the console banners that
 // need only facts: C08 (an enrolled fleet with no active device; critical) and
 // C09 (partial data or an empty poll; critical). FleetView.AllClear is true only
-// when there are no banners, no alarming device or customer, the load was
-// Complete, and the fleet is non-empty or this is the first run.
+// when there are no banners of any severity, no alarming device or customer,
+// the load was Complete, and the fleet is non-empty or this is the first run.
 //
-// # Scope of this version (v0)
+// Collapse (4.3): a customer with at least 5 active (non-retired, non-paused)
+// devices of which at least half are UNSEEN or DEFERRED for the gateway is one
+// customer-level row (FleetView.Collapses, CustomerCollapse); its device rows
+// stay. Fleet-wide, at least 5 reporting devices (active, facts known, not
+// UNSEEN) of which at least half are DEFERRED for the gateway is one C01 (C19)
+// and a fleet Collapse that covers the customer ones for notification. Devices
+// being offline never raise a console banner, however many (ADR 0013, C12).
 //
-// Implemented here: every row of 4.2, the rules of 4.3 that concern one device,
-// 4.4, 4.5, banners C08 and C09, and test cases A01-A23, B01-B15, B17-B48,
-// C01-C05, C21, C23 and D01-D13 of 4.8 (B16 is a schema test). Arriving later:
-// the probe-driven banners C01-C07 and C10-C16 and cases C06-C20, C22 and
-// C24-C28 (M3/M4; World.Probes already exists so signatures do not change), the
-// customer-wide collapse (C19, C20), and the ten-day strip with cases E01-E05
-// (M3; there is no strip_test.go in this version). The test rows for the probe
-// cases exist as skipped placeholders so their ids stay visible.
+// C13 (clock suspect, warning): at least 5 reporting devices, and at least 20 %
+// of them, report a clock offset of the same sign beyond 2 min. A reporting
+// device here is non-retired, facts complete, with a parseable heartbeat no
+// older than its unseen_after; the heartbeat handler stores an offset with every
+// heartbeat, so such a device has a real offset. One skewed device is only its
+// own clock_skew attribute, never its primary.
+//
+// # Probe banners (4.6)
+//
+// World.Probes carries one pointer per check. Nil means this build or caller
+// does not run the check (it arrives with a later milestone, a unit test, a
+// caller with no prober): nothing is raised, which is a property of the build,
+// not of the data. A non-nil check at its zero value has never reported and is
+// never read as healthy. Per condition:
+//
+//	C01  gateway probe, 3 failures in a row: critical. Never completed, or not for 3 prober intervals: C01b warning.
+//	C02  storage probe, 2 failures in a row: critical. Never or stale: C02b warning.
+//	C03  3 failed sends, a failed test send, 3 failed probes, or alerts pending with no delivery in 24 h:
+//	     critical. Probe never or stale and no delivery in 24 h: C03b warning (a recent delivery is evidence).
+//	C05  gateway certificate (the agent-listener half is health/endpoint.go, ADR 0013): under 21 d warning,
+//	     under 7 d or expired critical. Judged only while the gateway probe passes; no notAfter recorded by a
+//	     passing probe: C05b warning.
+//	C06  alarm-evaluator not finished for 3 periods: critical. Never finished: C06b warning within 3 periods of
+//	     ProbeFacts.StartedAt, critical after it or when the start is unknown.
+//	C07  maintain RPC failed its newest probe, or the maintenance scheduler (when this build runs it) not
+//	     finished for 30 min: critical. RPC never probed or stale, or the scheduler's first run pending within
+//	     30 min of the start: C07b warning.
+//	C10  snapshot (World.LoadedAt) older than 2 refresh intervals, unknown, or the stream disconnected: warning.
+//	C11  one banner listing every cause: integrity failed or self-backup verify failed is critical; disk under
+//	     10 % free, WAL over 1 GiB, self-backup older than 26 h or never written, and anything never measured
+//	     (integrity never run, disk not measured) are warnings. WAL size zero is a real value.
+//	C12  key not loaded (the zero value) or an active escrow wrapped under another key id: critical.
+//	     MasterKeyFacts.EnrollmentAllowed is false without a loaded key (the 503 of C12 / C18).
+//	C14  no digest on the local date of the newest digest_local_time + 30 min that has passed: critical.
+//	     A disabled digest raises nothing; an unset or unparseable time is C14b warning.
+//	C15  worst target with a soft quota: 80 % warning, 90 % and 100 % critical, growth (least squares over the
+//	     samples, at least 2 spanning an hour) reaching 100 % within 14 d critical. A target without a quota
+//	     raises nothing; a quota whose usage was never measured is C15b warning.
+//	C16  a rejected manifest: warning. release-check never ran: C16b warning.
+//
+// A "b" id is the not-checked warning of its condition, the pattern ADR 0013 set
+// with C04b. Banner text cites times in World.DisplayZone on a 12-hour clock and
+// Banner.At carries the instant.
+//
+// # The ten-day strip and the digest (4.7)
+//
+// TenDayStrip draws one device's ten cells in the customer's zone (else the
+// display zone, else UTC), bucketing each hour by its local date, so DST days of
+// 23 and 25 hours are one cell. Days before the (re)enrollment day and from the
+// pause day on are none; a day without runs is missed only when a run was
+// expected (not pending, not without a schedule, not today). DigestDue and
+// DigestKey give the digest one due time and one dedupe key per local date,
+// across DST; DigestOf lists the exceptions the digest sends, MISSING customers
+// and UNKNOWN devices first.
+//
+// # Scope of this version
+//
+// Implemented here: every row of 4.2, every rule of 4.3, 4.4, 4.5, every 4.6
+// banner except C04, C04b and the agent-listener half of C05 (ADR 0013:
+// internal/console/health), the ten-day strip and digest timing of 4.7, and
+// test cases A01-A23, B01-B15, B17-B48, C01-C10, C12-C28, D01-D13 and E01-E05
+// of 4.8. Elsewhere: B16 is a schema test; C11 is the agent-endpoint self-probe
+// (internal/console/health); the enrollment handler's 503 (C18), the digest
+// render and send with its notification_log dedupe (C22, C25, E05) and the
+// one-notification-per-Collapse rule (C19, C20) are M4 and agentapi, built on
+// MasterKeyFacts.EnrollmentAllowed, DigestOf, DigestDue, DigestKey and
+// FleetView.Collapses, which are tested here.
 //
 // # Error-class vocabulary: a deliberate duplication
 //
