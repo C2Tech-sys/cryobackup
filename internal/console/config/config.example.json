@@ -60,5 +60,14 @@
     "connect_address": "",
     "spki_pin": ""
   },
+  "health_prober": {
+    "interval_s": 60,
+    "gateway_ca_file": ""
+  },
+  "healthcheck_ping": {
+    "url": "",
+    "method": "GET",
+    "interval_s": 300
+  },
   "fixtures": false
 }

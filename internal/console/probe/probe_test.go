@@ -336,7 +336,9 @@ func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 func TestStreakClearAndLogs(t *testing.T) {
 	good := newCert(t, time.Now().Add(90*24*time.Hour), "agents.test")
 	var logs syncBuf
-	clk := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	// Relative to the real clock: the certificate's NotBefore is now minus 48 h, so a fixed date
+	// stops verifying once the wall clock passes it by two days.
+	clk := time.Now().UTC().Truncate(time.Minute)
 	var mu sync.Mutex
 	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return clk }
 	advance := func(d time.Duration) { mu.Lock(); clk = clk.Add(d); mu.Unlock() }

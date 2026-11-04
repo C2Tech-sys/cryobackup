@@ -14,6 +14,13 @@
 // names them. Nothing operator-specific is a default: the display zone defaults
 // to America/Chicago because the design says so and is a setting.
 //
+// JSON has no comments, so the keys are documented on their Go types in
+// config.go. The M3 health keys: health_prober.interval_s (60) and
+// health_prober.gateway_ca_file (empty: system roots) for the health-prober;
+// healthcheck_ping.url (empty: off), .method (GET) and .interval_s (300) for the
+// outbound dead-man's-switch ping, sent only while the alarm-evaluator is
+// healthy. No default names an operator, a host or a monitoring service.
+//
 // Validate enforces the listener rules of architecture §5: the admin listener
 // must bind a loopback or private address unless admin_allow_public is set, the
 // agent listener needs a certificate and key unless insecure_http_for_lab is on,
