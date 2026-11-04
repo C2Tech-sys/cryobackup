@@ -110,12 +110,16 @@ type CustomerState struct {
 
 // Banner is a console-level condition rendered above every page (§4.6).
 type Banner struct {
-	// ID is the §4.6 id, "C08" or "C09" in v0.
+	// ID is the §4.6 id ("C01" to "C16"), or the id with a "b" suffix for a "not checked" warning of
+	// that condition ("C01b"), the pattern ADR 0013 set with C04b.
 	ID       string
 	Severity Severity
 	Text     string
-	// Count is the number the text is about (devices, errors).
+	// Count is the number the text is about (devices, errors, days, percent).
 	Count int
+	// At is the instant the text cites ("Last OK", "due by", "data as of"), UTC; zero when none.
+	// The text already renders it in World.DisplayZone; At lets a page re-render it.
+	At time.Time
 }
 
 // FleetView is the result of Evaluate: everything a page, the API, the digest

@@ -12,9 +12,12 @@ import (
 const loadErrorOrphan = "orphan_device"
 
 // Evaluate classifies every device, rolls up every customer, and derives the
-// console-level banners of architecture §4.6 that v0 can see: C08 (empty fleet)
-// and C09 (empty poll or partial data). The probe-driven conditions arrive at
-// M3/M4 through World.Probes. The result is stamped with now (C23).
+// console-level banners of architecture §4.6: C08 (empty fleet) and C09 (empty
+// poll or partial data) from the load, the probe-driven conditions from
+// World.Probes (banners.go), and the device-derived ones (collapse.go). C04,
+// C04b and the agent-listener half of C05 are not raised here (ADR 0013: they
+// come from the self-probe in internal/console/health). The result is stamped
+// with now (C23).
 //
 // Evaluate never makes missing data look healthy. A failed or partial load,
 // an empty poll after a non-empty one, a device with incomplete facts, or a
@@ -129,6 +132,7 @@ func Evaluate(w World, now time.Time) FleetView {
 	if partial {
 		banners = append(banners, partialBanner(w, incomplete, emptyPoll))
 	}
+	banners = append(banners, probeBanners(w, now)...)
 	sort.SliceStable(banners, func(i, j int) bool {
 		if banners[i].Severity != banners[j].Severity {
 			return banners[i].Severity > banners[j].Severity
