@@ -323,6 +323,9 @@ func matrix() map[string]matrixCase {
 			l, err := w.s.ListAudit(w.ctx, sc, AuditFilter{}, Page{Limit: 1000})
 			var rows []string
 			for _, e := range l.Items {
+				if e.CustomerID == "" && sc.All {
+					continue // console-wide events (saved views, settings) are an all-customer caller's to see; a scoped caller must still never get one
+				}
 				rows = append(rows, e.CustomerID)
 			}
 			return rows, err
@@ -347,6 +350,7 @@ func matrix() map[string]matrixCase {
 	addEnrollM2Matrix(m) // M2-W2B: token management (enroll_m2_test.go)
 	addW2CMatrix(m)      // M2-W2C: commands and identity conflicts (scope_w2c_test.go)
 	addAuditM2Matrix(m)  // M2-W3A: audit viewer reads and console-wide settings (audit_m2_test.go)
+	addM3T3Matrix(m)     // M3-T3: saved views, pause/resume, run search, heartbeat ring (m3t3_test.go)
 	return m
 }
 
