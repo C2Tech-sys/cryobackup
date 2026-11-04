@@ -387,7 +387,6 @@ func TestFleetCasesPendingLaterTicketItems(t *testing.T) {
 		"C19_many_deferred_gateway_collapse_to_one_banner",
 		"C20_customer_wide_silence_collapses",
 		"C22_digest_lists_unknown_and_missing_even_when_rest_green",
-		"C24_clock_suspect_banner",
 	} {
 		t.Run(name, func(t *testing.T) { t.Skip("M3-T1 later item") })
 	}
@@ -828,6 +827,95 @@ func TestProbeBannersNilAndZeroChecks(t *testing.T) {
 		}
 		if v.AllClear() {
 			t.Fatal("AllClear with every check at its zero value")
+		}
+	})
+}
+
+// ---- clock (architecture 4.2 attribute clock skew, 4.6 C13; 4.8 C24) -----------------
+
+func TestC24ClockSuspect(t *testing.T) {
+	// fleet is 10 healthy devices; skew sets the offset of the first n of them.
+	fleet := func(n int, off time.Duration) World {
+		w := healthyFleet(2, 5)
+		for i := 0; i < n; i++ {
+			w.Devices[i].ClockOffset = off
+		}
+		return w
+	}
+	cases := []struct {
+		name string
+		w    World
+		want bool
+		text string
+	}{
+		{"C24_clock_suspect_banner", func() World {
+			w := healthyFleet(4, 5) // 20 devices, 6 (30 %) at +5 min
+			for i := 0; i < 6; i++ {
+				w.Devices[i].ClockOffset = 5 * time.Minute
+			}
+			return w
+		}(), true, "Server clock may be wrong: device offsets agree. 6 of 20 reporting devices run more than 2 min ahead of the server clock."},
+		{"C24_clock_suspect_behind", fleet(5, -10*time.Minute), true, "5 of 10 reporting devices run more than 2 min behind the server clock."},
+		{"C24_clock_suspect_needs_five_devices", fleet(4, 5*time.Minute), false, ""},
+		{"C24_clock_suspect_needs_twenty_percent", func() World {
+			w := healthyFleet(6, 5) // 30 devices, 5 skewed: 16.7 %
+			for i := 0; i < 5; i++ {
+				w.Devices[i].ClockOffset = 5 * time.Minute
+			}
+			return w
+		}(), false, ""},
+		{"C24_clock_suspect_exactly_twenty_percent", func() World {
+			w := healthyFleet(5, 5) // 25 devices, 5 skewed: 20 %
+			for i := 0; i < 5; i++ {
+				w.Devices[i].ClockOffset = 3 * time.Minute
+			}
+			return w
+		}(), true, "5 of 25"},
+		{"C24_clock_suspect_mixed_signs_do_not_agree", func() World {
+			w := fleet(4, 5*time.Minute)
+			for i := 4; i < 8; i++ {
+				w.Devices[i].ClockOffset = -5 * time.Minute
+			}
+			return w
+		}(), false, ""},
+		{"C24_clock_suspect_two_minutes_is_not_beyond", fleet(8, 2*time.Minute), false, ""},
+		{"C24_clock_suspect_ignores_unseen_retired_and_unknown", func() World {
+			w := fleet(8, 5*time.Minute)
+			w.Devices[0].LastSeen = ago(200 * hour) // unseen: offset is not current
+			w.Devices[1].RetiredAt = ago(day)
+			w.Devices[2].Complete = false
+			w.Devices[3].LastSeen = 0 // never heartbeat: falls back to enrolled_at, has no offset
+			return w
+		}(), false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := Evaluate(c.w, t0)
+			b, ok := findBanner(v, "C13")
+			if ok != c.want {
+				t.Fatalf("C13 raised = %v, want %v (banners %v)", ok, c.want, bannerIDs(v))
+			}
+			if !ok {
+				return
+			}
+			if b.Severity != SeverityAlarm || !strings.Contains(b.Text, c.text) || v.AllClear() {
+				t.Errorf("banner %+v allClear %v", b, v.AllClear())
+			}
+		})
+	}
+	t.Run("C24_clock_skew_is_a_device_attribute_never_the_primary", func(t *testing.T) {
+		v := Evaluate(fleet(6, 3*time.Hour), t0)
+		skewed := 0
+		for _, d := range v.Devices {
+			if hasAttr(d.Attrs, AttrClockSkew) {
+				skewed++
+				if d.Primary != StateOK || d.Detail.ClockOffset != 3*time.Hour {
+					t.Errorf("%s: primary %s offset %v", d.Hostname, d.Primary, d.Detail.ClockOffset)
+				}
+			}
+		}
+		if skewed != 6 {
+			t.Errorf("skewed devices = %d, want 6", skewed)
 		}
 	})
 }

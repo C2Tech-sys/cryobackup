@@ -42,6 +42,7 @@ func Evaluate(w World, now time.Time) FleetView {
 
 	incomplete := 0
 	states := make([]DeviceState, 0, len(w.Devices))
+	var reporting []*DeviceFacts
 	for _, df := range w.Devices {
 		d := df
 		if !known[d.CustomerID] {
@@ -55,6 +56,9 @@ func Evaluate(w World, now time.Time) FleetView {
 			continue
 		}
 		states = append(states, Classify(d, now))
+		if isReporting(&d, now) {
+			reporting = append(reporting, &d)
+		}
 	}
 
 	byCustomer := make(map[string][]DeviceState, len(w.Customers))
@@ -133,6 +137,9 @@ func Evaluate(w World, now time.Time) FleetView {
 		banners = append(banners, partialBanner(w, incomplete, emptyPoll))
 	}
 	banners = append(banners, probeBanners(w, now)...)
+	if b, ok := clockSuspectBanner(reporting); ok {
+		banners = append(banners, b)
+	}
 	sort.SliceStable(banners, func(i, j int) bool {
 		if banners[i].Severity != banners[j].Severity {
 			return banners[i].Severity > banners[j].Severity
