@@ -64,6 +64,24 @@ type EventSource interface {
 // connections of the admin listener. A negative MaxEventStreams removes the cap.
 const DefaultMaxEventStreams = 32
 
+// DefaultMaxEventStreamsPerPrincipal is how many event streams one account (or one
+// API token) may hold open when Service.MaxEventStreamsPerPrincipal is zero. A
+// handful of browser tabs fit; a script that opens streams in a loop does not
+// get to take the global slots of everyone else.
+const DefaultMaxEventStreamsPerPrincipal = 4
+
+// DefaultEventWriteTimeout is the write deadline of every write to a stream
+// (events and pings): a reader that stalls longer than this is dropped and its
+// slot freed.
+const DefaultEventWriteTimeout = 30 * time.Second
+
+// The stream's credential is checked again once per ping interval (15 s, the
+// same Authenticate calls the gate makes): a revoked or expired session or
+// token, or a disabled account, loses its stream within one interval. A role or
+// customer-scope change takes effect on the next evaluation. Note that this
+// check counts as activity for the session's sliding idle expiry, as any
+// request would; the absolute session lifetime still ends the stream.
+
 // sseShareDefault is how long one fleet evaluation may serve every stream of the
 // same scope: a change that fans out to N streams costs one evaluation, not N.
 const sseShareDefault = time.Second
@@ -144,11 +162,112 @@ func (s *Service) sharedFleet(ctx context.Context, scope store.Scope) (health.Fl
 	return f, nil
 }
 
-func writeSSE(w http.ResponseWriter, fl http.Flusher, name string, v any) error {
+// streamSlots takes one slot for the principal and one global slot, in that
+// order, and returns the function that gives both back. status is 0 on success,
+// 429 when the principal is over its limit, 503 when the console is.
+func (s *Service) streamSlots(principal string) (release func(), status int) {
+	perLimit := s.MaxEventStreamsPerPrincipal
+	if perLimit == 0 {
+		perLimit = DefaultMaxEventStreamsPerPrincipal
+	}
+	limit := s.MaxEventStreams
+	if limit == 0 {
+		limit = DefaultMaxEventStreams
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if perLimit > 0 && s.streamsOf[principal] >= perLimit {
+		return nil, http.StatusTooManyRequests
+	}
+	if limit > 0 && s.streamsOpen >= limit {
+		return nil, http.StatusServiceUnavailable
+	}
+	if s.streamsOf == nil {
+		s.streamsOf = map[string]int{}
+	}
+	s.streamsOf[principal]++
+	s.streamsOpen++
+	return func() {
+		s.streamMu.Lock()
+		defer s.streamMu.Unlock()
+		if s.streamsOf[principal]--; s.streamsOf[principal] <= 0 {
+			delete(s.streamsOf, principal)
+		}
+		s.streamsOpen--
+	}, 0
+}
+
+// openStreams reports how many streams are open (tests, diagnostics).
+func (s *Service) openStreams() int {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.streamsOpen
+}
+
+// principalKey names who a stream belongs to: the token for a token caller, else the account.
+func principalKey(p *auth.Principal) string {
+	if p.TokenID != "" {
+		return "token:" + p.TokenID
+	}
+	return "admin:" + p.Admin.ID
+}
+
+// streamCredential is the credential the request authenticated with, kept so the
+// stream can check it again: the bearer token if the request carried one (the
+// gate prefers it), else the session cookie.
+func streamCredential(r *http.Request) (bearer, cookie string) {
+	if h := r.Header.Get(api.HeaderAuthorization); len(h) >= len(api.BearerPrefix) && strings.EqualFold(h[:len(api.BearerPrefix)], api.BearerPrefix) {
+		return strings.TrimSpace(h[len(api.BearerPrefix):]), ""
+	}
+	if c, err := r.Cookie(auth.SessionCookie); err == nil {
+		return "", c.Value
+	}
+	return "", ""
+}
+
+// revalidate checks the stream's credential again. alive false means it is
+// revoked, expired or its account disabled and the stream must end. A database
+// error is not a verdict: the stream stays and the check is repeated on the next
+// interval (logged without identifiers).
+func (s *Service) revalidate(ctx context.Context, bearer, cookie string, cur *auth.Principal) (*auth.Principal, bool) {
+	var p *auth.Principal
+	var err error
+	switch {
+	case bearer != "":
+		p, err = s.Auth.AuthenticateBearer(ctx, bearer)
+	case cookie != "":
+		p, err = s.Auth.Authenticate(ctx, cookie)
+	default:
+		return cur, false
+	}
+	switch {
+	case err == nil:
+		if p.Role < auth.RoleReadOnly {
+			return cur, false
+		}
+		return p, true
+	case errors.Is(err, auth.ErrNoSession):
+		return cur, false
+	}
+	s.log().Warn("event stream: credential not re-checked", logx.Class("auth"))
+	return cur, true
+}
+
+func (s *Service) writeTimeout() time.Duration {
+	if s.sseWriteTimeout > 0 {
+		return s.sseWriteTimeout
+	}
+	return DefaultEventWriteTimeout
+}
+
+// writeSSE writes one event under the write deadline: a reader that does not
+// take it in time fails the write, which ends the stream.
+func (s *Service) writeSSE(w http.ResponseWriter, rc *http.ResponseController, fl http.Flusher, name string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	_ = rc.SetWriteDeadline(time.Now().Add(s.writeTimeout()))
 	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b); err != nil {
 		return err
 	}
@@ -192,17 +311,19 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, api.CodeInternal, 0)
 		return
 	}
-	// Over the cap: refused, with Retry-After, before anything is held for the stream.
-	limit := s.MaxEventStreams
-	if limit == 0 {
-		limit = DefaultMaxEventStreams
-	}
-	if n := s.eventStreams.Add(1); limit > 0 && int(n) > limit {
-		s.eventStreams.Add(-1)
+	// Over a limit: refused, with Retry-After, before anything is held for the stream.
+	// The principal's own limit is checked first, so one account cannot use up the global slots.
+	release, status := s.streamSlots(principalKey(p))
+	switch status {
+	case http.StatusTooManyRequests:
+		httpx.Problem(w, r, api.CodeRateLimited, 30*time.Second)
+		return
+	case http.StatusServiceUnavailable:
 		httpx.Problem(w, r, api.CodeUnavailable, 30*time.Second)
 		return
 	}
-	defer s.eventStreams.Add(-1)
+	defer release()
+	bearer, cookie := streamCredential(r)
 	// Watch before the first byte: a client that has seen the headers has a
 	// registered listener, so no signal after that point is lost.
 	var sigC <-chan Signal
@@ -212,8 +333,8 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stop()
 	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Time{}) // the stream outlives the server's write timeout
-	_ = rc.SetReadDeadline(time.Time{})
+	_ = rc.SetReadDeadline(time.Time{}) // the stream outlives the server's timeouts; every write sets its own deadline
+	_ = rc.SetWriteDeadline(time.Now().Add(s.writeTimeout()))
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")
@@ -233,7 +354,11 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 		}
 		return refresh
 	}
-	refreshT, gapT, pingT := time.NewTicker(period()), time.NewTicker(gap), time.NewTicker(ssePing)
+	pingEvery := s.sseRevalidate
+	if pingEvery <= 0 {
+		pingEvery = ssePing
+	}
+	refreshT, gapT, pingT := time.NewTicker(period()), time.NewTicker(gap), time.NewTicker(pingEvery)
 	defer refreshT.Stop()
 	defer gapT.Stop()
 	defer pingT.Stop()
@@ -244,11 +369,11 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 		f, err := s.sharedFleet(ctx, p.Scope)
 		if err != nil {
 			s.log().Warn("event stream: fleet not evaluated", logx.Class("fleet"))
-			return writeSSE(w, fl, "stream.error", StreamErrorJSON{ComputedAt: s.now(), Class: "fleet_unavailable"}) == nil
+			return s.writeSSE(w, rc, fl, "stream.error", StreamErrorJSON{ComputedAt: s.now(), Class: "fleet_unavailable"}) == nil
 		}
 		fd := fleetData{Fleet: f, names: map[string]string{}, Devices: f.View.Devices, Customers: f.View.Customers, Collapses: f.View.Collapses}
 		if topics[sseTopicFleet] {
-			if writeSSE(w, fl, "fleet.state", buildSummary(fd)) != nil {
+			if s.writeSSE(w, rc, fl, "fleet.state", buildSummary(fd)) != nil {
 				return false
 			}
 		}
@@ -257,7 +382,7 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 			key, _ := json.Marshal(bj)
 			if string(key) != lastBanners {
 				lastBanners = string(key)
-				if writeSSE(w, fl, "banner.update", BannerUpdateJSON{StampJSON: fd.stamp(), Banners: bj}) != nil {
+				if s.writeSSE(w, rc, fl, "banner.update", BannerUpdateJSON{StampJSON: fd.stamp(), Banners: bj}) != nil {
 					return false
 				}
 			}
@@ -301,7 +426,7 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 			switch sg.Kind {
 			case SignalProgress:
 				if topics[sseTopicRuns] && visible(sg.DeviceID) {
-					if writeSSE(w, fl, "run.progress", RunProgressJSON{DeviceID: sg.DeviceID, RunID: sg.RunID}) != nil {
+					if s.writeSSE(w, rc, fl, "run.progress", RunProgressJSON{DeviceID: sg.DeviceID, RunID: sg.RunID}) != nil {
 						return
 					}
 				}
@@ -322,10 +447,17 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-pingT.C:
+			_ = rc.SetWriteDeadline(time.Now().Add(s.writeTimeout()))
 			if _, err := fmt.Fprint(w, "event: ping\ndata: {}\n\n"); err != nil {
 				return
 			}
 			fl.Flush()
+			// The credential is checked again once per interval; a revoked principal loses the stream here.
+			np, alive := s.revalidate(r.Context(), bearer, cookie, p)
+			if !alive {
+				return
+			}
+			p = np
 		}
 	}
 }

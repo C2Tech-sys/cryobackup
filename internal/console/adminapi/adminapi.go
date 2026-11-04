@@ -99,9 +99,20 @@ type Service struct {
 	// 503 with Retry-After. Zero means DefaultMaxEventStreams, negative means no cap.
 	// (The console config key is not wired: config/** belongs to M3-T2.)
 	MaxEventStreams int
+	// MaxEventStreamsPerPrincipal caps the open event streams of one account (one
+	// token, for token callers, is its own principal); over it the answer is 429 with
+	// Retry-After, and no global slot is taken. Zero means
+	// DefaultMaxEventStreamsPerPrincipal, negative means no per-principal cap. One
+	// read-only account or token therefore cannot take every global slot.
+	MaxEventStreamsPerPrincipal int
+	// sseWriteTimeout (zero: DefaultEventWriteTimeout) and sseRevalidate (zero: the
+	// ping interval) are the stream's write deadline and credential re-check period.
+	sseWriteTimeout, sseRevalidate time.Duration
 	// sseRefresh, sseGap and sseShare override the event stream's cadences (tests).
 	sseRefresh, sseGap, sseShare time.Duration
-	eventStreams                 atomic.Int32
+	streamMu                     sync.Mutex
+	streamsOpen                  int
+	streamsOf                    map[string]int
 	evalMu                       sync.Mutex
 	evals                        map[string]*sharedEval
 }

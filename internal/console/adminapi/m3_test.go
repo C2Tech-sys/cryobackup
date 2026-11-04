@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"regexp"
 	"slices"
@@ -1602,7 +1604,7 @@ func TestM3EventStreamsWithAHubTakeOneEvaluationPerTick(t *testing.T) { // L2: n
 
 func TestM3EventStreamCapAnswers503WithRetryAfter(t *testing.T) { // L2
 	e := newEnv(t)
-	e.svc.sseRefresh, e.svc.MaxEventStreams = time.Hour, 2
+	e.svc.sseRefresh, e.svc.MaxEventStreams, e.svc.MaxEventStreamsPerPrincipal = time.Hour, 2, -1
 	owner := e.login("admin", pw)
 	first, _ := e.openStream("/api/v1/events?topics=fleet", owner)
 	first.next("fleet.state", 5*time.Second)
@@ -1659,5 +1661,192 @@ func TestM3EventStreamDoesNotRememberADatabaseErrorAsNotVisible(t *testing.T) { 
 	var rp RunProgressJSON
 	if err := json.Unmarshal([]byte(st.next("run.progress", 5*time.Second).Data), &rp); err != nil || rp.RunID != "01J9Y4K3A0B1C2D3E4F5G6H7M2" {
 		t.Fatalf("after the database came back: %+v %v", rp, err)
+	}
+}
+
+// closed waits for the stream to end (the server closed it), skipping events.
+func (st *sseStream) closed(d time.Duration) bool {
+	st.t.Helper()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		select {
+		case _, ok := <-st.events:
+			if !ok {
+				return true
+			}
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func TestM3EventStreamPerPrincipalLimit(t *testing.T) { // add. 1: one account cannot take every global slot
+	e := newEnv(t)
+	e.svc.sseRefresh = time.Hour
+	owner := e.login("admin", pw)
+	e.addAdmin("m3-lim-other", "read_only", nil)
+	other := e.login("m3-lim-other", pw)
+
+	if DefaultMaxEventStreamsPerPrincipal != 4 {
+		t.Fatalf("the documented default is 4, not %d", DefaultMaxEventStreamsPerPrincipal)
+	}
+	var held []*sseStream
+	for i := 0; i < DefaultMaxEventStreamsPerPrincipal; i++ {
+		st, res := e.openStream("/api/v1/events?topics=fleet", owner)
+		if res.StatusCode != 200 {
+			t.Fatalf("stream %d of one account = %d", i+1, res.StatusCode)
+		}
+		st.next("fleet.state", 5*time.Second)
+		held = append(held, st)
+	}
+	_, res := e.openStream("/api/v1/events?topics=fleet", owner)
+	if res.StatusCode != 429 || res.Header.Get("Retry-After") == "" {
+		t.Fatalf("the 5th stream of one account = %d (Retry-After %q), want 429 with Retry-After", res.StatusCode, res.Header.Get("Retry-After"))
+	}
+	if n := e.svc.openStreams(); n != 4 {
+		t.Errorf("%d global slots in use after a refused stream, want 4: a refusal must not take a slot", n)
+	}
+	// A second account still connects, and so does a token of the first (a token is its own principal).
+	st, res := e.openStream("/api/v1/events?topics=fleet", other)
+	if res.StatusCode != 200 {
+		t.Fatalf("a second account's first stream = %d, want 200 while the first account is at its limit", res.StatusCode)
+	}
+	st.next("fleet.state", 5*time.Second)
+	_, tb := e.req("POST", "/api/v1/me/api-tokens", owner, TokenCreateRequest{Name: "limit", Scope: "read", Days: 7})
+	tok := decode[TokenCreateResponse](t, tb).Token
+	ts, res := e.openStream("/api/v1/events?topics=fleet", nil, "Authorization", "Bearer "+tok)
+	if res.StatusCode != 200 {
+		t.Fatalf("a token's first stream = %d, want 200: tokens are limited per token", res.StatusCode)
+	}
+	ts.next("fleet.state", 5*time.Second)
+	// A freed slot is given back to the principal.
+	held[0].cancel()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		again, res := e.openStream("/api/v1/events?topics=fleet", owner)
+		if res.StatusCode == 200 {
+			again.next("fleet.state", 5*time.Second)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the account's freed slot was never given back (last %d)", res.StatusCode)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The principal's limit is checked before the global one: with the console full, the account over
+	// its own limit is told 429 (its own doing), not 503.
+	e.svc.MaxEventStreams = e.svc.openStreams()
+	if _, res := e.openStream("/api/v1/events?topics=fleet", owner); res.StatusCode != 429 {
+		t.Errorf("an account over its limit while the console is full = %d, want 429", res.StatusCode)
+	}
+	e.addAdmin("m3-lim-third", "read_only", nil)
+	if _, res := e.openStream("/api/v1/events?topics=fleet", e.login("m3-lim-third", pw)); res.StatusCode != 503 {
+		t.Errorf("a new account while the console is full = %d, want 503", res.StatusCode)
+	}
+	// Negative lifts the per-principal cap.
+	e.svc.MaxEventStreams, e.svc.MaxEventStreamsPerPrincipal = -1, -1
+	for i := 0; i < 6; i++ {
+		if _, res := e.openStream("/api/v1/events?topics=fleet", owner); res.StatusCode != 200 {
+			t.Fatalf("with no per-principal cap, stream %d = %d", i+1, res.StatusCode)
+		}
+	}
+}
+
+func TestM3EventStreamStalledReaderIsDropped(t *testing.T) { // add. 2: write deadline
+	e := newEnv(t)
+	src := &fakeSource{}
+	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = src, time.Hour, 5*time.Millisecond, time.Nanosecond
+	e.svc.sseWriteTimeout = 150 * time.Millisecond
+	owner := e.login("admin", pw)
+	// Every evaluation raises banners worth a few hundred KB, so a reader that does not read fills its buffers fast.
+	big := strings.Repeat("x", 2048)
+	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
+		out := make([]state.Banner, 0, 150)
+		for i := 0; i < 150; i++ {
+			out = append(out, state.Banner{ID: "C16", Subject: fmt.Sprintf("s%03d", i), Severity: state.SeverityAlarm, Text: big})
+		}
+		return out
+	}
+	conn, err := net.Dial("tcp", strings.TrimPrefix(e.srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.SetReadBuffer(1024)
+	}
+	var cookies []string
+	for _, c := range owner.cookies {
+		cookies = append(cookies, c.Name+"="+c.Value)
+	}
+	fmt.Fprintf(conn, "GET /api/v1/events?topics=fleet,banners HTTP/1.1\r\nHost: x\r\nCookie: %s\r\n\r\n", strings.Join(cookies, "; "))
+	// Do not read. Wait for the stream to take its slot, then keep the hub busy until the server gives up on us.
+	deadline := time.Now().Add(10 * time.Second)
+	for e.svc.openStreams() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the stream never opened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for e.svc.openStreams() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a reader that never reads still holds its slot after the write deadline")
+		}
+		src.send(Signal{Kind: SignalChange})
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestM3EventStreamEndsWhenItsCredentialIsRevoked(t *testing.T) { // add. 3: revocation within one interval
+	e := newEnv(t)
+	e.svc.sseRefresh, e.svc.sseRevalidate = time.Hour, 50*time.Millisecond
+	owner := e.login("admin", pw)
+
+	mk := func(name string) (token, id string) {
+		res, b := e.req("POST", "/api/v1/me/api-tokens", owner, TokenCreateRequest{Name: name, Scope: "read", Days: 7})
+		if res.StatusCode != 201 {
+			t.Fatalf("token: %d %s", res.StatusCode, b)
+		}
+		r := decode[TokenCreateResponse](t, b)
+		return r.Token, r.APIToken.ID
+	}
+	revoked, revokedID := mk("revoked")
+	kept, _ := mk("kept")
+	rs, _ := e.openStream("/api/v1/events?topics=fleet", nil, "Authorization", "Bearer "+revoked)
+	ks, _ := e.openStream("/api/v1/events?topics=fleet", nil, "Authorization", "Bearer "+kept)
+	rs.next("fleet.state", 5*time.Second)
+	ks.next("fleet.state", 5*time.Second)
+	if rs.closed(300 * time.Millisecond) {
+		t.Fatal("a live token's stream ended by itself")
+	}
+	if res, b := e.req("DELETE", "/api/v1/me/api-tokens/"+revokedID, owner, nil); res.StatusCode != 204 {
+		t.Fatalf("revoke: %d %s", res.StatusCode, b)
+	}
+	if !rs.closed(5 * time.Second) {
+		t.Fatal("the stream of a revoked token is still open")
+	}
+	if ks.closed(300 * time.Millisecond) {
+		t.Error("revoking one token closed another token's stream")
+	}
+	// The slot of the closed stream is free again.
+	deadline := time.Now().Add(5 * time.Second)
+	for e.svc.openStreams() > 1 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := e.svc.openStreams(); n != 1 {
+		t.Errorf("%d streams open after one was closed, want 1", n)
+	}
+
+	// A signed-out session loses its stream the same way.
+	e.addAdmin("m3-revoke-sess", "read_only", nil)
+	sess := e.login("m3-revoke-sess", pw)
+	ss, _ := e.openStream("/api/v1/events?topics=fleet", sess)
+	ss.next("fleet.state", 5*time.Second)
+	if res, b := e.req("POST", "/api/v1/auth/logout", sess, nil); res.StatusCode != 204 {
+		t.Fatalf("logout: %d %s", res.StatusCode, b)
+	}
+	if !ss.closed(5 * time.Second) {
+		t.Fatal("the stream of a signed-out session is still open")
 	}
 }
