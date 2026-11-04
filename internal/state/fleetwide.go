@@ -60,8 +60,9 @@ func clockSuspectBanner(reporting []*DeviceFacts) (Banner, bool) {
 			strconv.Itoa(len(reporting)) + " reporting devices run more than 2 min " + way + " the server clock."}, true
 }
 
-// Collapse thresholds (§4.3): at least CollapseMinDevices active devices, of
-// which at least CollapseShare are UNSEEN or DEFERRED for the gateway at once.
+// Collapse thresholds (§4.3): at least CollapseMinDevices active (non-retired)
+// devices, of which at least CollapseShare are UNSEEN or DEFERRED for the
+// gateway at once.
 const (
 	CollapseMinDevices = 5
 	CollapseShare      = 0.5
@@ -131,14 +132,17 @@ func collapses(affected, total int) bool {
 }
 
 // CustomerCollapse applies the §4.3 customer-wide collapse to one rolled-up
-// customer: at least 5 active (non-retired, non-paused) devices, at least half
-// of them UNSEEN or DEFERRED for the gateway. ok is false when it does not apply;
-// the counts are filled either way.
+// customer, literally: at least 5 of the customer's active devices, at least
+// half of them UNSEEN or DEFERRED for the gateway. Active means non-retired
+// (§4.3 says "active devices", and only RETIRED leaves the fleet), so a paused
+// device counts in the denominator, although a pause keeps it from being
+// UNSEEN. ok is false when the collapse does not apply; the counts are filled
+// either way.
 func CustomerCollapse(c CustomerState) (col Collapse, ok bool) {
 	col = Collapse{Scope: CollapseCustomer, CustomerID: c.ID, CustomerName: c.Name}
 	for i := range c.Devices {
 		d := &c.Devices[i]
-		if d.Primary == StateRetired || d.Primary == StatePaused {
+		if d.Primary == StateRetired {
 			continue
 		}
 		col.Total++

@@ -1148,17 +1148,25 @@ func TestC20CustomerWideSilence(t *testing.T) {
 				ds[i].LastBackup.DeferredReason = "battery"
 			}
 		}, want{false, 0, 10, 0}},
-		{"C20_paused_and_retired_are_not_active", func(ds []DeviceFacts) {
+		{"C20_paused_devices_count_in_the_denominator", func(ds []DeviceFacts) {
 			for i := 0; i < 3; i++ {
 				goSilent(&ds[i], 200*hour)
 			}
 			for i := 3; i < 6; i++ {
-				ds[i].PausedAt = ago(day) // indefinite pause: not active
+				ds[i].PausedAt = ago(day) // paused: still an active device of the customer
 			}
 			for i := 6; i < 8; i++ {
-				ds[i].RetiredAt = ago(day)
+				ds[i].RetiredAt = ago(day) // retired: out of the fleet
 			}
-		}, want{true, 3, 5, 3}}, // 3 silent of the 5 active (10 - 3 paused - 2 retired): 60 %
+		}, want{false, 3, 8, 3}}, // 3 silent of the 8 non-retired: 37.5 %
+		{"C20_paused_half_and_silent_half_collapse", func(ds []DeviceFacts) {
+			for i := 0; i < 5; i++ {
+				goSilent(&ds[i], 200*hour)
+			}
+			for i := 5; i < 10; i++ {
+				ds[i].PausedAt = ago(day)
+			}
+		}, want{true, 5, 10, 5}},
 		{"C20_fewer_than_five_active_never_collapse", func(ds []DeviceFacts) {
 			for i := 0; i < 4; i++ {
 				goSilent(&ds[i], 200*hour)

@@ -122,10 +122,13 @@
 // when there are no banners of any severity, no alarming device or customer,
 // the load was Complete, and the fleet is non-empty or this is the first run.
 //
-// Collapse (4.3): a customer with at least 5 active (non-retired, non-paused)
-// devices of which at least half are UNSEEN or DEFERRED for the gateway is one
+// Collapse (4.3, read literally): a customer with at least 5 active devices of
+// which at least half are UNSEEN or DEFERRED for the gateway is one
 // customer-level row (FleetView.Collapses, CustomerCollapse); its device rows
-// stay. Fleet-wide, at least 5 reporting devices (active, facts known, not
+// stay. Active means non-retired: a paused device counts in the denominator
+// (it is still the customer's device), although a pause keeps it from being
+// UNSEEN, so pausing devices makes a collapse harder, never easier. The
+// health.Silence call-through returns exactly these counts. Fleet-wide, at least 5 reporting devices (active, facts known, not
 // UNSEEN) of which at least half are DEFERRED for the gateway is one C01 (C19)
 // and a fleet Collapse that covers the customer ones for notification. Devices
 // being offline never raise a console banner, however many (ADR 0013, C12).
