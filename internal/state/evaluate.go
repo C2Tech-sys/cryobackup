@@ -14,7 +14,7 @@ const loadErrorOrphan = "orphan_device"
 // Evaluate classifies every device, rolls up every customer, and derives the
 // console-level banners of architecture §4.6: C08 (empty fleet) and C09 (empty
 // poll or partial data) from the load, the probe-driven conditions from
-// World.Probes (banners.go), and the device-derived ones (collapse.go). C04,
+// World.Probes (banners.go), and the device-derived ones (fleetwide.go). C04,
 // C04b and the agent-listener half of C05 are not raised here (ADR 0013: they
 // come from the self-probe in internal/console/health). The result is stamped
 // with now (C23).
