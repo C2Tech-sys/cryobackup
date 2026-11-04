@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
+	"github.com/c2tech-sys/cryobackup/internal/console/hubsig"
 )
 
 // M3-T3: the admin event stream listens to the hub through Watch.
 
-func recvSignal(t *testing.T, ch <-chan adminapi.Signal) adminapi.Signal {
+func recvSignal(t *testing.T, ch <-chan hubsig.Signal) hubsig.Signal {
 	t.Helper()
 	select {
 	case sg := <-ch:
@@ -19,18 +19,18 @@ func recvSignal(t *testing.T, ch <-chan adminapi.Signal) adminapi.Signal {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no signal")
 	}
-	return adminapi.Signal{}
+	return hubsig.Signal{}
 }
 
 func TestWatchReceivesDeviceChangesAndRunProgress(t *testing.T) {
 	h := NewHub(time.Hour, nil)
 	ch, stop := h.Watch()
 	h.DeviceChanged("dev-1")
-	if sg := recvSignal(t, ch); sg.Kind != adminapi.SignalChange || sg.DeviceID != "dev-1" {
+	if sg := recvSignal(t, ch); sg.Kind != hubsig.Change || sg.DeviceID != "dev-1" {
 		t.Fatalf("change: %+v", sg)
 	}
 	h.RunProgress("dev-2", "run-9")
-	if sg := recvSignal(t, ch); sg.Kind != adminapi.SignalProgress || sg.DeviceID != "dev-2" || sg.RunID != "run-9" {
+	if sg := recvSignal(t, ch); sg.Kind != hubsig.Progress || sg.DeviceID != "dev-2" || sg.RunID != "run-9" {
 		t.Fatalf("progress: %+v", sg)
 	}
 	stop()
@@ -106,7 +106,7 @@ func TestWatchHearsTheRefreshTick(t *testing.T) {
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
-	if sg := recvSignal(t, ch); sg.Kind != adminapi.SignalRefresh {
+	if sg := recvSignal(t, ch); sg.Kind != hubsig.Refresh {
 		t.Fatalf("refresh tick: %+v", sg)
 	}
 }

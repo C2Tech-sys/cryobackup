@@ -11,6 +11,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/api"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
+	"github.com/c2tech-sys/cryobackup/internal/console/hubsig"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
 
@@ -32,20 +33,14 @@ import (
 // default all). The stream is scoped like every other read: a caller sees the
 // fleet of its own customers and progress of its own devices only.
 
-// Signal is what the event source tells the stream: Kind is "change" (some
-// device changed), "progress" (a run of DeviceID made progress) or "refresh"
-// (the periodic re-evaluation tick).
-type Signal struct {
-	Kind     string
-	DeviceID string
-	RunID    string
-}
+// Signal is what the event source tells the stream (see hubsig).
+type Signal = hubsig.Signal
 
 // Signal kinds.
 const (
-	SignalChange   = "change"
-	SignalProgress = "progress"
-	SignalRefresh  = "refresh"
+	SignalChange   = hubsig.Change
+	SignalProgress = hubsig.Progress
+	SignalRefresh  = hubsig.Refresh
 )
 
 // EventSource is the hub the stream listens to (ui.Hub satisfies it). Watch
