@@ -155,6 +155,14 @@ func TestServeRegistersTheMonitoringJobs(t *testing.T) {
 	if strings.Contains(names, jobs.NameHealthcheckPing) {
 		t.Errorf("healthcheck-ping registered without a URL: %s", names)
 	}
+	// With a URL configured it is registered.
+	cfg := app.Cfg
+	cfg.HealthcheckPing.URL = "https://monitor.example.invalid/ping/x"
+	app.Runner = jobs.NewRunner(app.Store, "t", nil)
+	app.addMonitorJobs(cfg, app.Admin.Fleet)
+	if names := strings.Join(app.Runner.Names(), ","); !strings.Contains(names, jobs.NameHealthcheckPing) {
+		t.Errorf("healthcheck-ping not registered with a URL: %s", names)
+	}
 }
 
 // The alarm-evaluator records its job_state row, which clears C06b and is what
