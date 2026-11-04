@@ -1929,7 +1929,7 @@ paths:
       operationId: getSystemHealth
       tags: [system]
       summary: Probe results and versions
-      description: Gateway, storage, alert e-mail, certificates, agent API, maintenance worker, database, alarm evaluator, master key, jobs, clock and release manifest. A component is `ok` only on evidence; a probe that has not run is `not_checked`, never `ok`. `overall` is the worst component.
+      description: Gateway, storage, alert e-mail, certificates, agent API, maintenance worker, database, alarm evaluator, master key, jobs, fleet data, clock and release manifest. Every banner the engine can raise, its "not checked" (b) variants included, maps to a row. A component is `ok` only when none of its banners is raised and there is evidence for it; while C00 (self-checks not wired) is raised no row is `ok`. `overall` is the worst component.
       x-min-role: RO
       responses:
         '200':
@@ -1979,7 +1979,7 @@ paths:
       operationId: probeStorageTarget
       tags: [system]
       summary: Probe the gateway, storage and certificates now
-      description: Runs the health-prober job now (lease-guarded) and reads the checks from the banners it feeds. When the probe cannot run, every check is `not_checked` with the reason, never `ok`. One audit row for the attempt.
+      description: Runs the health-prober job now (lease-guarded) and reads three checks (gateway, storage including the quota banner, certificates) from the banners the engine raises, the "not checked" banners included. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt.
       x-min-role: AD
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -3879,11 +3879,13 @@ components:
         status: {type: string, enum: [accepted]}
     ProbeResponse:
       type: object
-      required: [computed_at, target_id, target, ran, checks]
+      required: [computed_at, target_id, target, ran, checks, scope, note]
       properties:
         computed_at: {$ref: '#/components/schemas/Timestamp'}
         target_id: {type: string}
         target: {type: string}
+        scope: {type: string, enum: [console-wide], description: The engine records gateway, storage, certificate and quota facts for the console as a whole; nothing in them names a storage target.}
+        note: {type: string}
         ran: {type: boolean}
         reason: {type: string, description: Why the probe could not run; the checks are then not_checked.}
         job:
@@ -3896,9 +3898,10 @@ components:
           type: array
           items:
             type: object
-            required: [id, status, banners]
+            required: [id, status, banners, scope]
             properties:
               id: {type: string, enum: [gateway, storage, certificates]}
+              scope: {type: string, enum: [console-wide]}
               status: {type: string, enum: [ok, not_checked, warn, failed]}
               detail: {type: string}
               banners:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,10 +31,6 @@ type JobRunner interface {
 // gateway, storage, SMTP and certificate banners (architecture §5.7). A console
 // without it cannot say any of those is fine: they read "not checked".
 const proberJob = "health-prober"
-
-// probeFreshness is how old the prober's last successful run may be and still
-// count as evidence (it runs every minute).
-const probeFreshness = 5 * time.Minute
 
 // jobRunTimeout bounds one manual job run.
 const jobRunTimeout = 15 * time.Minute
@@ -83,36 +80,167 @@ type SystemHealthResponse struct {
 	Versions   VersionsJSON          `json:"versions"`
 }
 
-// bannersWithID lists the ids of the banners among ids that are raised, and the
-// worst status they imply ("" when none is raised).
-func bannersWithID(bs []state.Banner, ids ...string) (out []string, worst string) {
+// healthRowBanners is the one mapping of every console banner the engine can
+// raise to the system health row that banner speaks for. A row is never ok
+// while a banner mapped to it is raised, and the "b" ids (the engine's own
+// "not checked" warnings, architecture ADR 0013 pattern) are mapped beside
+// their conditions. The test TestSystemHealthMapsEveryBannerTheEngineCanRaise
+// reads the banner ids out of the state and health sources and fails when one
+// is missing here, so a new banner cannot be added without a row to show it.
+var healthRowBanners = map[string][]string{
+	"gateway":            {"C01", "C01b"},
+	"storage":            {"C02", "C02b", "C15", "C15b"},
+	"smtp":               {"C03", "C03b", "C14", "C14b"},
+	"certificates":       {"C05", "C05b"},
+	"agent_api":          {"C04", "C04b"},
+	"maintenance_worker": {"C07", "C07b"},
+	"database":           {"C11"},
+	"evaluator":          {"C06", "C06b"},
+	"master_key":         {"C12", "C12b"},
+	"fleet_data":         {"C08", "C09", "C10"},
+	"clock":              {"C13"},
+	"release_manifest":   {"C16", "C16b"},
+}
+
+// bannerNotWired is C00: the console's own self-checks are not wired, so no
+// probe-driven row can be called ok.
+const bannerNotWired = "C00"
+
+// clockMinReporting is the fewest reporting devices C13 can judge from (§4.6).
+const clockMinReporting = 5
+
+// healthRowOrder is the order of the rows on the page.
+var healthRowOrder = []struct{ id, label string }{
+	{"gateway", "Gateway"}, {"storage", "Storage"}, {"smtp", "Alert e-mail"}, {"certificates", "Certificates"}, {"agent_api", "Agent API"},
+	{"maintenance_worker", "Maintenance worker"}, {"database", "Console database"}, {"evaluator", "Alarm evaluator"}, {"master_key", "Master key"},
+	{"jobs", "Background jobs"}, {"fleet_data", "Fleet data"}, {"clock", "Server clock"}, {"release_manifest", "Release manifest"},
+}
+
+// healthFacts is everything buildComponents needs: the engine's banners and the
+// local evidence the handler gathered. Nothing here is computed state.
+type healthFacts struct {
+	Banners  []state.Banner
+	Now      time.Time
+	Complete bool
+	// EndpointWired: the agent endpoint self-probe is wired.
+	EndpointWired bool
+	// WorkerPinged is whether the maintenance worker was pinged, WorkerReachable its answer, MaintainKnown
+	// whether the periodic probe has an answer.
+	WorkerPinged, WorkerReachable, MaintainKnown bool
+	// SchemaErr is the error of the schema version read (the database answering).
+	SchemaErr error
+	// EvaluatorRanAt is when the alarm-evaluator job last finished.
+	EvaluatorRanAt *time.Time
+	// MasterKeyWired: the master key state is known to the evaluator.
+	MasterKeyWired bool
+	// ReportingDevices counts devices with a current heartbeat, for C13.
+	ReportingDevices int
+	Jobs             []store.JobState
+}
+
+// worstOf folds a row's raised banners into a status: failed (a critical
+// banner), warn, then not_checked (a "b" banner). "" means none is raised.
+func worstOf(bs []state.Banner, ids []string) (raised []string, worst string) {
+	rank := map[string]int{"": 0, statusNotChecked: 1, statusWarn: 2, statusFailed: 3}
 	for _, b := range bs {
 		if !slices.Contains(ids, b.ID) {
 			continue
 		}
-		out = append(out, b.ID)
-		if b.Severity >= state.SeverityCritical {
-			worst = statusFailed
-		} else if worst == "" {
-			worst = statusWarn
+		raised = append(raised, b.ID)
+		st := statusWarn
+		switch {
+		case strings.HasSuffix(b.ID, "b"):
+			st = statusNotChecked
+		case b.Severity >= state.SeverityCritical:
+			st = statusFailed
+		}
+		if rank[st] > rank[worst] {
+			worst = st
 		}
 	}
-	return out, worst
+	return raised, worst
 }
 
-// proberEvidence is how the health-prober's own record reads: the time of its
-// last good run, or a detail saying why there is no evidence.
-func proberEvidence(f health.Fleet, now time.Time) (checked *time.Time, detail string) {
-	j, ok := f.JobStatus(proberJob)
-	switch {
-	case !ok || j.LastFinishedAt == nil:
-		return nil, "the health-prober job has not run"
-	case j.LastStatus != "ok":
-		return nil, "the health-prober job is failing (" + j.LastErrorClass + ")"
-	case now.Sub(*j.LastFinishedAt) > probeFreshness:
-		return nil, "the health-prober job last finished " + ageWords(now.Sub(*j.LastFinishedAt)) + " ago"
+// buildComponents turns the engine's banners and the local evidence into the
+// rows of the system health page. A row is ok only when none of its banners is
+// raised AND there is evidence for it: C00 (self-checks not wired) takes every
+// otherwise-ok row to not_checked, and each row names what its evidence is.
+func buildComponents(f healthFacts) []SystemComponentJSON {
+	_, c00 := worstOf(f.Banners, []string{bannerNotWired})
+	notWired := c00 != ""
+	out := make([]SystemComponentJSON, 0, len(healthRowOrder))
+	for _, row := range healthRowOrder {
+		c := SystemComponentJSON{ID: row.id, Label: row.label, Banners: []string{}}
+		var worst string
+		if ids, ok := healthRowBanners[row.id]; ok {
+			c.Banners, worst = worstOf(f.Banners, ids)
+			if c.Banners == nil {
+				c.Banners = []string{}
+			}
+		}
+		// Local evidence: what this console can see for itself, beyond the engine's banners.
+		status, detail := statusOK, ""
+		switch row.id {
+		case "agent_api":
+			if !f.EndpointWired {
+				status, detail = statusNotChecked, "the agent endpoint self-probe is not wired"
+			}
+		case "maintenance_worker":
+			switch {
+			case f.WorkerPinged && !f.WorkerReachable:
+				status, detail = statusFailed, "the worker did not answer a ping"
+			case !f.WorkerReachable && !f.MaintainKnown:
+				status, detail = statusNotChecked, "the worker has not been probed"
+			}
+		case "database":
+			if f.SchemaErr != nil {
+				status, detail = statusFailed, "the database did not answer"
+			}
+		case "evaluator":
+			if f.EvaluatorRanAt == nil {
+				status, detail = statusNotChecked, "the alarm-evaluator job has not run"
+			} else {
+				c.CheckedAt = ptrTime(*f.EvaluatorRanAt)
+			}
+		case "master_key":
+			if !f.MasterKeyWired {
+				status, detail = statusNotChecked, "the master key state is not reported"
+			}
+		case "clock":
+			if f.ReportingDevices < clockMinReporting {
+				status, detail = statusNotChecked, "fewer than 5 devices are reporting, so offsets cannot be compared"
+			}
+		case "fleet_data":
+			if !f.Complete {
+				status, detail = statusWarn, "the facts load was incomplete"
+			}
+		case "jobs":
+			failing, overdue := 0, 0
+			for _, jb := range f.Jobs {
+				if jb.LastStatus == "error" {
+					failing++
+				}
+				if jobOverdue(jb, f.Now) {
+					overdue++
+				}
+			}
+			switch {
+			case failing > 0 || overdue > 0:
+				status, detail = statusWarn, jobSummary(failing, overdue)
+			case len(f.Jobs) == 0:
+				status, detail = statusNotChecked, "no job has run yet"
+			}
+		}
+		switch {
+		case worst != "":
+			status, detail = worst, ""
+		case status == statusOK && notWired:
+			status, detail = statusNotChecked, "console self-checks are not wired (C00): this is not being monitored"
+		}
+		c.Status, c.Detail = status, detail
+		out = append(out, c)
 	}
-	return ptrTime(*j.LastFinishedAt), ""
+	return out
 }
 
 func (s *Service) systemHealth(w http.ResponseWriter, r *http.Request) {
@@ -123,135 +251,36 @@ func (s *Service) systemHealth(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	now := f.Computed
-	bs := f.View.Banners
-	probed, why := proberEvidence(f, now)
-
-	// probeComponent builds a component fed by the prober: failed or warn when
-	// its banners say so, ok only with fresh prober evidence.
-	probeComponent := func(id, label string, ids ...string) SystemComponentJSON {
-		c := SystemComponentJSON{ID: id, Label: label}
-		var worst string
-		c.Banners, worst = bannersWithID(bs, ids...)
-		switch {
-		case worst != "":
-			c.Status = worst
-		case probed != nil:
-			c.Status, c.CheckedAt = statusOK, probed
-		default:
-			c.Status, c.Detail = statusNotChecked, why
-		}
-		if c.Banners == nil {
-			c.Banners = []string{}
-		}
-		return c
-	}
-	out := SystemHealthResponse{StampJSON: StampJSON{ComputedAt: now, LoadedAt: f.View.LoadedAt, Complete: f.View.Complete}, Banners: bannersJSON(bs)}
-	gateway := probeComponent("gateway", "Gateway", "C01")
-	storage := probeComponent("storage", "Storage", "C02", "C15")
-	smtp := probeComponent("smtp", "Alert e-mail", "C03", "C14")
-	certs := probeComponent("certificates", "Certificates", "C05")
-
+	facts := healthFacts{Banners: f.View.Banners, Now: f.Computed, Complete: f.View.Complete, EndpointWired: s.Fleet.Endpoint != nil,
+		MasterKeyWired: s.Fleet.MasterLoaded != nil, Jobs: f.Jobs}
 	var worker *Worker
 	if s.Backend != nil {
 		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		pr, perr := s.Backend.Ping(pctx)
 		cancel()
+		facts.WorkerPinged = true
 		if perr == nil {
+			facts.WorkerReachable = true
 			worker = &Worker{Reachable: true, Version: pr.Version, MasterKeyLoaded: pr.MasterKeyLoaded, ResticVersion: toolUnknown, RcloneVersion: toolUnknown}
-			// The worker's own storage probe is evidence too.
-			if storage.Status == statusNotChecked && pr.StorageReachable != nil && *pr.StorageReachable {
-				storage.Status, storage.Detail = statusOK, "reported by the maintenance worker"
-			}
 		} else {
 			worker = &Worker{}
 		}
 	}
-
-	agentAPI := SystemComponentJSON{ID: "agent_api", Label: "Agent API", Banners: []string{}}
-	switch ids, worst := bannersWithID(bs, "C04", "C04b"); {
-	case worst != "":
-		agentAPI.Status, agentAPI.Banners = worst, ids
-		if slices.Contains(ids, "C04b") && !slices.Contains(ids, "C04") {
-			agentAPI.Status = statusNotChecked
-		}
-	case s.Fleet.Endpoint == nil:
-		agentAPI.Status, agentAPI.Detail = statusNotChecked, "the agent endpoint self-probe is not wired"
-	default:
-		agentAPI.Status = statusOK
+	if s.Fleet.Maintain != nil {
+		facts.MaintainKnown = s.Fleet.Maintain().Known
 	}
-
-	maint := SystemComponentJSON{ID: "maintenance_worker", Label: "Maintenance worker", Banners: []string{}}
-	switch ids, worst := bannersWithID(bs, "C07"); {
-	case worst != "":
-		maint.Status, maint.Banners = worst, ids
-	case worker != nil && worker.Reachable:
-		maint.Status = statusOK
-	case worker != nil:
-		maint.Status, maint.Detail = statusFailed, "the worker did not answer a ping"
-	case s.Fleet.Maintain != nil && s.Fleet.Maintain().Known:
-		maint.Status = statusOK
-	default:
-		maint.Status, maint.Detail = statusNotChecked, "the worker has not been probed"
-	}
-
-	db := SystemComponentJSON{ID: "database", Label: "Console database", Banners: []string{}}
 	schema, serr := s.Store.SchemaVersion(ctx)
-	switch ids, worst := bannersWithID(bs, "C11"); {
-	case serr != nil:
-		db.Status, db.Detail = statusFailed, "the database did not answer"
-	case worst != "":
-		db.Status, db.Banners = worst, ids
-	default:
-		db.Status = statusOK
+	facts.SchemaErr = serr
+	if ej, ok := f.JobStatus(health.EvaluatorJob); ok && ej.LastFinishedAt != nil {
+		facts.EvaluatorRanAt = ej.LastFinishedAt
 	}
-
-	eval := SystemComponentJSON{ID: "evaluator", Label: "Alarm evaluator", Banners: []string{}}
-	ej, hasEval := f.JobStatus(health.EvaluatorJob)
-	switch ids, worst := bannersWithID(bs, "C06"); {
-	case worst != "":
-		eval.Status, eval.Banners = worst, ids
-	case !hasEval || ej.LastFinishedAt == nil:
-		eval.Status, eval.Detail = statusNotChecked, "the alarm-evaluator job has not run"
-	default:
-		eval.Status, eval.CheckedAt = statusOK, ptrTime(*ej.LastFinishedAt)
-	}
-
-	key := SystemComponentJSON{ID: "master_key", Label: "Master key", Banners: []string{}, Status: statusOK}
-	if ids, worst := bannersWithID(bs, "C12"); worst != "" {
-		key.Status, key.Banners = worst, ids
-	}
-
-	jobsC := SystemComponentJSON{ID: "jobs", Label: "Background jobs", Banners: []string{}}
-	failing, overdue := 0, 0
-	for _, jb := range f.Jobs {
-		if jb.LastStatus == "error" {
-			failing++
-		}
-		if jobOverdue(jb, now) {
-			overdue++
+	for _, d := range f.View.Devices {
+		if d.Primary != state.StateRetired && d.Primary != state.StatePaused && d.Primary != state.StateUnseen && !d.Detail.LastSeen.IsZero() {
+			facts.ReportingDevices++
 		}
 	}
-	switch {
-	case failing > 0 || overdue > 0:
-		jobsC.Status, jobsC.Detail = statusWarn, jobSummary(failing, overdue)
-	case len(f.Jobs) == 0:
-		jobsC.Status, jobsC.Detail = statusNotChecked, "no job has run yet"
-	default:
-		jobsC.Status = statusOK
-	}
-
-	clock := SystemComponentJSON{ID: "clock", Label: "Server clock", Banners: []string{}, Status: statusOK}
-	if ids, worst := bannersWithID(bs, "C13"); worst != "" {
-		clock.Status, clock.Banners = worst, ids
-	}
-	releases := SystemComponentJSON{ID: "release_manifest", Label: "Release manifest", Banners: []string{}, Status: statusOK}
-	if ids, worst := bannersWithID(bs, "C16"); worst != "" {
-		releases.Status, releases.Banners = worst, ids
-	}
-
-	out.Components = []SystemComponentJSON{gateway, storage, smtp, certs, agentAPI, maint, db, eval, key, jobsC, clock, releases}
-	out.Overall = statusOK
+	out := SystemHealthResponse{StampJSON: StampJSON{ComputedAt: f.Computed, LoadedAt: f.View.LoadedAt, Complete: f.View.Complete}, Banners: bannersJSON(f.View.Banners),
+		Components: buildComponents(facts), Overall: statusOK}
 	rank := map[string]int{statusOK: 0, statusNotChecked: 1, statusWarn: 2, statusFailed: 3}
 	for _, c := range out.Components {
 		if rank[c.Status] > rank[out.Overall] {
@@ -425,7 +454,19 @@ type ProbeCheckJSON struct {
 	Status  string   `json:"status"`
 	Detail  string   `json:"detail,omitempty"`
 	Banners []string `json:"banners"`
+	// Scope is always "console-wide": the engine keeps gateway, storage and
+	// certificate facts for the console as a whole, not per storage target.
+	Scope string `json:"scope"`
 }
+
+// probeScope and probeNote say what a probe answer is about. The gateway, the
+// storage probe and the quota banner are console-wide in the engine's facts;
+// nothing in them names a target, so this route cannot honestly answer "is
+// target X fine" and does not pretend to.
+const (
+	probeScope = "console-wide"
+	probeNote  = "The engine records gateway, storage, certificate and quota facts for the console as a whole, not per storage target. These checks speak for the whole console; the target named here is the one you asked about, and its own state is not separately measured."
+)
 
 // ProbeJobJSON is the health-prober job's record after the run.
 type ProbeJobJSON struct {
@@ -445,6 +486,9 @@ type ProbeResponse struct {
 	Job        *ProbeJobJSON    `json:"job,omitempty"`
 	Checks     []ProbeCheckJSON `json:"checks"`
 	Worker     *Worker          `json:"worker,omitempty"`
+	// Scope says what the checks are about: always "console-wide" (see probeNote).
+	Scope string `json:"scope"`
+	Note  string `json:"note"`
 }
 
 func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
@@ -470,11 +514,11 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 	if !s.auditAccepted(w, r, p, "storage_target.probe", "storage_target", t.ID) {
 		return
 	}
-	out := ProbeResponse{TargetID: t.ID, Target: t.Name, Checks: []ProbeCheckJSON{}}
+	out := ProbeResponse{TargetID: t.ID, Target: t.Name, Checks: []ProbeCheckJSON{}, Scope: probeScope, Note: probeNote}
 	notChecked := func(reason string) {
 		out.Reason = reason
 		for _, id := range []string{"gateway", "storage", "certificates"} {
-			out.Checks = append(out.Checks, ProbeCheckJSON{ID: id, Status: statusNotChecked, Detail: reason, Banners: []string{}})
+			out.Checks = append(out.Checks, ProbeCheckJSON{ID: id, Status: statusNotChecked, Detail: reason, Banners: []string{}, Scope: probeScope})
 		}
 	}
 	if !runnable {
@@ -500,14 +544,15 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 				s.fail(w, r, ferr)
 				return
 			}
-			for _, c := range []struct {
-				id  string
-				ids []string
-			}{{"gateway", []string{"C01"}}, {"storage", []string{"C02"}}, {"certificates", []string{"C05"}}} {
-				ids, worst := bannersWithID(f.View.Banners, c.ids...)
-				chk := ProbeCheckJSON{ID: c.id, Status: statusOK, Banners: ids}
-				if worst != "" {
+			_, c00 := worstOf(f.View.Banners, []string{bannerNotWired})
+			for _, c := range []struct{ id, row string }{{"gateway", "gateway"}, {"storage", "storage"}, {"certificates", "certificates"}} {
+				ids, worst := worstOf(f.View.Banners, healthRowBanners[c.row])
+				chk := ProbeCheckJSON{ID: c.id, Status: statusOK, Banners: ids, Scope: probeScope}
+				switch {
+				case worst != "":
 					chk.Status = worst
+				case c00 != "":
+					chk.Status, chk.Detail = statusNotChecked, "console self-checks are not wired (C00)"
 				}
 				if chk.Banners == nil {
 					chk.Banners = []string{}

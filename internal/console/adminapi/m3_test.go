@@ -4,9 +4,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"net/http"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -857,7 +863,18 @@ func TestM3JobTableAndRunNow(t *testing.T) { // F19
 	}
 }
 
-func TestM3SystemHealthNeverSaysOKWithoutEvidence(t *testing.T) { // F18 F19, C01 C02 C05
+// hasBanner reports whether the fleet banners list carries id.
+func (e *env) hasBanner(s *session, id string) bool {
+	e.t.Helper()
+	for _, b := range decode[FleetBannersResponse](e.t, mustGet(e, "/api/v1/fleet/banners", s)).Banners {
+		if b.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestM3SystemHealthNeverSaysOKWithoutEvidence(t *testing.T) { // F18 F19, H2: the "b" banners and C00
 	e := newEnv(t)
 	owner := e.login("admin", pw)
 	comp := func(h SystemHealthResponse, id string) SystemComponentJSON {
@@ -870,52 +887,179 @@ func TestM3SystemHealthNeverSaysOKWithoutEvidence(t *testing.T) { // F18 F19, C0
 		return SystemComponentJSON{}
 	}
 	h := decode[SystemHealthResponse](t, mustGet(e, "/api/v1/system/health", owner))
-	for _, id := range []string{"gateway", "smtp", "certificates"} {
-		if c := comp(h, id); c.Status != statusNotChecked || c.Detail == "" {
-			t.Errorf("%s with no prober record = %+v, want not_checked with a reason", id, c)
-		}
-	}
-	// Storage has another witness: the maintenance worker's own probe (the fixture worker reports it reachable).
-	if c := comp(h, "storage"); c.Status != statusOK || !strings.Contains(c.Detail, "maintenance worker") {
-		t.Errorf("storage with the worker reporting it reachable = %+v", c)
-	}
 	if h.Overall == statusOK || h.Versions.Console == "" || h.Versions.Schema == 0 || h.Versions.Maintain == nil || h.Versions.Maintain.ResticVersion != "unknown" {
 		t.Errorf("overall/versions: %+v", h)
 	}
-
-	// A fresh prober record is the evidence; a banner turns a probe component into failed.
-	now := e.clk.Now()
-	next := now.Add(time.Minute)
-	if err := e.st.RecordJobRun(context.Background(), proberJob, store.JobRun{Status: "ok", StartedAt: now.Add(-time.Second), FinishedAt: now, NextDueAt: &next}); err != nil {
-		t.Fatal(err)
+	for _, c := range h.Components {
+		if c.Status == statusOK && len(c.Banners) != 0 {
+			t.Errorf("%s reads ok with banners %v raised", c.ID, c.Banners)
+		}
 	}
-	h = decode[SystemHealthResponse](t, mustGet(e, "/api/v1/system/health", owner))
-	if c := comp(h, "gateway"); c.Status != statusOK || c.CheckedAt == nil {
-		t.Errorf("gateway with a fresh prober record: %+v", c)
-	}
+	// The reproduction of the verifier's finding: not-checked banners must not read ok.
 	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
-		return []state.Banner{{ID: "C01", Severity: state.SeverityCritical, Text: "Gateway unreachable"}, {ID: "C05", Subject: state.SubjectGateway, Severity: state.SeverityAlarm, Text: "Certificate expires in 12 days"}}
+		return []state.Banner{
+			{ID: "C16b", Severity: state.SeverityAlarm, Text: "Release manifests not checked."},
+			{ID: "C12b", Severity: state.SeverityAlarm, Text: "Master key not checked."},
+			{ID: "C01", Severity: state.SeverityCritical, Text: "Gateway unreachable"},
+			{ID: "C05", Subject: state.SubjectGateway, Severity: state.SeverityAlarm, Text: "Certificate expires in 12 days"},
+			{ID: "C15", Severity: state.SeverityAlarm, Text: "Storage at 85 % of quota."},
+		}
 	}
 	h = decode[SystemHealthResponse](t, mustGet(e, "/api/v1/system/health", owner))
-	if c := comp(h, "gateway"); c.Status != statusFailed || len(c.Banners) != 1 || c.Banners[0] != "C01" {
-		t.Errorf("gateway with C01: %+v", c)
-	}
-	if c := comp(h, "certificates"); c.Status != statusWarn {
-		t.Errorf("certificates with a warn C05: %+v", c)
+	want := map[string]string{"release_manifest": statusNotChecked, "master_key": statusNotChecked, "gateway": statusFailed, "certificates": statusWarn, "storage": statusWarn}
+	for id, st := range want {
+		if c := comp(h, id); c.Status != st || len(c.Banners) == 0 {
+			t.Errorf("%s = %+v, want %s with its banner listed", id, c, st)
+		}
 	}
 	if h.Overall != statusFailed {
-		t.Errorf("overall = %s with a failed component", h.Overall)
+		t.Errorf("overall = %s with a failed row", h.Overall)
 	}
-	// A stale prober record is no evidence any more.
-	e.svc.Fleet.Extra = nil
-	e.clk.Advance(2 * probeFreshness)
+	// C00 (self-checks not wired): no row may be ok, whatever else is quiet.
+	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
+		return []state.Banner{{ID: bannerNotWired, Severity: state.SeverityAlarm, Text: "Console self-checks are not wired."}}
+	}
 	h = decode[SystemHealthResponse](t, mustGet(e, "/api/v1/system/health", owner))
-	if c := comp(h, "gateway"); c.Status != statusNotChecked || !strings.Contains(c.Detail, "last finished") {
-		t.Errorf("gateway with an old prober record: %+v", c)
+	for _, c := range h.Components {
+		if c.Status == statusOK {
+			t.Errorf("%s reads ok while C00 is raised", c.ID)
+		}
 	}
 }
 
-func TestM3StorageProbe(t *testing.T) { // F18 F19
+// engineBannerIDs reads every banner id the engine can raise out of the state and
+// health sources: any string literal of the form C<two digits> with an optional
+// b. A banner added to those packages shows up here without anyone remembering to
+// list it.
+func engineBannerIDs(t *testing.T) []string {
+	t.Helper()
+	idRE := regexp.MustCompile(`^"(C[0-9]{2}b?)"$`)
+	seen := map[string]bool{}
+	for _, dir := range []string{"../../state", "../health"} {
+		fset := token.NewFileSet()
+		pkgs, err := parser.ParseDir(fset, dir, func(fi fs.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pkg := range pkgs {
+			for _, f := range pkg.Files {
+				ast.Inspect(f, func(n ast.Node) bool {
+					if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+						if m := idRE.FindStringSubmatch(bl.Value); m != nil {
+							seen[m[1]] = true
+						}
+					}
+					return true
+				})
+			}
+		}
+	}
+	var out []string
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestSystemHealthMapsEveryBannerTheEngineCanRaise(t *testing.T) { // H2: a new banner id must get a row
+	ids := engineBannerIDs(t)
+	if len(ids) < 25 {
+		t.Fatalf("the source walk found only %d banner ids (%v); it is broken", len(ids), ids)
+	}
+	rowOf := map[string]string{}
+	for row, banners := range healthRowBanners {
+		for _, id := range banners {
+			if prev, dup := rowOf[id]; dup {
+				t.Errorf("banner %s is mapped to both %s and %s", id, prev, row)
+			}
+			rowOf[id] = row
+		}
+	}
+	known := map[string]bool{}
+	for _, r := range healthRowOrder {
+		known[r.id] = true
+	}
+	for row := range healthRowBanners {
+		if !known[row] {
+			t.Errorf("healthRowBanners names the row %q, which the page does not list", row)
+		}
+	}
+	// Local evidence everywhere, so only a banner can stop a row reading ok.
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	ran := now.Add(-time.Minute)
+	next := now.Add(time.Hour)
+	full := healthFacts{Now: now, Complete: true, EndpointWired: true, WorkerPinged: true, WorkerReachable: true, MaintainKnown: true,
+		EvaluatorRanAt: &ran, MasterKeyWired: true, ReportingDevices: 9,
+		Jobs: []store.JobState{{Name: "j", LastStatus: "ok", NextDueAt: &next}}}
+	for _, c := range buildComponents(full) {
+		if c.Status != statusOK {
+			t.Fatalf("with every piece of evidence and no banner, %s = %+v; the control must be all ok", c.ID, c)
+		}
+	}
+	rows := func(bs ...state.Banner) map[string]SystemComponentJSON {
+		f := full
+		f.Banners = bs
+		out := map[string]SystemComponentJSON{}
+		for _, c := range buildComponents(f) {
+			out[c.ID] = c
+		}
+		return out
+	}
+	// C00 takes every row off ok.
+	for id, c := range rows(state.Banner{ID: bannerNotWired, Severity: state.SeverityAlarm}) {
+		if c.Status != statusNotChecked {
+			t.Errorf("with C00 raised, %s = %s, want not_checked", id, c.Status)
+		}
+	}
+	for _, id := range ids {
+		if id == bannerNotWired {
+			continue
+		}
+		row, mapped := rowOf[id]
+		if !mapped {
+			t.Errorf("the engine can raise banner %s but no system health row speaks for it: add it to healthRowBanners", id)
+			continue
+		}
+		for _, sev := range []state.Severity{state.SeverityAlarm, state.SeverityCritical} {
+			got := rows(state.Banner{ID: id, Severity: sev})
+			if got[row].Status == statusOK || !slices.Contains(got[row].Banners, id) {
+				t.Errorf("banner %s (severity %s) raised, but row %s = %+v", id, sev, row, got[row])
+			}
+			for other, c := range got {
+				if other != row && c.Status != statusOK {
+					t.Errorf("banner %s raised and row %s (not its row) = %s", id, other, c.Status)
+				}
+			}
+		}
+	}
+	// A "b" banner is the engine saying "not checked", and a critical plain banner is failed.
+	if got := rows(state.Banner{ID: "C16b", Severity: state.SeverityCritical})["release_manifest"].Status; got != statusNotChecked {
+		t.Errorf("C16b = %s, want not_checked", got)
+	}
+	if got := rows(state.Banner{ID: "C12", Severity: state.SeverityCritical})["master_key"].Status; got != statusFailed {
+		t.Errorf("C12 critical = %s, want failed", got)
+	}
+	// Missing local evidence is not_checked, never ok.
+	for name, mut := range map[string]func(*healthFacts){
+		"agent_api":          func(f *healthFacts) { f.EndpointWired = false },
+		"maintenance_worker": func(f *healthFacts) { f.WorkerPinged, f.WorkerReachable, f.MaintainKnown = false, false, false },
+		"evaluator":          func(f *healthFacts) { f.EvaluatorRanAt = nil },
+		"master_key":         func(f *healthFacts) { f.MasterKeyWired = false },
+		"clock":              func(f *healthFacts) { f.ReportingDevices = 4 },
+		"jobs":               func(f *healthFacts) { f.Jobs = nil },
+	} {
+		f := full
+		mut(&f)
+		for _, c := range buildComponents(f) {
+			if c.ID == name && c.Status != statusNotChecked {
+				t.Errorf("%s without its evidence = %s, want not_checked", name, c.Status)
+			}
+		}
+	}
+}
+
+func TestM3StorageProbe(t *testing.T) { // F18 F19, L1
 	e := newEnv(t)
 	owner := e.login("admin", pw)
 	t.Cleanup(jobBackground.Wait)
@@ -924,10 +1068,31 @@ func TestM3StorageProbe(t *testing.T) { // F18 F19
 	if res, _ := e.req("POST", "/api/v1/storage-targets/nope/probe", owner, nil); res.StatusCode != 404 {
 		t.Fatalf("unknown target = %d", res.StatusCode)
 	}
+	checkScope := func(pr ProbeResponse) {
+		t.Helper()
+		if pr.Scope != "console-wide" || pr.Note == "" {
+			t.Errorf("the answer must say it is console-wide: scope %q note %q", pr.Scope, pr.Note)
+		}
+		for _, c := range pr.Checks {
+			if c.Scope != "console-wide" {
+				t.Errorf("check %s has scope %q", c.ID, c.Scope)
+			}
+		}
+	}
+	byID := func(pr ProbeResponse, id string) ProbeCheckJSON {
+		for _, c := range pr.Checks {
+			if c.ID == id {
+				return c
+			}
+		}
+		t.Fatalf("no check %s", id)
+		return ProbeCheckJSON{}
+	}
 
 	// No health-prober job: the answer is "not checked", never "ok", and it still audits the attempt.
 	before := e.audits()
 	pr := decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
+	checkScope(pr)
 	if pr.Ran || pr.Reason == "" || len(pr.Checks) != 3 || pr.TargetID != target {
 		t.Fatalf("probe without a prober: %+v", pr)
 	}
@@ -940,7 +1105,7 @@ func TestM3StorageProbe(t *testing.T) { // F18 F19
 		t.Errorf("probe wrote %d audit rows", e.audits()-before)
 	}
 
-	// With the job: it runs now, and the checks are read from the banners the prober feeds.
+	// With the job: it runs now, and the checks are read from the banners the engine raises.
 	runner := jobs.NewRunner(e.st, "probe-test", nil)
 	failing := false
 	runner.Add(jobs.Job{Name: proberJob, Every: time.Minute, Run: func(context.Context) error {
@@ -951,26 +1116,54 @@ func TestM3StorageProbe(t *testing.T) { // F18 F19
 	}})
 	e.svc.Jobs = runner
 	pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
+	checkScope(pr)
 	if !pr.Ran || pr.Job == nil || pr.Job.Status != "ok" || len(pr.Checks) != 3 {
 		t.Fatalf("probe with a prober: %+v", pr)
 	}
+	wantQuiet := statusOK
+	if e.hasBanner(owner, bannerNotWired) {
+		wantQuiet = statusNotChecked // C00: the engine's self-checks are not wired, so "nothing raised" is not evidence
+	}
 	for _, c := range pr.Checks {
-		if c.Status != statusOK {
-			t.Errorf("%s = %s with nothing raised", c.ID, c.Status)
+		if c.Status != wantQuiet {
+			t.Errorf("%s = %s with nothing raised (C00 up: %v), want %s", c.ID, c.Status, wantQuiet == statusNotChecked, wantQuiet)
+		}
+	}
+	// C02 fails the storage check; the quota banner C15 and the not-checked C02b/C15b speak for it too.
+	for _, tc := range []struct {
+		banner state.Banner
+		want   string
+	}{
+		{state.Banner{ID: "C02", Severity: state.SeverityCritical}, statusFailed},
+		{state.Banner{ID: "C15", Severity: state.SeverityAlarm}, statusWarn},
+		{state.Banner{ID: "C15", Severity: state.SeverityCritical}, statusFailed},
+		{state.Banner{ID: "C02b", Severity: state.SeverityAlarm}, statusNotChecked},
+		{state.Banner{ID: "C15b", Severity: state.SeverityAlarm}, statusNotChecked},
+	} {
+		b := tc.banner
+		e.svc.Fleet.Extra = func(time.Time) []state.Banner { return []state.Banner{b} }
+		pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
+		if c := byID(pr, "storage"); c.Status != tc.want || !slices.Contains(c.Banners, b.ID) {
+			t.Errorf("banner %s: storage = %+v, want %s", b.ID, c, tc.want)
+		}
+		for _, id := range []string{"gateway", "certificates"} {
+			if c := byID(pr, id); c.Status == statusFailed || len(c.Banners) != 0 {
+				t.Errorf("banner %s leaked into the %s check: %+v", b.ID, id, c)
+			}
 		}
 	}
 	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
-		return []state.Banner{{ID: "C02", Severity: state.SeverityCritical, Text: "Storage unreachable"}}
+		return []state.Banner{{ID: "C01", Severity: state.SeverityCritical}, {ID: "C05b", Severity: state.SeverityAlarm}}
 	}
 	pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
-	for _, c := range pr.Checks {
-		if (c.ID == "storage") != (c.Status == statusFailed) {
-			t.Errorf("%s = %s with C02 raised", c.ID, c.Status)
-		}
+	if byID(pr, "gateway").Status != statusFailed || byID(pr, "certificates").Status != statusNotChecked {
+		t.Errorf("gateway/certificates: %+v", pr.Checks)
 	}
 	// A prober that itself fails is not a pass.
+	e.svc.Fleet.Extra = nil
 	failing = true
 	pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
+	checkScope(pr)
 	if pr.Ran || pr.Job == nil || pr.Job.Status != "error" || pr.Job.ErrorClass != jobs.ClassIO {
 		t.Fatalf("a failing prober: %+v", pr)
 	}
