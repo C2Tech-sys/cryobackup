@@ -124,20 +124,21 @@ func TestFleetUsesTheProbe(t *testing.T) {
 	e, c := newEval(t)
 	st := healthy(fixtures.Now(), 90*24*time.Hour)
 	e.Endpoint = func() probe.Status { return st }
+	// C00 (self-checks not wired) stays until store.LoadWorld supplies probe facts (M3-T2).
 	f, _ := e.Fleet(ctx, store.ScopeAll())
-	if len(f.View.Banners) != 0 {
+	if ids(f.View.Banners) != "C00" {
 		t.Fatalf("healthy probe: %s", ids(f.View.Banners))
 	}
 	for _, quiet := range []time.Duration{20 * time.Minute, 40 * time.Minute, 14 * time.Hour} {
 		c.t = fixtures.Now().Add(quiet)
 		st = healthy(c.t, 90*24*time.Hour)
-		if f, _ = e.Fleet(ctx, store.ScopeAll()); len(f.View.Banners) != 0 {
+		if f, _ = e.Fleet(ctx, store.ScopeAll()); ids(f.View.Banners) != "C00" {
 			t.Fatalf("every agent offline for %v, probe healthy: %s", quiet, ids(f.View.Banners))
 		}
 	}
 	st = failing(c.t, probe.StageTLS, "untrusted", 3, 10*time.Minute)
 	f, _ = e.Fleet(ctx, store.ScopeAll())
-	if ids(f.View.Banners) != "C04" || f.View.Banners[0].Severity != state.SeverityCritical {
+	if ids(f.View.Banners) != "C04,C00" || f.View.Banners[0].Severity != state.SeverityCritical {
 		t.Fatalf("failing probe: %s", ids(f.View.Banners))
 	}
 	if f.View.AllClear() {
@@ -145,7 +146,7 @@ func TestFleetUsesTheProbe(t *testing.T) {
 	}
 	st = probe.Status{Limit: probe.LimitNoPublicURL}
 	c.t = fixtures.Now()
-	if f, _ = e.Fleet(ctx, store.ScopeAll()); ids(f.View.Banners) != "C04b" {
+	if f, _ = e.Fleet(ctx, store.ScopeAll()); ids(f.View.Banners) != "C00,C04b" {
 		t.Fatalf("no public_url: %s", ids(f.View.Banners))
 	}
 }

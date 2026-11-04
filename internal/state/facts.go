@@ -386,13 +386,19 @@ type ReleaseFacts struct {
 // stays in internal/console/health by ADR 0013), C06, C07, C10, C11, C12, C14,
 // C15 and C16. C13 and the device-derived C01 come from the devices.
 //
-// Every pointer is one check. Nil means this build or this caller does not run
-// that check (a check that arrives with a later milestone, a unit test, a
-// caller without a prober) and Evaluate raises nothing for it. A non-nil value
-// is a check the console runs, and its zero value means "never reported",
-// which is never read as healthy: it raises the condition or a "not checked"
-// warning, as doc.go lists per condition.
+// Wired is the loader's statement that it supplies the probe facts at all.
+// While it is false Evaluate raises one warning, C00 ("self-checks are not
+// wired"), so a console without a prober can never read all clear. Once it is
+// true every top-level check is expected: a nil one raises its "not checked"
+// warning, so a loader that forgets a pointer is loud. A non-nil check at its
+// zero value means "never reported", which is never read as healthy either: it
+// raises the condition or a "not checked" warning, as doc.go lists per
+// condition. View is the one pointer whose nil is quiet: it describes the page
+// rendering the view, and a caller with no page (the alarm evaluator, the
+// digest) has none.
 type ProbeFacts struct {
+	// Wired is true when the loader supplies probe facts (doc.go "Probe banners").
+	Wired bool
 	// StartedAt is when this console process started; the reference for "has not finished its first
 	// run yet". Zero means unknown, and a job that never finished is then the condition itself.
 	StartedAt Millis

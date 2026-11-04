@@ -43,7 +43,8 @@ func TestFixturesFleetHasNoConsoleBannersWhenHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.View.Banners) != 0 || !f.View.Complete {
+	// C00 (self-checks not wired) stays until store.LoadWorld supplies probe facts (M3-T2).
+	if ids(f.View.Banners) != "C00" || !f.View.Complete {
 		t.Fatalf("banners %s complete=%v", ids(f.View.Banners), f.View.Complete)
 	}
 	if f.View.AllClear() {
@@ -63,18 +64,19 @@ func TestConsoleBanners(t *testing.T) {
 
 	e.MasterLoaded = nil
 	f, _ := e.Fleet(ctx, store.ScopeAll())
-	if ids(f.View.Banners) != "C12" {
+	// C00 (self-checks not wired) stays until store.LoadWorld supplies probe facts (M3-T2).
+	if ids(f.View.Banners) != "C12,C00" {
 		t.Fatalf("no master key: %s", ids(f.View.Banners))
 	}
 	e.MasterLoaded = func() bool { return true }
 
 	e.Maintain = func() MaintainStatus { return MaintainStatus{Known: true, Reachable: false} }
 	f, _ = e.Fleet(ctx, store.ScopeAll())
-	if ids(f.View.Banners) != "C07" {
+	if ids(f.View.Banners) != "C07,C00" {
 		t.Fatalf("maintain down: %s", ids(f.View.Banners))
 	}
 	e.Maintain = func() MaintainStatus { return MaintainStatus{} } // never probed: nothing raised
-	if f, _ = e.Fleet(ctx, store.ScopeAll()); len(f.View.Banners) != 0 {
+	if f, _ = e.Fleet(ctx, store.ScopeAll()); ids(f.View.Banners) != "C00" {
 		t.Fatalf("unprobed worker must raise nothing: %s", ids(f.View.Banners))
 	}
 
@@ -101,7 +103,7 @@ func TestConsoleBanners(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, _ = e.Fleet(ctx, store.ScopeAll())
-	if ids(f.View.Banners) != "C06" {
+	if ids(f.View.Banners) != "C06,C00" {
 		t.Fatalf("stalled evaluator: %s", ids(f.View.Banners))
 	}
 }

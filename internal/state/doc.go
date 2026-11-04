@@ -139,12 +139,19 @@
 //
 // # Probe banners (4.6)
 //
-// World.Probes carries one pointer per check. Nil means this build or caller
-// does not run the check (it arrives with a later milestone, a unit test, a
-// caller with no prober): nothing is raised, which is a property of the build,
-// not of the data. A non-nil check at its zero value has never reported and is
-// never read as healthy. Per condition:
+// World.Probes carries one pointer per check and a Wired flag the loader sets
+// when it supplies probe facts at all. Not wired: one warning, C00 ("Console
+// self-checks are not wired"), so a console without a prober never reads all
+// clear; the checks it does carry are still judged. Wired: a nil check raises
+// its not-checked warning (C01b, C02b, C03b, C06b, C07b, C12b, C14b, C15b,
+// C16b; a nil Database is a C11 warning), so a loader that forgets a pointer is
+// loud. The one quiet nil is View: it describes the page rendering the view,
+// and a caller with no page (the alarm evaluator, the digest) has none. Inside
+// a check, Maintain.Scheduler and Database.SelfBackup are nil while this build
+// does not run those jobs (they arrive with M5). A non-nil check at its zero
+// value has never reported and is never read as healthy. Per condition:
 //
+//	C00  probe facts not wired: warning.
 //	C01  gateway probe, 3 failures in a row: critical. Never completed, or not for 3 prober intervals: C01b warning.
 //	C02  storage probe, 2 failures in a row: critical. Never or stale: C02b warning.
 //	C03  3 failed sends, a failed test send, 3 failed probes, or alerts pending with no delivery in 24 h:

@@ -140,53 +140,82 @@ func probeBanners(w World, now time.Time) []Banner {
 		iv = DefaultProberInterval
 	}
 	var out []Banner
-	if p.Gateway != nil {
-		out = append(out, gatewayBanners(p.Gateway, iv, c)...)
+	if !p.Wired {
+		out = append(out, Banner{ID: "C00", Severity: SeverityAlarm,
+			Text: "Console self-checks are not wired: gateway, storage, e-mail and job health are not being monitored."})
 	}
-	if p.Storage != nil {
-		switch v, age, never := judgeProbe(p.Storage, StorageFailuresToAlarm, iv, now); v {
-		case probeFailing:
-			tail, at := c.lastOK(p.Storage.LastOKAt, "It has never answered a probe.")
-			out = append(out, Banner{ID: "C02", Severity: SeverityCritical, Count: p.Storage.ConsecutiveFailures, At: at,
-				Text: "Storage unreachable from the admin path: retention, restore and usage are impaired." + tail})
-		case probeUnchecked:
-			out = append(out, notChecked("C02b", "Storage", "storage that cannot be reached from the admin path would go unnoticed", never, age))
+	// Each check: present, its rule; absent while Wired, its not-checked warning.
+	type check struct {
+		present bool
+		run     func() []Banner
+		absent  Banner
+	}
+	checks := []check{
+		{p.Gateway != nil, func() []Banner { return gatewayBanners(p.Gateway, iv, c) },
+			unsupplied("C01b", "Gateway", "an unreachable gateway would go unnoticed")},
+		{p.Storage != nil, func() []Banner { return storageBanners(p.Storage, iv, c) },
+			unsupplied("C02b", "Storage", "storage that cannot be reached from the admin path would go unnoticed")},
+		{p.SMTP != nil, func() []Banner { return smtpBanners(p.SMTP, iv, c) },
+			unsupplied("C03b", "Alert e-mail", "alert e-mail that cannot be delivered would go unnoticed")},
+		{p.Evaluator != nil, func() []Banner { return evaluatorBanners(p.Evaluator, p.StartedAt, c) },
+			unsupplied("C06b", "Alerting", "stalled alerting would go unnoticed")},
+		{p.Maintain != nil, func() []Banner { return maintainBanners(p.Maintain, p.StartedAt, iv, c) },
+			unsupplied("C07b", "Maintenance worker", "a stopped maintenance worker would go unnoticed")},
+		{p.Database != nil, func() []Banner { return databaseBanners(p.Database, c) },
+			Banner{ID: "C11", Severity: SeverityAlarm, Count: 1, Text: "Console database needs attention: database health is not measured."}},
+		{p.MasterKey != nil, func() []Banner { return masterKeyBanners(p.MasterKey) },
+			unsupplied("C12b", "Master key", "an unavailable master key would go unnoticed")},
+		{p.Digest != nil, func() []Banner { return digestBanners(p.Digest, c) },
+			unsupplied("C14b", "Daily digest", "a digest that is never sent would go unnoticed")},
+		{p.Quota != nil, func() []Banner { return quotaBanners(p.Quota, c) },
+			unsupplied("C15b", "Storage quota", "a full quota would go unnoticed")},
+		{p.Release != nil, func() []Banner { return releaseBanners(p.Release, c) },
+			unsupplied("C16b", "Release manifests", "a rejected manifest would go unnoticed")},
+	}
+	for _, k := range checks {
+		switch {
+		case k.present:
+			out = append(out, k.run()...)
+		case p.Wired:
+			out = append(out, k.absent)
 		}
 	}
-	if p.SMTP != nil {
-		out = append(out, smtpBanners(p.SMTP, iv, c)...)
-	}
-	if p.Evaluator != nil {
-		out = append(out, evaluatorBanners(p.Evaluator, p.StartedAt, c)...)
-	}
-	if p.Maintain != nil {
-		out = append(out, maintainBanners(p.Maintain, p.StartedAt, iv, c)...)
-	}
+	// View describes the page rendering this view; a caller with no page has none.
 	if p.View != nil {
 		out = append(out, viewBanners(p.View, w.LoadedAt, c)...)
 	}
-	if p.Database != nil {
-		out = append(out, databaseBanners(p.Database, c)...)
-	}
-	if p.MasterKey != nil {
-		out = append(out, masterKeyBanners(p.MasterKey)...)
-	}
-	if p.Digest != nil {
-		out = append(out, digestBanners(p.Digest, c)...)
-	}
-	if p.Quota != nil {
-		out = append(out, quotaBanners(p.Quota, c)...)
-	}
-	if p.Release != nil {
-		switch _, ok := p.Release.CheckedAt.Time(); {
-		case p.Release.Rejected:
-			out = append(out, Banner{ID: "C16", Severity: SeverityAlarm, Text: "Release manifest rejected."})
-		case !ok:
-			out = append(out, Banner{ID: "C16b", Severity: SeverityAlarm,
-				Text: "Release manifests not checked: release-check has not run, so a rejected manifest would go unnoticed."})
-		}
-	}
 	return out
+}
+
+// unsupplied is the not-checked warning of a check the loader did not supply although it is Wired.
+func unsupplied(id, subject, consequence string) Banner {
+	return Banner{ID: id, Severity: SeverityAlarm,
+		Text: subject + " not checked: the console does not supply this check, so " + consequence + "."}
+}
+
+// storageBanners is C02 from the storage probe through the maintain RPC.
+func storageBanners(s *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
+	switch v, age, never := judgeProbe(s, StorageFailuresToAlarm, iv, c.now); v {
+	case probeFailing:
+		tail, at := c.lastOK(s.LastOKAt, "It has never answered a probe.")
+		return []Banner{{ID: "C02", Severity: SeverityCritical, Count: s.ConsecutiveFailures, At: at,
+			Text: "Storage unreachable from the admin path: retention, restore and usage are impaired." + tail}}
+	case probeUnchecked:
+		return []Banner{notChecked("C02b", "Storage", "storage that cannot be reached from the admin path would go unnoticed", never, age)}
+	}
+	return nil
+}
+
+// releaseBanners is C16.
+func releaseBanners(r *ReleaseFacts, c bannerCtx) []Banner {
+	switch _, ok := r.CheckedAt.Time(); {
+	case r.Rejected:
+		return []Banner{{ID: "C16", Severity: SeverityAlarm, Text: "Release manifest rejected."}}
+	case !ok:
+		return []Banner{{ID: "C16b", Severity: SeverityAlarm,
+			Text: "Release manifests not checked: release-check has not run, so a rejected manifest would go unnoticed."}}
+	}
+	return nil
 }
 
 // gatewayBanners is C01 from the gateway probe and the gateway half of C05.

@@ -51,7 +51,8 @@ func TestFixturesEvaluateToTheIntendedStates(t *testing.T) {
 		if view.AllClear() {
 			t.Errorf("%s: a fleet with failures reported all clear", label)
 		}
-		if !view.Complete || len(view.Banners) != 0 {
+		// The only banner is C00 (self-checks not wired) until LoadWorld supplies probe facts (M3-T2).
+		if !view.Complete || len(view.Banners) != 1 || view.Banners[0].ID != "C00" {
 			t.Errorf("%s: complete=%v banners=%+v; the fixtures load cleanly", label, view.Complete, view.Banners)
 		}
 	}
@@ -277,9 +278,15 @@ func TestFixturesRespectScope(t *testing.T) {
 		t.Fatalf("scoped world: %d customers, %d devices", len(world.Customers), len(world.Devices))
 	}
 	view := state.Evaluate(world, clk.Now())
-	if len(view.Customers) != 1 || view.Customers[0].Status != state.CustomerOK || !view.AllClear() {
-		// A healthy scoped slice of the fleet is legitimately all clear (it has devices, no banners, nothing alarming).
-		t.Fatalf("scoped view: %+v allclear=%v", view.Customers, view.AllClear())
+	// A healthy scoped slice of the fleet is all clear except for C00 (self-checks not wired), which
+	// stays until LoadWorld supplies probe facts (M3-T2) and keeps AllClear false until then.
+	if len(view.Customers) != 1 || view.Customers[0].Status != state.CustomerOK || view.AllClear() ||
+		len(view.Banners) != 1 || view.Banners[0].ID != "C00" {
+		t.Fatalf("scoped view: %+v banners=%+v allclear=%v", view.Customers, view.Banners, view.AllClear())
+	}
+	view.Banners = nil
+	if !view.AllClear() {
+		t.Fatalf("scoped view without C00 is not all clear: %+v", view.Customers)
 	}
 	runs := must[Listing[Run]](t)(s.ListRuns(ctx, scope, "", Page{Limit: 1000}))
 	if len(runs.Items) == 0 {

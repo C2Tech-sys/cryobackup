@@ -27,6 +27,7 @@ func worldOf(customers []CustomerFacts, devices []DeviceFacts) World {
 		PreviousDeviceCount: -1,
 		LoadComplete:        true,
 		LoadedAt:            t0.Add(-time.Second),
+		Probes:              healthyProbes(), // every check wired and passing at t0
 	}
 }
 
@@ -458,6 +459,7 @@ func okProbe() ProbeRun {
 func healthyProbes() ProbeFacts {
 	gw, st := okProbe(), okProbe()
 	return ProbeFacts{
+		Wired:          true,
 		StartedAt:      ago(2 * day),
 		ProberInterval: time.Minute,
 		Gateway:        &gw,
@@ -860,9 +862,54 @@ func TestC28ReleaseManifest(t *testing.T) {
 }
 
 func TestProbeBannersNilAndZeroChecks(t *testing.T) {
-	t.Run("C21_every_nil_check_raises_nothing", func(t *testing.T) {
+	t.Run("C21_unwired_self_checks_raise_c00_and_are_never_clear", func(t *testing.T) {
 		w := healthyFleet(1, 2)
 		w.Probes = ProbeFacts{StartedAt: ago(day)}
+		v := Evaluate(w, t0)
+		b, ok := findBanner(v, "C00")
+		if !reflect.DeepEqual(bannerIDs(v), []string{"C00"}) || !ok || b.Severity != SeverityAlarm ||
+			b.Text != "Console self-checks are not wired: gateway, storage, e-mail and job health are not being monitored." {
+			t.Fatalf("banners %+v", v.Banners)
+		}
+		if v.AllClear() {
+			t.Fatal("AllClear with the self-checks not wired")
+		}
+	})
+	t.Run("C21_unwired_still_evaluates_the_checks_it_has", func(t *testing.T) {
+		w := healthyFleet(1, 2)
+		w.Probes = ProbeFacts{Gateway: &ProbeRun{ConsecutiveFailures: 3}}
+		if got := bannerIDs(Evaluate(w, t0)); !reflect.DeepEqual(got, []string{"C01", "C00"}) {
+			t.Fatalf("banners %v", got)
+		}
+	})
+	t.Run("C21_wired_every_nil_check_is_not_checked", func(t *testing.T) {
+		w := healthyFleet(1, 2)
+		w.Probes = ProbeFacts{Wired: true, StartedAt: ago(day)}
+		v := Evaluate(w, t0)
+		want := []string{"C01b", "C02b", "C03b", "C06b", "C07b", "C11", "C12b", "C14b", "C15b", "C16b"}
+		if !reflect.DeepEqual(bannerIDs(v), want) {
+			t.Fatalf("banners = %v, want %v", bannerIDs(v), want)
+		}
+		for _, b := range v.Banners {
+			if b.Severity != SeverityAlarm || !strings.Contains(b.Text, "not") {
+				t.Errorf("%s: %s %q", b.ID, b.Severity, b.Text)
+			}
+		}
+		if v.AllClear() {
+			t.Fatal("AllClear with every check missing")
+		}
+	})
+	t.Run("C21_wired_one_forgotten_pointer_is_loud", func(t *testing.T) {
+		w := healthyFleet(1, 2)
+		w.Probes.Storage = nil
+		v := Evaluate(w, t0)
+		if !reflect.DeepEqual(bannerIDs(v), []string{"C02b"}) || v.AllClear() {
+			t.Fatalf("banners %v allClear %v", bannerIDs(v), v.AllClear())
+		}
+	})
+	t.Run("C21_no_view_is_quiet_for_callers_without_a_page", func(t *testing.T) {
+		w := healthyFleet(1, 2)
+		w.Probes.View = nil
 		if v := Evaluate(w, t0); len(v.Banners) != 0 || !v.AllClear() {
 			t.Fatalf("banners %v", bannerIDs(v))
 		}
@@ -870,6 +917,7 @@ func TestProbeBannersNilAndZeroChecks(t *testing.T) {
 	t.Run("C21_every_zero_check_is_loud", func(t *testing.T) {
 		w := healthyFleet(1, 2)
 		w.Probes = ProbeFacts{
+			Wired:   true,
 			Gateway: &ProbeRun{}, Storage: &ProbeRun{}, SMTP: &SMTPFacts{}, Evaluator: &JobFacts{},
 			Maintain: &MaintainFacts{Scheduler: &JobFacts{}}, View: &ViewFacts{}, Database: &DatabaseFacts{SelfBackup: &SelfBackupFacts{}},
 			MasterKey: &MasterKeyFacts{}, Digest: &DigestFacts{}, Quota: &QuotaFacts{Targets: []TargetUsage{{SoftQuotaBytes: 1}}},

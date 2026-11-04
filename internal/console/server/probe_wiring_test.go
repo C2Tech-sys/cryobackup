@@ -205,7 +205,8 @@ func TestServeWithoutPublicURLWarnsOnce(t *testing.T) {
 			t.Fatalf("critical %s: %s", b.ID, b.Text)
 		}
 	}
-	if strings.Join(got, ",") != "C04b" || !strings.Contains(f.View.Banners[0].Text, "public_url is not set") {
+	// C00 (self-checks not wired) stays until store.LoadWorld supplies probe facts (M3-T2).
+	if strings.Join(got, ",") != "C00,C04b" || !strings.Contains(f.View.Banners[1].Text, "public_url is not set") {
 		t.Fatalf("banners %v", got)
 	}
 }
@@ -230,7 +231,8 @@ func TestFixturesShowTheEndpointBanner(t *testing.T) {
 	for _, b := range f.View.Banners {
 		ids = append(ids, b.ID)
 	}
-	if strings.Join(ids, ",") != "C05" || f.View.Banners[0].Text != "Agent listener certificate expires in 12 days." {
+	// C00 (self-checks not wired) stays until store.LoadWorld supplies probe facts (M3-T2).
+	if strings.Join(ids, ",") != "C00,C05" || f.View.Banners[1].Text != "Agent listener certificate expires in 12 days." {
 		t.Fatalf("fixtures banners: %v %+v", ids, f.View.Banners)
 	}
 	for id, want := range map[string]string{"C04": "AGENT API UNREACHABLE", "C05": "CERTIFICATE EXPIRING", "C04b": "AGENT API NOT CHECKED"} {
