@@ -44,3 +44,17 @@ operator's concrete addresses stay outside the repository.
 | F13 | "Live updates disconnected" appears on any EventSource error, including a page navigation or a blip that reconnects within seconds; show it only after the stream has been down for about two ping intervals | medium |
 
 M2 is accepted except step 2, which is rerun with all three VMs at once on the MSI that fixes F4.
+
+## Step 2 rerun on 0.2.1 (2026-11-03)
+
+Console and agent 0.2.1 (7a2e3bc), with all of F1-F13 fixed. The three VMs were rolled back to their clean
+snapshot (no agent), and the RMM script was started on all three in the same second with one fresh 3-use token.
+
+| VM | script exit | agent | enrolled |
+| --- | --- | --- | --- |
+| A | 0 | 0.2.1 | yes, key escrowed |
+| B | 0 | 0.2.1 | yes, key escrowed |
+| C | 0 | 0.2.1 | yes, key escrowed |
+
+The console answered all three `POST /api/v1/agent/enroll` with 200, after 4.4 s, 8.3 s and 13.7 s: the per-token
+queue (F4) serialised them and refused none. No MSI retried and none failed. Step 2 passes, and M2 is accepted.

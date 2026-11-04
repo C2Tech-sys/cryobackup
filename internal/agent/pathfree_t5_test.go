@@ -36,6 +36,41 @@ func hostileHits(text string) []string {
 	return out
 }
 
+// dbHostileHits is hostileHits for the raw database and WAL files. Those hold
+// random bytes and base64 secrets, where a 3- or 4-letter token turns up by
+// chance in a case-insensitive scan (CI once found "zq7" there with no other
+// token present). So the short tokens are matched only with the separator the
+// fixture always puts next to them; every other token is unchanged.
+func dbHostileHits(text string) []string {
+	var out []string
+	for _, tok := range hostileHits(text) {
+		switch tok {
+		case "ZQ7":
+			if hits := hostileHitsOf(text, "ZQ7-", `\ZQ7`, "/ZQ7", "ZQ7 "); len(hits) == 0 {
+				continue
+			}
+		case "Jane", "jane":
+			if hits := hostileHitsOf(text, "Jane ", "Jane'", `\jane`, "/jane"); len(hits) == 0 {
+				continue
+			}
+		}
+		out = append(out, tok)
+	}
+	return out
+}
+
+// hostileHitsOf is hostileHits over an explicit token list.
+func hostileHitsOf(text string, toks ...string) []string {
+	var out []string
+	low := strings.ToLower(text)
+	for _, tok := range toks {
+		if strings.Contains(low, strings.ToLower(tok)) {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
 // jsonStrings returns every string value (and object key) of a JSON document,
 // except under the named keys.
 func jsonStrings(t *testing.T, raw []byte, skipKeys ...string) []string {
@@ -143,6 +178,9 @@ func TestT5HostilePathsNeverReachTheConsole(t *testing.T) {
 	if hits := hostileHits(runLog); len(hits) < 8 {
 		t.Fatalf("the device's run log holds only %v of the hostile tokens: the scan below would prove nothing", hits)
 	}
+	if all, db := hostileHits(runLog), dbHostileHits(runLog); len(db) != len(all) {
+		t.Fatalf("the database scan sees %v of the run log's %v: its narrower short-token rule would miss a real leak", db, all)
+	}
 
 	// 1. The stored run row.
 	row, _ := json.Marshal(stored)
@@ -160,7 +198,7 @@ func TestT5HostilePathsNeverReachTheConsole(t *testing.T) {
 			t.Fatalf("reading the console database: %v", err)
 		}
 		sawRunID = sawRunID || strings.Contains(string(b), run.id)
-		if hits := hostileHits(string(b)); len(hits) > 0 {
+		if hits := dbHostileHits(string(b)); len(hits) > 0 {
 			t.Errorf("the console database file holds %v", hits)
 		}
 	}
