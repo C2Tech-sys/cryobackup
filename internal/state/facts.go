@@ -235,18 +235,200 @@ type CustomerFacts struct {
 	Expected bool
 	// OnboardingUntil suppresses MISSING until then.
 	OnboardingUntil Millis
-	// DisplayTZ is the customer's IANA display zone; the engine does not use it (the ten-day strip is M3).
+	// DisplayTZ is the customer's IANA display zone. The engine does not load zones (that is I/O); the
+	// caller resolves it and hands the *time.Location to TenDayStrip (StripFacts.CustomerZone).
 	DisplayTZ string
 	// KeyCustody is the customer's default key custody.
 	KeyCustody string
 }
 
-// ProbeFacts is reserved for the M3/M4 console conditions of §4.6 (C01-C07,
-// C10-C16): gateway, storage, SMTP and certificate probes, evaluator and
-// maintenance-worker heartbeats, database and master-key health, clock
-// suspicion, digest delivery, quota and the release manifest. It has no
-// fields in v0 so World already carries it and signatures never change.
-type ProbeFacts struct{}
+// ProbeRun is what the console last learned from one periodic probe: the
+// job_state row of the health-prober (last_status, last_error_class) plus its
+// in-memory ring. The zero value is a probe that has never reported, which the
+// engine never reads as healthy (doc.go "Probe banners").
+type ProbeRun struct {
+	// LastRunAt is when the newest completed run finished; zero means the probe never completed a run.
+	LastRunAt Millis
+	// LastOKAt is when the newest passing run finished; zero means it never passed.
+	LastOKAt Millis
+	// ConsecutiveFailures is the number of failing runs since the newest pass (0 when the newest run passed).
+	ConsecutiveFailures int
+	// LastErrorClass is the newest failure's class, path-free; carried for the UI, never interpreted.
+	LastErrorClass string
+	// CertNotAfter is the leaf certificate's notAfter seen by the newest run that completed a TLS
+	// handshake, for probes that dial TLS (the gateway); zero means none was recorded.
+	CertNotAfter Millis
+}
+
+// JobFacts is the heartbeat of a periodic console job (job_state.last_finished_at).
+type JobFacts struct {
+	// LastFinishedAt is when the newest run finished; zero means the job never finished a run.
+	LastFinishedAt Millis
+	// Period is the job's schedule; zero means the documented default of the job (§5.7).
+	Period time.Duration
+}
+
+// SMTPFacts is the alert e-mail path (C03): the health-prober's connect + EHLO
+// probe and the outcomes of real sends.
+type SMTPFacts struct {
+	// Probe is the connect + EHLO probe (no mail is sent).
+	Probe ProbeRun
+	// ConsecutiveSendFailures is the number of newest sends that failed in a row.
+	ConsecutiveSendFailures int
+	// LastSendOKAt is when an alert e-mail was last delivered; zero means never.
+	LastSendOKAt Millis
+	// LastTestFailed is true when the newest test send (settings page) failed.
+	LastTestFailed bool
+	// PendingAlerts counts notifications waiting to be delivered by e-mail.
+	PendingAlerts int
+}
+
+// MaintainFacts is the maintenance worker (C07).
+type MaintainFacts struct {
+	// RPC is the reachability probe of the maintain RPC socket.
+	RPC ProbeRun
+	// Scheduler is the maintenance-scheduler job's heartbeat; nil when this build does not run it (it
+	// arrives with M5).
+	Scheduler *JobFacts
+}
+
+// ViewFacts is the render side of C10: the page or stream that will show this view.
+type ViewFacts struct {
+	// RefreshInterval is the page's refresh interval; zero means DefaultRefreshInterval.
+	RefreshInterval time.Duration
+	// StreamDisconnected is true when the live event stream (SSE) is known to be down.
+	StreamDisconnected bool
+}
+
+// SelfBackupFacts is the console database's own backup (db-self-backup, M5).
+type SelfBackupFacts struct {
+	// LastAt is when the newest self-backup was written; zero means never.
+	LastAt Millis
+	// VerifyFailed is true when the newest weekly tested restore failed.
+	VerifyFailed bool
+}
+
+// DatabaseFacts is the console database's health (C11).
+type DatabaseFacts struct {
+	// IntegrityCheckedAt is when PRAGMA integrity_check last ran; zero means never.
+	IntegrityCheckedAt Millis
+	// IntegrityOK is the result of that check.
+	IntegrityOK bool
+	// MeasuredAt is when the disk and WAL figures below were measured; zero means never.
+	MeasuredAt Millis
+	// FreeBytes and TotalBytes describe the volume holding the database; TotalBytes <= 0 means unknown.
+	FreeBytes, TotalBytes int64
+	// WALBytes is the size of the write-ahead log.
+	WALBytes int64
+	// SelfBackup is the self-backup picture; nil when this build does not run db-self-backup.
+	SelfBackup *SelfBackupFacts
+}
+
+// MasterKeyFacts is the console master key (C12).
+type MasterKeyFacts struct {
+	// Loaded is true when the master key is loaded and usable.
+	Loaded bool
+	// KeyID is the loaded key's id (repo_key_escrow.master_key_id of new escrows).
+	KeyID string
+	// EscrowKeyIDs are the distinct master_key_id values of active escrow rows.
+	EscrowKeyIDs []string
+}
+
+// EnrollmentAllowed reports whether enrollment may proceed: only with a loaded
+// master key, so the console never stores an unwrapped repository key. The
+// enrollment handler returns 503 otherwise (§4.6 C12, §4.8 C18).
+func (m MasterKeyFacts) EnrollmentAllowed() bool { return m.Loaded }
+
+// DigestFacts is the daily digest's delivery (C14).
+type DigestFacts struct {
+	// Disabled is true when the operator turned the digest off; C14 then does not apply.
+	Disabled bool
+	// LocalTime is digest_local_time, "15:04" on a 24-hour clock in World.DisplayZone.
+	LocalTime string
+	// LastSentAt is the newest digest row in notification_log; zero means never.
+	LastSentAt Millis
+}
+
+// UsageSample is one usage_samples row of a storage target.
+type UsageSample struct {
+	At    Millis
+	Bytes int64
+}
+
+// TargetUsage is one storage target's usage against its soft quota (C15).
+type TargetUsage struct {
+	// ID and Name identify the storage target (operator configuration, not a client name).
+	ID, Name string
+	// SoftQuotaBytes is storage_targets.soft_quota_bytes; zero or less means no quota is set.
+	SoftQuotaBytes int64
+	// UsedBytes is the newest usage; MeasuredAt is when it was measured (zero means never).
+	UsedBytes  int64
+	MeasuredAt Millis
+	// Samples are recent usage samples for the growth projection, any order.
+	Samples []UsageSample
+}
+
+// QuotaFacts is every storage target's usage.
+type QuotaFacts struct {
+	Targets []TargetUsage
+}
+
+// ReleaseFacts is the release-check job's verdict on the release manifests (C16).
+type ReleaseFacts struct {
+	// CheckedAt is when release-check last ran; zero means never.
+	CheckedAt Millis
+	// Rejected is true when a manifest's signature did not verify.
+	Rejected bool
+}
+
+// ProbeFacts carries the inputs of the probe-driven console conditions of
+// §4.6: C01, C02, C03, C05 (the gateway certificate; the agent-listener half
+// stays in internal/console/health by ADR 0013), C06, C07, C10, C11, C12, C14,
+// C15 and C16. C13 and the device-derived C01 come from the devices.
+//
+// Wired is the loader's statement that it supplies the probe facts at all.
+// While it is false Evaluate raises one warning, C00 ("self-checks are not
+// wired"), so a console without a prober can never read all clear. Once it is
+// true every top-level check is expected: a nil one raises its "not checked"
+// warning, so a loader that forgets a pointer is loud. A non-nil check at its
+// zero value means "never reported", which is never read as healthy either: it
+// raises the condition or a "not checked" warning, as doc.go lists per
+// condition. View is the one pointer whose nil is quiet: it describes the page
+// rendering the view, and a caller with no page (the alarm evaluator, the
+// digest) has none.
+type ProbeFacts struct {
+	// Wired is true when the loader supplies probe facts (doc.go "Probe banners").
+	Wired bool
+	// StartedAt is when this console process started; the reference for "has not finished its first
+	// run yet". Zero means unknown, and a job that never finished is then the condition itself.
+	StartedAt Millis
+	// ProberInterval is the health-prober period; zero means DefaultProberInterval. A probe whose
+	// newest run is older than ProbeStaleIntervals intervals is "not checked".
+	ProberInterval time.Duration
+
+	// Gateway is the gateway probe (C01) and, through CertNotAfter, the gateway certificate (C05).
+	Gateway *ProbeRun
+	// Storage is the storage probe through the maintain RPC (C02).
+	Storage *ProbeRun
+	// SMTP is the alert e-mail path (C03).
+	SMTP *SMTPFacts
+	// Evaluator is the alarm-evaluator job (C06).
+	Evaluator *JobFacts
+	// Maintain is the maintenance worker (C07).
+	Maintain *MaintainFacts
+	// View is the render side (C10).
+	View *ViewFacts
+	// Database is the console database (C11).
+	Database *DatabaseFacts
+	// MasterKey is the console master key (C12).
+	MasterKey *MasterKeyFacts
+	// Digest is the daily digest (C14).
+	Digest *DigestFacts
+	// Quota is storage usage against quota (C15).
+	Quota *QuotaFacts
+	// Release is the release manifest check (C16).
+	Release *ReleaseFacts
+}
 
 // World is one complete load of the fleet, handed to Evaluate.
 type World struct {
@@ -262,6 +444,9 @@ type World struct {
 	LoadErrors   int
 	// LoadedAt is when the facts were read.
 	LoadedAt time.Time
-	// Probes carries the M3/M4 probe results; unused in v0.
+	// Probes carries the probe-driven inputs of §4.6.
 	Probes ProbeFacts
+	// DisplayZone is the operator's display zone: banner text cites times in it on a 12-hour clock, and
+	// the digest time is read in it. Nil means UTC. The engine never loads a zone itself.
+	DisplayZone *time.Location
 }

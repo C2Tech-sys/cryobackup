@@ -126,13 +126,15 @@ func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error)
 	return f, nil
 }
 
-// dedupe keeps the first banner of each id.
+// dedupe keeps the first banner of each (id, subject): the gateway and the
+// agent-listener C05 are different banners and both show.
 func dedupe(b []state.Banner) []state.Banner {
-	seen := map[string]bool{}
+	type key struct{ id, subject string }
+	seen := map[key]bool{}
 	out := b[:0:0]
 	for _, x := range b {
-		if !seen[x.ID] {
-			seen[x.ID] = true
+		if k := (key{x.ID, x.Subject}); !seen[k] {
+			seen[k] = true
 			out = append(out, x)
 		}
 	}
@@ -189,25 +191,17 @@ type EntityBanner struct {
 
 // SilenceMinDevices and SilenceShare are the architecture §4.3 customer-wide
 // collapse thresholds: at least 5 devices and at least half of the active ones.
+// The rule itself lives in internal/state (CustomerCollapse).
 const (
-	SilenceMinDevices = 5
-	SilenceShare      = 0.5
+	SilenceMinDevices = state.CollapseMinDevices
+	SilenceShare      = state.CollapseShare
 )
 
 // Silence reports whether a customer's devices are in customer-wide silence and
-// how many of how many.
+// how many of how many. It calls state.CustomerCollapse, which owns the §4.3 rule.
 func Silence(c state.CustomerState) (silent, total int, is bool) {
-	for _, d := range c.Devices {
-		if d.Primary == state.StateRetired {
-			continue
-		}
-		total++
-		if d.Primary == state.StateUnseen {
-			silent++
-		}
-	}
-	is = total >= SilenceMinDevices && float64(silent) >= SilenceShare*float64(total)
-	return silent, total, is
+	col, is := state.CustomerCollapse(c)
+	return col.Affected, col.Total, is
 }
 
 // EntityBanners lists the entity banners of a view, MISSING customers first.

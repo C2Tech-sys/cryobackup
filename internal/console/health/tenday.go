@@ -8,28 +8,26 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
+// The ten-day strip is computed by internal/state (TenDayStrip); this file
+// loads its inputs and calls it. The types are aliases so callers are unchanged.
+
 // DayKind is the kind of one cell of the ten-day strip (components.md §4.1).
-type DayKind string
+type DayKind = state.DayKind
 
 // Cell kinds.
 const (
-	DayNone    DayKind = "none"    // before enrollment, parked, or today with no run yet
-	DaySuccess DayKind = "success" // at least one success and no failure that day
-	DayMixed   DayKind = "mixed"   // a success and a failure
-	DayFailed  DayKind = "failed"  // failures and no success
-	DayMissed  DayKind = "missed"  // a day a run was expected and none finished
+	DayNone    = state.DayNone    // before enrollment, parked, or today with no run yet
+	DaySuccess = state.DaySuccess // at least one success and no failure that day
+	DayMixed   = state.DayMixed   // a success and a failure
+	DayFailed  = state.DayFailed  // failures and no success
+	DayMissed  = state.DayMissed  // a day a run was expected and none finished
 )
 
 // Day is one cell: a calendar day in the customer's zone.
-type Day struct {
-	Kind    DayKind
-	Date    time.Time // local midnight
-	Success int
-	Failed  int
-}
+type Day = state.StripCell
 
 // StripDays is the number of cells.
-const StripDays = 10
+const StripDays = state.StripDays
 
 // TenDay computes the strip of every non-retired device of view: finished
 // backup runs bucketed into calendar days in the customer's display zone
@@ -41,15 +39,14 @@ func TenDay(ctx context.Context, st *store.Store, scope store.Scope, view state.
 	if err != nil {
 		return nil, err
 	}
+	// The customer's zone, or nil (none set, or not loadable): state.StripZone then uses defaultLoc.
 	locOf := map[string]*time.Location{}
 	for _, c := range custs {
-		loc := defaultLoc
 		if c.DisplayTZ != "" {
 			if l, err := time.LoadLocation(c.DisplayTZ); err == nil {
-				loc = l
+				locOf[c.ID] = l
 			}
 		}
-		locOf[c.ID] = loc
 	}
 	enrolled := map[string]time.Time{}
 	for cursor := ""; ; {
@@ -66,13 +63,7 @@ func TenDay(ctx context.Context, st *store.Store, scope store.Scope, view state.
 		cursor = l.NextCursor
 	}
 
-	type key struct {
-		dev string
-		hr  int64
-	}
-	type counts struct{ ok, bad int }
-	buckets := map[key]*counts{}
-	byDevHour := map[string][]key{}
+	hoursOf := map[string][]state.StripHour{}
 	hours, err := st.TenDayCounts(ctx, scope, "", now.Add(-(StripDays+2)*24*time.Hour), time.Time{})
 	if err != nil {
 		return nil, err
@@ -81,9 +72,7 @@ func TenDay(ctx context.Context, st *store.Store, scope store.Scope, view state.
 		if _, ok := enrolled[h.DeviceID]; !ok {
 			continue // retired since the store answered, or never listed
 		}
-		k := key{h.DeviceID, h.Hour.Unix() / 3600}
-		buckets[k] = &counts{ok: h.Success, bad: h.Failure}
-		byDevHour[h.DeviceID] = append(byDevHour[h.DeviceID], k)
+		hoursOf[h.DeviceID] = append(hoursOf[h.DeviceID], state.StripHour{Hour: h.Hour, Success: h.Success, Failure: h.Failure})
 	}
 
 	out := make(map[string][StripDays]Day, len(view.Devices))
@@ -92,49 +81,19 @@ func TenDay(ctx context.Context, st *store.Store, scope store.Scope, view state.
 		if d.Primary == state.StateRetired {
 			continue
 		}
-		loc := locOf[d.CustomerID]
-		if loc == nil {
-			loc = defaultLoc
+		f := state.StripFacts{
+			CustomerZone: locOf[d.CustomerID],
+			DisplayZone:  defaultLoc,
+			EnrolledAt:   enrolled[d.ID],
+			PendingFirst: d.Primary == state.StatePendingFirst,
+			Hours:        hoursOf[d.ID],
 		}
-		today := midnight(now.In(loc))
-		var cells [StripDays]Day
-		for c := 0; c < StripDays; c++ {
-			cells[c] = Day{Kind: DayNone, Date: today.AddDate(0, 0, c-(StripDays-1))}
+		if d.Primary == state.StatePaused {
+			// Unchanged pre-M3 rendering: a device paused now shows every cell as none.
+			// (§4.7 asks only for the paused days; passing d.Since would do that.)
+			f.PausedAt = time.Unix(0, 0)
 		}
-		for _, k := range byDevHour[d.ID] {
-			t := time.UnixMilli(k.hr * 3600000).In(loc)
-			day := midnight(t)
-			idx := StripDays - 1 - int(today.Sub(day).Round(24*time.Hour)/(24*time.Hour))
-			if idx < 0 || idx >= StripDays {
-				continue
-			}
-			cells[idx].Success += buckets[k].ok
-			cells[idx].Failed += buckets[k].bad
-		}
-		enrolDay := midnight(enrolled[d.ID].In(loc))
-		for c := range cells {
-			cell := &cells[c]
-			switch {
-			case d.Primary == state.StatePaused:
-				cell.Kind = DayNone
-			case cell.Success > 0 && cell.Failed > 0:
-				cell.Kind = DayMixed
-			case cell.Success > 0:
-				cell.Kind = DaySuccess
-			case cell.Failed > 0:
-				cell.Kind = DayFailed
-			case cell.Date.Before(enrolDay), cell.Date.Equal(today), d.Primary == state.StatePendingFirst:
-				cell.Kind = DayNone
-			default:
-				cell.Kind = DayMissed
-			}
-		}
-		out[d.ID] = cells
+		out[d.ID] = state.TenDayStrip(f, now)
 	}
 	return out, nil
-}
-
-func midnight(t time.Time) time.Time {
-	y, m, d := t.Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }

@@ -141,10 +141,10 @@ func EndpointBanners(st probe.Status, now time.Time) []state.Banner {
 		const day = 24 * time.Hour
 		switch {
 		case left < CertCritDays*day:
-			out = append(out, state.Banner{ID: BannerCertExpiring, Severity: state.SeverityCritical, Count: days,
+			out = append(out, state.Banner{ID: BannerCertExpiring, Subject: state.SubjectAgentListener, Severity: state.SeverityCritical, Count: days,
 				Text: "Agent listener certificate expires " + in + ". Agents will stop checking in when it does."})
 		case left < CertWarnDays*day:
-			out = append(out, state.Banner{ID: BannerCertExpiring, Severity: state.SeverityAlarm, Count: days,
+			out = append(out, state.Banner{ID: BannerCertExpiring, Subject: state.SubjectAgentListener, Severity: state.SeverityAlarm, Count: days,
 				Text: "Agent listener certificate expires " + in + "."})
 		}
 	}

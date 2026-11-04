@@ -562,7 +562,8 @@ func TestLoadWorldFleetEverEnrolled(t *testing.T) {
 	if w1.FleetEverEnrolled || len(w1.Devices) != 0 || !w1.LoadComplete {
 		t.Fatalf("empty database: %+v", w1)
 	}
-	if v := state.Evaluate(w1, t0); !v.FirstRun || len(v.Banners) != 0 {
+	// The only banner is C00 (self-checks not wired) until LoadWorld supplies probe facts (M3-T2).
+	if v := state.Evaluate(w1, t0); !v.FirstRun || len(v.Banners) != 1 || v.Banners[0].ID != "C00" {
 		t.Fatalf("a first run is a neutral panel, not a banner: %+v", v)
 	}
 	// Scoped loads with an invalid scope fail closed.

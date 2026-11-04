@@ -83,6 +83,7 @@ func Classify(f DeviceFacts, now time.Time) DeviceState {
 		ds.Flags = []State{StateUnknown}
 		ds.Reason = ReasonFactsUnavailable
 		ds.Alarm = SeverityCritical
+		ds.AlarmFlags = []State{StateUnknown}
 		if paused {
 			// §4.2 row 3 is defined for non-paused devices, but a pause does not suppress
 			// IDENTITY, ESCROW or MAINT, which cannot be evaluated now: stay loud.
@@ -335,7 +336,11 @@ func Classify(f DeviceFacts, now time.Time) DeviceState {
 			continue
 		}
 		ds.Flags = append(ds.Flags, s)
-		if sev := severityOf(s, th.OutdatedIsAlarm); sev > ds.Alarm {
+		sev := severityOf(s, th.OutdatedIsAlarm)
+		if sev > SeverityNone {
+			ds.AlarmFlags = append(ds.AlarmFlags, s)
+		}
+		if sev > ds.Alarm {
 			ds.Alarm = sev
 		}
 	}

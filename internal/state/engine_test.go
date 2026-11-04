@@ -544,6 +544,7 @@ func randomWorld(rng *rand.Rand) (w World, mustNotBeClear bool) {
 		LoadComplete:        rng.IntN(5) != 0,
 		LoadErrors:          []int{0, 0, 0, 1, 4}[rng.IntN(5)],
 		LoadedAt:            t0,
+		Probes:              healthyProbes(),
 	}
 	if !w.LoadComplete || w.LoadErrors > 0 {
 		mustNotBeClear = true

@@ -12,9 +12,12 @@ import (
 const loadErrorOrphan = "orphan_device"
 
 // Evaluate classifies every device, rolls up every customer, and derives the
-// console-level banners of architecture §4.6 that v0 can see: C08 (empty fleet)
-// and C09 (empty poll or partial data). The probe-driven conditions arrive at
-// M3/M4 through World.Probes. The result is stamped with now (C23).
+// console-level banners of architecture §4.6: C08 (empty fleet) and C09 (empty
+// poll or partial data) from the load, the probe-driven conditions from
+// World.Probes (banners.go), and the device-derived ones (fleetwide.go). C04,
+// C04b and the agent-listener half of C05 are not raised here (ADR 0013: they
+// come from the self-probe in internal/console/health). The result is stamped
+// with now (C23).
 //
 // Evaluate never makes missing data look healthy. A failed or partial load,
 // an empty poll after a non-empty one, a device with incomplete facts, or a
@@ -39,6 +42,7 @@ func Evaluate(w World, now time.Time) FleetView {
 
 	incomplete := 0
 	states := make([]DeviceState, 0, len(w.Devices))
+	var reporting []*DeviceFacts
 	for _, df := range w.Devices {
 		d := df
 		if !known[d.CustomerID] {
@@ -52,6 +56,9 @@ func Evaluate(w World, now time.Time) FleetView {
 			continue
 		}
 		states = append(states, Classify(d, now))
+		if isReporting(&d, now) {
+			reporting = append(reporting, &d)
+		}
 	}
 
 	byCustomer := make(map[string][]DeviceState, len(w.Customers))
@@ -129,6 +136,18 @@ func Evaluate(w World, now time.Time) FleetView {
 	if partial {
 		banners = append(banners, partialBanner(w, incomplete, emptyPoll))
 	}
+	banners = append(banners, probeBanners(w, now)...)
+	if b, ok := clockSuspectBanner(reporting); ok {
+		banners = append(banners, b)
+	}
+	collapsed, gatewayMass := fleetCollapses(states, customers)
+	if gatewayMass {
+		// C19: one C01 for the whole cluster. A failing gateway probe already raised C01 and
+		// says more (its last OK time); the device-derived one is added only without it.
+		if _, probed := findBannerID(banners, "C01"); !probed {
+			banners = append(banners, gatewayDerivedBanner(collapsed[0]))
+		}
+	}
 	sort.SliceStable(banners, func(i, j int) bool {
 		if banners[i].Severity != banners[j].Severity {
 			return banners[i].Severity > banners[j].Severity
@@ -140,11 +159,22 @@ func Evaluate(w World, now time.Time) FleetView {
 		Banners:    banners,
 		Devices:    states,
 		Customers:  customers,
+		Collapses:  collapsed,
 		ComputedAt: now,
 		LoadedAt:   w.LoadedAt,
 		Complete:   !partial,
 		FirstRun:   !w.FleetEverEnrolled && len(w.Devices) == 0 && !emptyPoll,
 	}
+}
+
+// findBannerID returns the index of the banner with id, if any.
+func findBannerID(bs []Banner, id string) (int, bool) {
+	for i := range bs {
+		if bs[i].ID == id {
+			return i, true
+		}
+	}
+	return -1, false
 }
 
 // partialBanner builds C09 (§4.6): the facts loader returned nothing where it
