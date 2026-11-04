@@ -78,6 +78,9 @@ type DeviceState struct {
 	// Alarm is the highest severity over every flag, not only Primary: a paused device with an
 	// unverified escrow still alarms (B13). It is not reduced by an acknowledgement (B43).
 	Alarm Severity
+	// AlarmFlags are the flags that alarm (severity above none, OUTDATED only with its override), in
+	// precedence order: what a digest or notification must name, whichever state is Primary.
+	AlarmFlags []State
 	// Attrs are the non-primary badges in a fixed order.
 	Attrs []Attr
 	// Ack is non-nil when the device has an acknowledgement or snooze row.

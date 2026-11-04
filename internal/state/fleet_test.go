@@ -438,6 +438,33 @@ func TestC22DigestListsUnknownAndMissing(t *testing.T) {
 			}
 		}
 	})
+	t.Run("C22_digest_names_every_alarm_flag_not_only_the_primary", func(t *testing.T) {
+		w := healthyFleet(1, 3)
+		w.Devices[0].PausedAt = ago(day) // parked, and its escrow was never verified
+		w.Devices[0].Escrow = &EscrowFacts{Custody: "escrowed", CreatedAt: ago(30 * day)}
+		newlyEnrolled(&w.Devices[1], 30*hour) // pending first backup, escrow never verified past the grace
+		w.Devices[1].Escrow = &EscrowFacts{Custody: "escrowed", CreatedAt: ago(30 * hour)}
+		w.Devices[2].ExpectedVersion, w.Devices[2].Thresholds.OutdatedIsAlarm = "9.0.0", true // OUTDATED as an alarm
+		lines := DigestOf(Evaluate(w, t0), t0).Lines
+		byHost := map[string]DigestLine{}
+		for _, l := range lines {
+			byHost[l.Hostname] = l
+		}
+		if l := byHost[w.Devices[0].Hostname]; l.Kind != DigestParked || l.State != StatePaused ||
+			!reflect.DeepEqual(l.Alarms, []State{StateEscrowUnverified}) || l.Alarm != SeverityAlarm {
+			t.Errorf("parked device line %+v, want parked naming ESCROW_UNVERIFIED", l)
+		}
+		if l := byHost[w.Devices[1].Hostname]; l.Kind != DigestEscrow || l.State != StatePendingFirst ||
+			!reflect.DeepEqual(l.Alarms, []State{StateEscrowUnverified}) {
+			t.Errorf("pending device line %+v, want listed under escrow although its primary is not listed", l)
+		}
+		if l := byHost[w.Devices[2].Hostname]; l.Kind != DigestOutdated || !reflect.DeepEqual(l.Alarms, []State{StateOutdated}) {
+			t.Errorf("outdated-alarm device line %+v", l)
+		}
+		if len(lines) != 3 {
+			t.Errorf("lines %+v, want the three alarming devices", lines)
+		}
+	})
 	t.Run("C22_digest_suspended_customer_is_listed_and_labelled", func(t *testing.T) {
 		w := healthyFleet(1, 2)
 		w.Customers[0].State = "suspended"

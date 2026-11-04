@@ -31,11 +31,13 @@ const (
 	DigestMaintenance DigestKind = "maintenance"
 	DigestParked      DigestKind = "parked"
 	DigestDeferred    DigestKind = "deferred_24h"
+	// DigestOutdated holds devices whose OUTDATED flag alarms (notification_overrides.outdated_alarm).
+	DigestOutdated DigestKind = "outdated"
 )
 
 var digestOrder = [...]DigestKind{
 	DigestMissing, DigestUnknown, DigestIdentity, DigestUnseen, DigestBlank, DigestStuck, DigestFailed,
-	DigestStale, DigestPartial, DigestEscrow, DigestMaintenance, DigestParked, DigestDeferred,
+	DigestStale, DigestPartial, DigestEscrow, DigestMaintenance, DigestParked, DigestDeferred, DigestOutdated,
 }
 
 func (k DigestKind) rank() int {
@@ -58,6 +60,10 @@ type DigestLine struct {
 	DeviceID, Hostname string
 	State              State
 	Since              time.Time
+	// Alarm and Alarms are the device's severity and every alarming flag, whichever state is primary:
+	// a parked device with an unverified escrow is listed as parked and names ESCROW_UNVERIFIED.
+	Alarm  Severity
+	Alarms []State
 	// Attrs carries the device's badges (paused_indefinite flags an open-ended pause).
 	Attrs []Attr
 	// Muted marks a suspended customer: listed and labelled, notifications muted (D07).
@@ -75,11 +81,28 @@ type DigestView struct {
 	ComputedAt time.Time
 }
 
-// digestKindOf maps a device's primary state to its section; ok is false for
-// states the digest does not list (OK, PENDING_FIRST, MISSED, OUTDATED,
-// RETIRED, and DEFERRED for less than a day).
+// digestKindOf maps a device to its section: by its primary state, or, when the
+// primary is a state the digest does not list (OK, PENDING_FIRST, MISSED,
+// OUTDATED, RETIRED, DEFERRED for less than a day) but the device alarms, by
+// its first alarming flag, so no alarm is left out of the digest.
 func digestKindOf(d *DeviceState, now time.Time) (DigestKind, bool) {
-	switch d.Primary {
+	if k, ok := digestKindOfState(d.Primary, d, now); ok {
+		return k, true
+	}
+	for _, s := range d.AlarmFlags {
+		if k, ok := digestKindOfState(s, d, now); ok {
+			return k, true
+		}
+		if s == StateOutdated {
+			return DigestOutdated, true
+		}
+	}
+	return "", false
+}
+
+// digestKindOfState is the section of one state.
+func digestKindOfState(s State, d *DeviceState, now time.Time) (DigestKind, bool) {
+	switch s {
 	case StateUnknown:
 		return DigestUnknown, true
 	case StateIdentityConflict:
@@ -135,6 +158,7 @@ func DigestOf(v FleetView, now time.Time) DigestView {
 		}
 		out.Lines = append(out.Lines, DigestLine{Kind: k, CustomerID: d.CustomerID, CustomerName: names[d.CustomerID],
 			DeviceID: d.ID, Hostname: d.Hostname, State: d.Primary, Since: d.Since,
+			Alarm: d.Alarm, Alarms: append([]State(nil), d.AlarmFlags...),
 			Attrs: append([]Attr(nil), d.Attrs...), Muted: muted[d.CustomerID]})
 	}
 	sort.SliceStable(out.Lines, func(i, j int) bool {
