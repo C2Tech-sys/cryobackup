@@ -85,6 +85,44 @@ func TestC13HealthcheckPingOnlyWhileEvaluatorHealthy(t *testing.T) {
 	}
 }
 
+// §4.8 C13 input: the alarm-evaluator loop records every run in job_state
+// (C06 reads last_finished_at); a failed evaluation is an error row, never a
+// silent skip, and the loop sends nothing (notifications are M4).
+func TestC13AlarmEvaluatorLoopRecordsRuns(t *testing.T) {
+	st, _, _, _, _ := pingRig(t)
+	var calls atomic.Int64
+	var fail atomic.Bool
+	j := &AlarmEvaluator{Evaluate: func(context.Context) error {
+		calls.Add(1)
+		if fail.Load() {
+			return &ClassError{Class: ClassStore}
+		}
+		return nil
+	}}
+	if got := j.Job(); got.Name != NameAlarmEvaluator || got.Every != time.Minute {
+		t.Fatalf("job %+v", got)
+	}
+	r := NewRunner(st, "t", nil)
+	r.Add(j.Job())
+	ctx := context.Background()
+	if ran, err := r.RunOnce(ctx, NameAlarmEvaluator); !ran || err != nil {
+		t.Fatalf("ran %v err %v", ran, err)
+	}
+	row, _ := st.GetJobState(ctx, NameAlarmEvaluator)
+	if row.LastStatus != "ok" || row.LastFinishedAt == nil || calls.Load() != 1 {
+		t.Fatalf("row %+v calls %d", row, calls.Load())
+	}
+	fail.Store(true)
+	_, _ = r.RunOnce(ctx, NameAlarmEvaluator)
+	row, _ = st.GetJobState(ctx, NameAlarmEvaluator)
+	if row.LastStatus != "error" || row.LastErrorClass != ClassStore {
+		t.Fatalf("failed evaluation row %+v", row)
+	}
+	if ok, _ := EvaluatorHealthy(ctx, st, 0, st.Now()); ok {
+		t.Fatal("a failing evaluator reads healthy")
+	}
+}
+
 // Through the runner: the job_state row says why, and the log never carries the URL.
 func TestHealthcheckPingThroughTheRunnerIsTokenFree(t *testing.T) {
 	st, _, srv, _, _ := pingRig(t)
