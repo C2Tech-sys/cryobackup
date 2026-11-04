@@ -258,6 +258,10 @@ type ProbeRun struct {
 	// CertNotAfter is the leaf certificate's notAfter seen by the newest run that completed a TLS
 	// handshake, for probes that dial TLS (the gateway); zero means none was recorded.
 	CertNotAfter Millis
+	// Unconfigured is set when the probe cannot run at all and says why, path-free ("SMTP is not
+	// configured", "gateway_url is not set"). Such a probe is "not checked" with this reason, never
+	// healthy, whatever the other fields say.
+	Unconfigured string
 }
 
 // JobFacts is the heartbeat of a periodic console job (job_state.last_finished_at).
@@ -287,8 +291,8 @@ type SMTPFacts struct {
 type MaintainFacts struct {
 	// RPC is the reachability probe of the maintain RPC socket.
 	RPC ProbeRun
-	// Scheduler is the maintenance-scheduler job's heartbeat; nil when this build does not run it (it
-	// arrives with M5).
+	// Scheduler is the maintenance-scheduler job's heartbeat (job_state, written by `cryo-console
+	// maintain`). Nil is "not supplied": a C07b warning, never quiet (doc.go "Not in this build").
 	Scheduler *JobFacts
 }
 
@@ -302,6 +306,9 @@ type ViewFacts struct {
 
 // SelfBackupFacts is the console database's own backup (db-self-backup, M5).
 type SelfBackupFacts struct {
+	// NotInBuild marks a build that does not run db-self-backup (M5): the self-backup causes of C11
+	// are then not judged. The loader sets it only while no job of that name exists (doc.go).
+	NotInBuild bool
 	// LastAt is when the newest self-backup was written; zero means never.
 	LastAt Millis
 	// VerifyFailed is true when the newest weekly tested restore failed.
@@ -320,7 +327,8 @@ type DatabaseFacts struct {
 	FreeBytes, TotalBytes int64
 	// WALBytes is the size of the write-ahead log.
 	WALBytes int64
-	// SelfBackup is the self-backup picture; nil when this build does not run db-self-backup.
+	// SelfBackup is the self-backup picture. Nil is "not supplied", a C11 cause; a build without
+	// db-self-backup supplies &SelfBackupFacts{NotInBuild: true}.
 	SelfBackup *SelfBackupFacts
 }
 
@@ -341,6 +349,8 @@ func (m MasterKeyFacts) EnrollmentAllowed() bool { return m.Loaded }
 
 // DigestFacts is the daily digest's delivery (C14).
 type DigestFacts struct {
+	// NotInBuild marks a build that does not run daily-digest (M4): C14 is then not judged.
+	NotInBuild bool
 	// Disabled is true when the operator turned the digest off; C14 then does not apply.
 	Disabled bool
 	// LocalTime is digest_local_time, "15:04" on a 24-hour clock in World.DisplayZone.
@@ -370,11 +380,20 @@ type TargetUsage struct {
 
 // QuotaFacts is every storage target's usage.
 type QuotaFacts struct {
-	Targets []TargetUsage
+	// NotInBuild marks a build that does not run usage-sampler's provider-side listing (M5): C15 is
+	// then not judged.
+	NotInBuild bool
+	// WithQuota is how many storage targets have a soft quota set, as the loader counted them
+	// independently of Targets. Targets carrying fewer quota targets than this is C15b: a target
+	// whose usage row went missing is never read as within quota.
+	WithQuota int
+	Targets   []TargetUsage
 }
 
 // ReleaseFacts is the release-check job's verdict on the release manifests (C16).
 type ReleaseFacts struct {
+	// NotInBuild marks a build that does not run release-check (M11): C16 is then not judged.
+	NotInBuild bool
 	// CheckedAt is when release-check last ran; zero means never.
 	CheckedAt Millis
 	// Rejected is true when a manifest's signature did not verify.
@@ -395,7 +414,8 @@ type ReleaseFacts struct {
 // raises the condition or a "not checked" warning, as doc.go lists per
 // condition. View is the one pointer whose nil is quiet: it describes the page
 // rendering the view, and a caller with no page (the alarm evaluator, the
-// digest) has none.
+// digest) has none. A check whose producer is a later milestone is never nil:
+// the loader supplies it with its NotInBuild marker (doc.go "Not in this build").
 type ProbeFacts struct {
 	// Wired is true when the loader supplies probe facts (doc.go "Probe banners").
 	Wired bool

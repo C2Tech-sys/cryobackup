@@ -150,9 +150,11 @@
 // C16b; a nil Database is a C11 warning), so a loader that forgets a pointer is
 // loud. The one quiet nil is View: it describes the page rendering the view,
 // and a caller with no page (the alarm evaluator, the digest) has none. Inside
-// a check, Maintain.Scheduler and Database.SelfBackup are nil while this build
-// does not run those jobs (they arrive with M5). A non-nil check at its zero
-// value has never reported and is never read as healthy. Per condition:
+// a check, a nil Maintain.Scheduler is C07b and a nil Database.SelfBackup a C11
+// cause, for the same reason. A non-nil check at its zero value has never
+// reported and is never read as healthy, nor is a probe that cannot run
+// (ProbeRun.Unconfigured names why: C03b "SMTP is not configured") or one whose
+// failure count is negative. Per condition:
 //
 //	C00  probe facts not wired: warning.
 //	C01  gateway probe, 3 failures in a row: critical. Never completed, or not for 3 prober intervals: C01b warning.
@@ -164,13 +166,13 @@
 //	     passing probe: C05b warning.
 //	C06  alarm-evaluator not finished for 3 periods: critical. Never finished: C06b warning within 3 periods of
 //	     ProbeFacts.StartedAt, critical after it or when the start is unknown.
-//	C07  maintain RPC failed its newest probe, or the maintenance scheduler (when this build runs it) not
-//	     finished for 30 min: critical. RPC never probed or stale, or the scheduler's first run pending within
-//	     30 min of the start: C07b warning.
+//	C07  maintain RPC failed its newest probe, or the maintenance scheduler (job_state, written by `cryo-console
+//	     maintain`) not finished for 30 min: critical. RPC never probed or stale, the scheduler's heartbeat not
+//	     supplied, or its first run pending within 30 min of the start: C07b warning.
 //	C10  snapshot (World.LoadedAt) older than 2 refresh intervals, unknown, or the stream disconnected: warning.
 //	C11  one banner listing every cause: integrity failed or self-backup verify failed is critical; disk under
-//	     10 % free, WAL over 1 GiB, self-backup older than 26 h or never written, and anything not measured
-//	     are warnings: integrity never run or older than IntegrityMaxAge (8 d: startup plus weekly), disk and
+//	     10 % free, WAL over 1 GiB, self-backup older than 26 h, never written or not supplied, a garbled disk
+//	     figure (negative, or free above total), and anything not measured are warnings: integrity never run or older than IntegrityMaxAge (8 d: startup plus weekly), disk and
 //	     WAL never measured or older than DBMeasureMaxAge (15 min: the prober measures every run). A stale
 //	     disk figure is not judged, only reported as stale. WAL size zero is a real value.
 //	C12  key not loaded (the zero value) or an active escrow wrapped under another key id: critical.
@@ -179,10 +181,32 @@
 //	     A disabled digest raises nothing; an unset or unparseable time is C14b warning.
 //	C15  worst target with a soft quota: 80 % warning, 90 % and 100 % critical, growth (least squares over the
 //	     samples, at least 2 spanning an hour) reaching 100 % within 14 d critical. A target without a quota
-//	     raises nothing; a quota whose usage was never measured, or not for QuotaMeasureMaxAge (3 h: the
-//	     hourly usage-sampler twice over plus its stagger), is C15b warning.
+//	     raises nothing; a quota whose usage was never measured, is negative, or was not measured for
+//	     QuotaMeasureMaxAge (50 h: the daily provider-side listing twice over plus slack), or fewer quota
+//	     targets than QuotaFacts.WithQuota, is C15b warning.
 //	C16  a rejected manifest: warning. release-check never ran, or not for ReleaseCheckMaxAge (45 min: three
 //	     of its 15-min periods): C16b warning.
+//
+// # Not in this build
+//
+// One policy for checks whose producer is a later milestone: the loader never
+// leaves them nil (that is loud); it supplies the facts with NotInBuild set,
+// which keeps that check quiet, so a fully wired console of this milestone can
+// read all clear. Each marker names the job that will produce it, and the
+// console asserts (internal/console/cli, TestNotInBuildMarksOnlyUnbuiltJobs)
+// that no marker is set while a job of that name is registered:
+//
+//	QuotaFacts.NotInBuild       usage-sampler (provider-side listing)  M5
+//	SelfBackupFacts.NotInBuild  db-self-backup                         M5
+//	DigestFacts.NotInBuild      daily-digest                           M4
+//	ReleaseFacts.NotInBuild     release-check                          M11
+//
+// The quota usage source is the provider-side listing of usage-sampler, which is
+// daily, so QuotaMeasureMaxAge is 50 h (two listings plus slack); the hourly
+// per-device restic stats measure repository size, not what the provider counts
+// against the soft quota. QuotaFacts.WithQuota is the loader's own count of
+// targets with a quota: Targets carrying fewer is C15b, and a negative UsedBytes
+// is C15b, never "within quota".
 //
 // Every probe, job and measurement time is read with recorded(): NULL, garbled
 // (Millis.Time) or more than FutureSkewAllowed (5 min) ahead of now is "not

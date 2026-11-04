@@ -61,9 +61,10 @@ const (
 	IntegrityMaxAge = 8 * 24 * time.Hour
 	// DBMeasureMaxAge: the prober measures free disk and WAL each run (60 s); older than 15 min is a C11 cause.
 	DBMeasureMaxAge = 15 * time.Minute
-	// QuotaMeasureMaxAge: usage-sampler is hourly, staggered within the hour, so twice the cadence plus the
-	// stagger; older usage is C15b.
-	QuotaMeasureMaxAge = 3 * time.Hour
+	// QuotaMeasureMaxAge: a target's usage against its soft quota comes from usage-sampler's provider-side
+	// listing (M5), which is daily; two listings plus two hours of slack. Older usage is C15b. (The hourly
+	// per-device restic stats are repository sizes, not what the provider bills against the quota.)
+	QuotaMeasureMaxAge = 50 * time.Hour
 	// ReleaseCheckMaxAge: release-check runs every 15 min; three periods without a run is C16b.
 	ReleaseCheckMaxAge = 45 * time.Minute
 )
@@ -120,8 +121,16 @@ const garbledWhy = " time is garbled or in the future"
 // condition even when the prober has since stopped (the last evidence is a
 // failure); otherwise a probe that never completed, whose newest run time is
 // garbled or in the future, or that has not completed for ProbeStaleIntervals
-// intervals is unchecked, never healthy. why and n word the not-checked text.
+// intervals is unchecked, never healthy, and so is a probe that cannot run
+// (Unconfigured) or whose failure count is negative (garbled). why and n word
+// the not-checked text.
 func judgeProbe(p *ProbeRun, failAfter int, interval time.Duration, now time.Time) (v probeVerdict, why string, n int) {
+	switch {
+	case p.Unconfigured != "":
+		return probeUnchecked, p.Unconfigured, 0
+	case p.ConsecutiveFailures < 0:
+		return probeUnchecked, "its failure count is garbled", 0
+	}
 	if p.ConsecutiveFailures >= failAfter {
 		return probeFailing, "", 0
 	}
@@ -235,6 +244,9 @@ func storageBanners(s *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
 // releaseBanners is C16; C16b when release-check never ran, its time is
 // garbled or in the future, or it has not run for ReleaseCheckMaxAge.
 func releaseBanners(r *ReleaseFacts, c bannerCtx) []Banner {
+	if r.NotInBuild {
+		return nil
+	}
 	if r.Rejected {
 		return []Banner{{ID: "C16", Severity: SeverityAlarm, Text: "Release manifest rejected."}}
 	}
@@ -378,6 +390,11 @@ func maintainBanners(m *MaintainFacts, startedAt Millis, iv time.Duration, c ban
 		b := notChecked("C07b", "Maintenance worker", "a stopped maintenance worker would go unnoticed", why, n)
 		unchecked = &b
 	}
+	if m.Scheduler == nil && unchecked == nil {
+		b := notChecked("C07b", "Maintenance worker", "a stopped maintenance worker would go unnoticed",
+			"the console does not supply the maintenance scheduler's heartbeat", 0)
+		unchecked = &b
+	}
 	if m.Scheduler != nil {
 		stalled, notYet, garbled, last, hasLast := jobVerdict(m.Scheduler, MaintenanceSchedulerStale, startedAt, c.now)
 		switch {
@@ -453,6 +470,8 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 		add(SeverityAlarm, "disk measurement"+garbledWhy)
 	case c.now.Sub(measuredAt) > DBMeasureMaxAge:
 		add(SeverityAlarm, "free disk and WAL size not measured for "+strconv.Itoa(minutesOf(c.now.Sub(measuredAt)))+" min")
+	case d.FreeBytes < 0 || d.FreeBytes > d.TotalBytes || d.WALBytes < 0:
+		add(SeverityAlarm, "disk measurement is garbled")
 	default:
 		if pct := 100 * float64(d.FreeBytes) / float64(d.TotalBytes); pct < DBFreeDiskPct {
 			add(SeverityAlarm, "disk below "+strconv.Itoa(DBFreeDiskPct)+"% free ("+strconv.Itoa(int(math.Floor(pct)))+"%)")
@@ -461,7 +480,12 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 			add(SeverityAlarm, "WAL over 1 GiB")
 		}
 	}
-	if sb := d.SelfBackup; sb != nil {
+	switch sb := d.SelfBackup; {
+	case sb == nil:
+		add(SeverityAlarm, "self-backup not supplied")
+	case sb.NotInBuild:
+		// db-self-backup is a later milestone (doc.go "Not in this build").
+	default:
 		last, ok := recorded(sb.LastAt, c.now)
 		switch {
 		case sb.LastAt == 0:
@@ -572,7 +596,7 @@ func DigestKey(t time.Time, loc *time.Location) string {
 // whose grace has passed. A digest sent earlier that same local date (a manual
 // "send now") counts, because the dedupe key is the local date.
 func digestBanners(d *DigestFacts, c bannerCtx) []Banner {
-	if d.Disabled {
+	if d.NotInBuild || d.Disabled {
 		return nil
 	}
 	hh, mm, ok := parseLocalTime(d.LocalTime)
@@ -639,15 +663,20 @@ func growthPerDay(samples []UsageSample, now time.Time) (float64, bool) {
 // measured, whose measurement time is garbled or in the future, or whose usage
 // is older than QuotaMeasureMaxAge is C15b.
 func quotaBanners(q *QuotaFacts, c bannerCtx) []Banner {
+	if q.NotInBuild {
+		return nil
+	}
 	var worst *Banner
 	worstPct := -1.0
 	unmeasured := 0
 	unmeasuredName, unmeasuredWhy := "", ""
+	withQuota := 0
 	for i := range q.Targets {
 		t := &q.Targets[i]
 		if t.SoftQuotaBytes <= 0 {
 			continue // no quota set: nothing to measure against
 		}
+		withQuota++
 		at, ok := recorded(t.MeasuredAt, c.now)
 		why := ""
 		switch {
@@ -655,6 +684,8 @@ func quotaBanners(q *QuotaFacts, c bannerCtx) []Banner {
 			why = "usage has never been measured"
 		case !ok:
 			why = "the newest usage measurement" + garbledWhy
+		case t.UsedBytes < 0:
+			why = "the newest usage figure is garbled"
 		case c.now.Sub(at) > QuotaMeasureMaxAge:
 			why = "usage has not been measured for " + strconv.Itoa(int(c.now.Sub(at)/time.Hour)) + " h"
 		}
@@ -708,6 +739,14 @@ func quotaBanners(q *QuotaFacts, c bannerCtx) []Banner {
 	var out []Banner
 	if worst != nil {
 		out = append(out, *worst)
+	}
+	if missing := q.WithQuota - withQuota; missing > 0 && unmeasured == 0 {
+		// Targets with a quota whose usage the loader did not supply: never "within quota".
+		return append(out, Banner{ID: "C15b", Severity: SeverityAlarm, Count: missing,
+			Text: "Storage usage not checked: " + strconv.Itoa(missing) + " of " + strconv.Itoa(q.WithQuota) +
+				" targets with a quota have no usage figure, so a full quota would go unnoticed."})
+	} else if missing > 0 {
+		unmeasured += missing
 	}
 	if unmeasured > 0 {
 		subject := "Storage usage"

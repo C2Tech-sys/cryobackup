@@ -41,9 +41,17 @@ type Evaluator struct {
 	// C04b; ADR 0013). Nil means "not wired" (unit tests), which raises nothing;
 	// serve always wires it, and a probe that cannot run says so (C04b).
 	Endpoint func() probe.Status
-	// Extra supplies banners that cannot be derived here (fixtures mode shows the
-	// full C01-C16 set; the M3/M4 probers will feed the real ones).
+	// Extra supplies banners that cannot be derived here (the /design page and
+	// tests show the full C01-C16 set from canned data).
 	Extra func(now time.Time) []state.Banner
+	// Probes is the probe source (the health-prober's Facts; FixtureProbes in
+	// fixtures mode). Set, the World is wired (probes.go assembles every check)
+	// and the engine derives C01-C03, C05 (gateway), C06, C07, C10-C12 and C14-C16;
+	// MasterLoaded and Maintain then raise nothing here. Nil is not wired: C00,
+	// plus the pre-M3 C06, C07 and C12 below.
+	Probes func() state.ProbeFacts
+	// Refresh is the page refresh interval behind C10; nil means state.DefaultRefreshInterval.
+	Refresh func() time.Duration
 	// SystemDrive is passed to the facts loader (default "C").
 	SystemDrive string
 }
@@ -62,15 +70,28 @@ type Fleet struct {
 	Jobs []store.JobState
 }
 
-// Fleet loads the facts for scope and evaluates them.
+// Fleet loads the facts for scope and evaluates them for a page or an API
+// response: the view facts (C10) are always set on this path, so no handler can
+// forget them.
 func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error) {
+	return e.fleet(ctx, scope, true)
+}
+
+// Alarms evaluates the whole fleet for a caller without a page (the
+// alarm-evaluator job, the digest): no view facts, so no C10.
+func (e *Evaluator) Alarms(ctx context.Context) (Fleet, error) {
+	return e.fleet(ctx, store.ScopeAll(), false)
+}
+
+func (e *Evaluator) fleet(ctx context.Context, scope store.Scope, page bool) (Fleet, error) {
 	now := e.Clock().UTC()
 	w, err := e.Store.LoadWorld(ctx, scope, store.LoadOptions{SystemDrive: e.SystemDrive})
 	if err != nil {
 		return Fleet{}, err
 	}
-	view := state.Evaluate(w, now)
 	jobs, jerr := e.Store.ListJobStates(ctx)
+	w.Probes = e.ProbeFacts(jobs, jerr, page)
+	view := state.Evaluate(w, now)
 
 	f := Fleet{View: view, Computed: now, Jobs: jobs}
 	var active int
@@ -98,8 +119,9 @@ func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error)
 	if e.Endpoint != nil {
 		extra = append(extra, EndpointBanners(e.Endpoint(), now)...)
 	}
-	// C06: only when an evaluator job exists (it arrives at M3/M4).
-	if jerr == nil {
+	wired := w.Probes.Wired
+	// Unwired only (pre-M3 callers and tests): C06 when an evaluator job exists and stopped.
+	if jerr == nil && !wired {
 		for _, j := range jobs {
 			if j.Name == EvaluatorJob && j.LastFinishedAt != nil && now.Sub(*j.LastFinishedAt) > 3*EvaluatorPeriod {
 				extra = append(extra, state.Banner{ID: "C06", Severity: state.SeverityCritical,
@@ -107,15 +129,15 @@ func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error)
 			}
 		}
 	}
-	// C07: the maintenance worker did not answer its last probe.
-	if e.Maintain != nil {
+	// Unwired only: C07, the maintenance worker did not answer its last probe.
+	if e.Maintain != nil && !wired {
 		if m := e.Maintain(); m.Known && !m.Reachable {
 			extra = append(extra, state.Banner{ID: "C07", Severity: state.SeverityCritical,
 				Text: "Maintenance worker is not running: retention, restore browsing and usage sampling are off."})
 		}
 	}
-	// C12: no master key.
-	if e.MasterLoaded == nil || !e.MasterLoaded() {
+	// Unwired only: C12, no master key.
+	if !wired && (e.MasterLoaded == nil || !e.MasterLoaded()) {
 		extra = append(extra, state.Banner{ID: "C12", Severity: state.SeverityCritical,
 			Text: "Master key unavailable: enrollment, escrow reveal and server-side retention are disabled."})
 	}

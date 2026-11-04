@@ -556,6 +556,12 @@ func TestProbeBannersAllHealthyIsClear(t *testing.T) {
 
 func TestC06C07GatewayProbe(t *testing.T) {
 	runProbeCases(t, []probeCase{
+		{name: "C06_gateway_unconfigured_is_not_checked_with_its_reason", mod: func(p *ProbeFacts, _ *World) {
+			p.Gateway.Unconfigured = "gateway_url is not set"
+		}, want: []string{"C01b/alarm"}, contains: "Gateway not checked: gateway_url is not set, so an unreachable gateway would go unnoticed."},
+		{name: "C06_gateway_negative_failure_count_is_not_checked", mod: func(p *ProbeFacts, _ *World) {
+			p.Gateway.ConsecutiveFailures = -3
+		}, want: []string{"C01b/alarm"}, contains: "its failure count is garbled"},
 		{name: "C06_gateway_probe_failing_banner", mod: func(p *ProbeFacts, _ *World) {
 			p.Gateway.ConsecutiveFailures, p.Gateway.LastOKAt = 3, ago(4*time.Minute)
 		}, want: []string{"C01/critical"}, contains: "Gateway unreachable: no agent can back up. Last OK 11:56 AM."},
@@ -595,6 +601,9 @@ func TestC06C07GatewayProbe(t *testing.T) {
 
 func TestC08StorageProbe(t *testing.T) {
 	runProbeCases(t, []probeCase{
+		{name: "C08_storage_negative_failure_count_is_not_checked", mod: func(p *ProbeFacts, _ *World) {
+			p.Storage.ConsecutiveFailures = -1
+		}, want: []string{"C02b/alarm"}, contains: "its failure count is garbled"},
 		{name: "C08_storage_probe_failed_banner", mod: func(p *ProbeFacts, _ *World) {
 			p.Storage.ConsecutiveFailures, p.Storage.LastOKAt = 2, ago(14*time.Minute)
 		}, want: []string{"C02/critical"}, contains: "Storage unreachable from the admin path: retention, restore and usage are impaired. Last OK 11:46 AM."},
@@ -606,6 +615,9 @@ func TestC08StorageProbe(t *testing.T) {
 
 func TestC09C10SMTP(t *testing.T) {
 	runProbeCases(t, []probeCase{
+		{name: "C09_smtp_not_configured_is_not_checked", mod: func(p *ProbeFacts, _ *World) {
+			p.SMTP.Probe, p.SMTP.LastSendOKAt = ProbeRun{Unconfigured: "SMTP is not configured"}, 0
+		}, want: []string{"C03b/alarm"}, contains: "Alert e-mail not checked: SMTP is not configured, so alert e-mail that cannot be delivered would go unnoticed."},
 		{name: "C09_smtp_failing_banner", mod: func(p *ProbeFacts, _ *World) {
 			p.SMTP.ConsecutiveSendFailures, p.SMTP.LastSendOKAt = 3, ago(26*hour)
 		}, want: []string{"C03/critical"}, contains: "Alert e-mail cannot be delivered: alarms may go unnoticed. Last send Wed 21 Oct 10:00 AM."},
@@ -685,9 +697,12 @@ func TestC14MaintenanceWorker(t *testing.T) {
 		{name: "C14_maintenance_scheduler_never_ran_long_after_start", mod: func(p *ProbeFacts, _ *World) {
 			p.StartedAt, p.Maintain.Scheduler.LastFinishedAt = ago(2*hour), 0
 		}, want: []string{"C07/critical"}},
-		{name: "C14_maintenance_scheduler_not_in_this_build", mod: func(p *ProbeFacts, _ *World) {
+		{name: "C14_maintenance_scheduler_not_supplied_is_not_checked", mod: func(p *ProbeFacts, _ *World) {
 			p.Maintain.Scheduler = nil
-		}},
+		}, want: []string{"C07b/alarm"}, contains: "the console does not supply the maintenance scheduler's heartbeat"},
+		{name: "C14_maintenance_rpc_down_outranks_a_missing_scheduler", mod: func(p *ProbeFacts, _ *World) {
+			p.Maintain.Scheduler, p.Maintain.RPC.ConsecutiveFailures = nil, 1
+		}, want: []string{"C07/critical"}},
 	})
 }
 
@@ -754,7 +769,15 @@ func TestC17DatabaseDegraded(t *testing.T) {
 		{name: "C17_db_causes_join_and_worst_severity_wins", mod: func(p *ProbeFacts, _ *World) {
 			p.Database.IntegrityOK, p.Database.WALBytes = false, 3<<30
 		}, want: []string{"C11/critical"}, contains: "integrity check failed; WAL over 1 GiB."},
-		{name: "C17_db_self_backup_not_in_this_build", mod: func(p *ProbeFacts, _ *World) { p.Database.SelfBackup = nil }},
+		{name: "C17_db_self_backup_not_in_this_build_is_quiet", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.SelfBackup = &SelfBackupFacts{NotInBuild: true}
+		}},
+		{name: "C17_db_self_backup_not_supplied_is_a_cause", mod: func(p *ProbeFacts, _ *World) { p.Database.SelfBackup = nil },
+			want: []string{"C11/alarm"}, contains: "self-backup not supplied"},
+		{name: "C17_db_negative_free_bytes_is_garbled", mod: func(p *ProbeFacts, _ *World) { p.Database.FreeBytes = -1 },
+			want: []string{"C11/alarm"}, contains: "disk measurement is garbled"},
+		{name: "C17_db_negative_wal_is_garbled", mod: func(p *ProbeFacts, _ *World) { p.Database.WALBytes = -5 },
+			want: []string{"C11/alarm"}, contains: "disk measurement is garbled"},
 	})
 }
 
@@ -785,6 +808,9 @@ func TestC25DigestNotSent(t *testing.T) {
 		return func(p *ProbeFacts, _ *World) { p.Digest.LocalTime, p.Digest.LastSentAt = local, sent }
 	}
 	runProbeCases(t, []probeCase{
+		{name: "C25_digest_not_in_this_build_is_quiet", mod: func(p *ProbeFacts, _ *World) {
+			*p.Digest = DigestFacts{NotInBuild: true} // no time, never sent: still nothing until daily-digest exists
+		}},
 		{name: "C25_digest_not_sent_banner", mod: digest("11:15", ms(at(11, 15).Add(-day))),
 			want: []string{"C14/critical"}, contains: "Daily digest was not delivered. It was due by 11:45 AM."},
 		// 11:40 is due, but its grace runs to 12:10: yesterday's digest is the one judged.
@@ -816,6 +842,22 @@ func TestC25DigestNotSent(t *testing.T) {
 				t.Errorf("parseLocalTime(%q) ok = %v, want %v", in, got, ok)
 			}
 		}
+	})
+}
+
+func TestC26QuotaGarbledAndMissing(t *testing.T) {
+	runProbeCases(t, []probeCase{
+		{name: "C26_quota_negative_usage_is_not_checked", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].UsedBytes = -1 },
+			want: []string{"C15b/alarm"}, contains: "Storage usage of primary not checked: the newest usage figure is garbled"},
+		{name: "C26_quota_zero_targets_while_quotas_exist_is_not_checked", mod: func(p *ProbeFacts, _ *World) {
+			p.Quota.WithQuota, p.Quota.Targets = 2, nil
+		}, want: []string{"C15b/alarm"}, contains: "Storage usage not checked: 2 of 2 targets with a quota have no usage figure"},
+		{name: "C26_quota_one_missing_target_beside_a_measured_one", mod: func(p *ProbeFacts, _ *World) { p.Quota.WithQuota = 2 },
+			want: []string{"C15b/alarm"}, contains: "1 of 2 targets with a quota have no usage figure"},
+		{name: "C26_quota_count_matching_targets_is_clear", mod: func(p *ProbeFacts, _ *World) { p.Quota.WithQuota = 1 }},
+		{name: "C26_quota_not_in_this_build_is_quiet", mod: func(p *ProbeFacts, _ *World) {
+			*p.Quota = QuotaFacts{NotInBuild: true, WithQuota: 3}
+		}},
 	})
 }
 
@@ -880,6 +922,9 @@ func TestC26C27Quota(t *testing.T) {
 
 func TestC28ReleaseManifest(t *testing.T) {
 	runProbeCases(t, []probeCase{
+		{name: "C28_release_check_not_in_this_build_is_quiet", mod: func(p *ProbeFacts, _ *World) {
+			*p.Release = ReleaseFacts{NotInBuild: true}
+		}},
 		{name: "C28_release_manifest_invalid_banner", mod: func(p *ProbeFacts, _ *World) { p.Release.Rejected = true },
 			want: []string{"C16/alarm"}, contains: "Release manifest rejected."},
 		{name: "C28_release_check_never_ran_is_not_checked", mod: func(p *ProbeFacts, _ *World) { p.Release.CheckedAt = 0 },
@@ -909,9 +954,10 @@ func TestStaleAndFutureCheckTimes(t *testing.T) {
 		{name: "C17_db_self_backup_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Database.SelfBackup.LastAt = future },
 			want: []string{"C11/alarm"}, contains: "self-backup time is garbled or in the future"},
 		// C15
-		{name: "C26_quota_measurement_stale", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].MeasuredAt = ago(4 * hour) },
-			want: []string{"C15b/alarm"}, contains: "Storage usage of primary not checked: usage has not been measured for 4 h"},
-		{name: "C26_quota_measurement_within_max_age", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].MeasuredAt = ago(2 * hour) }},
+		{name: "C26_quota_measurement_stale", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].MeasuredAt = ago(51 * hour) },
+			want: []string{"C15b/alarm"}, contains: "Storage usage of primary not checked: usage has not been measured for 51 h"},
+		// The provider-side listing is daily: a day-old figure is current, not "not checked".
+		{name: "C26_quota_daily_listing_is_within_max_age", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].MeasuredAt = ago(30 * hour) }},
 		{name: "C26_quota_measurement_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].MeasuredAt = future },
 			want: []string{"C15b/alarm"}, contains: "the newest usage measurement time is garbled or in the future"},
 		{name: "C27_quota_future_sample_is_ignored", mod: func(p *ProbeFacts, _ *World) {
