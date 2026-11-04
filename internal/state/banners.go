@@ -424,15 +424,29 @@ func parseLocalTime(s string) (hh, mm int, ok bool) {
 	return hh, mm, true
 }
 
+// localTimeOn is hh:mm on the local date y-mo-d in loc. A time that a DST
+// change skips (02:30 on a spring-forward day) becomes the first instant after
+// the gap at the same distance past it (03:30), never an hour early; a time the
+// change repeats (01:30 on a fall-back day) is its first occurrence.
+func localTimeOn(y int, mo time.Month, d, hh, mm int, loc *time.Location) time.Time {
+	t := time.Date(y, mo, d, hh, mm, 0, 0, loc)
+	if t.Hour() == hh && t.Minute() == mm {
+		return t
+	}
+	_, offBefore := t.Add(-12 * time.Hour).Zone()
+	if later := time.Date(y, mo, d, hh, mm, 0, 0, time.UTC).Add(-time.Duration(offBefore) * time.Second); later.After(t) {
+		return later
+	}
+	return t
+}
+
 // digestDueAtOrBefore is the newest instant at or before ref at which the
-// digest was due: hh:mm on a local calendar day of loc. A local time that a DST
-// change skips is normalised forward by time.Date (02:30 becomes 03:30).
+// digest was due: hh:mm on a local calendar day of loc.
 func digestDueAtOrBefore(hh, mm int, loc *time.Location, ref time.Time) time.Time {
-	l := ref.In(loc)
-	y, mo, d := l.Date()
-	due := time.Date(y, mo, d, hh, mm, 0, 0, loc)
+	y, mo, d := ref.In(loc).Date()
+	due := localTimeOn(y, mo, d, hh, mm, loc)
 	if due.After(ref) {
-		due = time.Date(y, mo, d-1, hh, mm, 0, 0, loc)
+		due = localTimeOn(y, mo, d-1, hh, mm, loc)
 	}
 	return due
 }
