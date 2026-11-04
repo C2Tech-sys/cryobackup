@@ -140,6 +140,14 @@ func Evaluate(w World, now time.Time) FleetView {
 	if b, ok := clockSuspectBanner(reporting); ok {
 		banners = append(banners, b)
 	}
+	collapsed, gatewayMass := fleetCollapses(states, customers)
+	if gatewayMass {
+		// C19: one C01 for the whole cluster. A failing gateway probe already raised C01 and
+		// says more (its last OK time); the device-derived one is added only without it.
+		if _, probed := findBannerID(banners, "C01"); !probed {
+			banners = append(banners, gatewayDerivedBanner(collapsed[0]))
+		}
+	}
 	sort.SliceStable(banners, func(i, j int) bool {
 		if banners[i].Severity != banners[j].Severity {
 			return banners[i].Severity > banners[j].Severity
@@ -151,11 +159,22 @@ func Evaluate(w World, now time.Time) FleetView {
 		Banners:    banners,
 		Devices:    states,
 		Customers:  customers,
+		Collapses:  collapsed,
 		ComputedAt: now,
 		LoadedAt:   w.LoadedAt,
 		Complete:   !partial,
 		FirstRun:   !w.FleetEverEnrolled && len(w.Devices) == 0 && !emptyPoll,
 	}
+}
+
+// findBannerID returns the index of the banner with id, if any.
+func findBannerID(bs []Banner, id string) (int, bool) {
+	for i := range bs {
+		if bs[i].ID == id {
+			return i, true
+		}
+	}
+	return -1, false
 }
 
 // partialBanner builds C09 (§4.6): the facts loader returned nothing where it

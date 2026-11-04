@@ -131,6 +131,10 @@ type FleetView struct {
 	Devices []DeviceState
 	// Customers are ordered by SortKey then name. Archived customers are not included.
 	Customers []CustomerState
+	// Collapses are the §4.3 collapses: the fleet-wide DEFERRED(gateway) one first (it also raises
+	// C01), then customer-wide silence rows in customer order. The device rows they cover remain in
+	// Devices; a Collapse is one row and one notification in their place.
+	Collapses []Collapse
 	// ComputedAt is the injected now (C23); LoadedAt is when the facts were read.
 	ComputedAt, LoadedAt time.Time
 	// Complete is false when any part of the load failed, was empty after a non-empty load, or any device is UNKNOWN.

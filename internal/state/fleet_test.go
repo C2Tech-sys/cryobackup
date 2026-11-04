@@ -383,9 +383,6 @@ func TestC23FreshnessStampInEveryFleetView(t *testing.T) {
 // that are not written yet visible.
 func TestFleetCasesPendingLaterTicketItems(t *testing.T) {
 	for _, name := range []string{
-		"C12_offline_fleet_raises_no_console_banner",
-		"C19_many_deferred_gateway_collapse_to_one_banner",
-		"C20_customer_wide_silence_collapses",
 		"C22_digest_lists_unknown_and_missing_even_when_rest_green",
 	} {
 		t.Run(name, func(t *testing.T) { t.Skip("M3-T1 later item") })
@@ -918,4 +915,247 @@ func TestC24ClockSuspect(t *testing.T) {
 			t.Errorf("skewed devices = %d, want 6", skewed)
 		}
 	})
+}
+
+// ---- collapse (architecture 4.3; 4.8 C12, C19, C20) ----------------------------------
+
+func deferGateway(f *DeviceFacts) {
+	f.ServiceState = "deferred"
+	f.LastBackup = &RunFacts{Outcome: "deferred", DeferredReason: "gateway", StartedAt: ago(hour), FinishedAt: ago(hour), CountsKnown: true}
+}
+
+func goSilent(f *DeviceFacts, quiet time.Duration) { f.LastSeen = ago(quiet) }
+
+func TestC20CustomerWideSilence(t *testing.T) {
+	// customerOf10 is customer 1 with 10 devices and customer 2 with 3 healthy ones.
+	customerOf10 := func(mod func(ds []DeviceFacts)) World {
+		w := worldOf([]CustomerFacts{customer(1, "Northwind Dental"), customer(2, "Contoso Law")}, nil)
+		for i := 1; i <= 10; i++ {
+			w.Devices = append(w.Devices, deviceOf(i, 1, fmt.Sprintf("nd-%02d", i)))
+		}
+		for i := 11; i <= 13; i++ {
+			w.Devices = append(w.Devices, deviceOf(i, 2, fmt.Sprintf("cl-%02d", i)))
+		}
+		mod(w.Devices[:10])
+		return w
+	}
+	type want struct {
+		collapse                bool
+		affected, total, unseen int
+	}
+	cases := []struct {
+		name string
+		mod  func(ds []DeviceFacts)
+		want want
+	}{
+		{"C20_customer_wide_silence_collapses", func(ds []DeviceFacts) {
+			for i := 0; i < 8; i++ {
+				goSilent(&ds[i], 200*hour)
+			}
+		}, want{true, 8, 10, 8}},
+		{"C20_half_is_enough", func(ds []DeviceFacts) {
+			for i := 0; i < 5; i++ {
+				goSilent(&ds[i], 200*hour)
+			}
+		}, want{true, 5, 10, 5}},
+		{"C20_under_half_no_collapse", func(ds []DeviceFacts) {
+			for i := 0; i < 4; i++ {
+				goSilent(&ds[i], 200*hour)
+			}
+		}, want{false, 4, 10, 4}},
+		{"C20_gateway_deferral_counts_as_silence", func(ds []DeviceFacts) {
+			for i := 0; i < 3; i++ {
+				goSilent(&ds[i], 200*hour)
+			}
+			for i := 3; i < 6; i++ {
+				deferGateway(&ds[i])
+			}
+		}, want{true, 6, 10, 3}},
+		{"C20_other_deferral_reasons_do_not_count", func(ds []DeviceFacts) {
+			for i := 0; i < 8; i++ {
+				deferGateway(&ds[i])
+				ds[i].LastBackup.DeferredReason = "battery"
+			}
+		}, want{false, 0, 10, 0}},
+		{"C20_paused_and_retired_are_not_active", func(ds []DeviceFacts) {
+			for i := 0; i < 3; i++ {
+				goSilent(&ds[i], 200*hour)
+			}
+			for i := 3; i < 6; i++ {
+				ds[i].PausedAt = ago(day) // indefinite pause: not active
+			}
+			for i := 6; i < 8; i++ {
+				ds[i].RetiredAt = ago(day)
+			}
+		}, want{true, 3, 5, 3}}, // 3 silent of the 5 active (10 - 3 paused - 2 retired): 60 %
+		{"C20_fewer_than_five_active_never_collapse", func(ds []DeviceFacts) {
+			for i := 0; i < 4; i++ {
+				goSilent(&ds[i], 200*hour)
+			}
+			for i := 4; i < 10; i++ {
+				ds[i].RetiredAt = ago(day)
+			}
+		}, want{false, 4, 4, 4}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := Evaluate(customerOf10(c.mod), t0)
+			var nd *CustomerState
+			for i := range v.Customers {
+				if v.Customers[i].ID == custID(1) {
+					nd = &v.Customers[i]
+				}
+			}
+			col, ok := CustomerCollapse(*nd)
+			if ok != c.want.collapse || col.Affected != c.want.affected || col.Total != c.want.total || col.Unseen != c.want.unseen {
+				t.Fatalf("collapse %v %+v, want %+v", ok, col, c.want)
+			}
+			var rows []Collapse
+			for _, x := range v.Collapses {
+				if x.Scope == CollapseCustomer {
+					rows = append(rows, x)
+				}
+			}
+			if !c.want.collapse {
+				if len(rows) != 0 {
+					t.Fatalf("collapses %+v, want none", rows)
+				}
+				return
+			}
+			// one customer row and one notification; the device rows remain listed.
+			if len(rows) != 1 || rows[0].CustomerID != custID(1) || rows[0].CustomerName != "Northwind Dental" ||
+				rows[0].Covered || len(rows[0].DeviceIDs) != c.want.affected {
+				t.Fatalf("collapses %+v", v.Collapses)
+			}
+			listed := 0
+			for _, d := range v.Devices {
+				if d.CustomerID == custID(1) {
+					listed++
+				}
+			}
+			if listed != 10 {
+				t.Errorf("device rows of the customer = %d, want all 10 kept", listed)
+			}
+			// customer-wide silence is an entity row, never a console banner (ADR 0013)
+			if len(v.Banners) != 0 {
+				t.Errorf("customer-wide silence raised console banners %v", bannerIDs(v))
+			}
+		})
+	}
+}
+
+func TestC19GatewayDeferralCollapse(t *testing.T) {
+	t.Run("C19_many_deferred_gateway_collapse_to_one_banner", func(t *testing.T) {
+		w := healthyFleet(16, 10) // 160 devices, 150 deferred(gateway)
+		for i := 0; i < 150; i++ {
+			deferGateway(&w.Devices[i])
+		}
+		v := Evaluate(w, t0)
+		var c01 []Banner
+		for _, b := range v.Banners {
+			if b.ID == "C01" {
+				c01 = append(c01, b)
+			}
+		}
+		if len(c01) != 1 || c01[0].Severity != SeverityCritical || c01[0].Count != 150 ||
+			c01[0].Text != "Gateway unreachable: no agent can back up. 150 of 160 reporting devices are deferring their backups because they cannot reach it." {
+			t.Fatalf("C01 banners %+v", c01)
+		}
+		if len(v.Collapses) == 0 || v.Collapses[0].Scope != CollapseFleet || len(v.Collapses[0].DeviceIDs) != 150 {
+			t.Fatalf("fleet collapse %+v", v.Collapses)
+		}
+		// rows not individually notified: every customer collapse is covered by the fleet one.
+		for _, c := range v.Collapses[1:] {
+			if c.Scope != CollapseCustomer || !c.Covered {
+				t.Errorf("customer collapse not covered: %+v", c)
+			}
+		}
+		if v.AllClear() {
+			t.Error("AllClear with C01")
+		}
+	})
+	rows := []struct {
+		name    string
+		n, of   int
+		want    bool
+		probe   bool
+		wantTxt string
+	}{
+		{"C19_half_of_reporting_devices_raises_c01", 5, 10, true, false, "5 of 10 reporting devices"},
+		{"C19_under_half_no_banner", 4, 10, false, false, ""},
+		{"C19_four_devices_never_raise", 4, 4, false, false, ""},
+		{"C19_failing_probe_and_mass_deferral_are_one_c01", 8, 10, true, true, "Last OK"},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			w := healthyFleet(1, r.of)
+			for i := 0; i < r.n; i++ {
+				deferGateway(&w.Devices[i])
+			}
+			if r.probe {
+				w.Probes = healthyProbes()
+				w.Probes.Gateway.ConsecutiveFailures, w.Probes.Gateway.LastOKAt = 3, ago(5*time.Minute)
+			}
+			v := Evaluate(w, t0)
+			n := 0
+			var b Banner
+			for _, x := range v.Banners {
+				if x.ID == "C01" {
+					n++
+					b = x
+				}
+			}
+			if (n == 1) != r.want || n > 1 {
+				t.Fatalf("C01 count %d, want raised=%v (banners %v)", n, r.want, bannerIDs(v))
+			}
+			if r.want && !strings.Contains(b.Text, r.wantTxt) {
+				t.Errorf("text %q, want %q", b.Text, r.wantTxt)
+			}
+		})
+	}
+	t.Run("C19_unseen_and_unknown_devices_are_not_reporting", func(t *testing.T) {
+		w := healthyFleet(1, 10)
+		for i := 0; i < 4; i++ {
+			deferGateway(&w.Devices[i])
+		}
+		for i := 4; i < 8; i++ {
+			goSilent(&w.Devices[i], 200*hour) // 4 deferred of 6 reporting
+		}
+		w.Devices[8].Complete = false // 4 of 5
+		v := Evaluate(w, t0)
+		if b, ok := findBanner(v, "C01"); !ok || !strings.Contains(b.Text, "4 of 5 reporting devices") {
+			t.Fatalf("C01 = %+v ok=%v", b, ok)
+		}
+	})
+}
+
+func TestC12OfflineFleetRaisesNoConsoleBanner(t *testing.T) {
+	// ADR 0013: devices being offline never raise a console banner, however many and for however long.
+	for _, quiet := range []time.Duration{20 * time.Minute, 4 * time.Hour, 60 * time.Hour, 200 * time.Hour} {
+		t.Run("C12_offline_fleet_raises_no_console_banner_"+quiet.String(), func(t *testing.T) {
+			w := healthyFleet(2, 6)
+			w.Probes = healthyProbes()
+			for i := range w.Devices {
+				goSilent(&w.Devices[i], quiet)
+				w.Devices[i].LastSuccess = ago(quiet + time.Hour)
+				w.Devices[i].LastBackup = successRun(quiet + time.Hour)
+				w.Devices[i].LastAttemptStart = ago(quiet + time.Hour)
+			}
+			v := Evaluate(w, t0)
+			if len(v.Banners) != 0 {
+				t.Fatalf("banners %v for a fleet silent %v", bannerIDs(v), quiet)
+			}
+			for _, d := range v.Devices {
+				switch d.Primary {
+				case StateOK, StateMissed, StateStale, StateUnseen:
+				default:
+					t.Errorf("%s: %s", d.Hostname, d.Primary)
+				}
+			}
+			// past unseen_after each customer collapses to one silence row: an entity row, not a banner.
+			if wantRows := quiet > 168*time.Hour; (len(v.Collapses) == 2) != wantRows {
+				t.Errorf("collapses %+v at %v", v.Collapses, quiet)
+			}
+		})
+	}
 }

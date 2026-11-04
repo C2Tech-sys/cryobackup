@@ -1,6 +1,7 @@
 package state
 
 import (
+	"sort"
 	"strconv"
 	"time"
 )
@@ -57,4 +58,151 @@ func clockSuspectBanner(reporting []*DeviceFacts) (Banner, bool) {
 	return Banner{ID: "C13", Severity: SeverityAlarm, Count: agree,
 		Text: "Server clock may be wrong: device offsets agree. " + strconv.Itoa(agree) + " of " +
 			strconv.Itoa(len(reporting)) + " reporting devices run more than 2 min " + way + " the server clock."}, true
+}
+
+// Collapse thresholds (§4.3): at least CollapseMinDevices active devices, of
+// which at least CollapseShare are UNSEEN or DEFERRED for the gateway at once.
+const (
+	CollapseMinDevices = 5
+	CollapseShare      = 0.5
+)
+
+// CollapseScope says whether a Collapse is about one customer or the fleet.
+type CollapseScope string
+
+const (
+	// CollapseCustomer is customer-wide silence: one customer-level row, one notification.
+	CollapseCustomer CollapseScope = "customer"
+	// CollapseFleet is fleet-wide DEFERRED(gateway): banner C01 instead of N rows.
+	CollapseFleet CollapseScope = "fleet"
+)
+
+// Collapse is one §4.3 collapse: many devices with one likely cause, shown as
+// one row and notified once. The per-device rows stay in FleetView.Devices and
+// CustomerState.Devices; the notifier sends one notification per Collapse that
+// is not Covered, in place of one per device in DeviceIDs.
+type Collapse struct {
+	Scope CollapseScope
+	// CustomerID and CustomerName are set for a customer collapse.
+	CustomerID, CustomerName string
+	// Affected devices of Total active devices; Unseen and DeferredGateway split Affected by cause
+	// (a device that is both counts as Unseen).
+	Affected, Total         int
+	Unseen, DeferredGateway int
+	// DeviceIDs are the affected devices, sorted.
+	DeviceIDs []string
+	// Covered is true for a customer collapse whose every affected device is in the fleet-wide
+	// collapse: banner C01 already speaks for them, so it adds a row but no notification.
+	Covered bool
+}
+
+// hasFlag reports whether d is in state s, as Primary or as any flag.
+func hasFlag(d *DeviceState, s State) bool {
+	if d.Primary == s {
+		return true
+	}
+	for _, f := range d.Flags {
+		if f == s {
+			return true
+		}
+	}
+	return false
+}
+
+func isUnseen(d *DeviceState) bool { return hasFlag(d, StateUnseen) }
+
+func isDeferredGateway(d *DeviceState) bool {
+	if !hasFlag(d, StateDeferred) {
+		return false
+	}
+	return d.Reason == ReasonDeferredGateway || deferredReason(d.Detail.DeferredReason) == ReasonDeferredGateway
+}
+
+// collapses reports whether affected of total meets the §4.3 rule.
+func collapses(affected, total int) bool {
+	return total >= CollapseMinDevices && float64(affected) >= CollapseShare*float64(total)
+}
+
+// CustomerCollapse applies the §4.3 customer-wide collapse to one rolled-up
+// customer: at least 5 active (non-retired, non-paused) devices, at least half
+// of them UNSEEN or DEFERRED for the gateway. ok is false when it does not apply;
+// the counts are filled either way.
+func CustomerCollapse(c CustomerState) (col Collapse, ok bool) {
+	col = Collapse{Scope: CollapseCustomer, CustomerID: c.ID, CustomerName: c.Name}
+	for i := range c.Devices {
+		d := &c.Devices[i]
+		if d.Primary == StateRetired || d.Primary == StatePaused {
+			continue
+		}
+		col.Total++
+		switch {
+		case isUnseen(d):
+			col.Unseen++
+		case isDeferredGateway(d):
+			col.DeferredGateway++
+		default:
+			continue
+		}
+		col.Affected++
+		col.DeviceIDs = append(col.DeviceIDs, d.ID)
+	}
+	sort.Strings(col.DeviceIDs)
+	return col, collapses(col.Affected, col.Total)
+}
+
+// fleetGatewayCollapse is the fleet-wide half of §4.3 and the derived half of
+// C01: of the reporting devices (active, facts known, heartbeat current), at
+// least 5 and at least half are DEFERRED for the gateway. Devices that cannot
+// report (UNSEEN, UNKNOWN) say nothing about the gateway and are left out.
+func fleetGatewayCollapse(states []DeviceState) (Collapse, bool) {
+	col := Collapse{Scope: CollapseFleet}
+	for i := range states {
+		d := &states[i]
+		if d.Primary == StateRetired || d.Primary == StatePaused || d.Primary == StateUnknown || isUnseen(d) {
+			continue
+		}
+		col.Total++
+		if isDeferredGateway(d) {
+			col.Affected++
+			col.DeferredGateway++
+			col.DeviceIDs = append(col.DeviceIDs, d.ID)
+		}
+	}
+	sort.Strings(col.DeviceIDs)
+	return col, collapses(col.Affected, col.Total)
+}
+
+// gatewayDerivedBanner is C01 raised from the devices (§4.3, §4.6, C19).
+func gatewayDerivedBanner(col Collapse) Banner {
+	return Banner{ID: "C01", Severity: SeverityCritical, Count: col.Affected,
+		Text: "Gateway unreachable: no agent can back up. " + strconv.Itoa(col.Affected) + " of " + strconv.Itoa(col.Total) +
+			" reporting devices are deferring their backups because they cannot reach it."}
+}
+
+// fleetCollapses lists the §4.3 collapses of a view: the fleet-wide one first,
+// then customer ones in customer order.
+func fleetCollapses(states []DeviceState, customers []CustomerState) (out []Collapse, fleet bool) {
+	fc, fleet := fleetGatewayCollapse(states)
+	inFleet := map[string]bool{}
+	if fleet {
+		out = append(out, fc)
+		for _, id := range fc.DeviceIDs {
+			inFleet[id] = true
+		}
+	}
+	for i := range customers {
+		cc, ok := CustomerCollapse(customers[i])
+		if !ok {
+			continue
+		}
+		cc.Covered = fleet
+		for _, id := range cc.DeviceIDs {
+			if !inFleet[id] {
+				cc.Covered = false
+				break
+			}
+		}
+		out = append(out, cc)
+	}
+	return out, fleet
 }
