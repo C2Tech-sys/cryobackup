@@ -1284,6 +1284,38 @@ func TestC19GatewayDeferralCollapse(t *testing.T) {
 			}
 		})
 	}
+	t.Run("C19_gateway_outage_past_stale_after_still_collapses", func(t *testing.T) {
+		// The outage outlived stale_after: every device is STALE, which suppresses DEFERRED,
+		// but the newest run of each was still deferred for the gateway.
+		w := healthyFleet(1, 10)
+		for i := range w.Devices {
+			deferGateway(&w.Devices[i])
+			w.Devices[i].LastSuccess = ago(80 * hour)
+		}
+		v := Evaluate(w, t0)
+		for _, d := range v.Devices {
+			if d.Primary != StateStale || hasState(d.Flags, StateDeferred) {
+				t.Fatalf("%s: %s %v, want STALE without DEFERRED", d.Hostname, d.Primary, d.Flags)
+			}
+		}
+		b, ok := findBanner(v, "C01")
+		if !ok || b.Count != 10 || !strings.Contains(b.Text, "10 of 10 reporting devices") {
+			t.Fatalf("C01 = %+v ok=%v", b, ok)
+		}
+		if len(v.Collapses) != 2 || v.Collapses[0].Scope != CollapseFleet || v.Collapses[0].Affected != 10 ||
+			v.Collapses[1].Scope != CollapseCustomer || !v.Collapses[1].Covered {
+			t.Fatalf("collapses %+v", v.Collapses)
+		}
+	})
+	t.Run("C19_stale_device_whose_newest_run_succeeded_is_not_gateway_evidence", func(t *testing.T) {
+		w := healthyFleet(1, 10)
+		for i := range w.Devices {
+			w.Devices[i].LastSuccess, w.Devices[i].LastBackup = ago(80*hour), successRun(80*hour)
+		}
+		if _, ok := findBanner(Evaluate(w, t0), "C01"); ok {
+			t.Fatal("C01 for a fleet that is only stale")
+		}
+	})
 	t.Run("C19_unseen_and_unknown_devices_are_not_reporting", func(t *testing.T) {
 		w := healthyFleet(1, 10)
 		for i := 0; i < 4; i++ {

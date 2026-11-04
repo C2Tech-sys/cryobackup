@@ -111,11 +111,18 @@ func hasFlag(d *DeviceState, s State) bool {
 
 func isUnseen(d *DeviceState) bool { return hasFlag(d, StateUnseen) }
 
+// isDeferredGateway is true for a device that cannot reach the gateway: it is
+// DEFERRED for the gateway, or its newest backup run was deferred for the
+// gateway even though the DEFERRED row no longer applies. The second case
+// matters: once the outage outlives stale_after the device is STALE, which
+// suppresses DEFERRED, and the gateway evidence must not vanish as the outage
+// gets worse.
 func isDeferredGateway(d *DeviceState) bool {
-	if !hasFlag(d, StateDeferred) {
-		return false
+	gateway := deferredReason(d.Detail.DeferredReason) == ReasonDeferredGateway
+	if hasFlag(d, StateDeferred) && (d.Reason == ReasonDeferredGateway || gateway) {
+		return true
 	}
-	return d.Reason == ReasonDeferredGateway || deferredReason(d.Detail.DeferredReason) == ReasonDeferredGateway
+	return d.Detail.LastOutcome == outcomeDeferred && gateway
 }
 
 // collapses reports whether affected of total meets the §4.3 rule.
