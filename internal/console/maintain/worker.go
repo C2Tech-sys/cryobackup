@@ -63,6 +63,8 @@ type Worker struct {
 
 	storageOK atomic.Pointer[bool] // last storage probe result; nil until a call reached the repository
 	seq       atomic.Uint64        // request ids of scheduler-originated calls
+	// renewEvery is how often a pass renews the scheduler lease; zero means a third of leaseTTL (tests shorten it).
+	renewEvery time.Duration
 
 	mu         sync.Mutex
 	retryAfter map[string]time.Time // step 1 reschedule, per device

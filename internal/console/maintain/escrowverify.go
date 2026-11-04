@@ -17,10 +17,14 @@ const escrowVerifyRetry = time.Hour
 // escrowVerifyPerPass and escrowVerifyBudget bound the escrow phase of one
 // scheduler pass. The first pass after deploy may find many never-verified
 // keys, and against a blackholed storage endpoint every cat config runs to its
-// timeout (55 s by default): the phase starts at most escrowVerifyPerPass
-// checks, and none after escrowVerifyBudget has passed, so it ends within the
-// budget plus one cat-config timeout (about 3 minutes), well inside the
-// scheduler lease (at least 10 minutes). The rest wait for the next pass.
+// timeout (55 s by default). Each check may first wait for a free concurrency
+// slot (Config.MaxConcurrent, shared with the console's admin-path calls), at
+// most schedulerSlotWait (30 s); a check that gets none in time records only
+// the attempt. The phase starts at most escrowVerifyPerPass checks, and none
+// after escrowVerifyBudget has passed, so it ends within the budget plus one
+// slot wait plus one cat-config timeout (about 3.5 minutes), inside the
+// scheduler lease (at least 10 minutes, renewed while the pass runs). The rest
+// wait for the next pass.
 const (
 	escrowVerifyPerPass = 5
 	escrowVerifyBudget  = 2 * time.Minute
@@ -85,7 +89,9 @@ func (w *Worker) verifyEscrows(ctx context.Context, cands []candidate, rep *Cycl
 // "never verified" and alarms after the grace, and the next attempt is an hour
 // later. cat config takes no repository lock, so step 1 does not apply.
 func (w *Worker) verifyEscrow(ctx context.Context, deviceID string, rep *CycleReport) {
-	_, err := w.CatConfig(ctx, adminpath.DeviceRequest{DeviceID: deviceID, RequestID: w.schedulerRequestID()})
+	cctx, cancel := context.WithTimeout(ctx, schedulerSlotWait+w.cfg.Timeouts.CatConfig)
+	_, err := w.CatConfig(cctx, adminpath.DeviceRequest{DeviceID: deviceID, RequestID: w.schedulerRequestID()})
+	cancel()
 	if ctx.Err() != nil {
 		return
 	}

@@ -373,8 +373,14 @@ func (p *Prober) check(ctx context.Context) Result {
 	}
 
 	// 5. responder, with its own bound: the request and the answer must come
-	// within one stage timeout, whatever is left of the run.
-	_ = conn.SetDeadline(time.Now().Add(p.stageTimeout()))
+	// within one stage timeout, and never after the run's own deadline
+	// (TotalTimeout): the connection deadline is the earlier of the two, so a
+	// slow handshake cannot stretch a run past the documented 30 s.
+	rdl := time.Now().Add(p.stageTimeout())
+	if dl, ok := ctx.Deadline(); ok && dl.Before(rdl) {
+		rdl = dl
+	}
+	_ = conn.SetDeadline(rdl)
 	rctx, rcancel := context.WithTimeout(ctx, p.stageTimeout())
 	defer rcancel()
 	if r := p.responder(rctx, rw); r != "" {

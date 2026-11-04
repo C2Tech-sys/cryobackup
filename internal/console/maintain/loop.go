@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
@@ -29,6 +30,20 @@ const (
 	preflightSpan = 45 * time.Minute
 	// m5LogEvery limits the "scheduled for M5" line to once an hour.
 	m5LogEvery = time.Hour
+	// usageRefreshPerPass and usageRefreshBudget bound step 8 of one pass: at most
+	// usageRefreshPerPass stats runs start, and none after usageRefreshBudget, so a
+	// large fleet or a slow storage endpoint cannot keep one pass running past the
+	// 30 minutes after which banner C07 calls the scheduler stopped. Devices left
+	// over are counted in CycleReport.UsageDeferred and sampled by the next passes
+	// (a sampled device is not due again for Config.UsageInterval).
+	usageRefreshPerPass = 20
+	usageRefreshBudget  = 5 * time.Minute
+	// schedulerSlotWait bounds how long one scheduler call (escrow cat config,
+	// usage stats) waits for a free concurrency slot (Config.MaxConcurrent, shared
+	// with the console's admin-path calls) before its own method timeout starts.
+	// A call that cannot get a slot in time is left for the next pass: a deferral,
+	// not a failure.
+	schedulerSlotWait = 30 * time.Second
 )
 
 // CycleReport is what one scheduler pass did, in counts only.
@@ -60,6 +75,13 @@ type CycleReport struct {
 	// EscrowDeferred is the number of due verifications left for a later pass
 	// by the per-pass bound (escrowVerifyPerPass, escrowVerifyBudget).
 	EscrowDeferred int
+	// UsageDeferred is the number of due usage refreshes left for a later pass by
+	// the per-pass bound (usageRefreshPerPass, usageRefreshBudget) or because no
+	// concurrency slot came free within schedulerSlotWait.
+	UsageDeferred int
+	// LeaseLost is set when the scheduler lease could not be renewed during the
+	// pass (another process took it): the pass stopped and wrote no job_state row.
+	LeaseLost bool
 	// ErrorClass is the dominant failure class (path-free), "" when none.
 	ErrorClass restic.ErrorClass
 }
@@ -144,20 +166,49 @@ func (w *Worker) RunOnce(ctx context.Context) (CycleReport, error) {
 		defer cancel()
 		_ = w.st.ReleaseJobLease(rctx, SchedulerJob, w.holder)
 	}()
+	// The lease is renewed while the pass runs, so a long pass never outlives it
+	// and lets a second maintain process start a pass of its own.
+	outer := ctx
+	ctx, stopPass := context.WithCancel(ctx)
+	var lost atomic.Bool
+	renewed := make(chan struct{})
+	go func() {
+		defer close(renewed)
+		w.renewLease(ctx, stopPass, &lost)
+	}()
+	defer func() { stopPass(); <-renewed }()
+	leaseLost := func() bool {
+		if !lost.Load() {
+			return false
+		}
+		rep.LeaseLost = true
+		w.log.Warn("scheduler lease lost during the pass; pass stopped, job state untouched", attrOutcome("skipped"))
+		return true
+	}
 
 	cands, err := w.candidates(ctx)
 	if err != nil {
+		if leaseLost() {
+			return rep, nil
+		}
 		w.recordJob(ctx, "error", string(restic.ClassInternal), start)
 		return rep, w.storeErr(ctx, err)
 	}
 	// Never-verified escrowed keys first, bounded in count and time (verifyEscrows).
 	w.verifyEscrows(ctx, cands, &rep)
 	classes := make(restic.ErrorCounts)
+	usageStart, usageRuns := w.clock(), 0
 	for _, c := range cands {
 		if ctx.Err() != nil {
 			break
 		}
-		w.step(ctx, c, &rep, classes)
+		allow := usageRuns < usageRefreshPerPass && w.clock().Sub(usageStart) < usageRefreshBudget
+		if w.step(ctx, c, &rep, classes, allow) {
+			usageRuns++
+		}
+	}
+	if leaseLost() {
+		return rep, nil
 	}
 	rep.ErrorClass = ""
 	if rep.Failed > 0 {
@@ -171,7 +222,33 @@ func (w *Worker) RunOnce(ctx context.Context) (CycleReport, error) {
 		status, class = "error", string(rep.ErrorClass)
 	}
 	w.recordJob(ctx, status, class, start)
-	return rep, ctx.Err()
+	return rep, outer.Err()
+}
+
+// renewLease renews the scheduler lease every leaseRenewEvery until ctx ends.
+// When the store says another holder has it, the pass is stopped (stop) and
+// lost is set; a store error is retried at the next tick (the lease outlives
+// several of them).
+func (w *Worker) renewLease(ctx context.Context, stop context.CancelFunc, lost *atomic.Bool) {
+	every := w.renewEvery
+	if every <= 0 {
+		every = w.leaseTTL() / 3
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		got, err := w.st.AcquireJobLease(ctx, SchedulerJob, w.holder, w.leaseTTL())
+		if err == nil && !got {
+			lost.Store(true)
+			stop()
+			return
+		}
+	}
 }
 
 // leaseTTL is how long one pass may hold the scheduler lease: long enough for a
@@ -264,8 +341,10 @@ func (w *Worker) candidates(ctx context.Context) ([]candidate, error) {
 }
 
 // step applies steps 1, 2 and 8 to one candidate and counts the M5 operations
-// that are due.
-func (w *Worker) step(ctx context.Context, c candidate, rep *CycleReport, classes restic.ErrorCounts) {
+// that are due. allowUsage is false once the pass's usage bound is reached: a
+// due refresh is then deferred to a later pass. It reports whether it started a
+// usage refresh (a stats run), which is what the bound counts.
+func (w *Worker) step(ctx context.Context, c candidate, rep *CycleReport, classes restic.ErrorCounts, allowUsage bool) bool {
 	now := w.clock()
 	rep.Considered++
 	for _, n := range []sql.NullInt64{c.nextForget, c.nextPrune, c.nextCheck} {
@@ -275,24 +354,31 @@ func (w *Worker) step(ctx context.Context, c candidate, rep *CycleReport, classe
 	}
 	usageDue := !c.lastUsageSample.Valid || now.Sub(time.UnixMilli(c.lastUsageSample.Int64)) >= w.cfg.UsageInterval
 	if !usageDue {
-		return
+		return false
+	}
+	if !allowUsage {
+		rep.UsageDeferred++
+		return false
 	}
 
 	// Step 1: pre-flight. A running backup or a pending reschedule skips the
 	// device; the retry time is 15 to 60 minutes out, jittered per device.
 	if w.deferredByPreflight(ctx, c.deviceID, now) {
 		rep.Preflight++
-		return
+		return false
 	}
 	// Per-device lease (maintenance_schedule.lease_*).
 	leased, err := w.leaseDevice(ctx, c.deviceID, now)
 	if err != nil || !leased {
-		return
+		return false
 	}
 	defer w.releaseDevice(ctx, c.deviceID)
 
 	// Step 8: usage refresh. Step 2: a lock (exit 11) is a deferral, never a failure.
-	stats, err := w.Stats(ctx, adminpath.StatsRequest{
+	// The call waits at most schedulerSlotWait for a concurrency slot before its own timeout.
+	cctx, cancel := context.WithTimeout(ctx, schedulerSlotWait+w.cfg.Timeouts.Stats)
+	defer cancel()
+	stats, err := w.Stats(cctx, adminpath.StatsRequest{
 		DeviceRequest: adminpath.DeviceRequest{DeviceID: c.deviceID, RequestID: w.schedulerRequestID()},
 		Mode:          restic.StatsRawData,
 	})
@@ -302,7 +388,7 @@ func (w *Worker) step(ctx context.Context, c candidate, rep *CycleReport, classe
 		if err := w.recordUsage(ctx, c.deviceID, stats); err != nil {
 			rep.Failed++
 			classes.Add(restic.ErrorEvent{Class: restic.ClassInternal})
-			return
+			return true
 		}
 		rep.Sampled++
 		if c.deferredCount > 0 {
@@ -319,13 +405,16 @@ func (w *Worker) step(ctx context.Context, c candidate, rep *CycleReport, classe
 			}
 		}
 	case ctx.Err() != nil:
-		return
+		return true
+	case errors.Is(err, context.DeadlineExceeded) && cctx.Err() != nil:
+		rep.UsageDeferred++ // no slot came free in time (or the run hit the outer bound): next pass
+		return true
 	default:
 		class := restic.ClassUnknown
 		if errors.As(err, &ae) {
 			switch {
 			case ae.Code == adminpath.CodeCustodyCustomerHeld:
-				return // the key is the customer's: not a failure (step 0 already filters these)
+				return true // the key is the customer's: not a failure (step 0 already filters these)
 			case ae.Class != "":
 				class = ae.Class
 			default:
@@ -336,6 +425,7 @@ func (w *Worker) step(ctx context.Context, c candidate, rep *CycleReport, classe
 		classes.Add(restic.ErrorEvent{Class: class})
 		w.log.Warn("usage refresh failed", attrDevice(c.deviceID), attrClass(string(class)))
 	}
+	return true
 }
 
 func (w *Worker) schedulerRequestID() string {

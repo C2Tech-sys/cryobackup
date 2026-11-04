@@ -165,6 +165,31 @@ func TestC09SMTPProbeOutcomes(t *testing.T) {
 	}
 }
 
+// ADR 0013 bounds a whole run at TotalTimeout: the responder's own stage
+// deadline never reaches past the run's deadline (before M3-T2 it was set to
+// now plus a full stage timeout, so a slow handshake stretched the run).
+func TestC11ResponderNeverOutlivesTheRunDeadline(t *testing.T) {
+	good := newCert(t, time.Now().Add(90*24*time.Hour), "agents.test")
+	srv := tlsServer(t, good, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	})
+	p := prober(t, srv, "https", time.Now, nil)
+	p.Roots = roots(good)
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	r := p.check(ctx) // the stage timeout is 10 s; the run has 0.7 s
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("the responder ran %v past a 0.7 s run deadline", took)
+	}
+	if r.OK || r.Stage != StageResponder || r.Class != "timeout" {
+		t.Fatalf("%+v", r)
+	}
+}
+
 func TestDiskSpaceOfATempDir(t *testing.T) {
 	free, total, err := DiskSpace(t.TempDir())
 	if err != nil || total <= 0 || free < 0 || free > total {
