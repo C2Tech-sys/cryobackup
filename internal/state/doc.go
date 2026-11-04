@@ -166,16 +166,26 @@
 //	     30 min of the start: C07b warning.
 //	C10  snapshot (World.LoadedAt) older than 2 refresh intervals, unknown, or the stream disconnected: warning.
 //	C11  one banner listing every cause: integrity failed or self-backup verify failed is critical; disk under
-//	     10 % free, WAL over 1 GiB, self-backup older than 26 h or never written, and anything never measured
-//	     (integrity never run, disk not measured) are warnings. WAL size zero is a real value.
+//	     10 % free, WAL over 1 GiB, self-backup older than 26 h or never written, and anything not measured
+//	     are warnings: integrity never run or older than IntegrityMaxAge (8 d: startup plus weekly), disk and
+//	     WAL never measured or older than DBMeasureMaxAge (15 min: the prober measures every run). A stale
+//	     disk figure is not judged, only reported as stale. WAL size zero is a real value.
 //	C12  key not loaded (the zero value) or an active escrow wrapped under another key id: critical.
 //	     MasterKeyFacts.EnrollmentAllowed is false without a loaded key (the 503 of C12 / C18).
 //	C14  no digest on the local date of the newest digest_local_time + 30 min that has passed: critical.
 //	     A disabled digest raises nothing; an unset or unparseable time is C14b warning.
 //	C15  worst target with a soft quota: 80 % warning, 90 % and 100 % critical, growth (least squares over the
 //	     samples, at least 2 spanning an hour) reaching 100 % within 14 d critical. A target without a quota
-//	     raises nothing; a quota whose usage was never measured is C15b warning.
-//	C16  a rejected manifest: warning. release-check never ran: C16b warning.
+//	     raises nothing; a quota whose usage was never measured, or not for QuotaMeasureMaxAge (3 h: the
+//	     hourly usage-sampler twice over plus its stagger), is C15b warning.
+//	C16  a rejected manifest: warning. release-check never ran, or not for ReleaseCheckMaxAge (45 min: three
+//	     of its 15-min periods): C16b warning.
+//
+// Every probe, job and measurement time is read with recorded(): NULL, garbled
+// (Millis.Time) or more than FutureSkewAllowed (5 min) ahead of now is "not
+// checked" (the b-warning, or a C11 cause), never healthy; a future delivery or
+// send proves nothing either. Certificate notAfter is the exception: it is
+// meant to be in the future.
 //
 // A "b" id is the not-checked warning of its condition, the pattern ADR 0013 set
 // with C04b. Banner text cites times in World.DisplayZone on a 12-hour clock and

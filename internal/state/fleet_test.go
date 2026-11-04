@@ -752,26 +752,25 @@ func TestC18MasterKey(t *testing.T) {
 }
 
 func TestC25DigestNotSent(t *testing.T) {
+	// Every case runs at t0 (12:00 UTC) so the other probes stay current; the digest time moves instead.
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 22, h, m, 0, 0, time.UTC) }
+	digest := func(local string, sent Millis) func(p *ProbeFacts, _ *World) {
+		return func(p *ProbeFacts, _ *World) { p.Digest.LocalTime, p.Digest.LastSentAt = local, sent }
+	}
 	runProbeCases(t, []probeCase{
-		{name: "C25_digest_not_sent_banner", now: at(7, 45), mod: func(p *ProbeFacts, _ *World) {
-			p.Digest.LastSentAt = ms(at(7, 0).Add(-day))
-		}, want: []string{"C14/critical"}, contains: "Daily digest was not delivered. It was due by 7:30 AM."},
-		{name: "C25_digest_inside_grace_yesterday_sent_no_banner", now: at(7, 20), mod: func(p *ProbeFacts, _ *World) {
-			p.Digest.LastSentAt = ms(at(7, 1).Add(-day))
-		}},
-		{name: "C25_digest_inside_grace_yesterday_missing", now: at(7, 20), mod: func(p *ProbeFacts, _ *World) {
-			p.Digest.LastSentAt = ms(at(7, 1).Add(-2 * day))
-		}, want: []string{"C14/critical"}},
-		{name: "C25_digest_sent_today_no_banner", now: at(7, 45), mod: func(p *ProbeFacts, _ *World) {
-			p.Digest.LastSentAt = ms(at(7, 2))
-		}},
-		{name: "C25_digest_manual_send_earlier_same_day_counts", now: at(9, 0), mod: func(p *ProbeFacts, _ *World) {
-			p.Digest.LastSentAt = ms(at(6, 0))
-		}},
-		{name: "C25_digest_never_sent", now: at(8, 0), mod: func(p *ProbeFacts, _ *World) { p.Digest.LastSentAt = 0 },
-			want: []string{"C14/critical"}},
-		{name: "C25_digest_disabled", now: at(8, 0), mod: func(p *ProbeFacts, _ *World) { p.Digest.Disabled, p.Digest.LastSentAt = true, 0 }},
+		{name: "C25_digest_not_sent_banner", mod: digest("11:15", ms(at(11, 15).Add(-day))),
+			want: []string{"C14/critical"}, contains: "Daily digest was not delivered. It was due by 11:45 AM."},
+		// 11:40 is due, but its grace runs to 12:10: yesterday's digest is the one judged.
+		{name: "C25_digest_inside_grace_yesterday_sent_no_banner", mod: digest("11:40", ms(at(11, 41).Add(-day)))},
+		{name: "C25_digest_inside_grace_yesterday_missing", mod: digest("11:40", ms(at(11, 41).Add(-2*day))),
+			want: []string{"C14/critical"}, contains: "due by Wed 21 Oct 12:10 PM."},
+		{name: "C25_digest_sent_today_no_banner", mod: digest("11:15", ms(at(11, 16)))},
+		{name: "C25_digest_manual_send_earlier_same_day_counts", mod: digest("11:15", ms(at(6, 0)))},
+		{name: "C25_digest_never_sent", mod: digest("11:15", 0), want: []string{"C14/critical"}},
+		{name: "C25_digest_send_time_in_the_future_is_not_checked", mod: digest("11:15", ahead(10*time.Minute)),
+			want: []string{"C14b/alarm"}, contains: "the newest digest send time is garbled or in the future"},
+		{name: "C25_digest_send_time_slightly_ahead_is_tolerated", mod: digest("11:15", ahead(4*time.Minute))},
+		{name: "C25_digest_disabled", mod: func(p *ProbeFacts, _ *World) { p.Digest.Disabled, p.Digest.LastSentAt = true, 0 }},
 		{name: "C25_digest_time_not_set_is_not_checked", mod: func(p *ProbeFacts, _ *World) { p.Digest.LocalTime = "" },
 			want: []string{"C14b/alarm"}, contains: "Daily digest not checked"},
 		{name: "C25_digest_time_in_display_zone", mod: func(p *ProbeFacts, w *World) {
@@ -858,6 +857,71 @@ func TestC28ReleaseManifest(t *testing.T) {
 			want: []string{"C16/alarm"}, contains: "Release manifest rejected."},
 		{name: "C28_release_check_never_ran_is_not_checked", mod: func(p *ProbeFacts, _ *World) { p.Release.CheckedAt = 0 },
 			want: []string{"C16b/alarm"}},
+	})
+}
+
+// TestStaleAndFutureCheckTimes: a measurement older than its named maximum age,
+// and any check time more than FutureSkewAllowed ahead of now, is "not checked"
+// (or a C11 cause), never healthy.
+func TestStaleAndFutureCheckTimes(t *testing.T) {
+	future, nearFuture := ahead(10*time.Minute), ahead(4*time.Minute)
+	runProbeCases(t, []probeCase{
+		// C11
+		{name: "C17_db_integrity_older_than_max_age", mod: func(p *ProbeFacts, _ *World) { p.Database.IntegrityCheckedAt = ago(9 * day) },
+			want: []string{"C11/alarm"}, contains: "integrity check not run for 9 days"},
+		{name: "C17_db_integrity_within_max_age", mod: func(p *ProbeFacts, _ *World) { p.Database.IntegrityCheckedAt = ago(7 * day) }},
+		{name: "C17_db_integrity_time_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Database.IntegrityCheckedAt = future },
+			want: []string{"C11/alarm"}, contains: "integrity check time is garbled or in the future"},
+		{name: "C17_db_measurement_stale", mod: func(p *ProbeFacts, _ *World) { p.Database.MeasuredAt = ago(20 * time.Minute) },
+			want: []string{"C11/alarm"}, contains: "free disk and WAL size not measured for 20 min"},
+		{name: "C17_db_measurement_stale_hides_the_old_disk_figure", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.MeasuredAt, p.Database.FreeBytes = ago(time.Hour), 1<<30 // 1 % free an hour ago: not current evidence
+		}, want: []string{"C11/alarm"}, contains: "not measured for 60 min."},
+		{name: "C17_db_measurement_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Database.MeasuredAt = future },
+			want: []string{"C11/alarm"}, contains: "disk measurement time is garbled or in the future"},
+		{name: "C17_db_self_backup_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Database.SelfBackup.LastAt = future },
+			want: []string{"C11/alarm"}, contains: "self-backup time is garbled or in the future"},
+		// C15
+		{name: "C26_quota_measurement_stale", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].MeasuredAt = ago(4 * hour) },
+			want: []string{"C15b/alarm"}, contains: "Storage usage of primary not checked: usage has not been measured for 4 h"},
+		{name: "C26_quota_measurement_within_max_age", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].MeasuredAt = ago(2 * hour) }},
+		{name: "C26_quota_measurement_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Quota.Targets[0].MeasuredAt = future },
+			want: []string{"C15b/alarm"}, contains: "the newest usage measurement time is garbled or in the future"},
+		{name: "C27_quota_future_sample_is_ignored", mod: func(p *ProbeFacts, _ *World) {
+			tg := &p.Quota.Targets[0] // flat at 50 %; a future sample at 99 % would project full within days
+			tg.Samples = append(tg.Samples, UsageSample{At: ahead(2 * day), Bytes: tg.SoftQuotaBytes * 99 / 100})
+		}},
+		// C16
+		{name: "C28_release_check_stale", mod: func(p *ProbeFacts, _ *World) { p.Release.CheckedAt = ago(50 * time.Minute) },
+			want: []string{"C16b/alarm"}, contains: "release-check has not run for 50 min"},
+		{name: "C28_release_check_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Release.CheckedAt = future },
+			want: []string{"C16b/alarm"}, contains: "the newest release-check time is garbled or in the future"},
+		{name: "C28_rejected_manifest_shows_even_when_stale", mod: func(p *ProbeFacts, _ *World) {
+			p.Release.CheckedAt, p.Release.Rejected = ago(3*hour), true
+		}, want: []string{"C16/alarm"}},
+		// probes and jobs
+		{name: "C06_gateway_probe_time_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Gateway.LastRunAt = future },
+			want: []string{"C01b/alarm"}, contains: "its newest probe time is garbled or in the future"},
+		{name: "C06_gateway_probe_time_slightly_ahead_is_tolerated", mod: func(p *ProbeFacts, _ *World) { p.Gateway.LastRunAt = nearFuture }},
+		{name: "C08_storage_probe_time_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Storage.LastRunAt = future },
+			want: []string{"C02b/alarm"}},
+		{name: "C09_smtp_future_delivery_is_not_evidence", mod: func(p *ProbeFacts, _ *World) {
+			p.SMTP.Probe.LastRunAt, p.SMTP.LastSendOKAt = future, future
+		}, want: []string{"C03b/alarm"}},
+		{name: "C09_smtp_pending_with_only_a_future_delivery_is_failing", mod: func(p *ProbeFacts, _ *World) {
+			p.SMTP.LastSendOKAt, p.SMTP.PendingAlerts = future, 2
+		}, want: []string{"C03/critical"}, contains: "No alert e-mail has been delivered yet."},
+		{name: "C13_evaluator_finish_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Evaluator.LastFinishedAt = future },
+			want: []string{"C06b/alarm"}, contains: "the evaluator's newest finish time is garbled or in the future"},
+		{name: "C13_evaluator_never_finished_start_in_the_future_is_stalled", mod: func(p *ProbeFacts, _ *World) {
+			p.StartedAt, p.Evaluator.LastFinishedAt = future, 0
+		}, want: []string{"C06/critical"}},
+		{name: "C14_maintenance_scheduler_finish_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Maintain.Scheduler.LastFinishedAt = future },
+			want: []string{"C07b/alarm"}, contains: "the maintenance scheduler's newest finish time is garbled"},
+		{name: "C14_maintenance_rpc_probe_time_in_the_future", mod: func(p *ProbeFacts, _ *World) { p.Maintain.RPC.LastRunAt = future },
+			want: []string{"C07b/alarm"}},
+		{name: "C16_snapshot_time_in_the_future_is_unknown_age", mod: func(_ *ProbeFacts, w *World) { w.LoadedAt = t0.Add(10 * time.Minute) },
+			want: []string{"C10/alarm"}, contains: "the age of this data is unknown"},
 	})
 }
 

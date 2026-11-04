@@ -54,6 +54,18 @@ const (
 	QuotaWarnPct        = 80
 	QuotaCritPct        = 90
 	QuotaProjectionDays = 14
+
+	// FutureSkewAllowed: a recorded check time more than this ahead of now is garbled ("not checked").
+	FutureSkewAllowed = 5 * time.Minute
+	// IntegrityMaxAge: integrity_check runs at startup and weekly; older than a week and a day is a C11 cause.
+	IntegrityMaxAge = 8 * 24 * time.Hour
+	// DBMeasureMaxAge: the prober measures free disk and WAL each run (60 s); older than 15 min is a C11 cause.
+	DBMeasureMaxAge = 15 * time.Minute
+	// QuotaMeasureMaxAge: usage-sampler is hourly, staggered within the hour, so twice the cadence plus the
+	// stagger; older usage is C15b.
+	QuotaMeasureMaxAge = 3 * time.Hour
+	// ReleaseCheckMaxAge: release-check runs every 15 min; three periods without a run is C16b.
+	ReleaseCheckMaxAge = 45 * time.Minute
 )
 
 // bannerCtx is what every banner rule needs to word its text.
@@ -62,12 +74,12 @@ type bannerCtx struct {
 	loc *time.Location
 }
 
-// clock renders t for banner text: "3:04 PM" in the display zone within the
-// last day, "Mon 2 Jan 3:04 PM" otherwise (a bare clock time days old would read
-// as today).
+// clock renders t for banner text in the display zone: "3:04 PM" on today's
+// local date, "Mon 2 Jan 3:04 PM" on any other (a bare clock time from
+// yesterday would read as today).
 func (c bannerCtx) clock(t time.Time) string {
-	lt := t.In(c.loc)
-	if d := c.now.Sub(t); d < 24*time.Hour && d > -24*time.Hour {
+	lt, ln := t.In(c.loc), c.now.In(c.loc)
+	if ly, lm, ld := lt.Date(); ly == ln.Year() && lm == ln.Month() && ld == ln.Day() {
 		return lt.Format("3:04 PM")
 	}
 	return lt.Format("Mon 2 Jan 3:04 PM")
@@ -89,38 +101,52 @@ const (
 	probeUnchecked              // never completed, or stopped completing: "not checked"
 )
 
+// recorded parses a time the console recorded about its own checks. ok is
+// false for NULL, for a garbled value, and for a time more than
+// FutureSkewAllowed ahead of now: a check that claims to have run in the future
+// proves nothing, so it is "not checked", never healthy.
+func recorded(m Millis, now time.Time) (time.Time, bool) {
+	t, ok := m.Time()
+	if !ok || t.After(now.Add(FutureSkewAllowed)) {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// garbledWhy is the not-checked reason for a present but unusable timestamp.
+const garbledWhy = " time is garbled or in the future"
+
 // judgeProbe reads a ProbeRun. A failure streak at the threshold is the
 // condition even when the prober has since stopped (the last evidence is a
-// failure); otherwise a probe that never completed or has not completed for
-// ProbeStaleIntervals intervals is unchecked, never healthy.
-func judgeProbe(p *ProbeRun, failAfter int, interval time.Duration, now time.Time) (v probeVerdict, age time.Duration, never bool) {
+// failure); otherwise a probe that never completed, whose newest run time is
+// garbled or in the future, or that has not completed for ProbeStaleIntervals
+// intervals is unchecked, never healthy. why and n word the not-checked text.
+func judgeProbe(p *ProbeRun, failAfter int, interval time.Duration, now time.Time) (v probeVerdict, why string, n int) {
 	if p.ConsecutiveFailures >= failAfter {
-		return probeFailing, 0, false
+		return probeFailing, "", 0
 	}
-	last, ok := p.LastRunAt.Time()
-	if !ok {
-		return probeUnchecked, 0, true
+	last, ok := recorded(p.LastRunAt, now)
+	switch {
+	case p.LastRunAt == 0:
+		return probeUnchecked, "the health prober has not completed a probe of it yet", 0
+	case !ok:
+		return probeUnchecked, "its newest probe" + garbledWhy, 0
 	}
-	if age = now.Sub(last); age > time.Duration(ProbeStaleIntervals)*interval {
-		return probeUnchecked, age, false
+	if age := now.Sub(last); age > time.Duration(ProbeStaleIntervals)*interval {
+		n = minutesOf(age)
+		return probeUnchecked, "no probe of it has completed for " + strconv.Itoa(n) + " min", n
 	}
-	return probeOK, age, false
+	return probeOK, "", 0
 }
 
 // notChecked is the "not checked" warning of a probe-driven condition.
-func notChecked(id, subject, consequence string, never bool, age time.Duration) Banner {
-	why := "the health prober has not completed a probe of it yet"
-	n := 0
-	if !never {
-		n = minutesOf(age)
-		why = "no probe of it has completed for " + strconv.Itoa(n) + " min"
-	}
+func notChecked(id, subject, consequence, why string, n int) Banner {
 	return Banner{ID: id, Severity: SeverityAlarm, Count: n, Text: subject + " not checked: " + why + ", so " + consequence + "."}
 }
 
 // lastOK is the " Last OK h:mm PM." tail of a failing-probe banner.
 func (c bannerCtx) lastOK(m Millis, never string) (string, time.Time) {
-	if t, ok := m.Time(); ok {
+	if t, ok := recorded(m, c.now); ok {
 		return " Last OK " + c.clock(t) + ".", t
 	}
 	return " " + never, time.Time{}
@@ -195,40 +221,52 @@ func unsupplied(id, subject, consequence string) Banner {
 
 // storageBanners is C02 from the storage probe through the maintain RPC.
 func storageBanners(s *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
-	switch v, age, never := judgeProbe(s, StorageFailuresToAlarm, iv, c.now); v {
+	switch v, why, n := judgeProbe(s, StorageFailuresToAlarm, iv, c.now); v {
 	case probeFailing:
 		tail, at := c.lastOK(s.LastOKAt, "It has never answered a probe.")
 		return []Banner{{ID: "C02", Severity: SeverityCritical, Count: s.ConsecutiveFailures, At: at,
 			Text: "Storage unreachable from the admin path: retention, restore and usage are impaired." + tail}}
 	case probeUnchecked:
-		return []Banner{notChecked("C02b", "Storage", "storage that cannot be reached from the admin path would go unnoticed", never, age)}
+		return []Banner{notChecked("C02b", "Storage", "storage that cannot be reached from the admin path would go unnoticed", why, n)}
 	}
 	return nil
 }
 
-// releaseBanners is C16.
+// releaseBanners is C16; C16b when release-check never ran, its time is
+// garbled or in the future, or it has not run for ReleaseCheckMaxAge.
 func releaseBanners(r *ReleaseFacts, c bannerCtx) []Banner {
-	switch _, ok := r.CheckedAt.Time(); {
-	case r.Rejected:
+	if r.Rejected {
 		return []Banner{{ID: "C16", Severity: SeverityAlarm, Text: "Release manifest rejected."}}
-	case !ok:
-		return []Banner{{ID: "C16b", Severity: SeverityAlarm,
-			Text: "Release manifests not checked: release-check has not run, so a rejected manifest would go unnoticed."}}
 	}
-	return nil
+	at, ok := recorded(r.CheckedAt, c.now)
+	why := ""
+	n := 0
+	switch {
+	case r.CheckedAt == 0:
+		why = "release-check has not run"
+	case !ok:
+		why = "the newest release-check" + garbledWhy
+	case c.now.Sub(at) > ReleaseCheckMaxAge:
+		n = minutesOf(c.now.Sub(at))
+		why = "release-check has not run for " + strconv.Itoa(n) + " min"
+	default:
+		return nil
+	}
+	return []Banner{{ID: "C16b", Severity: SeverityAlarm, Count: n,
+		Text: "Release manifests not checked: " + why + ", so a rejected manifest would go unnoticed."}}
 }
 
 // gatewayBanners is C01 from the gateway probe and the gateway half of C05.
 // The certificate is judged only while the probe passes: a failing probe is
 // already C01, and an unchecked one is already C01b.
 func gatewayBanners(g *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
-	switch v, age, never := judgeProbe(g, GatewayFailuresToAlarm, iv, c.now); v {
+	switch v, why, n := judgeProbe(g, GatewayFailuresToAlarm, iv, c.now); v {
 	case probeFailing:
 		tail, at := c.lastOK(g.LastOKAt, "It has never answered a probe.")
 		return []Banner{{ID: "C01", Severity: SeverityCritical, Count: g.ConsecutiveFailures, At: at,
 			Text: "Gateway unreachable: no agent can back up." + tail}}
 	case probeUnchecked:
-		return []Banner{notChecked("C01b", "Gateway", "an unreachable gateway would go unnoticed", never, age)}
+		return []Banner{notChecked("C01b", "Gateway", "an unreachable gateway would go unnoticed", why, n)}
 	}
 	na, ok := g.CertNotAfter.Time()
 	if !ok {
@@ -263,8 +301,8 @@ func gatewayBanners(g *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
 // is evidence too, so an unchecked probe is only a warning when nothing has
 // been delivered within the day.
 func smtpBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
-	v, age, never := judgeProbe(&s.Probe, SMTPFailuresToAlarm, iv, c.now)
-	sent, sentOK := s.LastSendOKAt.Time()
+	v, why, n := judgeProbe(&s.Probe, SMTPFailuresToAlarm, iv, c.now)
+	sent, sentOK := recorded(s.LastSendOKAt, c.now)
 	recent := sentOK && c.now.Sub(sent) <= SMTPPendingWithoutSend
 	failing := s.ConsecutiveSendFailures >= SMTPFailuresToAlarm || s.LastTestFailed || v == probeFailing ||
 		(s.PendingAlerts > 0 && !recent)
@@ -280,22 +318,27 @@ func smtpBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
 		return []Banner{b}
 	}
 	if v == probeUnchecked && !recent {
-		return []Banner{notChecked("C03b", "Alert e-mail", "alert e-mail that cannot be delivered would go unnoticed", never, age)}
+		return []Banner{notChecked("C03b", "Alert e-mail", "alert e-mail that cannot be delivered would go unnoticed", why, n)}
 	}
 	return nil
 }
 
 // jobVerdict reads a job heartbeat: stalled once the newest finish is older than
 // stalledAfter; a job that never finished is "not yet" within stalledAfter of the
-// process start and stalled after it, or at once when the start is unknown.
-func jobVerdict(j *JobFacts, stalledAfter time.Duration, startedAt Millis, now time.Time) (stalled, notYet bool, last time.Time, hasLast bool) {
-	if last, ok := j.LastFinishedAt.Time(); ok {
-		return now.Sub(last) > stalledAfter, false, last, true
+// process start and stalled after it, or at once when the start is unknown. A
+// finish time that is garbled or in the future proves nothing: garbled.
+func jobVerdict(j *JobFacts, stalledAfter time.Duration, startedAt Millis, now time.Time) (stalled, notYet, garbled bool, last time.Time, hasLast bool) {
+	if j.LastFinishedAt != 0 {
+		last, ok := recorded(j.LastFinishedAt, now)
+		if !ok {
+			return false, false, true, time.Time{}, false
+		}
+		return now.Sub(last) > stalledAfter, false, false, last, true
 	}
-	if start, ok := startedAt.Time(); ok && now.Sub(start) <= stalledAfter {
-		return false, true, time.Time{}, false
+	if start, ok := recorded(startedAt, now); ok && now.Sub(start) <= stalledAfter {
+		return false, true, false, time.Time{}, false
 	}
-	return true, false, time.Time{}, false
+	return true, false, false, time.Time{}, false
 }
 
 // evaluatorBanners is C06.
@@ -304,9 +347,11 @@ func evaluatorBanners(j *JobFacts, startedAt Millis, c bannerCtx) []Banner {
 	if period <= 0 {
 		period = DefaultEvaluatorPeriod
 	}
-	stalled, notYet, last, hasLast := jobVerdict(j, EvaluatorStalledPeriods*period, startedAt, c.now)
+	stalled, notYet, garbled, last, hasLast := jobVerdict(j, EvaluatorStalledPeriods*period, startedAt, c.now)
 	const lead = "Alerting is stalled: this view and notifications may be stale."
 	switch {
+	case garbled:
+		return []Banner{notChecked("C06b", "Alerting", "stalled alerting would go unnoticed", "the evaluator's newest finish"+garbledWhy, 0)}
 	case stalled && hasLast:
 		return []Banner{{ID: "C06", Severity: SeverityCritical, At: last, Count: minutesOf(c.now.Sub(last)),
 			Text: lead + " Last evaluation " + c.clock(last) + "."}}
@@ -326,16 +371,20 @@ func maintainBanners(m *MaintainFacts, startedAt Millis, iv time.Duration, c ban
 	const lead = "Maintenance worker is not running: retention, restore browsing and usage sampling are off."
 	var down *Banner
 	var unchecked *Banner
-	switch v, age, never := judgeProbe(&m.RPC, 1, iv, c.now); v {
+	switch v, why, n := judgeProbe(&m.RPC, 1, iv, c.now); v {
 	case probeFailing:
 		down = &Banner{ID: "C07", Severity: SeverityCritical, Count: m.RPC.ConsecutiveFailures, Text: lead}
 	case probeUnchecked:
-		b := notChecked("C07b", "Maintenance worker", "a stopped maintenance worker would go unnoticed", never, age)
+		b := notChecked("C07b", "Maintenance worker", "a stopped maintenance worker would go unnoticed", why, n)
 		unchecked = &b
 	}
 	if m.Scheduler != nil {
-		stalled, notYet, last, hasLast := jobVerdict(m.Scheduler, MaintenanceSchedulerStale, startedAt, c.now)
+		stalled, notYet, garbled, last, hasLast := jobVerdict(m.Scheduler, MaintenanceSchedulerStale, startedAt, c.now)
 		switch {
+		case garbled && unchecked == nil:
+			b := notChecked("C07b", "Maintenance worker", "a stopped maintenance worker would go unnoticed",
+				"the maintenance scheduler's newest finish"+garbledWhy, 0)
+			unchecked = &b
 		case stalled && down == nil:
 			tail := " The maintenance scheduler has not finished a run since the console started."
 			if hasLast {
@@ -363,7 +412,7 @@ func viewBanners(v *ViewFacts, loadedAt time.Time, c bannerCtx) []Banner {
 	if iv <= 0 {
 		iv = DefaultRefreshInterval
 	}
-	if loadedAt.IsZero() {
+	if loadedAt.IsZero() || loadedAt.After(c.now.Add(FutureSkewAllowed)) {
 		return []Banner{{ID: "C10", Severity: SeverityAlarm, Text: "Live updates disconnected: the age of this data is unknown."}}
 	}
 	if v.StreamDisconnected || c.now.Sub(loadedAt) > time.Duration(StaleViewIntervals)*iv {
@@ -385,14 +434,26 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 			sev = s
 		}
 	}
-	if _, ok := d.IntegrityCheckedAt.Time(); !ok {
+	integrityAt, integrityOK := recorded(d.IntegrityCheckedAt, c.now)
+	switch {
+	case d.IntegrityCheckedAt == 0:
 		add(SeverityAlarm, "integrity check has never run")
-	} else if !d.IntegrityOK {
+	case !integrityOK:
+		add(SeverityAlarm, "integrity check"+garbledWhy)
+	case !d.IntegrityOK:
 		add(SeverityCritical, "integrity check failed")
+	case c.now.Sub(integrityAt) > IntegrityMaxAge:
+		add(SeverityAlarm, "integrity check not run for "+strconv.Itoa(int(c.now.Sub(integrityAt)/(24*time.Hour)))+" days")
 	}
-	if _, ok := d.MeasuredAt.Time(); !ok || d.TotalBytes <= 0 {
+	measuredAt, measuredOK := recorded(d.MeasuredAt, c.now)
+	switch {
+	case d.MeasuredAt == 0 || d.TotalBytes <= 0:
 		add(SeverityAlarm, "free disk and WAL size not measured")
-	} else {
+	case !measuredOK:
+		add(SeverityAlarm, "disk measurement"+garbledWhy)
+	case c.now.Sub(measuredAt) > DBMeasureMaxAge:
+		add(SeverityAlarm, "free disk and WAL size not measured for "+strconv.Itoa(minutesOf(c.now.Sub(measuredAt)))+" min")
+	default:
 		if pct := 100 * float64(d.FreeBytes) / float64(d.TotalBytes); pct < DBFreeDiskPct {
 			add(SeverityAlarm, "disk below "+strconv.Itoa(DBFreeDiskPct)+"% free ("+strconv.Itoa(int(math.Floor(pct)))+"%)")
 		}
@@ -401,10 +462,12 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 		}
 	}
 	if sb := d.SelfBackup; sb != nil {
-		last, ok := sb.LastAt.Time()
+		last, ok := recorded(sb.LastAt, c.now)
 		switch {
-		case !ok:
+		case sb.LastAt == 0:
 			add(SeverityAlarm, "no self-backup has been written")
+		case !ok:
+			add(SeverityAlarm, "self-backup"+garbledWhy)
 		case c.now.Sub(last) > DBSelfBackupMaxAge:
 			add(SeverityAlarm, "self-backup older than 26 h")
 		}
@@ -521,7 +584,12 @@ func digestBanners(d *DigestFacts, c bannerCtx) []Banner {
 	ld := due.In(c.loc)
 	y, mo, day := ld.Date()
 	dayStart := time.Date(y, mo, day, 0, 0, 0, 0, c.loc)
-	if sent, ok := d.LastSentAt.Time(); ok && !sent.Before(dayStart) {
+	sent, sentOK := recorded(d.LastSentAt, c.now)
+	if d.LastSentAt != 0 && !sentOK {
+		return []Banner{{ID: "C14b", Severity: SeverityAlarm,
+			Text: "Daily digest not checked: the newest digest send" + garbledWhy + ", so a digest that is never sent would go unnoticed."}}
+	}
+	if sentOK && !sent.Before(dayStart) {
 		return nil
 	}
 	by := due.Add(DigestGrace)
@@ -532,11 +600,11 @@ func digestBanners(d *DigestFacts, c bannerCtx) []Banner {
 // growthPerDay is the least-squares usage growth in bytes per day over the
 // valid samples; ok is false with fewer than two valid samples or a span under
 // an hour (too little to project from).
-func growthPerDay(samples []UsageSample) (float64, bool) {
+func growthPerDay(samples []UsageSample, now time.Time) (float64, bool) {
 	type pt struct{ x, y float64 }
 	var pts []pt
 	for _, s := range samples {
-		if t, ok := s.At.Time(); ok {
+		if t, ok := recorded(s.At, now); ok {
 			pts = append(pts, pt{float64(t.UnixMilli()) / float64(24*time.Hour/time.Millisecond), float64(s.Bytes)})
 		}
 	}
@@ -568,21 +636,32 @@ func growthPerDay(samples []UsageSample) (float64, bool) {
 // quotaBanners is C15 for the worst storage target with a soft quota: 80 %
 // warns, 90 % and 100 % are critical, and a growth projection that reaches
 // 100 % within 14 days is critical. A target with a quota whose usage was never
-// measured is C15b.
+// measured, whose measurement time is garbled or in the future, or whose usage
+// is older than QuotaMeasureMaxAge is C15b.
 func quotaBanners(q *QuotaFacts, c bannerCtx) []Banner {
 	var worst *Banner
 	worstPct := -1.0
 	unmeasured := 0
-	unmeasuredName := ""
+	unmeasuredName, unmeasuredWhy := "", ""
 	for i := range q.Targets {
 		t := &q.Targets[i]
 		if t.SoftQuotaBytes <= 0 {
 			continue // no quota set: nothing to measure against
 		}
-		if _, ok := t.MeasuredAt.Time(); !ok {
+		at, ok := recorded(t.MeasuredAt, c.now)
+		why := ""
+		switch {
+		case t.MeasuredAt == 0:
+			why = "usage has never been measured"
+		case !ok:
+			why = "the newest usage measurement" + garbledWhy
+		case c.now.Sub(at) > QuotaMeasureMaxAge:
+			why = "usage has not been measured for " + strconv.Itoa(int(c.now.Sub(at)/time.Hour)) + " h"
+		}
+		if why != "" {
 			unmeasured++
-			if unmeasuredName == "" {
-				unmeasuredName = t.Name
+			if unmeasured == 1 {
+				unmeasuredName, unmeasuredWhy = t.Name, why
 			}
 			continue
 		}
@@ -596,7 +675,7 @@ func quotaBanners(q *QuotaFacts, c bannerCtx) []Banner {
 		}
 		projection := ""
 		if pct < 100 {
-			if g, ok := growthPerDay(t.Samples); ok && g > 0 {
+			if g, ok := growthPerDay(t.Samples, c.now); ok && g > 0 {
 				days := float64(t.SoftQuotaBytes-t.UsedBytes) / g
 				if days < QuotaProjectionDays {
 					sev = SeverityCritical
@@ -639,7 +718,7 @@ func quotaBanners(q *QuotaFacts, c bannerCtx) []Banner {
 			subject += " and " + strconv.Itoa(unmeasured-1) + " more targets"
 		}
 		out = append(out, Banner{ID: "C15b", Severity: SeverityAlarm, Count: unmeasured,
-			Text: subject + " not checked: usage has never been measured, so a full quota would go unnoticed."})
+			Text: subject + " not checked: " + unmeasuredWhy + ", so a full quota would go unnoticed."})
 	}
 	return out
 }
