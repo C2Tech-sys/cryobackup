@@ -1196,6 +1196,15 @@ func TestM3StatusOverallIsOKOnlyOnEvidence(t *testing.T) { // F14 F20
 	if len(one.Customers) != 1 || one.Customers[0].Status != "ok" || len(one.Devices) != 3 || one.AllClear {
 		t.Errorf("one customer: %+v", one)
 	}
+	// L3 (mutant M04): the console is not all clear (another customer is alarming, banners are up), so a
+	// narrowed answer for a healthy customer must not read "ok" however clean its own rows are.
+	if one.Overall == OverallOK || one.Overall != OverallWarning {
+		t.Errorf("/status?customer=<healthy> = %q while other customers are alarming; want %q, never ok", one.Overall, OverallWarning)
+	}
+	healthy := state.FleetView{Complete: true, Devices: []state.DeviceState{{ID: "other", Primary: state.StateFailed, Alarm: state.SeverityAlarm}}}
+	if got := overall(healthy, nil, nil); got == OverallOK {
+		t.Errorf("a customer filter with clean rows over a fleet that is not all clear = %q, must not be ok", got)
+	}
 	// overall() on views: empty fleet without a first run is unknown, a first run is not.
 	empty := state.FleetView{Complete: true}
 	if got := overall(empty, nil, nil); got != OverallUnknown {
