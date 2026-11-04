@@ -2,7 +2,6 @@ package adminapi
 
 import (
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -235,14 +234,4 @@ func isWarning(d state.DeviceState) bool {
 		return true
 	}
 	return false
-}
-
-// sortedKeys returns the keys of a count map in a fixed order.
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
