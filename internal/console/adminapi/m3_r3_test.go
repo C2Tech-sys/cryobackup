@@ -126,3 +126,35 @@ func TestM3EventStreamForgetsDeviceVisibilityWhenTheScopeNarrows(t *testing.T) {
 		t.Fatalf("after the narrowing the first run.progress is %+v (%v); the device that left the scope must not arrive", rp, err)
 	}
 }
+
+// r3 L2: every write sets its own deadline. With a short write timeout and pings
+// faster than it, a reader that keeps reading stays connected for many times the
+// timeout. A deadline set only on connect would end every healthy stream once the
+// timeout passed (30 s in production).
+func TestM3EventStreamHealthyReaderOutlivesTheWriteTimeout(t *testing.T) { // r3 L2
+	e := newEnv(t)
+	const timeout = 200 * time.Millisecond
+	e.svc.sseRefresh, e.svc.sseWriteTimeout, e.svc.sseRevalidate = time.Hour, timeout, 40*time.Millisecond
+	owner := e.login("admin", pw)
+	st, _ := e.openStream("/api/v1/events?topics=fleet", owner)
+	st.next("fleet.state", 5*time.Second)
+	start := time.Now()
+	pings := 0
+	for time.Since(start) < 6*timeout {
+		select {
+		case ev, ok := <-st.events:
+			if !ok {
+				t.Fatalf("a reading client was dropped after %s (write timeout %s)", time.Since(start).Round(time.Millisecond), timeout)
+			}
+			if ev.Name == "ping" {
+				pings++
+			}
+		case <-time.After(timeout):
+			t.Fatalf("no event for %s while pings are due every 40ms", timeout)
+		}
+	}
+	st.next("ping", 2*time.Second) // still delivering after 6x the timeout
+	if pings < 10 {
+		t.Errorf("%d pings in %s, want at least 10", pings, 6*timeout)
+	}
+}
