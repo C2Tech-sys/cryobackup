@@ -74,8 +74,8 @@ const (
 	// has not ended by then (a hung disk under the database probe, whose disk calls take no context) is
 	// abandoned and logged by name, so a stuck probe never holds serve's shutdown.
 	StopWait = 10 * time.Second
-	// stopReleaseTimeout bounds the write that releases ProbeLease at shutdown.
-	stopReleaseTimeout = 5 * time.Second
+	// StopReleaseTimeout bounds the write that releases ProbeLease at shutdown.
+	StopReleaseTimeout = 5 * time.Second
 )
 
 // errProbesCancelled is ProbeNow's answer when the probes it asked for ended
@@ -88,6 +88,11 @@ var errProbesCancelled = fmt.Errorf("jobs: the probes were cancelled before they
 // configured, the worker cannot be reached or is busy). Nothing was cancelled and
 // nothing failed; there is simply no result. It is not a context error.
 var ErrNothingProbed = errors.New("jobs: nothing was probed: neither the gateway nor the storage probe could run")
+
+// ErrProbePanicked is ProbeNow's answer when a probe it waited for panicked: an
+// internal failure, so ran is false. The probe's job row says internal_panic. It is
+// not a context error: nothing was cancelled.
+var ErrProbePanicked = errors.New("jobs: a health probe panicked")
 
 // ClassWorkerStore is the storage probe row's class when the maintenance
 // worker's own settings store failed during the probe (maintain.ProbeRecordClass
@@ -273,8 +278,8 @@ type result struct {
 // it was cancelled or panicked, so nothing was learned; skipped is true when it
 // could not run at all (status "skipped"), so it probed nothing either.
 type probeRun struct {
-	done         chan struct{}
-	ran, skipped bool
+	done                   chan struct{}
+	ran, skipped, panicked bool
 }
 
 // probed reports whether r is a probe's result, not a cancellation or a panic.
@@ -305,7 +310,7 @@ func (h *HealthProber) claim(row string) bool {
 func (h *HealthProber) release(row string, res result) {
 	h.mu.Lock()
 	if r, ok := h.inflight[row]; ok {
-		r.ran, r.skipped = res.probed(), res.status == "skipped"
+		r.ran, r.skipped, r.panicked = res.probed(), res.status == "skipped", res.class == ClassPanic
 		close(r.done)
 	}
 	delete(h.inflight, row)
@@ -383,7 +388,7 @@ func (h *HealthProber) acquire(ctx context.Context) (got bool, err error) {
 	h.leaseUntil = asked.Add(h.leaseTTL())
 	h.mu.Unlock()
 	if stopped {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopReleaseTimeout)
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), StopReleaseTimeout)
 		defer cancel()
 		if err := h.Store.ReleaseJobLease(rctx, ProbeLease, h.holder()); err != nil {
 			h.log().Warn("health probe lease not released at shutdown; it expires on its own", logx.Class(ClassStore))
@@ -494,7 +499,7 @@ func (h *HealthProber) Stop() {
 			h.log().Warn("health probe abandoned at shutdown", probeAttr(row))
 		}
 	}
-	rctx, rcancel := context.WithTimeout(context.Background(), stopReleaseTimeout)
+	rctx, rcancel := context.WithTimeout(context.Background(), StopReleaseTimeout)
 	defer rcancel()
 	if err := h.Store.ReleaseJobLease(rctx, ProbeLease, h.holder()); err != nil {
 		h.log().Warn("health probe lease not released at shutdown; it expires on its own", logx.Class(ClassStore))
@@ -619,9 +624,9 @@ func (h *HealthProber) start(pctx context.Context, row string, fn func(context.C
 // master-key and integrity probes keep their own schedule.
 //
 // ran is true only when the probes ran or were left running. Probes that ended
-// without a result (the lease was lost mid-wait, Stop began or had finished, one
-// panicked, or the run waited for was cancelled under an earlier lease) answer
-// (false, errProbesCancelled). Both probes skipped answer (false, ErrNothingProbed);
+// without a result (the lease was lost mid-wait, Stop began or had finished, or the
+// run waited for was cancelled under an earlier lease) answer (false,
+// errProbesCancelled); a probe that panicked answers (false, ErrProbePanicked). Both probes skipped answer (false, ErrNothingProbed);
 // one skipped beside one that really ran is a run, and its check says not checked.
 func (h *HealthProber) ProbeNow(ctx context.Context) (ran bool, err error) {
 	pctx, runs, err := h.startProbeNow(ctx)
@@ -632,6 +637,9 @@ func (h *HealthProber) ProbeNow(ctx context.Context) (ran bool, err error) {
 	for _, run := range runs {
 		select {
 		case <-run.done:
+			if run.panicked {
+				return false, ErrProbePanicked
+			}
 			if !run.ran {
 				return false, errProbesCancelled
 			}

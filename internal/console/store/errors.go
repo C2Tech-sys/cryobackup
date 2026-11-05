@@ -42,6 +42,9 @@ var (
 	ErrNestedWrite = errors.New("store: nested Write")
 	// ErrClosed: the Store was closed.
 	ErrClosed = errors.New("store: closed")
+	// ErrCloseAbandoned: Close gave up after CloseWait on work still in flight. The
+	// caller should exit; the WAL recovers on the next open.
+	ErrCloseAbandoned = errors.New("store: close abandoned: work still in flight")
 )
 
 // ConstraintError is a database constraint violation mapped onto ErrConflict

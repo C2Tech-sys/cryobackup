@@ -144,10 +144,14 @@ func TestC08ProbeNowWaitingOnACancelledRunDidNotRun(t *testing.T) { // M3-STORE1
 }
 
 // A probe that panicked learned nothing: its row says so, and ProbeNow did not run.
-func TestC08ProbeNowWhenAProbePanickedDidNotRun(t *testing.T) { // M3-STORE1 B
+// The answer names an internal failure, not a cancellation that never happened.
+func TestC08ProbeNowWhenAProbePanickedDidNotRun(t *testing.T) { // M3-STORE1 B, M3-STORE2 7
 	r := newProberRig(t, false)
 	r.hp.Backend = panickingBackend{}
-	wantNotRan(t, probeNowAsync(r.hp))
+	ran, err := r.hp.ProbeNow(context.Background())
+	if ran || !errors.Is(err, ErrProbePanicked) || errors.Is(err, context.Canceled) {
+		t.Fatalf("ProbeNow = (%v, %v), want ran false and ErrProbePanicked, not a cancellation", ran, err)
+	}
 	if j := r.row(t, ProbeRowStorage); j.LastErrorClass != ClassPanic {
 		t.Fatalf("storage row %+v, want %s", j, ClassPanic)
 	}

@@ -99,9 +99,11 @@ func (s *Service) BeginShutdown() {
 
 // WaitBackground waits at most d for the manual job runs and POST probes in
 // flight, so that they end before the store closes, and reports whether they all
-// did. A job or probe that outlives d finds the store closed: its writes answer
-// store.ErrClosed, and a POST probe then fails its request with a 500 because the
-// audit row could not be written.
+// did. A job or probe that outlives d and is not inside a store call finds the
+// store closed: its writes answer store.ErrClosed, and a POST probe then fails its
+// request with a 500 because the audit row could not be written. One stuck inside
+// a Write holds the store's close until Store.Close gives up on its own bound, and
+// the process then exits with that transaction unfinished.
 func (s *Service) WaitBackground(d time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
@@ -704,7 +706,7 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.Prober == nil {
-		if !s.auditAccepted(w, r, p, auditAction, "storage_target", t.ID) {
+		if !s.auditOutcome(w, r, p, auditAction, "storage_target", t.ID, "error", map[string]any{"outcome": "not_run"}) {
 			return
 		}
 		notChecked("the health prober does not run in this console")
@@ -728,6 +730,8 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 			result, outcome = "error", "cancelled"
 		case errors.Is(rerr, jobs.ErrNothingProbed):
 			result, outcome = "error", "nothing_probed"
+		case errors.Is(rerr, jobs.ErrProbePanicked):
+			result, outcome = "error", jobs.ClassPanic
 		case rerr != nil:
 			result, outcome = "error", "failed"
 		}
@@ -749,6 +753,8 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 			notChecked("the probes were cancelled before they finished: the probe lease was lost, or the console is shutting down")
 		case outcome == "nothing_probed":
 			notChecked("nothing was probed: neither the gateway probe nor the storage probe could run")
+		case outcome == jobs.ClassPanic:
+			notChecked("a health probe failed with an internal error, so nothing can be said from it; the console log names the probe")
 		case rerr != nil:
 			notChecked("the health prober failed to run")
 		default:
