@@ -899,7 +899,7 @@ func TestM3SystemHealthNeverSaysOKWithoutEvidence(t *testing.T) { // F18 F19, H2
 		}
 	}
 	// The reproduction of the verifier's finding: not-checked banners must not read ok.
-	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
+	e.setExtra(func(time.Time) []state.Banner {
 		return []state.Banner{
 			{ID: "C16b", Severity: state.SeverityAlarm, Text: "Release manifests not checked."},
 			{ID: "C12b", Severity: state.SeverityAlarm, Text: "Master key not checked."},
@@ -907,7 +907,7 @@ func TestM3SystemHealthNeverSaysOKWithoutEvidence(t *testing.T) { // F18 F19, H2
 			{ID: "C05", Subject: state.SubjectGateway, Severity: state.SeverityAlarm, Text: "Certificate expires in 12 days"},
 			{ID: "C15", Severity: state.SeverityAlarm, Text: "Storage at 85 % of quota."},
 		}
-	}
+	})
 	h = decode[SystemHealthResponse](t, mustGet(e, "/api/v1/system/health", owner))
 	want := map[string]string{"release_manifest": statusNotChecked, "master_key": statusNotChecked, "gateway": statusFailed, "certificates": statusWarn, "storage": statusWarn}
 	for id, st := range want {
@@ -919,9 +919,9 @@ func TestM3SystemHealthNeverSaysOKWithoutEvidence(t *testing.T) { // F18 F19, H2
 		t.Errorf("overall = %s with a failed row", h.Overall)
 	}
 	// C00 (self-checks not wired): no row may be ok, whatever else is quiet.
-	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
+	e.setExtra(func(time.Time) []state.Banner {
 		return []state.Banner{{ID: bannerNotWired, Severity: state.SeverityAlarm, Text: "Console self-checks are not wired."}}
-	}
+	})
 	h = decode[SystemHealthResponse](t, mustGet(e, "/api/v1/system/health", owner))
 	for _, c := range h.Components {
 		if c.Status == statusOK {
@@ -1144,7 +1144,7 @@ func TestM3StorageProbe(t *testing.T) { // F18 F19, L1
 		{state.Banner{ID: "C15b", Severity: state.SeverityAlarm}, statusNotChecked},
 	} {
 		b := tc.banner
-		e.svc.Fleet.Extra = func(time.Time) []state.Banner { return []state.Banner{b} }
+		e.setExtra(func(time.Time) []state.Banner { return []state.Banner{b} })
 		pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
 		if c := byID(pr, "storage"); c.Status != tc.want || !slices.Contains(c.Banners, b.ID) {
 			t.Errorf("banner %s: storage = %+v, want %s", b.ID, c, tc.want)
@@ -1155,15 +1155,15 @@ func TestM3StorageProbe(t *testing.T) { // F18 F19, L1
 			}
 		}
 	}
-	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
+	e.setExtra(func(time.Time) []state.Banner {
 		return []state.Banner{{ID: "C01", Severity: state.SeverityCritical}, {ID: "C05b", Severity: state.SeverityAlarm}}
-	}
+	})
 	pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
 	if byID(pr, "gateway").Status != statusFailed || byID(pr, "certificates").Status != statusNotChecked {
 		t.Errorf("gateway/certificates: %+v", pr.Checks)
 	}
 	// A prober that itself fails is not a pass.
-	e.svc.Fleet.Extra = nil
+	e.setExtra(nil)
 	failing = true
 	pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
 	checkScope(pr)
@@ -1478,9 +1478,9 @@ func TestM3EventStreamDeliversAndIsScoped(t *testing.T) { // F05 F18
 		t.Fatalf("run.progress: %+v %v", rp, err)
 	}
 	// A banner that appears is pushed.
-	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
+	e.setExtra(func(time.Time) []state.Banner {
 		return []state.Banner{{ID: "C16", Severity: state.SeverityAlarm, Text: "Release manifest rejected."}}
-	}
+	})
 	src.send(Signal{Kind: SignalChange})
 	if err := json.Unmarshal([]byte(st.next("banner.update", 5*time.Second).Data), &bu); err != nil {
 		t.Fatal(err)
@@ -1560,7 +1560,7 @@ func TestM3EventStreamTakesAnAPIToken(t *testing.T) {
 // runs once per evaluation.
 func (e *env) evalCounter() *atomic.Int32 {
 	var n atomic.Int32
-	e.svc.Fleet.Extra = func(time.Time) []state.Banner { n.Add(1); return nil }
+	e.setExtra(func(time.Time) []state.Banner { n.Add(1); return nil })
 	return &n
 }
 
@@ -1618,7 +1618,8 @@ func TestM3EventStreamsWithAHubTakeOneEvaluationPerTick(t *testing.T) { // L2: n
 
 func TestM3EventStreamCapAnswers503WithRetryAfter(t *testing.T) { // L2
 	e := newEnv(t)
-	e.svc.sseRefresh, e.svc.MaxEventStreams, e.svc.MaxEventStreamsPerPrincipal = time.Hour, 2, -1
+	e.svc.sseRefresh = time.Hour
+	e.setStreamCaps(2, -1)
 	owner := e.login("admin", pw)
 	first, _ := e.openStream("/api/v1/events?topics=fleet", owner)
 	first.next("fleet.state", 5*time.Second)
@@ -1643,7 +1644,7 @@ func TestM3EventStreamCapAnswers503WithRetryAfter(t *testing.T) { // L2
 		time.Sleep(50 * time.Millisecond)
 	}
 	// The cap is the one a deployment can lift.
-	e.svc.MaxEventStreams = -1
+	e.setStreamCaps(-1, -1)
 	for i := 0; i < 4; i++ {
 		st, res := e.openStream("/api/v1/events?topics=fleet", owner)
 		if res.StatusCode != 200 {
@@ -1750,7 +1751,7 @@ func TestM3EventStreamPerPrincipalLimit(t *testing.T) { // add. 1: one account c
 	}
 	// The principal's limit is checked before the global one: with the console full, the account over
 	// its own limit is told 429 (its own doing), not 503.
-	e.svc.MaxEventStreams = e.svc.openStreams()
+	e.setStreamCaps(e.svc.openStreams(), 0)
 	if _, res := e.openStream("/api/v1/events?topics=fleet", owner); res.StatusCode != 429 {
 		t.Errorf("an account over its limit while the console is full = %d, want 429", res.StatusCode)
 	}
@@ -1759,7 +1760,7 @@ func TestM3EventStreamPerPrincipalLimit(t *testing.T) { // add. 1: one account c
 		t.Errorf("a new account while the console is full = %d, want 503", res.StatusCode)
 	}
 	// Negative lifts the per-principal cap.
-	e.svc.MaxEventStreams, e.svc.MaxEventStreamsPerPrincipal = -1, -1
+	e.setStreamCaps(-1, -1)
 	for i := 0; i < 6; i++ {
 		if _, res := e.openStream("/api/v1/events?topics=fleet", owner); res.StatusCode != 200 {
 			t.Fatalf("with no per-principal cap, stream %d = %d", i+1, res.StatusCode)
@@ -1775,13 +1776,13 @@ func TestM3EventStreamStalledReaderIsDropped(t *testing.T) { // add. 2: write de
 	owner := e.login("admin", pw)
 	// Every evaluation raises banners worth a few hundred KB, so a reader that does not read fills its buffers fast.
 	big := strings.Repeat("x", 2048)
-	e.svc.Fleet.Extra = func(time.Time) []state.Banner {
+	e.setExtra(func(time.Time) []state.Banner {
 		out := make([]state.Banner, 0, 150)
 		for i := 0; i < 150; i++ {
 			out = append(out, state.Banner{ID: "C16", Subject: fmt.Sprintf("s%03d", i), Severity: state.SeverityAlarm, Text: big})
 		}
 		return out
-	}
+	})
 	conn, err := net.Dial("tcp", strings.TrimPrefix(e.srv.URL, "http://"))
 	if err != nil {
 		t.Fatal(err)

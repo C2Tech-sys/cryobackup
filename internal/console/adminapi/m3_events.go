@@ -165,7 +165,13 @@ func (s *Service) sharedFleet(ctx context.Context, scope store.Scope) (health.Fl
 // streamSlots takes one slot for the principal and one global slot, in that
 // order, and returns the function that gives both back. status is 0 on success,
 // 429 when the principal is over its limit, 503 when the console is.
+//
+// The two limits are read under streamMu, the lock the slot counts already take,
+// so a change of them (tests do this while streams are open) is ordered with every
+// admission.
 func (s *Service) streamSlots(principal string) (release func(), status int) {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
 	perLimit := s.MaxEventStreamsPerPrincipal
 	if perLimit == 0 {
 		perLimit = DefaultMaxEventStreamsPerPrincipal
@@ -174,8 +180,6 @@ func (s *Service) streamSlots(principal string) (release func(), status int) {
 	if limit == 0 {
 		limit = DefaultMaxEventStreams
 	}
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
 	if perLimit > 0 && s.streamsOf[principal] >= perLimit {
 		return nil, http.StatusTooManyRequests
 	}
