@@ -15,6 +15,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
+	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -45,17 +46,9 @@ type shutdownGate struct {
 	probes   sync.WaitGroup // POST probes in flight
 }
 
-// shutdownGates holds each Service's gate (one in production, one per test env).
-var shutdownGates sync.Map // *Service -> *shutdownGate
-
-func (s *Service) gate() *shutdownGate {
-	g, _ := shutdownGates.LoadOrStore(s, &shutdownGate{})
-	return g.(*shutdownGate)
-}
-
 // jobContext is the manual job runs' parent context: cancelled by BeginShutdown.
 func (s *Service) jobContext() context.Context {
-	g := s.gate()
+	g := &s.gate
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.jobs == nil {
@@ -69,7 +62,7 @@ func (s *Service) jobContext() context.Context {
 
 // enterJobRun counts one manual job run; false once shutdown has begun.
 func (s *Service) enterJobRun() bool {
-	g := s.gate()
+	g := &s.gate
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.stopping {
@@ -81,7 +74,7 @@ func (s *Service) enterJobRun() bool {
 
 // enterProbe counts one POST probe; false once shutdown has begun.
 func (s *Service) enterProbe() bool {
-	g := s.gate()
+	g := &s.gate
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.stopping {
@@ -95,7 +88,7 @@ func (s *Service) enterProbe() bool {
 // manual job runs in flight. It is the first half of serve's shutdown; the prober
 // is stopped next (which ends the POST probes' waits), then WaitBackground.
 func (s *Service) BeginShutdown() {
-	g := s.gate()
+	g := &s.gate
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.stopping = true
@@ -113,7 +106,7 @@ func (s *Service) WaitBackground(d time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		jobBackground.Wait()
-		s.gate().probes.Wait()
+		s.gate.probes.Wait()
 		close(done)
 	}()
 	select {
@@ -574,7 +567,8 @@ func (s *Service) systemJobRun(w http.ResponseWriter, r *http.Request) {
 // once both have recorded their facts, bounded by ctx (ran true and ctx's
 // error when the wait ran out). Probes that ended without a result (the lease
 // was lost mid-wait, or the console is shutting down) are ran false and an
-// error that is context.Canceled.
+// error that is context.Canceled. Both probes skipped (neither could run) are
+// ran false and jobs.ErrNothingProbed.
 type HealthProbe interface {
 	ProbeNow(ctx context.Context) (ran bool, err error)
 }
@@ -685,7 +679,7 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, api.CodeUnavailable, 30*time.Second) // shutting down: no probe, so no audit row
 		return
 	}
-	defer s.gate().probes.Done()
+	defer s.gate.probes.Done()
 	t, err := s.Store.GetStorageTarget(ctx, r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, err)
@@ -697,7 +691,8 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 	// it: the row is written then, with the outcome (ok; error "conflict" when
 	// another console holds the lease, answered 409; error "timeout" or "failed"
 	// for probes that did not finish; error "cancelled" for probes that ended
-	// without a result). It is written even when the client has gone
+	// without a result; error "nothing_probed" when neither probe could run). It is
+	// written even when the client has gone
 	// (auditOutcome). A refused audit then answers 500; the probe itself only
 	// refreshes health facts.
 	const auditAction = "storage_target.probe"
@@ -731,6 +726,8 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 			result, outcome = "error", "timeout"
 		case !ran && errors.Is(rerr, context.Canceled):
 			result, outcome = "error", "cancelled"
+		case errors.Is(rerr, jobs.ErrNothingProbed):
+			result, outcome = "error", "nothing_probed"
 		case rerr != nil:
 			result, outcome = "error", "failed"
 		}
@@ -750,6 +747,8 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 			notChecked("the probes did not finish within " + probeNowTimeout.String())
 		case outcome == "cancelled":
 			notChecked("the probes were cancelled before they finished: the probe lease was lost, or the console is shutting down")
+		case outcome == "nothing_probed":
+			notChecked("nothing was probed: neither the gateway probe nor the storage probe could run")
 		case rerr != nil:
 			notChecked("the health prober failed to run")
 		default:

@@ -30,8 +30,8 @@ func TestC08RunAfterStopTakesNoLeaseAndProbesNothing(t *testing.T) { // M3-STORE
 	close(be.release)
 	r.hp.Backend, r.hp.Holder = be, "console-a"
 	r.hp.Stop()
-	if err := r.hp.Run(r.ctx); err != nil {
-		t.Fatalf("Run after Stop = %v, want a no-op", err)
+	if err := r.hp.Run(r.ctx); !errors.Is(err, errDidNotRun) {
+		t.Fatalf("Run after Stop = %v, want errDidNotRun", err)
 	}
 	r.waitAll(t)
 	if n := be.total.Load(); n != 0 {
@@ -92,8 +92,8 @@ func TestC08RunThatOutlivesStopsWaitDoesNotKeepTheLease(t *testing.T) { // M3-ST
 	waitBounded(t, "Stop", 10*time.Second, func() { <-stopDone })
 	select {
 	case err := <-runDone:
-		if err != nil {
-			t.Fatalf("Run = %v", err)
+		if err != nil && !errors.Is(err, errDidNotRun) {
+			t.Fatalf("Run = %v, want nil (it took the lease before Stop released it) or errDidNotRun", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run did not return")

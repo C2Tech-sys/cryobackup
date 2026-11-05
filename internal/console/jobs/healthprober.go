@@ -83,6 +83,12 @@ const (
 // finished). It wraps context.Canceled because that is what happened to them.
 var errProbesCancelled = fmt.Errorf("jobs: the probes were cancelled before they finished: %w", context.Canceled)
 
+// ErrNothingProbed is ProbeNow's answer when the gateway and storage probes both
+// ended skipped, so ran is false: neither could run (the gateway is not
+// configured, the worker cannot be reached or is busy). Nothing was cancelled and
+// nothing failed; there is simply no result. It is not a context error.
+var ErrNothingProbed = errors.New("jobs: nothing was probed: neither the gateway nor the storage probe could run")
+
 // ClassWorkerStore is the storage probe row's class when the maintenance
 // worker's own settings store failed during the probe (maintain.ProbeRecordClass
 // on an unavailable answer): for storage it is not checked, never a failure. It
@@ -263,11 +269,12 @@ type result struct {
 }
 
 // probeRun is one probe in flight. done closes once it has ended and written its
-// facts and its row. ran, set before done closes, says whether it produced a
-// result: false when it was cancelled or panicked, so nothing was learned.
+// facts and its row. ran and skipped are set before done closes. ran is false when
+// it was cancelled or panicked, so nothing was learned; skipped is true when it
+// could not run at all (status "skipped"), so it probed nothing either.
 type probeRun struct {
-	done chan struct{}
-	ran  bool
+	done         chan struct{}
+	ran, skipped bool
 }
 
 // probed reports whether r is a probe's result, not a cancellation or a panic.
@@ -295,10 +302,10 @@ func (h *HealthProber) claim(row string) bool {
 	return claimed
 }
 
-func (h *HealthProber) release(row string, ran bool) {
+func (h *HealthProber) release(row string, res result) {
 	h.mu.Lock()
 	if r, ok := h.inflight[row]; ok {
-		r.ran = ran
+		r.ran, r.skipped = res.probed(), res.status == "skipped"
 		close(r.done)
 	}
 	delete(h.inflight, row)
@@ -533,16 +540,17 @@ func (h *HealthProber) safeProbe(ctx context.Context, row string, fn func(contex
 // own bound and the lease's context, and the integrity check when it is due,
 // and returns without waiting for them: a slow probe only ages its own facts.
 // Each probe records its own job_state row when it ends. Wait and WaitAll wait
-// for them (tests, shutdown). After Stop it is a no-op: a late run-now must not
-// take the lease back, or it would block a takeover for up to one TTL.
+// for them (tests, shutdown). After Stop it does nothing and answers errDidNotRun:
+// a late run-now must not take the lease back, or it would block a takeover for up
+// to one TTL, and the runner must not record a tick that never happened.
 func (h *HealthProber) Run(ctx context.Context) error {
 	if !h.enter() {
-		return nil
+		return errDidNotRun
 	}
 	defer h.entries.Done()
 	got, err := h.acquire(ctx)
 	if errors.Is(err, errProbesCancelled) {
-		return nil
+		return errDidNotRun
 	}
 	if err != nil {
 		return err
@@ -571,7 +579,7 @@ func (h *HealthProber) Run(ctx context.Context) error {
 		go func() {
 			defer h.background.Done()
 			var r result
-			defer func() { h.release(ProbeRowIntegrity, r.probed()) }()
+			defer func() { h.release(ProbeRowIntegrity, r) }()
 			r = h.safeProbe(pctx, ProbeRowIntegrity, h.probeIntegrity)
 			h.finish(pctx, r)
 		}()
@@ -592,7 +600,7 @@ func (h *HealthProber) start(pctx context.Context, row string, fn func(context.C
 	go func() {
 		defer h.probes.Done()
 		var r result
-		defer func() { h.release(row, r.probed()) }() // after finish: done closes once the facts and the row are written
+		defer func() { h.release(row, r) }() // after finish: done closes once the facts and the row are written
 		r = h.safeProbe(pctx, row, fn)
 		h.finish(pctx, r)
 	}()
@@ -613,23 +621,29 @@ func (h *HealthProber) start(pctx context.Context, row string, fn func(context.C
 // ran is true only when the probes ran or were left running. Probes that ended
 // without a result (the lease was lost mid-wait, Stop began or had finished, one
 // panicked, or the run waited for was cancelled under an earlier lease) answer
-// (false, errProbesCancelled).
+// (false, errProbesCancelled). Both probes skipped answer (false, ErrNothingProbed);
+// one skipped beside one that really ran is a run, and its check says not checked.
 func (h *HealthProber) ProbeNow(ctx context.Context) (ran bool, err error) {
 	pctx, runs, err := h.startProbeNow(ctx)
 	if err != nil || runs == nil {
 		return false, err
 	}
+	allSkipped := true
 	for _, run := range runs {
 		select {
 		case <-run.done:
 			if !run.ran {
 				return false, errProbesCancelled
 			}
+			allSkipped = allSkipped && run.skipped
 		case <-pctx.Done():
 			return false, errProbesCancelled
 		case <-ctx.Done():
 			return true, ctx.Err()
 		}
+	}
+	if allSkipped {
+		return false, ErrNothingProbed
 	}
 	return true, nil
 }
