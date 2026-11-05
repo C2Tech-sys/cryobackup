@@ -14,6 +14,11 @@ import (
 // EvaluatorJob is the job_state row whose staleness raises C06.
 const EvaluatorJob = "alarm-evaluator"
 
+// EvaluatorOKJob is the job_state row the alarm-evaluator writes only after a
+// successful evaluation (jobs.NameAlarmEvaluatorOK). The wired C06 reads it, so
+// a loop that runs but fails every evaluation raises C06 instead of clearing it.
+const EvaluatorOKJob = EvaluatorJob + ".ok"
+
 // EvaluatorPeriod is the alarm evaluator's period; C06 fires after three.
 const EvaluatorPeriod = time.Minute
 

@@ -70,7 +70,7 @@ func TestC13EvaluatorFactsFromJobState(t *testing.T) {
 	if got := ids(f.View.Banners); !strings.Contains(got, "C06") || !strings.Contains(got, "C07") {
 		t.Fatalf("no evaluator or scheduler row ever, started a day ago: %s", got)
 	}
-	for _, name := range []string{EvaluatorJob, SchedulerJob} {
+	for _, name := range []string{EvaluatorOKJob, SchedulerJob} {
 		at := fixtures.Now().Add(-20 * time.Second)
 		if err := e.Store.RecordJobRun(ctx, name, store.JobRun{Status: "ok", StartedAt: at, FinishedAt: at}); err != nil {
 			t.Fatal(err)
@@ -86,6 +86,32 @@ func TestC13EvaluatorFactsFromJobState(t *testing.T) {
 	}
 	if p := e.ProbeFacts(nil, context.DeadlineExceeded, false); p.Evaluator != nil || p.Maintain.Scheduler != nil {
 		t.Fatalf("a job_state read error must leave the heartbeats unsupplied: %+v %+v", p.Evaluator, p.Maintain.Scheduler)
+	}
+}
+
+// §4.8 C13 (M3-T2 delta, LOW): an evaluator that runs but fails every
+// evaluation is stalled alerting. C06 reads the newest successful evaluation
+// (the alarm-evaluator.ok row), not the newest run, so fresh error rows do not
+// clear it.
+func TestC13EvaluatorErroringEveryRunRaisesC06(t *testing.T) {
+	e, c := newEval(t)
+	base := FixtureProbes(c.now)
+	e.Probes = func() state.ProbeFacts { p := base(); p.Evaluator = nil; return p }
+	ctx := context.Background()
+	okAt := fixtures.Now().Add(-10 * time.Minute)
+	if err := e.Store.RecordJobRun(ctx, EvaluatorOKJob, store.JobRun{Status: "ok", StartedAt: okAt, FinishedAt: okAt}); err != nil {
+		t.Fatal(err)
+	}
+	failAt := fixtures.Now().Add(-20 * time.Second)
+	if err := e.Store.RecordJobRun(ctx, EvaluatorJob, store.JobRun{Status: "error", ErrorClass: "store", StartedAt: failAt, FinishedAt: failAt}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := e.Fleet(ctx, store.ScopeAll())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(f.View.Banners); !strings.HasPrefix(got, "C06") {
+		t.Fatalf("an evaluator failing for 10 min: %q, want C06", got)
 	}
 }
 

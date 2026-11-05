@@ -72,7 +72,7 @@ func (e *Evaluator) ProbeFacts(jobs []store.JobState, jerr error, page bool) sta
 	}
 	p := e.Probes()
 	if p.Evaluator == nil {
-		p.Evaluator = jobFacts(jobs, jerr, EvaluatorJob, EvaluatorPeriod)
+		p.Evaluator = jobFacts(jobs, jerr, EvaluatorOKJob, EvaluatorPeriod) // the newest successful evaluation
 	}
 	if p.Maintain == nil {
 		p.Maintain = &state.MaintainFacts{}

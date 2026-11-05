@@ -17,6 +17,10 @@ const (
 	NameAlarmEvaluator      = "alarm-evaluator"
 	NameAbandonedRunSweeper = "abandoned-run-sweeper"
 	NameHealthcheckPing     = "healthcheck-ping"
+	// NameAlarmEvaluatorOK is the job_state row the alarm-evaluator writes only after an evaluation
+	// that succeeded: its last_finished_at is the newest successful evaluation, which is what C06 reads
+	// (a loop that runs but errors every time is stalled alerting, not healthy alerting).
+	NameAlarmEvaluatorOK = NameAlarmEvaluator + ".ok"
 )
 
 // Schedules (architecture §5.7).
@@ -41,13 +45,28 @@ const ClassEvaluatorUnhealthy = "evaluator_unhealthy"
 // job_state, which is what banner C06 and healthcheck-ping read. It sends no
 // notification (M4).
 type AlarmEvaluator struct {
+	// Store receives the NameAlarmEvaluatorOK row after each successful evaluation.
+	Store *store.Store
 	// Evaluate runs one evaluation (health.Evaluator.Alarms); an error is the run's error class.
 	Evaluate func(ctx context.Context) error
 }
 
 // Job returns the schedule for the runner.
 func (j *AlarmEvaluator) Job() Job {
-	return Job{Name: NameAlarmEvaluator, Every: AlarmEvaluatorEvery, Lease: 2 * time.Minute, Run: j.Evaluate}
+	return Job{Name: NameAlarmEvaluator, Every: AlarmEvaluatorEvery, Lease: 2 * time.Minute, Run: j.Run}
+}
+
+// Run is one evaluation; a successful one also stamps NameAlarmEvaluatorOK.
+func (j *AlarmEvaluator) Run(ctx context.Context) error {
+	start := j.Store.Now()
+	if err := j.Evaluate(ctx); err != nil {
+		return err
+	}
+	end := j.Store.Now()
+	if end.Before(start) {
+		end = start
+	}
+	return j.Store.RecordJobRun(context.WithoutCancel(ctx), NameAlarmEvaluatorOK, store.JobRun{Status: "ok", StartedAt: start, FinishedAt: end})
 }
 
 // AbandonedRunSweeper closes open agent runs the device stopped reporting

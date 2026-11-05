@@ -92,7 +92,7 @@ func TestC13AlarmEvaluatorLoopRecordsRuns(t *testing.T) {
 	st, _, _, _, _ := pingRig(t)
 	var calls atomic.Int64
 	var fail atomic.Bool
-	j := &AlarmEvaluator{Evaluate: func(context.Context) error {
+	j := &AlarmEvaluator{Store: st, Evaluate: func(context.Context) error {
 		calls.Add(1)
 		if fail.Load() {
 			return &ClassError{Class: ClassStore}
@@ -112,11 +112,19 @@ func TestC13AlarmEvaluatorLoopRecordsRuns(t *testing.T) {
 	if row.LastStatus != "ok" || row.LastFinishedAt == nil || calls.Load() != 1 {
 		t.Fatalf("row %+v calls %d", row, calls.Load())
 	}
+	okRow, err := st.GetJobState(ctx, NameAlarmEvaluatorOK)
+	if err != nil || okRow.LastFinishedAt == nil {
+		t.Fatalf("success row %+v %v", okRow, err)
+	}
 	fail.Store(true)
 	_, _ = r.RunOnce(ctx, NameAlarmEvaluator)
 	row, _ = st.GetJobState(ctx, NameAlarmEvaluator)
 	if row.LastStatus != "error" || row.LastErrorClass != ClassStore {
 		t.Fatalf("failed evaluation row %+v", row)
+	}
+	// A failed evaluation never stamps the success row (C06 reads it).
+	if again, _ := st.GetJobState(ctx, NameAlarmEvaluatorOK); again.RunCount != okRow.RunCount {
+		t.Fatalf("a failed evaluation stamped the success row: %d -> %d", okRow.RunCount, again.RunCount)
 	}
 	if ok, _ := EvaluatorHealthy(ctx, st, 0, st.Now()); ok {
 		t.Fatal("a failing evaluator reads healthy")
