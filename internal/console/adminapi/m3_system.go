@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -398,6 +399,28 @@ func (s *Service) auditAccepted(w http.ResponseWriter, r *http.Request, p *auth.
 	return true
 }
 
+// auditOutcome writes the one audit row of an action whose outcome is known, with
+// that outcome: result is ok or error, and details (fixed words, nothing
+// identifying) say what happened. A refusal to audit answers 500 ("NOT AUDITED").
+func (s *Service) auditOutcome(w http.ResponseWriter, r *http.Request, p *auth.Principal, action, objectType, objectID, result string, details map[string]any) bool {
+	ev := store.AuditEvent{ActorType: "admin", ActorID: p.Admin.ID, ActorLabel: p.Admin.Username, Method: "api",
+		SourceIP: httpx.ClientIP(r), Action: action, ObjectType: objectType, ObjectID: objectID, Result: result}
+	if len(details) > 0 {
+		b, err := json.Marshal(details)
+		if err != nil {
+			httpx.Problem(w, r, api.CodeInternal, 0)
+			return false
+		}
+		ev.Details = b
+	}
+	if _, err := s.Store.AppendAudit(r.Context(), ev); err != nil {
+		s.log().Error("admin api: action not audited", logx.Class("audit"), logx.Err(err))
+		httpx.Problem(w, r, api.CodeInternal, 0)
+		return false
+	}
+	return true
+}
+
 // jobBusy reports whether another holder has the job's lease now.
 func (s *Service) jobBusy(ctx context.Context, name string) (bool, error) {
 	j, err := s.Store.GetJobState(ctx, name)
@@ -511,7 +534,14 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !s.auditAccepted(w, r, p, "storage_target.probe", "storage_target", t.ID) {
+	// Exactly one audit row per probe. Without a prober nothing runs: the row is
+	// written first and a refused audit refuses the probe. With one, the run's
+	// lease is taken inside RunOnce, so whether the probe ran is known only after
+	// it: the row is written then, with the outcome (ok; error "conflict" for a
+	// lost lease, answered 409; error "failed" for a prober that failed). A refused
+	// audit then answers 500; the probe itself only refreshes health facts.
+	const auditAction = "storage_target.probe"
+	if !runnable && !s.auditAccepted(w, r, p, auditAction, "storage_target", t.ID) {
 		return
 	}
 	out := ProbeResponse{TargetID: t.ID, Target: t.Name, Checks: []ProbeCheckJSON{}, Scope: probeScope, Note: probeNote}
@@ -530,6 +560,20 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 		out.Ran = ran
 		if row, gerr := s.Store.GetJobState(ctx, proberJob); gerr == nil {
 			out.Job = &ProbeJobJSON{Status: row.LastStatus, ErrorClass: row.LastErrorClass, DurationMS: row.LastDurationMS}
+		}
+		result, outcome := "ok", ""
+		switch {
+		case !ran && rerr == nil:
+			result, outcome = "error", "conflict"
+		case rerr != nil:
+			result, outcome = "error", "failed"
+		}
+		var details map[string]any
+		if outcome != "" {
+			details = map[string]any{"outcome": outcome}
+		}
+		if !s.auditOutcome(w, r, p, auditAction, "storage_target", t.ID, result, details) {
+			return
 		}
 		switch {
 		case !ran && rerr == nil:

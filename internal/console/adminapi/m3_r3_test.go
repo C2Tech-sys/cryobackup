@@ -3,6 +3,7 @@ package adminapi
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,5 +157,36 @@ func TestM3EventStreamHealthyReaderOutlivesTheWriteTimeout(t *testing.T) { // r3
 	st.next("ping", 2*time.Second) // still delivering after 6x the timeout
 	if pings < 10 {
 		t.Errorf("%d pings in %s, want at least 10", pings, 6*timeout)
+	}
+}
+
+// lostLeaseRunner registers the health prober but always loses its lease, as when
+// another holder takes it between the busy check and the run.
+type lostLeaseRunner struct{}
+
+func (lostLeaseRunner) Names() []string { return []string{proberJob} }
+func (lostLeaseRunner) RunOnce(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+// r3 L3: a probe that loses the prober's lease answers 409 and its one audit row
+// says so; it never records "ok" for a probe that did not run.
+func TestM3StorageProbeThatLosesTheLeaseAuditsTheConflict(t *testing.T) { // F19, r3 L3
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	target := e.firstStorageTarget()
+	e.svc.Jobs = lostLeaseRunner{}
+	if res, b := e.req("POST", "/api/v1/storage-targets/"+target+"/probe", owner, nil); res.StatusCode != 409 {
+		t.Fatalf("probe that lost the lease = %d %s, want 409", res.StatusCode, b)
+	}
+	l, err := e.st.ListAudit(context.Background(), store.ScopeAll(), store.AuditFilter{Action: "storage_target.probe", ObjectID: target}, store.Page{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Items) != 1 {
+		t.Fatalf("%d audit rows for one probe, want exactly 1", len(l.Items))
+	}
+	if ev := l.Items[0]; ev.Result != "error" || !strings.Contains(string(ev.Details), `"conflict"`) {
+		t.Errorf("the audit row of a probe that did not run: result %q details %s, want error / conflict", ev.Result, ev.Details)
 	}
 }
