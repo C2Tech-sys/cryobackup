@@ -192,3 +192,19 @@ func TestM3StorageProbeAuditedWhenTheClientDisconnects(t *testing.T) { // F19, r
 		t.Fatalf("%d audit rows for a probe whose client disconnected, want exactly 1", n)
 	}
 }
+
+// r4 LOW-2: without a hub (Events nil) the API's own counter is the whole change
+// generation. A stream that connects right after a pause, inside the share
+// window of an evaluation from before it, still gets the fleet after the pause.
+func TestM3EventStreamWithoutAHubSeesAnAPIChange(t *testing.T) { // F18, r4 LOW-2
+	e := newEnv(t)
+	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = nil, time.Hour, 10*time.Millisecond, time.Hour
+	owner := e.login("admin", pw)
+	a, _ := e.openStream("/api/v1/events?topics=fleet", owner)
+	before := summaryOf(t, a.next("fleet.state", 5*time.Second))
+	e.mustReq("POST", "/api/v1/devices/"+e.held.ID+"/pause", owner, DevicePauseRequest{Reason: "no hub", Indefinite: true}, 200)
+	b, _ := e.openStream("/api/v1/events?topics=fleet", owner)
+	if got := summaryOf(t, b.next("fleet.state", 5*time.Second)); got.Devices.Paused != before.Devices.Paused+1 {
+		t.Errorf("without a hub, a stream connecting after the pause shows paused %d, want %d", got.Devices.Paused, before.Devices.Paused+1)
+	}
+}
