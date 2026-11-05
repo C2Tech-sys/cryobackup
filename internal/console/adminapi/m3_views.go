@@ -44,8 +44,8 @@ type SavedViewJSON struct {
 	// scope (you lost one of its customers): you may make it private or delete
 	// it; any other change answers 404.
 	Locked    bool      `json:"locked,omitempty"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ViewAudienceJSON is the audience of a shared view: exactly one of
