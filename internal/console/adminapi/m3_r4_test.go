@@ -142,12 +142,11 @@ func TestM3EventStreamAfterACustomerPatchServesTheFleetAfterIt(t *testing.T) { /
 	}
 }
 
-// blockingProber registers the health prober and runs until the request that
-// started it is cancelled (the client went away mid-probe).
+// blockingProber probes until the request that started it is cancelled (the
+// client went away mid-probe).
 type blockingProber struct{ started chan struct{} }
 
-func (blockingProber) Names() []string { return []string{proberJob} }
-func (b blockingProber) RunOnce(ctx context.Context, _ string) (bool, error) {
+func (b blockingProber) ProbeNow(ctx context.Context) (bool, error) {
 	close(b.started)
 	<-ctx.Done()
 	return true, ctx.Err()
@@ -161,7 +160,7 @@ func TestM3StorageProbeAuditedWhenTheClientDisconnects(t *testing.T) { // F19, r
 	owner := e.login("admin", pw)
 	target := e.firstStorageTarget()
 	pr := blockingProber{started: make(chan struct{})}
-	e.svc.Jobs = pr
+	e.svc.Prober = pr
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, "POST", e.srv.URL+"/api/v1/storage-targets/"+target+"/probe", nil)
 	for _, c := range owner.cookies {

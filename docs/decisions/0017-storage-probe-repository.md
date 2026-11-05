@@ -38,7 +38,11 @@ earlier decision.
   new configuration; the cost is that a worker saturated for three prober intervals shows C02b until a slot frees.
 - **One prober.** The console's probes run only while that process holds the `health-prober.probes` lease, renewed
   while any probe is in flight; a second console probes nothing (it shows the not-checked warnings), so two
-  consoles never overlap probes or the first-boot `restic init`.
+  consoles never overlap probes or the first-boot `restic init`. The on-demand probe
+  (`POST /api/v1/storage-targets/{id}/probe`, M3-INT) takes the same lease: it runs the gateway and storage
+  probes now (or waits for the run already in flight), waits for their facts, and answers 409 when another
+  console holds the lease. Its checks read only facts produced during the request; anything older is
+  `not_checked`.
 
 ## Consequences
 

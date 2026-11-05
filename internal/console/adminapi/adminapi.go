@@ -91,6 +91,10 @@ type Service struct {
 	// Jobs is the console's job runner (jobs.Runner), for the job table and "run
 	// now" (M3-T3). Nil answers "run now" with 503 and lists only the job_state rows.
 	Jobs JobRunner
+	// Prober runs the health probes now and waits for them (jobs.HealthProber), for
+	// POST /api/v1/storage-targets/{id}/probe (M3-INT). Nil answers that route with
+	// every check not_checked.
+	Prober HealthProbe
 	// Events is the SSE hub (ui.Hub) the admin event stream listens to (M3-T3). Nil
 	// leaves GET /api/v1/events on its refresh tick alone: the stream still
 	// delivers, just not on every device change.

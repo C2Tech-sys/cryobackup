@@ -225,7 +225,10 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	a.Server = srv
 
 	a.Runner = jobs.NewRunner(a.Store, holderID(), a.log)
-	a.Admin.Jobs = a.Runner // run-now and the storage probe (M3-T3); the runner exists only after the server
+	a.Admin.Jobs = a.Runner // run-now (M3-T3); the runner exists only after the server
+	if a.Prober != nil {
+		a.Admin.Prober = a.Prober // the storage probe runs the probes now and waits for them (M3-INT); never a typed nil
+	}
 	if !fix {
 		a.Runner.Add(a.Htpasswd.Job())
 		a.Runner.Add((&jobs.HeartbeatRingTrim{Store: a.Store}).Job())

@@ -1981,7 +1981,7 @@ paths:
       operationId: probeStorageTarget
       tags: [system]
       summary: Probe the gateway, storage and certificates now
-      description: Runs the health-prober job now (lease-guarded) and reads three checks (gateway, storage including the quota banner, certificates) from the banners the engine raises, the "not checked" banners included. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt.
+      description: Runs the health-prober's gateway probe (which also reads the gateway certificate's expiry) and storage probe now under the probe lease, waits for them (at most 90 s; a probe already in flight is waited for, not doubled), and reads three checks (gateway, storage including the quota banner, certificates). A check reads only a fact produced at or after the request started; an older one is `not_checked`. A fresh fact is judged by the banners the engine raises from it, the "not checked" banners included, and a probe that failed just now is `failed` before its streak raises a banner. When another console holds the probe lease nothing is probed here and the answer is 409. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt.
       x-min-role: AD
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -3905,9 +3905,10 @@ components:
         reason: {type: string, description: Why the probe could not run; the checks are then not_checked.}
         job:
           type: object
+          description: This request's probe run. ok when the probes ran and ended within the bound; error with error_class timeout or failed otherwise.
           properties:
-            status: {type: string}
-            error_class: {type: string}
+            status: {type: string, enum: [ok, error]}
+            error_class: {type: string, enum: [timeout, failed]}
             duration_ms: {type: integer}
         checks:
           type: array

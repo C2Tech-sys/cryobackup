@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,16 +129,18 @@ type HealthProber struct {
 	escrowIDs     []string
 	escrowReadAt  time.Time // zero: the escrow key ids are not known (never read, or the newest read failed)
 	integrityNext time.Time
-	inflight      map[string]bool
+	inflight      map[string]chan struct{} // a probe in flight; its channel is closed when it ends
 	logged        map[string]string
 	probes        sync.WaitGroup // the per-tick probes
 	background    sync.WaitGroup // the integrity check and the lease renewer
 	holderOnce    sync.Once
 	pctx          context.Context // the probes' context while this process holds ProbeLease
 	pcancel       context.CancelFunc
+	life          context.Context // this prober's lifetime: cancelled by Stop
+	lifeCancel    context.CancelFunc
 	renewing      bool
 	idle          chan struct{} // wakes the renewer when the last probe ends
-	renewEvery    time.Duration // overrides leaseTTL/3 (tests)
+	renewEvery    time.Duration // overrides renewInterval (tests)
 }
 
 func (h *HealthProber) interval() time.Duration {
@@ -176,6 +179,27 @@ func (h *HealthProber) holder() string {
 // leaseTTL outlives three ticks, so a missed tick never drops the lease of a live prober.
 func (h *HealthProber) leaseTTL() time.Duration { return 3 * h.interval() }
 
+// renewInterval is how often the renewer renews ProbeLease while a probe is in
+// flight: a third of the lease, so two renewals can be missed before the lease
+// lapses under a running probe.
+func (h *HealthProber) renewInterval() time.Duration {
+	if h.renewEvery > 0 {
+		return h.renewEvery
+	}
+	return h.leaseTTL() / 3
+}
+
+// lifetime is this prober's own context, cancelled by Stop. ProbeNow starts its
+// probes under it, never under the caller's request.
+func (h *HealthProber) lifetime() context.Context {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.life == nil {
+		h.life, h.lifeCancel = context.WithCancel(context.Background())
+	}
+	return h.life
+}
+
 // Job returns the schedule for the runner.
 func (h *HealthProber) Job() Job {
 	return Job{Name: NameHealthProber, Every: h.interval(), Lease: 2 * h.interval(), Run: h.Run}
@@ -212,22 +236,34 @@ type result struct {
 	started, finished  time.Time
 }
 
-// claim marks a probe in flight; false when its previous run has not finished.
-func (h *HealthProber) claim(row string) bool {
+// claimOrWait marks a probe in flight and returns claimed true or, when its
+// previous run has not finished, returns that run's channel and claimed false.
+// Either way the channel is closed when the run in flight ends.
+func (h *HealthProber) claimOrWait(row string) (done <-chan struct{}, claimed bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.inflight == nil {
-		h.inflight = map[string]bool{}
+		h.inflight = map[string]chan struct{}{}
 	}
-	if h.inflight[row] {
-		return false
+	if ch, busy := h.inflight[row]; busy {
+		return ch, false
 	}
-	h.inflight[row] = true
-	return true
+	ch := make(chan struct{})
+	h.inflight[row] = ch
+	return ch, true
+}
+
+// claim marks a probe in flight; false when its previous run has not finished.
+func (h *HealthProber) claim(row string) bool {
+	_, claimed := h.claimOrWait(row)
+	return claimed
 }
 
 func (h *HealthProber) release(row string) {
 	h.mu.Lock()
+	if ch, ok := h.inflight[row]; ok {
+		close(ch)
+	}
 	delete(h.inflight, row)
 	idle := len(h.inflight) == 0
 	h.mu.Unlock()
@@ -283,10 +319,8 @@ func (h *HealthProber) startRenewer(ctx context.Context) {
 	h.renewing = true
 	h.mu.Unlock()
 	idle := h.idleC()
-	every := h.renewEvery
-	if every <= 0 {
-		every = h.leaseTTL() / 3
-	}
+	every := h.renewInterval()
+	life := h.lifetime()
 	h.background.Add(1)
 	go func() {
 		defer h.background.Done()
@@ -303,6 +337,8 @@ func (h *HealthProber) startRenewer(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-life.Done():
+				return // Stop: the lease is released and never renewed again
 			case <-idle:
 				continue
 			case <-t.C:
@@ -316,12 +352,30 @@ func (h *HealthProber) startRenewer(ctx context.Context) {
 	}()
 }
 
-// Stop waits for every probe and releases ProbeLease (serve's shutdown).
+// Stop cancels every probe in flight (ProbeNow's run under the prober's
+// lifetime, not the runner's context), waits for them and releases ProbeLease
+// (serve's shutdown).
 func (h *HealthProber) Stop() {
+	h.lifetime() // a prober that never ran has a lifetime to end too
+	h.mu.Lock()
+	cancel, endLife := h.pcancel, h.lifeCancel
+	h.pctx, h.pcancel = nil, nil
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	endLife()
 	h.WaitAll()
-	rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer rcancel()
 	_ = h.Store.ReleaseJobLease(rctx, ProbeLease, h.holder())
+}
+
+// probeAttr names a probe in a log line by its short name ("gateway",
+// "maintain-rpc"): the row name's dot before a letter is outside logx's token
+// alphabet, so logging the row itself printed "invalid".
+func probeAttr(row string) logx.Attr {
+	return logx.Str("probe", strings.TrimPrefix(row, NameHealthProber+"."))
 }
 
 // safeProbe runs one probe and turns a panic into an internal_panic result for
@@ -332,7 +386,7 @@ func (h *HealthProber) safeProbe(ctx context.Context, row string, fn func(contex
 	defer func() {
 		if p := recover(); p != nil {
 			r = result{row: row, status: "error", class: ClassPanic, started: start, finished: h.now()}
-			h.log().Error("health probe panicked", logx.Str("probe", row), logx.Class(ClassPanic))
+			h.log().Error("health probe panicked", probeAttr(row), logx.Class(ClassPanic))
 		}
 	}()
 	return fn(ctx)
@@ -364,15 +418,7 @@ func (h *HealthProber) Run(ctx context.Context) error {
 		{ProbeRowMaintain, h.probeMaintain}, {ProbeRowDatabase, h.probeDatabase}, {ProbeRowMasterKey, h.probeMasterKey},
 		{ProbeRowEndpoint, h.mirrorEndpoint},
 	} {
-		if !h.claim(p.row) {
-			continue // still running: only its own facts age
-		}
-		h.probes.Add(1)
-		go func() {
-			defer h.probes.Done()
-			defer h.release(p.row)
-			h.finish(pctx, h.safeProbe(pctx, p.row, p.fn))
-		}()
+		h.start(pctx, p.row, p.fn) // one still running from an earlier tick is not doubled: only its own facts age
 	}
 	h.mu.Lock()
 	due := !h.now().Before(h.integrityNext)
@@ -386,6 +432,57 @@ func (h *HealthProber) Run(ctx context.Context) error {
 		}()
 	}
 	return ctx.Err()
+}
+
+// start runs one per-tick probe in its own goroutine under pctx, unless its
+// previous run is still in flight. It returns the channel that is closed when
+// the run in flight (this one or the earlier one) has ended and written its
+// facts and its row.
+func (h *HealthProber) start(pctx context.Context, row string, fn func(context.Context) result) <-chan struct{} {
+	done, claimed := h.claimOrWait(row)
+	if !claimed {
+		return done
+	}
+	h.probes.Add(1)
+	go func() {
+		defer h.probes.Done()
+		defer h.release(row) // after finish: the channel closes once the facts and the row are written
+		h.finish(pctx, h.safeProbe(pctx, row, fn))
+	}()
+	return done
+}
+
+// ProbeNow is the on-demand probe (POST /api/v1/storage-targets/{id}/probe).
+// It takes ProbeLease like a tick; when another console holds it nothing is
+// probed here and ran is false. Holding it, it starts the gateway probe (which
+// also reads the gateway certificate's expiry: the certificates check) and the
+// storage probe, and waits until both have ended and written their facts,
+// bounded by ctx. A probe already in flight from a tick is waited for, not
+// started twice. The probes run under the lease's context, not ctx: a caller
+// that gives up stops waiting, it never cuts a probe short (whose result still
+// lands in Facts). The SMTP, maintain RPC, database, master-key and integrity
+// probes keep their own schedule.
+func (h *HealthProber) ProbeNow(ctx context.Context) (ran bool, err error) {
+	got, err := h.Store.AcquireJobLease(ctx, ProbeLease, h.holder(), h.leaseTTL())
+	if err != nil {
+		return false, err
+	}
+	if !got {
+		h.loseLease() // another console probes; nothing runs here
+		return false, nil
+	}
+	life := h.lifetime()
+	pctx := h.probeContext(life)
+	waits := []<-chan struct{}{h.start(pctx, ProbeRowGateway, h.probeGateway), h.start(pctx, ProbeRowStorage, h.probeStorage)}
+	h.startRenewer(life)
+	for _, done := range waits {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return true, ctx.Err()
+		}
+	}
+	return true, nil
 }
 
 // Wait waits for the per-tick probes started so far (not the integrity check).
@@ -405,7 +502,7 @@ func (h *HealthProber) finish(ctx context.Context, r result) {
 	}
 	if err := h.Store.RecordJobRun(context.WithoutCancel(ctx), r.row, store.JobRun{Status: r.status, ErrorClass: r.class,
 		StartedAt: r.started, FinishedAt: r.finished}); err != nil {
-		h.log().Error("health probe state not recorded", logx.Str("probe", r.row), logx.Class(ClassStore))
+		h.log().Error("health probe state not recorded", probeAttr(r.row), logx.Class(ClassStore))
 	}
 }
 
@@ -425,12 +522,12 @@ func (h *HealthProber) logChange(r result) {
 	switch r.status {
 	case "ok":
 		if seen {
-			h.log().Info("health probe passing", logx.Str("probe", r.row))
+			h.log().Info("health probe passing", probeAttr(r.row))
 		}
 	case "skipped":
-		h.log().Warn("health probe not checked", logx.Str("probe", r.row), logx.Class(r.class))
+		h.log().Warn("health probe not checked", probeAttr(r.row), logx.Class(r.class))
 	default:
-		h.log().Warn("health probe failing", logx.Str("probe", r.row), logx.Class(r.class))
+		h.log().Warn("health probe failing", probeAttr(r.row), logx.Class(r.class))
 	}
 }
 
