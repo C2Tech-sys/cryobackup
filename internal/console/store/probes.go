@@ -24,3 +24,16 @@ func (s *Store) ActiveEscrowKeyIDs(ctx context.Context) ([]string, error) {
 	})
 	return out, err
 }
+
+// DeleteSetting removes one settings row inside the caller's write transaction
+// (the caller writes its audit row in the same transaction). It reports whether
+// a row was there. It is a Tx method, not a Store one: global configuration,
+// used by `cryo-console probe-repo reset` (ADR 0017).
+func (tx *Tx) DeleteSetting(key string) (bool, error) {
+	res, err := tx.Exec(`DELETE FROM settings WHERE key = ?`, key)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
