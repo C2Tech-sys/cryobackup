@@ -115,6 +115,10 @@ func TestC08ProbeNowWaitingOnACancelledRunDidNotRun(t *testing.T) { // M3-STORE1
 	case <-time.After(5 * time.Second):
 		t.Fatal("the storage probe never started")
 	}
+	deadline := time.Now().Add(5 * time.Second) // the gateway probe of the tick has ended; only storage is in flight
+	for r.hp.Facts().Gateway.LastRunAt == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	r.hp.loseLease() // its context is cancelled; the probe has not noticed
 	answer := probeNowAsync(r.hp)
 	select {

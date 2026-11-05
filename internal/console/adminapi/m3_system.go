@@ -34,6 +34,97 @@ const jobRunTimeout = 15 * time.Minute
 // jobBackground tracks manual job runs so a test (and a shutdown) can wait for them.
 var jobBackground sync.WaitGroup
 
+// shutdownGate is what serve's shutdown needs of the routes whose work can outlive
+// the HTTP server's grace: manual job runs, which run past their request, and POST
+// probes, which wait up to probeNowTimeout and write their audit row after it.
+type shutdownGate struct {
+	mu       sync.Mutex
+	stopping bool
+	jobs     context.Context // the parent of every manual job run
+	cancel   context.CancelFunc
+	probes   sync.WaitGroup // POST probes in flight
+}
+
+// shutdownGates holds each Service's gate (one in production, one per test env).
+var shutdownGates sync.Map // *Service -> *shutdownGate
+
+func (s *Service) gate() *shutdownGate {
+	g, _ := shutdownGates.LoadOrStore(s, &shutdownGate{})
+	return g.(*shutdownGate)
+}
+
+// jobContext is the manual job runs' parent context: cancelled by BeginShutdown.
+func (s *Service) jobContext() context.Context {
+	g := s.gate()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.jobs == nil {
+		g.jobs, g.cancel = context.WithCancel(context.Background())
+		if g.stopping {
+			g.cancel()
+		}
+	}
+	return g.jobs
+}
+
+// enterJobRun counts one manual job run; false once shutdown has begun.
+func (s *Service) enterJobRun() bool {
+	g := s.gate()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stopping {
+		return false
+	}
+	jobBackground.Add(1)
+	return true
+}
+
+// enterProbe counts one POST probe; false once shutdown has begun.
+func (s *Service) enterProbe() bool {
+	g := s.gate()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stopping {
+		return false
+	}
+	g.probes.Add(1)
+	return true
+}
+
+// BeginShutdown refuses new manual job runs and POST probes (503) and cancels the
+// manual job runs in flight. It is the first half of serve's shutdown; the prober
+// is stopped next (which ends the POST probes' waits), then WaitBackground.
+func (s *Service) BeginShutdown() {
+	g := s.gate()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.stopping = true
+	if g.cancel != nil {
+		g.cancel()
+	}
+}
+
+// WaitBackground waits at most d for the manual job runs and POST probes in
+// flight, so that they end before the store closes, and reports whether they all
+// did. A job or probe that outlives d finds the store closed: its writes answer
+// store.ErrClosed, and a POST probe then fails its request with a 500 because the
+// audit row could not be written.
+func (s *Service) WaitBackground(d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		jobBackground.Wait()
+		s.gate().probes.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		s.log().Warn("admin api: background work abandoned at shutdown", logx.Class("shutdown"))
+		return false
+	}
+}
+
 // ---- system/health ----
 
 // Component statuses. ok is only ever said on evidence: a probe that has not
@@ -454,13 +545,17 @@ func (s *Service) systemJobRun(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, api.CodeConflict, 0)
 		return
 	}
-	if !s.auditAccepted(w, r, p, "system.job.run", "job", name) {
+	if !s.enterJobRun() {
+		httpx.Problem(w, r, api.CodeUnavailable, 30*time.Second) // shutting down
 		return
 	}
-	jobBackground.Add(1)
+	if !s.auditAccepted(w, r, p, "system.job.run", "job", name) {
+		jobBackground.Done()
+		return
+	}
 	go func() {
 		defer jobBackground.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), jobRunTimeout)
+		ctx, cancel := context.WithTimeout(s.jobContext(), jobRunTimeout)
 		defer cancel()
 		if _, err := s.Jobs.RunOnce(ctx, name); err != nil {
 			s.log().Warn("manual job run failed", logx.Str("job", name), logx.Err(err))
@@ -586,6 +681,11 @@ func probeChecks(banners []state.Banner, facts state.ProbeFacts, since time.Time
 func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 	p, _ := auth.FromContext(r.Context())
 	ctx := r.Context()
+	if !s.enterProbe() {
+		httpx.Problem(w, r, api.CodeUnavailable, 30*time.Second) // shutting down: no probe, so no audit row
+		return
+	}
+	defer s.gate().probes.Done()
 	t, err := s.Store.GetStorageTarget(ctx, r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, err)

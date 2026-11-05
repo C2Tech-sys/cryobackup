@@ -262,12 +262,20 @@ func (a *App) Run(ctx context.Context) error {
 	a.Runner.Start(ctx)
 	err := a.Server.Serve(ctx)
 	a.Runner.Stop()
+	a.Admin.BeginShutdown() // no new run-now or POST probe; the manual job runs in flight are cancelled
 	if a.Prober != nil {
 		a.Prober.Stop() // its probes run under its own lifetime, not the runner's ctx: Stop cancels them (bounded) and frees the probe lease
 	}
+	// Before Close (deferred above): a POST probe that outlived the server's grace writes its audit row now.
+	a.Admin.WaitBackground(backgroundShutdownWait)
 	wg.Wait()
 	return err
 }
+
+// backgroundShutdownWait bounds how long Run waits for manual job runs and POST
+// probes after cancelling them. One that ignores its cancellation is abandoned
+// and logged, and meets a closed store: it cannot hold the shutdown.
+const backgroundShutdownWait = 10 * time.Second
 
 // Close releases everything Build opened. It is safe to call twice.
 func (a *App) Close() {
