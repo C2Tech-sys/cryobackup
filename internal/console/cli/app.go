@@ -258,7 +258,7 @@ func (a *App) Run(ctx context.Context) error {
 	err := a.Server.Serve(ctx)
 	a.Runner.Stop()
 	if a.Prober != nil {
-		a.Prober.WaitAll() // its probes run detached from the runner; ctx is done, so they end promptly
+		a.Prober.Stop() // its probes run detached from the runner; ctx is done, so they end promptly; frees the probe lease
 	}
 	wg.Wait()
 	return err

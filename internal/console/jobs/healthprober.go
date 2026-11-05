@@ -2,6 +2,8 @@ package jobs
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -33,6 +35,14 @@ const (
 	ProbeRowMasterKey = NameHealthProber + ".master-key"
 	ProbeRowEndpoint  = NameHealthProber + ".agent-endpoint"
 )
+
+// ProbeLease is the job_state lease that guards the probes themselves. The
+// runner's health-prober lease only covers Run, which returns as soon as the
+// probes are started; this one is held by the process whose probes are running,
+// renewed while any of them (the background integrity check included) is in
+// flight, and taken again each tick, so a second console never probes (it shows
+// the not-checked warnings). Losing it cancels every probe in flight.
+const ProbeLease = NameHealthProber + ".probes"
 
 // Bounds and cadences of the health-prober. Every probe but the integrity check
 // runs on each 60 s tick unless its previous run is still in flight, and each
@@ -108,6 +118,8 @@ type HealthProber struct {
 	Log   *logx.Logger
 	// Started is when this console process started (ProbeFacts.StartedAt).
 	Started time.Time
+	// Holder identifies this process in the ProbeLease (the runner's holder id); empty means a random one.
+	Holder string
 
 	mu            sync.Mutex
 	gw, st, sm    state.ProbeRun
@@ -119,7 +131,13 @@ type HealthProber struct {
 	inflight      map[string]bool
 	logged        map[string]string
 	probes        sync.WaitGroup // the per-tick probes
-	background    sync.WaitGroup // the integrity check
+	background    sync.WaitGroup // the integrity check and the lease renewer
+	holderOnce    sync.Once
+	pctx          context.Context // the probes' context while this process holds ProbeLease
+	pcancel       context.CancelFunc
+	renewing      bool
+	idle          chan struct{} // wakes the renewer when the last probe ends
+	renewEvery    time.Duration // overrides leaseTTL/3 (tests)
 }
 
 func (h *HealthProber) interval() time.Duration {
@@ -142,6 +160,21 @@ func (h *HealthProber) log() *logx.Logger {
 	}
 	return logx.Default()
 }
+
+// holder is this process's ProbeLease holder id.
+func (h *HealthProber) holder() string {
+	h.holderOnce.Do(func() {
+		if h.Holder == "" {
+			var b [6]byte
+			_, _ = rand.Read(b[:])
+			h.Holder = "prober-" + hex.EncodeToString(b[:])
+		}
+	})
+	return h.Holder
+}
+
+// leaseTTL outlives three ticks, so a missed tick never drops the lease of a live prober.
+func (h *HealthProber) leaseTTL() time.Duration { return 3 * h.interval() }
 
 // Job returns the schedule for the runner.
 func (h *HealthProber) Job() Job {
@@ -196,15 +229,133 @@ func (h *HealthProber) claim(row string) bool {
 func (h *HealthProber) release(row string) {
 	h.mu.Lock()
 	delete(h.inflight, row)
+	idle := len(h.inflight) == 0
 	h.mu.Unlock()
+	if idle {
+		select {
+		case h.idleC() <- struct{}{}:
+		default:
+		}
+	}
 }
 
-// Run is one health-prober tick: it starts every probe that is not still in
-// flight from an earlier tick, each in its own goroutine under its own bound,
-// and the integrity check when it is due, and returns without waiting for
-// them. Each probe records its own job_state row when it ends. Wait and
-// WaitAll wait for them (tests, shutdown).
+func (h *HealthProber) idleC() chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.idle == nil {
+		h.idle = make(chan struct{}, 1)
+	}
+	return h.idle
+}
+
+// probeContext is the context the probes run under while this process holds
+// ProbeLease: one per holding period, cancelled when the lease is lost.
+func (h *HealthProber) probeContext(ctx context.Context) context.Context {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pctx == nil || h.pctx.Err() != nil {
+		h.pctx, h.pcancel = context.WithCancel(ctx)
+	}
+	return h.pctx
+}
+
+// loseLease cancels every probe in flight: another process holds ProbeLease.
+func (h *HealthProber) loseLease() {
+	h.mu.Lock()
+	cancel := h.pcancel
+	h.pctx, h.pcancel = nil, nil
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		h.log().Warn("health probe lease lost; probes in flight cancelled", logx.Class("lease_lost"))
+	}
+}
+
+// startRenewer renews ProbeLease while any probe is in flight (the background
+// integrity check can outlive several ticks), and cancels the probes when the
+// store says another process has it.
+func (h *HealthProber) startRenewer(ctx context.Context) {
+	h.mu.Lock()
+	if h.renewing {
+		h.mu.Unlock()
+		return
+	}
+	h.renewing = true
+	h.mu.Unlock()
+	idle := h.idleC()
+	every := h.renewEvery
+	if every <= 0 {
+		every = h.leaseTTL() / 3
+	}
+	h.background.Add(1)
+	go func() {
+		defer h.background.Done()
+		defer func() { h.mu.Lock(); h.renewing = false; h.mu.Unlock() }()
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			h.mu.Lock()
+			busy := len(h.inflight) > 0
+			h.mu.Unlock()
+			if !busy {
+				return // the next tick takes the lease again
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-idle:
+				continue
+			case <-t.C:
+			}
+			got, err := h.Store.AcquireJobLease(context.WithoutCancel(ctx), ProbeLease, h.holder(), h.leaseTTL())
+			if err == nil && !got {
+				h.loseLease()
+				return
+			}
+		}
+	}()
+}
+
+// Stop waits for every probe and releases ProbeLease (serve's shutdown).
+func (h *HealthProber) Stop() {
+	h.WaitAll()
+	rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = h.Store.ReleaseJobLease(rctx, ProbeLease, h.holder())
+}
+
+// safeProbe runs one probe and turns a panic into an internal_panic result for
+// that probe alone: the other probes and the console keep running. The log
+// carries the probe and the class, never the panic value or a stack.
+func (h *HealthProber) safeProbe(ctx context.Context, row string, fn func(context.Context) result) (r result) {
+	start := h.now()
+	defer func() {
+		if p := recover(); p != nil {
+			r = result{row: row, status: "error", class: ClassPanic, started: start, finished: h.now()}
+			h.log().Error("health probe panicked", logx.Str("probe", row), logx.Class(ClassPanic))
+		}
+	}()
+	return fn(ctx)
+}
+
+// Run is one health-prober tick. It takes (or renews) ProbeLease; without it
+// nothing is probed on this console. Holding it, it starts every probe that is
+// not still in flight from an earlier tick, each in its own goroutine under its
+// own bound and the lease's context, and the integrity check when it is due,
+// and returns without waiting for them: a slow probe only ages its own facts.
+// Each probe records its own job_state row when it ends. Wait and WaitAll wait
+// for them (tests, shutdown).
 func (h *HealthProber) Run(ctx context.Context) error {
+	got, err := h.Store.AcquireJobLease(ctx, ProbeLease, h.holder(), h.leaseTTL())
+	if err != nil {
+		return err
+	}
+	if !got {
+		h.loseLease() // another console probes; nothing runs here
+		return nil
+	}
+	pctx := h.probeContext(ctx)
+	defer h.startRenewer(ctx)
 	for _, p := range []struct {
 		row string
 		fn  func(context.Context) result
@@ -220,7 +371,7 @@ func (h *HealthProber) Run(ctx context.Context) error {
 		go func() {
 			defer h.probes.Done()
 			defer h.release(p.row)
-			h.finish(ctx, p.fn(ctx))
+			h.finish(pctx, h.safeProbe(pctx, p.row, p.fn))
 		}()
 	}
 	h.mu.Lock()
@@ -231,7 +382,7 @@ func (h *HealthProber) Run(ctx context.Context) error {
 		go func() {
 			defer h.background.Done()
 			defer h.release(ProbeRowIntegrity)
-			h.finish(ctx, h.probeIntegrity(ctx))
+			h.finish(pctx, h.safeProbe(pctx, ProbeRowIntegrity, h.probeIntegrity))
 		}()
 	}
 	return ctx.Err()

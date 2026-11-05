@@ -55,6 +55,20 @@ type proberRig struct {
 	status atomic.Int64 // the fake gateway's answer
 	logs   *syncBuf
 	clk    *testClock
+	ctx    context.Context // the runner's context; cancelled at cleanup so no probe outlives the test
+}
+
+// waitBounded runs wait and fails the test with what instead of hanging when it
+// does not return within d (M3-T2 delta 2, L4).
+func waitBounded(t *testing.T, what string, d time.Duration, wait func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Errorf("%s did not finish within %v", what, d)
+	}
 }
 
 // newProberRig is a health-prober over an in-memory store, the fake admin path
@@ -90,17 +104,34 @@ func newProberRig(t *testing.T, withFleet bool) *proberRig {
 	r.hp = &HealthProber{Store: st, Backend: r.be, Master: r.mk, Clock: r.clk.Now, Started: r.clk.Now().Add(-time.Hour),
 		Log: logx.New(r.logs, logx.LevelDebug)}
 	r.hp.Gateway.URL, r.hp.Gateway.Roots = gw.URL, pool
-	t.Cleanup(r.hp.WaitAll)
+	ctx, cancel := context.WithCancel(context.Background())
+	r.ctx = ctx
+	t.Cleanup(func() { // runs before the store closes (cleanups are LIFO)
+		cancel()
+		waitBounded(t, "the probes at cleanup", 10*time.Second, r.hp.WaitAll)
+	})
 	return r
+}
+
+// waitAll waits for every probe, the integrity check included, bounded.
+func (r *proberRig) waitAll(t *testing.T) {
+	t.Helper()
+	waitBounded(t, "the probes", 30*time.Second, r.hp.WaitAll)
+	if t.Failed() {
+		t.FailNow()
+	}
 }
 
 // run is one tick and waits for its per-tick probes (not the background integrity check).
 func (r *proberRig) run(t *testing.T) {
 	t.Helper()
-	if err := r.hp.Run(context.Background()); err != nil {
+	if err := r.hp.Run(r.ctx); err != nil {
 		t.Fatal(err)
 	}
-	r.hp.Wait()
+	waitBounded(t, "the tick's probes", 30*time.Second, r.hp.Wait)
+	if t.Failed() {
+		t.FailNow()
+	}
 }
 
 // evaluate judges the prober's facts with every job-derived check healthy, so
@@ -135,7 +166,7 @@ func TestC06HealthProberFirstRunRecordsEveryProbe(t *testing.T) {
 		t.Fatalf("before the first run the checks must be 'not checked', got %s", got)
 	}
 	r.run(t)
-	r.hp.WaitAll()
+	r.waitAll(t)
 	p := r.hp.Facts()
 	if !p.Wired || p.Gateway.LastOKAt == 0 || p.Gateway.CertNotAfter == 0 || p.Gateway.ConsecutiveFailures != 0 {
 		t.Fatalf("gateway %+v", p.Gateway)
@@ -179,7 +210,7 @@ func TestC06ProbePasswordNeverLoggedOrStored(t *testing.T) {
 	r.status.Store(http.StatusUnauthorized)
 	r.clk.Advance(time.Minute)
 	r.run(t)
-	r.hp.WaitAll()
+	r.waitAll(t)
 	if strings.Contains(r.logs.String(), pw) || strings.Contains(r.logs.String(), pw[:16]) {
 		t.Fatal("the probe password reached the log")
 	}
@@ -288,12 +319,14 @@ func TestC08StorageProbeIsBounded(t *testing.T) {
 	r := newProberRig(t, false)
 	r.hp.Backend = blockingBackend{r.be}
 	r.hp.StorageTimeout = 200 * time.Millisecond
-	done := make(chan struct{})
-	go func() { r.run(t); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the storage probe outlived its bound")
+	if err := r.hp.Run(r.ctx); err != nil {
+		t.Fatal(err)
+	}
+	// L4: a probe that ignores its bound fails here with a message; the cleanup's
+	// cancel then releases it, so the package never hangs to its timeout.
+	waitBounded(t, "the storage probe (its 200 ms bound)", 5*time.Second, r.hp.Wait)
+	if t.Failed() {
+		t.FailNow()
 	}
 	if p := r.hp.Facts(); p.Storage.ConsecutiveFailures != 1 || p.Storage.LastErrorClass != "timeout" {
 		t.Fatalf("storage %+v", p.Storage)
@@ -365,7 +398,7 @@ func TestC17IntegrityHangDoesNotStaleTheOtherProbes(t *testing.T) {
 			r.clk.Advance(time.Minute)
 		}
 		done := make(chan struct{})
-		go func() { _ = r.hp.Run(ctx); r.hp.Wait(); close(done) }()
+		go func() { _ = r.hp.Run(ctx); r.hp.Wait(); close(done) }() // ctx is the test's own, so cancel() below ends the hung check
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
@@ -389,7 +422,7 @@ func TestC17IntegrityHangDoesNotStaleTheOtherProbes(t *testing.T) {
 		t.Fatalf("integrity started %d times (want 1); SMTP violations %d", calls.Load(), violations.Load())
 	}
 	cancel()
-	r.hp.WaitAll()
+	waitBounded(t, "the cancelled integrity check", 10*time.Second, r.hp.WaitAll)
 }
 
 // M3-T2 M1: an integrity check that times out backs off for a day instead of
@@ -404,21 +437,21 @@ func TestC17IntegrityTimeoutBacksOffADay(t *testing.T) {
 	}
 	r.hp.IntegrityTimeout = 50 * time.Millisecond
 	r.run(t)
-	r.hp.WaitAll()
+	r.waitAll(t)
 	if j := r.row(t, ProbeRowIntegrity); j.LastStatus != "error" || j.LastErrorClass != ClassTimeout {
 		t.Fatalf("row %+v", j)
 	}
 	for i := 0; i < 3; i++ {
 		r.clk.Advance(time.Minute)
 		r.run(t)
-		r.hp.WaitAll()
+		r.waitAll(t)
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("retried %d times within the day", calls.Load()-1)
 	}
 	r.clk.Advance(IntegrityRetryAfter)
 	r.run(t)
-	r.hp.WaitAll()
+	r.waitAll(t)
 	if calls.Load() != 2 {
 		t.Fatalf("not retried after the back-off: %d calls", calls.Load())
 	}
@@ -429,7 +462,7 @@ func TestC17IntegrityProblemIsAFailedCheck(t *testing.T) {
 	r := newProberRig(t, false)
 	r.hp.IntegrityCheck = func(context.Context) (string, error) { return "row 3 missing from index idx_x", nil }
 	r.run(t)
-	r.hp.WaitAll()
+	r.waitAll(t)
 	if p := r.hp.Facts(); p.Database.IntegrityOK || p.Database.IntegrityCheckedAt == 0 {
 		t.Fatalf("database %+v", p.Database)
 	}
@@ -541,5 +574,160 @@ func TestC06HealthProberGatewayNotConfigured(t *testing.T) {
 	r.run(t)
 	if p := r.hp.Facts(); p.Gateway.Unconfigured != unconfGatewayURL || p.Gateway.LastRunAt != 0 {
 		t.Fatalf("after the run: %+v", p.Gateway)
+	}
+}
+
+// countingBackend blocks every CatConfig until release is closed (or its
+// context ends) and records how many ran at once.
+type countingBackend struct {
+	*fixtures.Backend
+	release      chan struct{}
+	active, peak atomic.Int64
+	total        atomic.Int64
+}
+
+func (b *countingBackend) CatConfig(ctx context.Context, _ adminpath.DeviceRequest) (restic.Config, error) {
+	n := b.active.Add(1)
+	b.total.Add(1)
+	defer b.active.Add(-1)
+	for {
+		p := b.peak.Load()
+		if n <= p || b.peak.CompareAndSwap(p, n) {
+			break
+		}
+	}
+	select {
+	case <-b.release:
+		return restic.Config{}, nil
+	case <-ctx.Done():
+		return restic.Config{}, ctx.Err()
+	}
+}
+
+// M3-T2 delta 2, M-1: two consoles (two runners, two probers) on one database.
+// The holder of the probe lease probes; the other console's tick runs (its
+// runner lease is free) but starts no probe, so storage probes never overlap,
+// and it shows the not-checked warnings.
+func TestC08TwoConsolesNeverProbeAtOnce(t *testing.T) {
+	r := newProberRig(t, false)
+	be := &countingBackend{Backend: r.be, release: make(chan struct{})}
+	r.hp.Backend, r.hp.Holder = be, "console-a"
+	second := &HealthProber{Store: r.st, Backend: be, Master: r.mk, Clock: r.clk.Now, Started: r.clk.Now(), Holder: "console-b",
+		Log: logx.New(r.logs, logx.LevelDebug), Gateway: r.hp.Gateway}
+	t.Cleanup(func() { waitBounded(t, "the second prober", 10*time.Second, second.WaitAll) })
+	runA, runB := NewRunner(r.st, "console-a", nil), NewRunner(r.st, "console-b", nil)
+	runA.Add(r.hp.Job())
+	runB.Add(second.Job())
+	if ran, err := runA.RunOnce(r.ctx, NameHealthProber); !ran || err != nil {
+		t.Fatalf("first console: ran %v err %v", ran, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for be.active.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	ran, err := runB.RunOnce(r.ctx, NameHealthProber)
+	if err != nil || !ran {
+		t.Fatalf("second console's tick: ran %v err %v (its runner lease is free while the first console's probes run)", ran, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if p := be.peak.Load(); p != 1 || be.total.Load() != 1 {
+		t.Fatalf("peak concurrent storage probes %d, total %d: want 1 and 1", p, be.total.Load())
+	}
+	second.Wait()
+	if p := second.Facts(); p.Gateway.LastRunAt != 0 || p.Maintain.RPC.LastRunAt != 0 || p.Storage.LastRunAt != 0 {
+		t.Fatalf("the console without the lease probed: gateway %+v rpc %+v", p.Gateway, p.Maintain.RPC)
+	}
+	close(be.release)
+	r.waitAll(t)
+	if p := r.hp.Facts(); p.Storage.LastOKAt == 0 {
+		t.Fatalf("the holder's storage probe did not complete: %+v", p.Storage)
+	}
+}
+
+// M3-T2 delta 2, M-1: the lease is renewed while a probe is in flight, and
+// losing it cancels every probe in flight; nothing is recorded for them.
+func TestC08ProbeLeaseLostCancelsProbesInFlight(t *testing.T) {
+	r := newProberRig(t, false)
+	be := &countingBackend{Backend: r.be, release: make(chan struct{})}
+	defer close(be.release)
+	r.hp.Backend, r.hp.Holder, r.hp.renewEvery = be, "console-a", 20*time.Millisecond
+	if err := r.hp.Run(r.ctx); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for be.active.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The renewer keeps the lease while the probe runs: the lease is ours and its expiry moves on.
+	first := r.row(t, ProbeLease)
+	r.clk.Advance(time.Minute)
+	time.Sleep(100 * time.Millisecond)
+	if again := r.row(t, ProbeLease); again.LeaseHolder != "console-a" || !again.LeaseUntil.After(*first.LeaseUntil) {
+		t.Fatalf("lease not renewed while a probe runs: %+v -> %+v", first, again)
+	}
+	// Another console takes it.
+	if err := r.st.Write(r.ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE job_state SET lease_holder = 'console-b' WHERE name = ?`, ProbeLease)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitBounded(t, "the probes after the lease was lost", 5*time.Second, r.hp.WaitAll)
+	if be.active.Load() != 0 {
+		t.Fatal("a storage probe kept running without the lease")
+	}
+	if p := r.hp.Facts(); p.Storage.LastRunAt != 0 {
+		t.Fatalf("a cancelled probe was recorded: %+v", p.Storage)
+	}
+}
+
+// panickingBackend panics in CatConfig.
+type panickingBackend struct{ *fixtures.Backend }
+
+func (panickingBackend) CatConfig(context.Context, adminpath.DeviceRequest) (restic.Config, error) {
+	panic("client 0123 /home/someone/secret.docx")
+}
+
+// M3-T2 delta 2, L2: a panic in one probe is that probe's internal_panic row;
+// the console and the other probes carry on, and the log carries no panic value.
+func TestC08ProbePanicIsContained(t *testing.T) {
+	r := newProberRig(t, false)
+	r.hp.Backend = panickingBackend{r.be}
+	r.run(t)
+	if j := r.row(t, ProbeRowStorage); j.LastStatus != "error" || j.LastErrorClass != ClassPanic {
+		t.Fatalf("storage row %+v", j)
+	}
+	if j := r.row(t, ProbeRowGateway); j.LastStatus != "ok" {
+		t.Fatalf("gateway row %+v: the other probes must run", j)
+	}
+	if strings.Contains(r.logs.String(), "secret.docx") || strings.Contains(r.logs.String(), "someone") {
+		t.Fatal("the panic value reached the log")
+	}
+	r.clk.Advance(time.Minute)
+	r.run(t) // the prober is still alive and the storage probe is not stuck in flight
+	if j := r.row(t, ProbeRowStorage); j.RunCount != 2 {
+		t.Fatalf("storage probe ran %d times, want 2", j.RunCount)
+	}
+}
+
+// M3-T2 delta 2, M-2: a worker whose slots are all taken answers busy; that is
+// "not checked" (C02b once the last result ages), never C02.
+func TestC08BusyWorkerIsNotCheckedNeverC02(t *testing.T) {
+	r := newProberRig(t, false)
+	r.run(t) // a passing probe first
+	r.be.Errors = map[string]error{adminpath.MethodCatConfig: adminpath.NewError(adminpath.CodeBusy, "")}
+	for i := 0; i < 4; i++ {
+		r.clk.Advance(time.Minute)
+		r.run(t)
+	}
+	got := r.evaluate()
+	if slices.Contains(got, "C02") || !slices.Contains(got, "C02b") {
+		t.Fatalf("a busy worker for four intervals: %v, want C02b and no C02", got)
+	}
+	if p := r.hp.Facts(); p.Storage.ConsecutiveFailures != 0 {
+		t.Fatalf("busy counted as a storage failure: %+v", p.Storage)
+	}
+	if j := r.row(t, ProbeRowStorage); j.LastStatus != "skipped" || j.LastErrorClass != adminpath.CodeBusy {
+		t.Fatalf("row %+v", j)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
@@ -58,7 +59,13 @@ func TestC21ServeSuppliesEveryProbeFactsPointer(t *testing.T) {
 	if err := app.Prober.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	app.Prober.WaitAll()
+	done := make(chan struct{})
+	go func() { app.Prober.WaitAll(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Minute):
+		t.Fatal("the probes did not finish within their bounds")
+	}
 	page := serveProbeFacts(t, app, true)
 	if !page.Wired {
 		t.Fatal("serve's probe facts are not wired: C00 would show")

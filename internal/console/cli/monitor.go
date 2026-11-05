@@ -62,6 +62,7 @@ func (a *App) probeSource(fix bool) func() state.ProbeFacts {
 
 // addMonitorJobs registers the M3 monitoring jobs (serve only, not fixtures).
 func (a *App) addMonitorJobs(cfg config.Config, fleet *health.Evaluator) {
+	a.Prober.Holder = a.Runner.Holder // its probe lease names this process like every other lease
 	a.Runner.Add(a.Prober.Job())
 	a.Runner.Add((&jobs.AlarmEvaluator{Store: a.Store, Evaluate: func(ctx context.Context) error {
 		_, err := fleet.Alarms(ctx)
