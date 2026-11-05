@@ -126,8 +126,10 @@ func TestC14SchedulerLeaseRenewedDuringThePass(t *testing.T) {
 
 func TestC14SchedulerLeaseLostStopsThePass(t *testing.T) {
 	e := newTenv(t, []fakeRule{{Cmd: "cat", Stdout: "cat_config.json"}, {Cmd: "stats", Stdout: "stats_raw_data.json", SleepMS: 400}}, nil)
-	e.onlyDevice(e.esc)
-	e.stampAll()
+	n := e.stampAll() // every candidate is due for a usage refresh
+	if n < 3 {
+		t.Fatalf("the fixtures give %d candidates; the test needs at least 3", n)
+	}
 	e.w.renewEvery = 50 * time.Millisecond
 	done := make(chan CycleReport, 1)
 	go func() {
@@ -148,5 +150,15 @@ func TestC14SchedulerLeaseLostStopsThePass(t *testing.T) {
 	}
 	if js, err := e.st.GetJobState(e.ctx, SchedulerJob); err == nil && js.LastFinishedAt != nil {
 		t.Fatalf("a pass without its lease wrote job_state: %+v", js)
+	}
+	// M3 m13: the work stops: the stats run in flight is cut and no further device is refreshed.
+	stats := 0
+	for _, c := range e.repoCalls() {
+		if c.Args[0] == "stats" {
+			stats++
+		}
+	}
+	if stats > 1 || rep.Sampled != 0 {
+		t.Fatalf("after losing the lease the pass went on: %d stats runs of %d candidates, %d sampled", stats, n, rep.Sampled)
 	}
 }

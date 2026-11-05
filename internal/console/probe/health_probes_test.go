@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -83,6 +84,10 @@ func TestC06GatewayProbeOutcomes(t *testing.T) {
 	})
 }
 
+// smtpViolations counts commands a probe must never send (MAIL, RCPT, DATA,
+// AUTH or anything else beyond EHLO/HELO/QUIT); TestC09SMTPProbeOutcomes fails on any.
+var smtpViolations atomic.Int64
+
 // fakeSMTP serves one scripted SMTP session per connection.
 func fakeSMTP(t *testing.T, greeting string, ehlo []string) string {
 	t.Helper()
@@ -121,7 +126,8 @@ func fakeSMTP(t *testing.T, greeting string, ehlo []string) string {
 					case "QUIT":
 						_, _ = c.Write([]byte("221 bye\r\n"))
 						return
-					default:
+					default: // MAIL, RCPT, DATA, AUTH, ...: the probe sends no mail and never logs in
+						smtpViolations.Add(1)
 						_, _ = c.Write([]byte("502 no\r\n"))
 					}
 				}
@@ -162,6 +168,40 @@ func TestC09SMTPProbeOutcomes(t *testing.T) {
 	_ = ln.Close()
 	if o := CheckSMTP(context.Background(), smtpAt(closed, "plain")); o.OK || o.Class != "refused" {
 		t.Fatalf("refused: %+v", o)
+	}
+	if n := smtpViolations.Load(); n != 0 {
+		t.Fatalf("the SMTP probe sent %d commands beyond EHLO and QUIT (MAIL, RCPT, DATA or AUTH)", n)
+	}
+}
+
+// M3 m2c: the SMTP probe is bounded. A relay that accepts the connection and
+// never greets is a timeout, not a probe that hangs.
+func TestC09SMTPProbeIsBounded(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // held open, silent
+		}
+	}()
+	s := smtpAt(ln.Addr().String(), "plain")
+	s.Timeout = 300 * time.Millisecond
+	done := make(chan Outcome, 1)
+	go func() { done <- CheckSMTP(context.Background(), s) }()
+	select {
+	case o := <-done:
+		if o.OK || o.Class != "timeout" {
+			t.Fatalf("silent relay: %+v", o)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the SMTP probe outlived its bound")
 	}
 }
 
