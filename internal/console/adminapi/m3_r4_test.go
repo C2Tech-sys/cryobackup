@@ -1,10 +1,14 @@
 package adminapi
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 )
 
 // M3-T3 fix round 4: every API mutation that can change what the fleet
@@ -134,5 +138,57 @@ func TestM3EventStreamAfterACustomerPatchServesTheFleetAfterIt(t *testing.T) { /
 	}
 	if got := summaryOf(t, a.next("fleet.state", time.Second)); got.CustomerRing.Missing != want.CustomerRing.Missing {
 		t.Errorf("the open stream's next fleet.state shows missing %d, want %d", got.CustomerRing.Missing, want.CustomerRing.Missing)
+	}
+}
+
+// blockingProber registers the health prober and runs until the request that
+// started it is cancelled (the client went away mid-probe).
+type blockingProber struct{ started chan struct{} }
+
+func (blockingProber) Names() []string { return []string{proberJob} }
+func (b blockingProber) RunOnce(ctx context.Context, _ string) (bool, error) {
+	close(b.started)
+	<-ctx.Done()
+	return true, ctx.Err()
+}
+
+// r4 LOW-1: a client that disconnects mid-probe still leaves exactly one audit
+// row: the row is written after the run, so it must not use the request's
+// (now cancelled) context.
+func TestM3StorageProbeAuditedWhenTheClientDisconnects(t *testing.T) { // F19, r4 LOW-1
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	target := e.firstStorageTarget()
+	pr := blockingProber{started: make(chan struct{})}
+	e.svc.Jobs = pr
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "POST", e.srv.URL+"/api/v1/storage-targets/"+target+"/probe", nil)
+	for _, c := range owner.cookies {
+		req.AddCookie(c)
+	}
+	req.Header.Set("Origin", e.srv.URL)
+	req.Header.Set(auth.CSRFHeader, owner.csrf)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if res, err := http.DefaultClient.Do(req); err == nil {
+			res.Body.Close()
+		}
+	}()
+	select {
+	case <-pr.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the probe never started")
+	}
+	cancel() // the client goes away while the prober runs
+	<-done
+	rows := func() int { return e.auditCount("storage_target.probe", target) }
+	deadline := time.Now().Add(5 * time.Second)
+	for rows() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond) // and no second row follows
+	if n := rows(); n != 1 {
+		t.Fatalf("%d audit rows for a probe whose client disconnected, want exactly 1", n)
 	}
 }

@@ -401,7 +401,8 @@ func (s *Service) auditAccepted(w http.ResponseWriter, r *http.Request, p *auth.
 
 // auditOutcome writes the one audit row of an action whose outcome is known, with
 // that outcome: result is ok or error, and details (fixed words, nothing
-// identifying) say what happened. A refusal to audit answers 500 ("NOT AUDITED").
+// identifying) say what happened. It writes even when the client has gone away.
+// A refusal to audit answers 500 ("NOT AUDITED").
 func (s *Service) auditOutcome(w http.ResponseWriter, r *http.Request, p *auth.Principal, action, objectType, objectID, result string, details map[string]any) bool {
 	ev := store.AuditEvent{ActorType: "admin", ActorID: p.Admin.ID, ActorLabel: p.Admin.Username, Method: "api",
 		SourceIP: httpx.ClientIP(r), Action: action, ObjectType: objectType, ObjectID: objectID, Result: result}
@@ -413,7 +414,9 @@ func (s *Service) auditOutcome(w http.ResponseWriter, r *http.Request, p *auth.P
 		}
 		ev.Details = b
 	}
-	if _, err := s.Store.AppendAudit(r.Context(), ev); err != nil {
+	// The action has happened by now: a client that went away (a cancelled request
+	// context) must not cost it its audit row.
+	if _, err := s.Store.AppendAudit(context.WithoutCancel(r.Context()), ev); err != nil {
 		s.log().Error("admin api: action not audited", logx.Class("audit"), logx.Err(err))
 		httpx.Problem(w, r, api.CodeInternal, 0)
 		return false
