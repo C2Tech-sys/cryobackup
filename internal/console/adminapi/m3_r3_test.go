@@ -3,6 +3,7 @@ package adminapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -188,5 +189,77 @@ func TestM3StorageProbeThatLosesTheLeaseAuditsTheConflict(t *testing.T) { // F19
 	}
 	if ev := l.Items[0]; ev.Result != "error" || !strings.Contains(string(ev.Details), `"conflict"`) {
 		t.Errorf("the audit row of a probe that did not run: result %q details %s, want error / conflict", ev.Result, ev.Details)
+	}
+}
+
+// r3 M2 through the API: a view's audience, not its name or text, decides who
+// sees it, and a refused audience is a 400 naming the field.
+func TestM3SharedViewAudienceThroughTheAPI(t *testing.T) { // F06, r3 M2
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	nw, summit := e.customerNamed("Northwind Dental"), e.customerNamed("Summit Eye Care")
+	e.addAdmin("m3-r3-nw", "read_only", []string{nw.ID})
+	e.addAdmin("m3-r3-summit", "read_only", []string{summit.ID})
+	nwS, summitS := e.login("m3-r3-nw", pw), e.login("m3-r3-summit", pw)
+
+	create := func(s *session, body CreateViewRequest) (int, []byte) {
+		res, b := e.req("POST", "/api/v1/views", s, body)
+		return res.StatusCode, b
+	}
+	// Named after Summit, with Summit in its text clauses, audience all customers: hidden from Northwind.
+	for i, f := range []string{`{}`, `{"field":"state","op":"in","value":["STALE"]}`, `{"field":"tag","op":"contains","value":"Summit Eye Care"}`, `{"field":"os","op":"contains","value":"Summit Eye Care"}`} {
+		if code, b := create(owner, CreateViewRequest{Name: fmt.Sprintf("Summit Eye Care exam rooms %d", i), Entity: "devices", Shared: true,
+			Audience: &ViewAudienceJSON{AllCustomers: true}, Filter: json.RawMessage(f)}); code != 201 {
+			t.Fatalf("create: %d %s", code, b)
+		}
+	}
+	// Audience Northwind: Northwind sees it, Summit does not.
+	code, b := create(owner, CreateViewRequest{Name: "Northwind only", Entity: "devices", Shared: true, Audience: &ViewAudienceJSON{CustomerIDs: []string{nw.ID}}})
+	if code != 201 {
+		t.Fatalf("create for Northwind: %d %s", code, b)
+	}
+	if v := decode[ViewResponse](t, b); v.Audience == nil || len(v.Audience.CustomerIDs) != 1 || v.Audience.CustomerIDs[0] != nw.ID {
+		t.Fatalf("the created view's audience: %+v", v.Audience)
+	}
+	names := func(s *session) string {
+		var n []string
+		for _, v := range decode[ViewListResponse](t, mustGet(e, "/api/v1/views", s)).Views {
+			n = append(n, v.Name)
+		}
+		return strings.Join(n, ",")
+	}
+	if got := names(nwS); got != "Northwind only" {
+		t.Errorf("Northwind sees %q, want only the view for Northwind", got)
+	}
+	if got := names(summitS); got != "" {
+		t.Errorf("Summit sees %q, want nothing (the views named after Summit are for all customers)", got)
+	}
+
+	// The 400s.
+	before := e.audits()
+	for name, c := range map[string]struct {
+		s     *session
+		body  CreateViewRequest
+		field string
+	}{
+		"shared without an audience":           {owner, CreateViewRequest{Shared: true}, "audience"},
+		"an audience on a private view":        {owner, CreateViewRequest{Audience: &ViewAudienceJSON{AllCustomers: true}}, "audience"},
+		"both forms":                           {owner, CreateViewRequest{Shared: true, Audience: &ViewAudienceJSON{AllCustomers: true, CustomerIDs: []string{nw.ID}}}, "audience"},
+		"all customers by a scoped account":    {nwS, CreateViewRequest{Shared: true, Audience: &ViewAudienceJSON{AllCustomers: true}}, "audience"},
+		"another customer by a scoped account": {nwS, CreateViewRequest{Shared: true, Audience: &ViewAudienceJSON{CustomerIDs: []string{summit.ID}}}, "audience"},
+		"a filter outside the audience": {owner, CreateViewRequest{Shared: true, Audience: &ViewAudienceJSON{CustomerIDs: []string{nw.ID}},
+			Filter: json.RawMessage(`{"field":"customer","op":"in","value":["` + summit.ID + `"]}`)}, "filter"},
+	} {
+		c.body.Name, c.body.Entity = "refused "+name, "devices"
+		code, b := create(c.s, c.body)
+		if code != 400 || problemFields(t, b)[c.field] == "" {
+			t.Errorf("%s: %d %s, want 400 naming %s", name, code, b, c.field)
+		}
+		if strings.Contains(string(b), summit.ID) {
+			t.Errorf("%s: the problem echoes a customer id: %s", name, b)
+		}
+	}
+	if e.audits() != before {
+		t.Errorf("refused shares wrote %d audit rows", e.audits()-before)
 	}
 }

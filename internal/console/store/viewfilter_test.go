@@ -8,11 +8,12 @@ import (
 )
 
 // M3-T3 delta H1/L4: a saved view's filter is a typed clause tree (components.md
-// 5.4), validated on write and read fail-closed.
+// 5.4), validated on write. Fix round 3 (M2): who sees a shared view is its
+// audience alone; the filter must lie inside the audience when it is written.
 
-func sharedView(t *testing.T, w *world, name, entity, filter string) SavedView {
+func sharedView(t *testing.T, w *world, name, entity, filter string, aud ViewAudience) SavedView {
 	t.Helper()
-	v, err := w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: name, Entity: entity, Shared: true, Filter: json.RawMessage(filter)}, actorOf(w))
+	v, err := w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: name, Entity: entity, Shared: true, Audience: &aud, Filter: json.RawMessage(filter)}, actorOf(w))
 	if err != nil {
 		t.Fatalf("create %q: %v", name, err)
 	}
@@ -37,15 +38,19 @@ func visibleTo(t *testing.T, w *world, sc Scope, id string) bool {
 	return false
 }
 
-func TestSharedViewVisibilityResolvesEveryReferenceInsideTheCallersScope(t *testing.T) { // H1
+// Everything a filter names (customer and device ids, hostnames, customer names)
+// must resolve inside the view's audience, or the share is a 400; a view that is
+// written is seen by its audience whatever its filter says.
+func TestSharedViewFilterMustLieInsideItsAudience(t *testing.T) { // H1, r3 M2
 	w := seed(t)
 	a, b := ScopeOf(w.custA.ID), ScopeOf(w.custB.ID)
+	forA, forB := ViewAudience{Customers: []string{w.custA.ID}}, ViewAudience{Customers: []string{w.custB.ID}}
 	clause := func(field, op, value string) string {
 		return `{"field":"` + field + `","op":"` + op + `","value":` + value + `}`
 	}
 	cases := []struct {
 		name, entity, filter string
-		wantA, wantB         bool
+		okForA, okForB       bool
 	}{
 		{"customer clause for A", "devices", clause("customer", "in", `["`+w.custA.ID+`"]`), true, false},
 		{"customer clause for B (the reported bypass)", "devices", clause("customer", "in", `["`+w.custB.ID+`"]`), false, true},
@@ -63,46 +68,54 @@ func TestSharedViewVisibilityResolvesEveryReferenceInsideTheCallersScope(t *test
 		{"state only", "devices", clause("state", "in", `["STALE","FAILED"]`), true, true},
 		{"no filter at all", "devices", `{}`, true, true},
 	}
-	ids := make([]string, len(cases))
-	for i, c := range cases {
-		ids[i] = sharedView(t, w, c.name, c.entity, c.filter).ID
+	for _, c := range cases {
+		for _, aud := range []struct {
+			who  string
+			a    ViewAudience
+			want bool
+			sees Scope
+			not  Scope
+		}{{"A", forA, c.okForA, a, b}, {"B", forB, c.okForB, b, a}} {
+			au := aud.a
+			v, err := w.s.CreateSavedViewAudited(w.ctx, ScopeAll(), SavedViewInput{Name: uniq(c.name), Entity: c.entity, Shared: true, Audience: &au, Filter: json.RawMessage(c.filter)}, actorOf(w))
+			switch {
+			case aud.want && err != nil:
+				t.Errorf("%s, audience %s: %v, want it accepted", c.name, aud.who, err)
+			case !aud.want && (!errors.Is(err, ErrInvalid) || len(FieldErrors(err)) == 0 || FieldErrors(err)[0].Field != "filter"):
+				t.Errorf("%s, audience %s: err = %v, want a filter field error (400)", c.name, aud.who, err)
+			case err == nil:
+				if !visibleTo(t, w, aud.sees, v.ID) || visibleTo(t, w, aud.not, v.ID) || !visibleTo(t, w, ScopeAll(), v.ID) || visibleTo(t, w, ScopeOf(), v.ID) {
+					t.Errorf("%s, audience %s: seen by the wrong accounts", c.name, aud.who)
+				}
+			}
+		}
 	}
-	for i, c := range cases {
-		if got := visibleTo(t, w, a, ids[i]); got != c.wantA {
-			t.Errorf("%s: scoped to A sees it = %v, want %v", c.name, got, c.wantA)
-		}
-		if got := visibleTo(t, w, b, ids[i]); got != c.wantB {
-			t.Errorf("%s: scoped to B sees it = %v, want %v", c.name, got, c.wantB)
-		}
-		if !visibleTo(t, w, ScopeAll(), ids[i]) {
-			t.Errorf("%s: an all-customer caller must see every shared view", c.name)
-		}
-		if got := visibleTo(t, w, ScopeOf(), ids[i]); got && c.name != "state only" && c.name != "no filter at all" {
-			t.Errorf("%s: an empty scope sees it", c.name)
-		}
-	}
+	// "all customers" holds everything the filter can name: the share is accepted.
+	sharedView(t, w, "everything", "devices", clause("customer", "in", `["`+w.custA.ID+`","`+w.custB.ID+`"]`), ViewAudience{All: true})
 }
 
-func TestAViewFilterThatCannotBeParsedIsHiddenFromAScopedCaller(t *testing.T) { // H1(c): fail closed
+// A shared view without a readable audience is seen by its owner only: no
+// audience, an empty list, or a list of non-strings (which only a hand edit of
+// the database can produce) all fail closed, for every caller.
+func TestASharedViewWithoutAReadableAudienceIsHiddenFromEveryoneButItsOwner(t *testing.T) { // r3 M2: fail closed
 	w := seed(t)
-	v := sharedView(t, w, "legacy", "devices", `{}`)
-	for name, raw := range map[string]string{
-		"the old key shape":   `{"customer":"` + w.custB.ID + `"}`,
-		"a nested old shape":  `{"all":[{"customer_id":"` + w.custB.ID + `"}]}`,
-		"unknown field":       `{"field":"favourite_colour","op":"eq","value":"red"}`,
-		"an op the field has": `{"field":"state","op":"contains","value":"STALE"}`,
-		"a plain array":       `[1,2]`,
+	v := sharedView(t, w, "legacy", "devices", `{}`, ViewAudience{Customers: []string{w.custA.ID}})
+	for name, raw := range map[string]any{
+		"no audience":       nil,
+		"an empty list":     `[]`,
+		"a list of numbers": `[1,2]`,
 	} {
-		raw := raw
 		ok(t, w.s.Write(w.ctx, func(tx *Tx) error {
-			_, err := tx.Exec(`UPDATE saved_views SET filter = ? WHERE id = ?`, raw, v.ID)
+			_, err := tx.Exec(`UPDATE saved_views SET audience = ? WHERE id = ?`, raw, v.ID)
 			return err
 		}))
-		if visibleTo(t, w, ScopeOf(w.custA.ID), v.ID) {
-			t.Errorf("%s: a filter that does not parse was shown to a scoped caller", name)
+		for _, sc := range []Scope{ScopeOf(w.custA.ID), ScopeAll(), ScopeOf()} {
+			if visibleTo(t, w, sc, v.ID) {
+				t.Errorf("%s: shown to %+v", name, sc)
+			}
 		}
-		if !visibleTo(t, w, ScopeAll(), v.ID) {
-			t.Errorf("%s: an all-customer caller still sees it", name)
+		if _, err := w.s.GetSavedView(w.ctx, ScopeOf(), w.admin.ID, v.ID); err != nil {
+			t.Errorf("%s: the owner no longer sees their own view: %v", name, err)
 		}
 	}
 }
@@ -152,7 +165,7 @@ func TestViewFilterIsValidatedOnCreateAndUpdate(t *testing.T) { // H1(b)
 	}
 
 	// Update: the patch is validated against the stored entity; nothing is written or audited.
-	v := sharedView(t, w, "good", "devices", `{"field":"state","op":"in","value":["OK"]}`)
+	v := sharedView(t, w, "good", "devices", `{"field":"state","op":"in","value":["OK"]}`, ViewAudience{All: true})
 	updates := auditCount(t, w, "view.update")
 	for name, f := range bad {
 		raw := json.RawMessage(f)

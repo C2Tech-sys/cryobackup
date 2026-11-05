@@ -11,32 +11,56 @@ import (
 )
 
 // Saved views (architecture §5.2 /views, flow F06). A view belongs to the
-// account that made it; a shared view is visible to every account. Any signed-in
-// account may make views; the owner edits and deletes their own, an admin any
-// view they can see (the SELF/AD rule). Only an account that sees every
-// customer may share a view, and a scoped account does not see another account's
-// shared view whose filter names a customer outside its scope.
+// account that made it. Any signed-in account may make views; the owner edits
+// and deletes their own, an admin any view they can see (the SELF/AD rule).
+//
+// A shared view names its audience when it is shared: all customers, or a list of
+// customer ids. Another account sees it only when the audience lies inside that
+// account's scope (all customers: only accounts that see every customer). The
+// audience must lie inside the sharer's own scope and hold every customer and
+// device the filter names, or the write is a 400. The view's name and its text
+// clauses are never read for scope (store/views.go says why).
 
 // SavedViewJSON is one view. Filter, Columns and Sort are opaque to the server:
 // the console pages define their shape.
 type SavedViewJSON struct {
-	ID        string          `json:"id"`
-	OwnerID   string          `json:"owner_id,omitempty"`
-	Owner     string          `json:"owner,omitempty"`
-	Mine      bool            `json:"mine"`
-	Name      string          `json:"name"`
-	Entity    string          `json:"entity"`
-	Filter    json.RawMessage `json:"filter"`
-	Columns   json.RawMessage `json:"columns"`
-	Sort      json.RawMessage `json:"sort"`
-	Shared    bool            `json:"shared"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID      string          `json:"id"`
+	OwnerID string          `json:"owner_id,omitempty"`
+	Owner   string          `json:"owner,omitempty"`
+	Mine    bool            `json:"mine"`
+	Name    string          `json:"name"`
+	Entity  string          `json:"entity"`
+	Filter  json.RawMessage `json:"filter"`
+	Columns json.RawMessage `json:"columns"`
+	Sort    json.RawMessage `json:"sort"`
+	Shared  bool            `json:"shared"`
+	// Audience is present on a shared view: who besides the owner sees it.
+	Audience  *ViewAudienceJSON `json:"audience,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
+}
+
+// ViewAudienceJSON is the audience of a shared view: exactly one of
+// all_customers (true) or customer_ids (1 to 50 ids).
+type ViewAudienceJSON struct {
+	AllCustomers bool     `json:"all_customers,omitempty"`
+	CustomerIDs  []string `json:"customer_ids,omitempty"`
+}
+
+func (a *ViewAudienceJSON) store() *store.ViewAudience {
+	if a == nil {
+		return nil
+	}
+	return &store.ViewAudience{All: a.AllCustomers, Customers: a.CustomerIDs}
 }
 
 func viewJSON(v store.SavedView, viewer string) SavedViewJSON {
-	return SavedViewJSON{ID: v.ID, OwnerID: v.OwnerID, Owner: v.OwnerName, Mine: v.OwnerID != "" && v.OwnerID == viewer, Name: v.Name, Entity: v.Entity,
+	out := SavedViewJSON{ID: v.ID, OwnerID: v.OwnerID, Owner: v.OwnerName, Mine: v.OwnerID != "" && v.OwnerID == viewer, Name: v.Name, Entity: v.Entity,
 		Filter: v.Filter, Columns: v.Columns, Sort: v.Sort, Shared: v.Shared, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
+	if v.Audience != nil {
+		out.Audience = &ViewAudienceJSON{AllCustomers: v.Audience.All, CustomerIDs: v.Audience.Customers}
+	}
+	return out
 }
 
 // ViewListResponse is GET /api/v1/views.
@@ -61,6 +85,8 @@ type CreateViewRequest struct {
 	Columns json.RawMessage `json:"columns"`
 	Sort    json.RawMessage `json:"sort"`
 	Shared  bool            `json:"shared"`
+	// Audience is required when shared is true and refused otherwise.
+	Audience *ViewAudienceJSON `json:"audience"`
 }
 
 // PatchViewRequest is the body of PATCH /api/v1/views/{id}; absent fields are
@@ -71,6 +97,8 @@ type PatchViewRequest struct {
 	Columns *json.RawMessage `json:"columns"`
 	Sort    *json.RawMessage `json:"sort"`
 	Shared  *bool            `json:"shared"`
+	// Audience replaces the audience of a shared view; making a view shared needs it.
+	Audience *ViewAudienceJSON `json:"audience"`
 }
 
 func (s *Service) listViews(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +127,7 @@ func (s *Service) createView(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	v, err := s.Store.CreateSavedViewAudited(r.Context(), p.Scope, store.SavedViewInput{Name: req.Name, Entity: req.Entity, Filter: req.Filter, Columns: req.Columns,
-		Sort: req.Sort, Shared: req.Shared}, actorOf(r, p))
+		Sort: req.Sort, Shared: req.Shared, Audience: req.Audience.store()}, actorOf(r, p))
 	if err != nil {
 		s.failM2(w, r, err)
 		return
@@ -115,7 +143,7 @@ func (s *Service) patchView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, changed, err := s.Store.UpdateSavedViewAudited(r.Context(), p.Scope, r.PathValue("id"), store.SavedViewPatch{Name: req.Name, Filter: req.Filter,
-		Columns: req.Columns, Sort: req.Sort, Shared: req.Shared}, actorOf(r, p), p.Role >= auth.RoleAdmin)
+		Columns: req.Columns, Sort: req.Sort, Shared: req.Shared, Audience: req.Audience.store()}, actorOf(r, p), p.Role >= auth.RoleAdmin)
 	if err != nil {
 		s.failM2(w, r, err)
 		return

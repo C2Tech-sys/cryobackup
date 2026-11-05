@@ -461,7 +461,7 @@ func auditMutationCases() map[string]mutation {
 			status: 201,
 			build: func(e *env, s *session) func() call {
 				return func() call {
-					return call{method: "POST", path: "/api/v1/views", body: CreateViewRequest{Name: "audit view", Entity: "devices", Shared: true}}
+					return call{method: "POST", path: "/api/v1/views", body: CreateViewRequest{Name: "audit view", Entity: "devices", Shared: true, Audience: &ViewAudienceJSON{AllCustomers: true}}}
 				}
 			},
 		},

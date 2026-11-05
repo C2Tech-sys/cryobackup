@@ -464,9 +464,13 @@ func TestM3ACustomerScopedAccountSeesOnlyItsCustomer(t *testing.T) { // §3.5
 			t.Errorf("alarms of %s shown to an account scoped to Northwind", g.Customer)
 		}
 	}
-	// A scoped account cannot share a view, and cannot see a shared view naming another customer.
-	if res, _ := e.req("POST", "/api/v1/views", sc, CreateViewRequest{Name: "mine", Entity: "devices", Shared: true}); res.StatusCode != 403 {
-		t.Errorf("scoped share = %d, want 403", res.StatusCode)
+	// A scoped account cannot share with all customers (400) but can share with its own customer, and it
+	// sees no shared view whose audience reaches past its scope.
+	if res, _ := e.req("POST", "/api/v1/views", sc, CreateViewRequest{Name: "mine", Entity: "devices", Shared: true, Audience: &ViewAudienceJSON{AllCustomers: true}}); res.StatusCode != 400 {
+		t.Errorf("scoped share with all customers = %d, want 400", res.StatusCode)
+	}
+	if res, b := e.req("POST", "/api/v1/views", sc, CreateViewRequest{Name: "mine", Entity: "devices", Shared: true, Audience: &ViewAudienceJSON{CustomerIDs: []string{nw.ID}}}); res.StatusCode != 201 {
+		t.Errorf("scoped share with its own customer = %d %s, want 201", res.StatusCode, b)
 	}
 	owner := e.login("admin", pw)
 	// H1: the clause-builder shapes {field, op, value} name Summit by id and by hostname.
@@ -478,14 +482,16 @@ func TestM3ACustomerScopedAccountSeesOnlyItsCustomer(t *testing.T) { // §3.5
 		"Not Summit":                 `{"op":"not","clauses":[{"field":"customer","op":"in","value":["` + summit.ID + `"]}]}`,
 	}
 	for name, f := range hidden {
-		if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: name, Entity: "devices", Shared: true, Filter: json.RawMessage(f)}); res.StatusCode != 201 {
+		if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: name, Entity: "devices", Shared: true, Audience: &ViewAudienceJSON{AllCustomers: true}, Filter: json.RawMessage(f)}); res.StatusCode != 201 {
 			t.Fatalf("shared view %s: %d %s", name, res.StatusCode, b)
 		}
 	}
-	if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: "everyone", Entity: "devices", Shared: true}); res.StatusCode != 201 {
+	hidden["everyone"] = "{}" // all customers: an account scoped to Northwind does not see it
+	if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: "everyone", Entity: "devices", Shared: true, Audience: &ViewAudienceJSON{AllCustomers: true}}); res.StatusCode != 201 {
 		t.Fatalf("shared view: %d %s", res.StatusCode, b)
 	}
-	if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: "northwind", Entity: "devices", Shared: true, Filter: json.RawMessage(`{"field":"customer","op":"in","value":["` + nw.ID + `"]}`)}); res.StatusCode != 201 {
+	if res, b := e.req("POST", "/api/v1/views", owner, CreateViewRequest{Name: "northwind", Entity: "devices", Shared: true, Audience: &ViewAudienceJSON{CustomerIDs: []string{nw.ID}},
+		Filter: json.RawMessage(`{"field":"customer","op":"in","value":["` + nw.ID + `"]}`)}); res.StatusCode != 201 {
 		t.Fatalf("shared view: %d %s", res.StatusCode, b)
 	}
 	code, raw := e.get("/api/v1/views", sc)
@@ -494,8 +500,13 @@ func TestM3ACustomerScopedAccountSeesOnlyItsCustomer(t *testing.T) { // §3.5
 	for _, v := range vl.Views {
 		names = append(names, v.Name)
 	}
-	if code != 200 || len(vl.Views) != 2 || strings.Join(names, ",") != "everyone,northwind" {
-		t.Errorf("the scoped account sees %v, want only everyone and northwind", names)
+	if code != 200 || len(vl.Views) != 2 || strings.Join(names, ",") != "mine,northwind" {
+		t.Errorf("the scoped account sees %v, want only its own view and northwind", names)
+	}
+	for _, v := range vl.Views {
+		if v.Audience == nil || v.Audience.AllCustomers || len(v.Audience.CustomerIDs) != 1 || v.Audience.CustomerIDs[0] != nw.ID {
+			t.Errorf("view %q carries the audience %+v, want Northwind", v.Name, v.Audience)
+		}
 	}
 	if strings.Contains(string(raw), summit.ID) || strings.Contains(string(raw), "EXAM-ROOM-3") {
 		t.Errorf("the list carries Summit's id or a Summit hostname: %s", raw)
@@ -692,8 +703,12 @@ func TestM3SavedViewsThroughTheAPI(t *testing.T) { // F06
 			t.Errorf("%s: %d %s", name, res.StatusCode, b)
 		}
 	}
-	// Sharing: an all-customer account may; then everyone sees it, read-only to non-owners.
-	res, b = e.req("PATCH", "/api/v1/views/"+mine.ID, ro, PatchViewRequest{Shared: ptr(true)})
+	// Sharing names an audience (400 without one); with all customers every all-customer account sees
+	// it, read-only to non-owners.
+	if res, b := e.req("PATCH", "/api/v1/views/"+mine.ID, ro, PatchViewRequest{Shared: ptr(true)}); res.StatusCode != 400 || problemFields(t, b)["audience"] == "" {
+		t.Errorf("share without an audience: %d %s, want 400 naming the audience", res.StatusCode, b)
+	}
+	res, b = e.req("PATCH", "/api/v1/views/"+mine.ID, ro, PatchViewRequest{Shared: ptr(true), Audience: &ViewAudienceJSON{AllCustomers: true}})
 	if res.StatusCode != 200 || !decode[ViewResponse](t, b).Shared {
 		t.Fatalf("share: %d %s", res.StatusCode, b)
 	}

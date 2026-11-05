@@ -1827,7 +1827,7 @@ paths:
       operationId: createView
       tags: [views]
       summary: Create a saved view
-      description: Only an account that sees every customer may share a view (403 otherwise). A second view of the same owner, entity and name answers 409.
+      description: A shared view needs an audience (all customers, or a list of customer ids). The audience must lie inside the caller's scope (all customers needs an account that sees every customer) and hold every customer and device the filter names; otherwise 400. Another account sees the view only when its audience lies inside that account's scope; the view's name and text clauses are never read for scope. A second view of the same owner, entity and name answers 409.
       x-min-role: RO
       parameters:
         - {$ref: '#/components/parameters/CsrfToken'}
@@ -1852,7 +1852,7 @@ paths:
       operationId: patchView
       tags: [views]
       summary: Edit a saved view
-      description: The owner edits their own view; an admin edits any view they can see. Absent fields are unchanged. A patch that changes nothing writes no audit row.
+      description: The owner edits their own view; an admin edits any view they can see. Absent fields are unchanged. Making a view shared needs an audience in the patch; making it private clears the audience. A shared view's audience is checked again (400 as on create) whenever the audience, the filter or the sharing changes. A patch that changes nothing writes no audit row.
       x-min-role: SELF
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -3725,8 +3725,19 @@ components:
         columns: {type: array, items: {type: string}}
         sort: {type: array, items: {type: object}}
         shared: {type: boolean}
+        audience: {$ref: '#/components/schemas/ViewAudience'}
         created_at: {$ref: '#/components/schemas/Timestamp'}
         updated_at: {$ref: '#/components/schemas/Timestamp'}
+    ViewAudience:
+      type: object
+      additionalProperties: false
+      description: >-
+        Who besides the owner sees a shared view: exactly one of all_customers (only accounts that see every
+        customer) or customer_ids (accounts whose scope holds every listed customer). Present on shared views only.
+        Views shared before the audience existed have all_customers.
+      properties:
+        all_customers: {type: boolean}
+        customer_ids: {type: array, minItems: 1, maxItems: 50, items: {type: string}}
     ViewListResponse:
       type: object
       required: [computed_at, views]
@@ -3753,7 +3764,8 @@ components:
         filter: {type: object}
         columns: {type: array, items: {type: string}}
         sort: {type: array, items: {type: object}}
-        shared: {type: boolean, description: Needs an account that sees every customer.}
+        shared: {type: boolean, description: A shared view needs an audience.}
+        audience: {$ref: '#/components/schemas/ViewAudience'}
     PatchViewRequest:
       type: object
       additionalProperties: false
@@ -3763,6 +3775,7 @@ components:
         columns: {type: array, items: {type: string}}
         sort: {type: array, items: {type: object}}
         shared: {type: boolean}
+        audience: {$ref: '#/components/schemas/ViewAudience'}
     StatusResponse:
       allOf:
         - $ref: '#/components/schemas/FleetStamp'

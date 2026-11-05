@@ -95,6 +95,10 @@ const (
 	byID        kind = iota // addresses one customer's row: allowed inside scope, ErrNotFound outside
 	list                    // returns rows: only rows of allowed customers may appear
 	globalWrite             // needs scope.All: ErrScope otherwise
+	// refWrite names one customer in its input (M3-T3: a saved view's audience):
+	// allowed inside scope; outside it a *ValidationError (400, the input names a
+	// customer the caller cannot see) and nothing changes.
+	refWrite
 )
 
 type matrixCase struct {
@@ -527,7 +531,7 @@ func TestScopeMatrix(t *testing.T) {
 							t.Errorf("%s does not see customer %s's rows (the list is empty for an allowed customer)", p.name, tg.name)
 						}
 					}
-				case byID, globalWrite:
+				case byID, globalWrite, refWrite:
 					for _, tg := range targets {
 						if c.prep != nil {
 							c.prep(&wt, tg)
@@ -547,6 +551,13 @@ func TestScopeMatrix(t *testing.T) {
 						case allowed:
 							if err != nil {
 								t.Errorf("%s on its own customer %s: %v", p.name, tg.name, err)
+							}
+						case c.kind == refWrite:
+							if !errors.Is(err, ErrInvalid) {
+								t.Errorf("%s naming customer %s: err = %v, want ErrInvalid (400)", p.name, tg.name, err)
+							}
+							if after := fingerprint(&wt, tg); after != before {
+								t.Errorf("%s changed customer %s's data through a refused call:\nbefore:\n%s\nafter:\n%s", p.name, tg.name, before, after)
 							}
 						default:
 							if !errors.Is(err, ErrNotFound) {

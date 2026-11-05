@@ -4,20 +4,34 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
 	"time"
 )
 
 // Saved views (M3-T3, architecture §5.2 /views, table saved_views): a named
 // filter, column list and sort for the devices, runs or customers table. A view
-// belongs to the admin who made it; a shared view is visible to every admin.
+// belongs to the admin who made it; a shared view is visible to the accounts of
+// its audience as well.
 //
-// A view holds no customer data of its own, but its filter may name customers
-// by id. So the same Scope rules apply as everywhere: only an all-customer
-// caller may share a view (a scoped caller's view is private), and a scoped
-// caller does not see another admin's shared view whose filter names a customer
-// outside the caller's scope. An invisible view is ErrNotFound, exactly like a
-// view that does not exist.
+// A view's name and its free-text clauses (a tag, an OS, a hostname pattern) can
+// carry anything, including another customer's name, and text cannot be resolved
+// to a customer reliably. So who may see a shared view is never inferred from its
+// name or its filter. The sharer states it, as the view's audience:
+//
+//   - all customers: visible only to accounts that see every customer;
+//   - a set of customer ids: visible to an account only when every one of them is
+//     inside that account's scope.
+//
+// It fails closed: a shared view without a readable audience is visible to its
+// owner only. On create and update the audience must lie inside the sharer's own
+// scope (all customers needs an all-customer sharer), and the customers and
+// devices the filter names (by id, hostname or customer name, resolved as
+// viewfilter.go does) must lie inside the audience; otherwise the write is a
+// *ValidationError (400). An invisible view is ErrNotFound, exactly like a view
+// that does not exist. Views shared before the audience existed (migration 0005)
+// have the audience all customers.
 
 // ViewEntities are the tables a view can describe.
 var ViewEntities = []string{"devices", "runs", "customers"}
@@ -36,8 +50,47 @@ type SavedView struct {
 	Columns   json.RawMessage // a JSON array of column ids
 	Sort      json.RawMessage // a JSON array of {column, dir}
 	Shared    bool
+	// Audience is who besides the owner sees a shared view; nil for a private view.
+	Audience  *ViewAudience
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// ViewAudience is the audience of a shared view: every customer (All), or the
+// listed customers (Customers, at least one). Exactly one of the two is set.
+type ViewAudience struct {
+	All       bool
+	Customers []string
+}
+
+// audienceAll is the audience column's value for "all customers"; a set of
+// customers is stored as a JSON array of ids.
+const audienceAll = "all"
+
+// encode is the audience column's value.
+func (a ViewAudience) encode() (string, error) {
+	if a.All {
+		return audienceAll, nil
+	}
+	b, err := json.Marshal(a.Customers)
+	return string(b), err
+}
+
+// decodeAudience reads the audience column. NULL is no audience (nil). A value
+// that is neither "all" nor an array of ids decodes to an audience nobody but
+// the owner sees (fail closed).
+func decodeAudience(col sql.NullString) *ViewAudience {
+	if !col.Valid {
+		return nil
+	}
+	if col.String == audienceAll {
+		return &ViewAudience{All: true}
+	}
+	var ids []string
+	if json.Unmarshal([]byte(col.String), &ids) != nil {
+		return &ViewAudience{}
+	}
+	return &ViewAudience{Customers: ids}
 }
 
 // SavedViewInput is the body of a create. Nil Filter, Columns or Sort default to
@@ -49,18 +102,22 @@ type SavedViewInput struct {
 	Columns json.RawMessage
 	Sort    json.RawMessage
 	Shared  bool
+	// Audience is required when Shared is true and refused when it is false.
+	Audience *ViewAudience
 }
 
-// SavedViewPatch is a partial update; nil fields are left alone.
+// SavedViewPatch is a partial update; nil fields are left alone. Making a view
+// private clears its audience; making it shared needs an Audience in the patch.
 type SavedViewPatch struct {
-	Name    *string
-	Filter  *json.RawMessage
-	Columns *json.RawMessage
-	Sort    *json.RawMessage
-	Shared  *bool
+	Name     *string
+	Filter   *json.RawMessage
+	Columns  *json.RawMessage
+	Sort     *json.RawMessage
+	Shared   *bool
+	Audience *ViewAudience
 }
 
-const viewCols = `v.id, v.owner_id, COALESCE(a.username, ''), v.name, v.entity, v.filter, v.columns, v.sort, v.shared, v.created_at, v.updated_at`
+const viewCols = `v.id, v.owner_id, COALESCE(a.username, ''), v.name, v.entity, v.filter, v.columns, v.sort, v.shared, v.audience, v.created_at, v.updated_at`
 
 const viewFrom = ` FROM saved_views v LEFT JOIN admin_users a ON a.id = v.owner_id`
 
@@ -69,37 +126,117 @@ func scanView(sc scanner) (SavedView, error) {
 	var owner sql.NullString
 	var filter, cols, sort string
 	var shared int
+	var audience sql.NullString
 	var c, u int64
-	if err := sc.Scan(&v.ID, &owner, &v.OwnerName, &v.Name, &v.Entity, &filter, &cols, &sort, &shared, &c, &u); err != nil {
+	if err := sc.Scan(&v.ID, &owner, &v.OwnerName, &v.Name, &v.Entity, &filter, &cols, &sort, &shared, &audience, &c, &u); err != nil {
 		return SavedView{}, err
 	}
 	v.OwnerID, v.Shared = owner.String, shared != 0
+	if v.Shared {
+		v.Audience = decodeAudience(audience)
+	}
 	v.Filter, v.Columns, v.Sort = json.RawMessage(filter), json.RawMessage(cols), json.RawMessage(sort)
 	v.CreatedAt, v.UpdatedAt = timeOf(c), timeOf(u)
 	return v, nil
 }
 
 // visibleView reports whether viewer (an admin id) may see v under scope. The
-// owner sees their own view; an all-customer caller sees every shared view; any
-// other caller sees a shared view only when its filter parses and everything it
-// names (customers, devices, hostnames, customer names) resolves to something
-// inside scope. A filter that does not parse, or names something unresolvable,
-// is hidden: fail closed.
-func visibleView(tx *Tx, scope Scope, viewer string, v SavedView) (bool, error) {
+// owner sees their own view. Anyone else sees it only when it is shared and its
+// audience is inside scope: the audience all customers needs an all-customer
+// scope, a set of customers needs every one of them in scope. The view's name and
+// filter are not read here; a shared view without a readable audience is hidden.
+func visibleView(scope Scope, viewer string, v SavedView) bool {
 	if v.OwnerID != "" && v.OwnerID == viewer {
-		return true, nil
+		return true
 	}
-	if !v.Shared {
-		return false, nil
+	if !v.Shared || v.Audience == nil {
+		return false
 	}
-	if scope.All {
-		return true, nil
+	if v.Audience.All {
+		return scope.All
 	}
-	refs, _, ok := parseViewFilter(v.Entity, v.Filter)
+	if len(v.Audience.Customers) == 0 {
+		return false
+	}
+	for _, id := range v.Audience.Customers {
+		if !scope.Allows(id) {
+			return false
+		}
+	}
+	return true
+}
+
+// Fixed sentences of the audience checks; they never echo the input.
+const (
+	audienceNeeded  = "Say who the shared view is for: all customers, or a list of customer ids."
+	audienceOneForm = "Give either all customers or a list of 1 to 50 customer ids, not both."
+	audiencePrivate = "Only a shared view has an audience."
+	audienceAllOnly = "Only an account that sees every customer can share a view with all customers."
+	audienceUnseen  = "The audience names a customer you cannot see."
+	audienceFilter  = "The filter names a customer or device outside the view's audience."
+)
+
+// cleanAudience checks the shape of an audience and returns it with its ids
+// de-duplicated and sorted. It does not read the database.
+func cleanAudience(a ViewAudience) (ViewAudience, []FieldError) {
+	if a.All {
+		if len(a.Customers) > 0 {
+			return a, []FieldError{fieldf("audience", "%s", audienceOneForm)}
+		}
+		return ViewAudience{All: true}, nil
+	}
+	if len(a.Customers) == 0 || len(a.Customers) > maxFilterList {
+		return a, []FieldError{fieldf("audience", "%s", audienceOneForm)}
+	}
+	ids := make([]string, 0, len(a.Customers))
+	for _, id := range a.Customers {
+		if !idToken.MatchString(id) {
+			return a, []FieldError{fieldf("audience", "%s", audienceOneForm)}
+		}
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ViewAudience{Customers: ids}, nil
+}
+
+// checkAudience is the database half of the audience rules, inside the write:
+// the audience lies inside the sharer's scope (every customer exists and is in
+// it; all customers needs an all-customer sharer), and everything the filter
+// names lies inside the audience. A failure is a *ValidationError.
+func checkAudience(tx *Tx, sharer Scope, a ViewAudience, entity string, filter json.RawMessage) error {
+	if a.All {
+		if !sharer.All {
+			return validation([]FieldError{fieldf("audience", "%s", audienceAllOnly)})
+		}
+		return nil // every customer is inside "all customers"
+	}
+	for _, id := range a.Customers {
+		if !sharer.Allows(id) {
+			return validation([]FieldError{fieldf("audience", "%s", audienceUnseen)})
+		}
+		var one int
+		if err := tx.QueryRow(`SELECT 1 FROM customers WHERE id = ?`, id).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// The same sentence as a customer out of scope: no existence oracle.
+				return validation([]FieldError{fieldf("audience", "%s", audienceUnseen)})
+			}
+			return err
+		}
+	}
+	refs, why, ok := parseViewFilter(entity, filter)
 	if !ok {
-		return false, nil
+		return validation([]FieldError{viewFilterError(why)})
 	}
-	return refs.allInScope(tx, scope)
+	in, err := refs.allInScope(tx, ScopeOf(a.Customers...))
+	if err != nil {
+		return err
+	}
+	if !in {
+		return validation([]FieldError{fieldf("filter", "%s", audienceFilter)})
+	}
+	return nil
 }
 
 // validateView checks the user-supplied parts. Rejected input is a
@@ -165,11 +302,7 @@ func (s *Store) ListSavedViews(ctx context.Context, scope Scope, viewer, entity 
 			return err
 		}
 		for _, v := range all {
-			vis, err := visibleView(tx, scope, viewer, v)
-			if err != nil {
-				return err
-			}
-			if vis {
+			if visibleView(scope, viewer, v) {
 				out = append(out, v)
 			}
 		}
@@ -192,11 +325,7 @@ func (s *Store) GetSavedView(ctx context.Context, scope Scope, viewer, id string
 		if v, err = one(tx, `SELECT `+viewCols+viewFrom+` WHERE v.id = ?`, []any{id}, scanView); err != nil {
 			return err
 		}
-		vis, err := visibleView(tx, scope, viewer, v)
-		if err != nil {
-			return err
-		}
-		if !vis {
+		if !visibleView(scope, viewer, v) {
 			return ErrNotFound
 		}
 		return nil
@@ -208,9 +337,10 @@ func (s *Store) GetSavedView(ctx context.Context, scope Scope, viewer, id string
 }
 
 // CreateSavedViewAudited makes a view owned by actor and writes one "view.create"
-// audit row in the same transaction. Sharing needs an all-customer scope
-// (ErrScope otherwise). A second view of the same owner, entity and name is
-// ErrConflict.
+// audit row in the same transaction. A shared view needs an audience inside the
+// caller's scope that holds everything its filter names (*ValidationError
+// otherwise, see the package comment above). A second view of the same owner,
+// entity and name is ErrConflict.
 func (s *Store) CreateSavedViewAudited(ctx context.Context, scope Scope, in SavedViewInput, actor AuditActor) (SavedView, error) {
 	if err := scope.check(); err != nil {
 		return SavedView{}, err
@@ -220,11 +350,19 @@ func (s *Store) CreateSavedViewAudited(ctx context.Context, scope Scope, in Save
 	if in.Entity == "" {
 		bad = append(bad, fieldf("entity", "Use devices, runs or customers."))
 	}
+	var aud ViewAudience
+	switch {
+	case in.Shared && in.Audience == nil:
+		bad = append(bad, fieldf("audience", "%s", audienceNeeded))
+	case !in.Shared && in.Audience != nil:
+		bad = append(bad, fieldf("audience", "%s", audiencePrivate))
+	case in.Shared:
+		var abad []FieldError
+		aud, abad = cleanAudience(*in.Audience)
+		bad = append(bad, abad...)
+	}
 	if err := validation(bad); err != nil {
 		return SavedView{}, err
-	}
-	if in.Shared && !scope.All {
-		return SavedView{}, ErrScope
 	}
 	def := func(raw json.RawMessage, d string) string {
 		if len(raw) == 0 {
@@ -234,13 +372,24 @@ func (s *Store) CreateSavedViewAudited(ctx context.Context, scope Scope, in Save
 	}
 	var out SavedView
 	err := s.Write(ctx, func(tx *Tx) error {
+		var audCol any // NULL: a private view has no audience
+		if in.Shared {
+			if err := checkAudience(tx, scope, aud, in.Entity, json.RawMessage(def(in.Filter, "{}"))); err != nil {
+				return err
+			}
+			enc, err := aud.encode()
+			if err != nil {
+				return err
+			}
+			audCol = enc
+		}
 		now, id := tx.nowMS(), tx.id()
-		if _, err := tx.Exec(`INSERT INTO saved_views (id, owner_id, name, entity, filter, columns, sort, shared, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?)`, id, nullStr(actor.AdminID), name, in.Entity, def(in.Filter, "{}"), def(in.Columns, "[]"),
-			def(in.Sort, "[]"), boolInt(in.Shared), now, now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO saved_views (id, owner_id, name, entity, filter, columns, sort, shared, audience, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, nullStr(actor.AdminID), name, in.Entity, def(in.Filter, "{}"), def(in.Columns, "[]"),
+			def(in.Sort, "[]"), boolInt(in.Shared), audCol, now, now); err != nil {
 			return err
 		}
-		ev, err := actor.event("view.create", "saved_view", id, "", map[string]any{"name": name, "entity": in.Entity, "shared": in.Shared})
+		ev, err := actor.event("view.create", "saved_view", id, "", map[string]any{"name": name, "entity": in.Entity, "shared": in.Shared, "audience": auditAudience(in.Shared, aud)})
 		if err != nil {
 			return err
 		}
@@ -260,11 +409,7 @@ func editableView(tx *Tx, scope Scope, actor AuditActor, id string, asAdmin bool
 	if err != nil {
 		return SavedView{}, err
 	}
-	vis, err := visibleView(tx, scope, actor.AdminID, v)
-	if err != nil {
-		return SavedView{}, err
-	}
-	if !vis {
+	if !visibleView(scope, actor.AdminID, v) {
 		return SavedView{}, ErrNotFound
 	}
 	if !(v.OwnerID != "" && v.OwnerID == actor.AdminID) && !asAdmin {
@@ -275,17 +420,23 @@ func editableView(tx *Tx, scope Scope, actor AuditActor, id string, asAdmin bool
 
 // UpdateSavedViewAudited applies p to a view and writes one "view.update" audit
 // row. Only the owner may edit a view, or an admin (asAdmin). Making a view
-// shared needs an all-customer scope. A patch that changes nothing writes
-// nothing (changed false).
+// shared needs an audience in the patch; a shared view's audience is checked
+// again (against the caller's scope and the filter) whenever the audience, the
+// filter or the sharing changes. Making a view private clears its audience. A
+// patch that changes nothing writes nothing (changed false).
 func (s *Store) UpdateSavedViewAudited(ctx context.Context, scope Scope, id string, p SavedViewPatch, actor AuditActor, asAdmin bool) (v SavedView, changed bool, err error) {
 	if err := scope.check(); err != nil {
 		return SavedView{}, false, err
 	}
-	if bad := validateView(p.Name, "", p.Filter, p.Columns, p.Sort); len(bad) > 0 {
-		return SavedView{}, false, validation(bad)
+	bad := validateView(p.Name, "", p.Filter, p.Columns, p.Sort)
+	var newAud ViewAudience
+	if p.Audience != nil {
+		var abad []FieldError
+		newAud, abad = cleanAudience(*p.Audience)
+		bad = append(bad, abad...)
 	}
-	if p.Shared != nil && *p.Shared && !scope.All {
-		return SavedView{}, false, ErrScope
+	if len(bad) > 0 {
+		return SavedView{}, false, validation(bad)
 	}
 	err = s.Write(ctx, func(tx *Tx) error {
 		cur, err := editableView(tx, scope, actor, id, asAdmin)
@@ -316,6 +467,43 @@ func (s *Store) UpdateSavedViewAudited(ctx context.Context, scope Scope, id stri
 		}
 		if p.Shared != nil && *p.Shared != cur.Shared {
 			set("shared", "shared", boolInt(*p.Shared))
+		}
+		// The audience of the view after the patch.
+		shared := cur.Shared
+		if p.Shared != nil {
+			shared = *p.Shared
+		}
+		switch {
+		case !shared && p.Audience != nil:
+			return validation([]FieldError{fieldf("audience", "%s", audiencePrivate)})
+		case !shared:
+			if cur.Audience != nil {
+				set("audience", "audience", nil)
+			}
+		default:
+			aud := cur.Audience
+			if p.Audience != nil {
+				aud = &newAud
+			}
+			if aud == nil || (!cur.Shared && p.Audience == nil) {
+				return validation([]FieldError{fieldf("audience", "%s", audienceNeeded)})
+			}
+			filter := cur.Filter
+			if p.Filter != nil {
+				filter = *p.Filter
+			}
+			if p.Audience != nil || !same(p.Filter, cur.Filter) || !cur.Shared {
+				if err := checkAudience(tx, scope, *aud, cur.Entity, filter); err != nil {
+					return err
+				}
+			}
+			if p.Audience != nil && !sameAudience(cur.Audience, aud) {
+				enc, err := aud.encode()
+				if err != nil {
+					return err
+				}
+				set("audience", "audience", enc)
+			}
 		}
 		if len(fields) == 0 {
 			v = cur
@@ -362,4 +550,26 @@ func (s *Store) DeleteSavedViewAudited(ctx context.Context, scope Scope, id stri
 		}
 		return audited(tx, ev)
 	})
+}
+
+// sameAudience reports whether two audiences are the same (both nil, both all,
+// or the same ids; ids are kept sorted).
+func sameAudience(a, b *ViewAudience) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.All == b.All && slices.Equal(a.Customers, b.Customers)
+}
+
+// auditAudience is the audience as the audit row records it: "all", the number
+// of customers, or "none" for a private view. Customer ids stay out of the
+// details (the row is the sharer's, not any one customer's).
+func auditAudience(shared bool, a ViewAudience) any {
+	switch {
+	case !shared:
+		return "none"
+	case a.All:
+		return audienceAll
+	}
+	return len(a.Customers)
 }

@@ -23,13 +23,13 @@ import (
 // F is a field of the view's entity, O an operator that field takes and V a
 // value of the field's type. The tree is validated when a view is written
 // (unknown fields, operators, value types, empty groups, more than 40 clauses
-// or 4 levels of groups are refused) and read again, with the same parser, when
-// a scoped caller asks to see another account's shared view: every customer,
-// device and hostname the filter names must resolve to something inside the
-// caller's scope, and a filter that does not parse is hidden. That second rule
-// is what keeps a shared view from carrying another customer's identifiers
-// across the scope line, so the parser is the single definition of "what a
-// filter can name".
+// or 4 levels of groups are refused). When a shared view is written, the same
+// parser lists what the filter names (customer and device ids, hostnames,
+// customer names) and every one must resolve to something inside the view's
+// audience (views.go), so the parser is the single definition of "what a filter
+// can name". Who may see a shared view is decided by its audience alone, never
+// by reading the filter: free text (a tag, an OS) can carry any customer's name
+// and cannot be resolved.
 
 const (
 	maxFilterClauses = 40

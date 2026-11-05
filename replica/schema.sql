@@ -775,6 +775,12 @@ CREATE INDEX idx_notification_log_failed  ON notification_log(sent_at DESC) WHER
 
 -- -----------------------------------------------------------------------------
 -- 30. saved_views   (recon: SavedView)
+--    audience (migration 0005, M3-T3): who besides the owner sees a shared view:
+--    'all' (accounts that see every customer only) or a JSON array of customer
+--    ids (accounts whose scope holds every one); NULL for a private view. It sits
+--    on the updated_at line because that is where SQLite's ALTER TABLE ... ADD
+--    COLUMN writes it in sqlite_master, and the migrated schema must equal this
+--    file (DH20).
 -- -----------------------------------------------------------------------------
 CREATE TABLE saved_views (
   id          TEXT    PRIMARY KEY CHECK (length(id) = 26),
@@ -786,7 +792,7 @@ CREATE TABLE saved_views (
   sort        TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(sort)),
   shared      INTEGER NOT NULL DEFAULT 0 CHECK (shared IN (0,1)),
   created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL, audience TEXT CHECK (audience IS NULL OR audience = 'all' OR (json_valid(audience) AND json_type(audience) = 'array')),
   UNIQUE (owner_id, entity, name)
 );
 CREATE INDEX idx_saved_views_owner  ON saved_views(owner_id);
