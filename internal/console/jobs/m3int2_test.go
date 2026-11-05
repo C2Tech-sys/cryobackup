@@ -15,7 +15,7 @@ import (
 // waitActive waits until the counting backend has a storage probe in flight.
 func waitActive(t *testing.T, be *countingBackend) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for be.active.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}

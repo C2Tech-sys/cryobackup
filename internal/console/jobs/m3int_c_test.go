@@ -37,11 +37,7 @@ func TestC08ProbeLeaseRenewsInsideItsTTL(t *testing.T) { // M3-INT C1
 	first := r.row(t, ProbeLease)
 	time.Sleep(200 * time.Millisecond) // several TTLs of real time: the renewer runs on a real ticker
 	r.clk.Advance(time.Second)         // the store's clock: well past the first expiry
-	time.Sleep(100 * time.Millisecond)
-	again := r.row(t, ProbeLease)
-	if again.LeaseHolder != "console-a" || !again.LeaseUntil.After(*first.LeaseUntil) {
-		t.Fatalf("the lease was not renewed under a running probe: %+v -> %+v", first, again)
-	}
+	waitLeaseRenewedAfter(t, r, "console-a", *first.LeaseUntil)
 }
 
 // M3-T2 r3 LOW-3: the worker's settings store failing during the probe (after a

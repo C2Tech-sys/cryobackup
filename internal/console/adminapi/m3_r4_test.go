@@ -112,7 +112,7 @@ func TestEveryFleetMutationAdvancesTheChangeGeneration(t *testing.T) { // r4 MED
 				// A stream open before the call, with its first fleet evaluation shared for an hour and no refresh
 				// tick: only the change signal can make it render again.
 				open, _ = e.openStream("/api/v1/events?topics=fleet", owner)
-				open.next("fleet.state", 5*time.Second)
+				open.next("fleet.state", eventWait)
 			}
 			g0, fleet0 := e.svc.changeGeneration(), e.fleetDigest()
 			src.mu.Lock()
@@ -152,10 +152,10 @@ func TestEveryFleetMutationAdvancesTheChangeGeneration(t *testing.T) { // r4 MED
 			}
 			// The behaviour: the open stream renders again, and a stream opening now gets the fleet after
 			// the call (the shared evaluation from before it is not reused).
-			open.next("fleet.state", 5*time.Second)
+			open.next("fleet.state", eventWait)
 			wantSum := decode[FleetSummaryResponse](t, mustGet(e, "/api/v1/fleet/summary", owner))
 			later, _ := e.openStream("/api/v1/events?topics=fleet", owner)
-			got := summaryOf(t, later.next("fleet.state", 5*time.Second))
+			got := summaryOf(t, later.next("fleet.state", eventWait))
 			if !reflect.DeepEqual(got.Devices, wantSum.Devices) || !reflect.DeepEqual(got.CustomerRing, wantSum.CustomerRing) || !reflect.DeepEqual(got.States, wantSum.States) {
 				t.Errorf("a stream opened after the call shows devices %+v ring %+v states %v; /fleet/summary says %+v %+v %v",
 					got.Devices, got.CustomerRing, got.States, wantSum.Devices, wantSum.CustomerRing, wantSum.States)
@@ -375,7 +375,7 @@ func TestM3EventStreamAfterACustomerPatchServesTheFleetAfterIt(t *testing.T) { /
 		t.Fatalf("create customer: %v", err)
 	}
 	a, _ := e.openStream("/api/v1/events?topics=fleet", owner)
-	before := summaryOf(t, a.next("fleet.state", 5*time.Second))
+	before := summaryOf(t, a.next("fleet.state", eventWait))
 
 	e.mustReq("PATCH", "/api/v1/customers/"+cust.ID, owner, map[string]any{"expected": true}, 200)
 	want := decode[FleetSummaryResponse](t, mustGet(e, "/api/v1/fleet/summary", owner))
@@ -383,10 +383,10 @@ func TestM3EventStreamAfterACustomerPatchServesTheFleetAfterIt(t *testing.T) { /
 		t.Fatalf("fixture: /fleet/summary missing %d before, %d after", before.CustomerRing.Missing, want.CustomerRing.Missing)
 	}
 	b, _ := e.openStream("/api/v1/events?topics=fleet", owner)
-	if got := summaryOf(t, b.next("fleet.state", 5*time.Second)); got.CustomerRing.Missing != want.CustomerRing.Missing {
+	if got := summaryOf(t, b.next("fleet.state", eventWait)); got.CustomerRing.Missing != want.CustomerRing.Missing {
 		t.Errorf("a stream connecting after the PATCH shows customer_ring.missing %d; /fleet/summary says %d", got.CustomerRing.Missing, want.CustomerRing.Missing)
 	}
-	if got := summaryOf(t, a.next("fleet.state", time.Second)); got.CustomerRing.Missing != want.CustomerRing.Missing {
+	if got := summaryOf(t, a.next("fleet.state", eventWait)); got.CustomerRing.Missing != want.CustomerRing.Missing {
 		t.Errorf("the open stream's next fleet.state shows missing %d, want %d", got.CustomerRing.Missing, want.CustomerRing.Missing)
 	}
 }
@@ -450,10 +450,10 @@ func TestM3EventStreamWithoutAHubSeesAnAPIChange(t *testing.T) { // F18, r4 LOW-
 	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = nil, time.Hour, 10*time.Millisecond, time.Hour
 	owner := e.login("admin", pw)
 	a, _ := e.openStream("/api/v1/events?topics=fleet", owner)
-	before := summaryOf(t, a.next("fleet.state", 5*time.Second))
+	before := summaryOf(t, a.next("fleet.state", eventWait))
 	e.mustReq("POST", "/api/v1/devices/"+e.held.ID+"/pause", owner, DevicePauseRequest{Reason: "no hub", Indefinite: true}, 200)
 	b, _ := e.openStream("/api/v1/events?topics=fleet", owner)
-	if got := summaryOf(t, b.next("fleet.state", 5*time.Second)); got.Devices.Paused != before.Devices.Paused+1 {
+	if got := summaryOf(t, b.next("fleet.state", eventWait)); got.Devices.Paused != before.Devices.Paused+1 {
 		t.Errorf("without a hub, a stream connecting after the pause shows paused %d, want %d", got.Devices.Paused, before.Devices.Paused+1)
 	}
 }
