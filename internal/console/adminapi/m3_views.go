@@ -14,6 +14,10 @@ import (
 // account that made it. Any signed-in account may make views; the owner edits
 // and deletes their own, an admin any view they can see (the SELF/AD rule).
 //
+// An owner who has lost one of the customers their shared view is for still sees
+// it (marked locked) and may make it private or delete it, both of which only
+// reduce who sees it; a rename or a filter change is refused (404).
+//
 // A shared view names its audience when it is shared: all customers, or a list of
 // customer ids. Another account sees it only when the audience lies inside that
 // account's scope (all customers: only accounts that see every customer). The
@@ -35,7 +39,11 @@ type SavedViewJSON struct {
 	Sort    json.RawMessage `json:"sort"`
 	Shared  bool            `json:"shared"`
 	// Audience is present on a shared view: who besides the owner sees it.
-	Audience  *ViewAudienceJSON `json:"audience,omitempty"`
+	Audience *ViewAudienceJSON `json:"audience,omitempty"`
+	// Locked is true on your own shared view whose audience reaches past your
+	// scope (you lost one of its customers): you may make it private or delete
+	// it; any other change answers 404.
+	Locked    bool      `json:"locked,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
 	UpdatedAt time.Time         `json:"updated_at"`
 }
@@ -54,9 +62,10 @@ func (a *ViewAudienceJSON) store() *store.ViewAudience {
 	return &store.ViewAudience{All: a.AllCustomers, Customers: a.CustomerIDs}
 }
 
-func viewJSON(v store.SavedView, viewer string) SavedViewJSON {
+func viewJSON(v store.SavedView, viewer string, scope store.Scope) SavedViewJSON {
 	out := SavedViewJSON{ID: v.ID, OwnerID: v.OwnerID, Owner: v.OwnerName, Mine: v.OwnerID != "" && v.OwnerID == viewer, Name: v.Name, Entity: v.Entity,
 		Filter: v.Filter, Columns: v.Columns, Sort: v.Sort, Shared: v.Shared, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
+	out.Locked = out.Mine && !v.AudienceInside(scope)
 	if v.Audience != nil {
 		out.Audience = &ViewAudienceJSON{AllCustomers: v.Audience.All, CustomerIDs: v.Audience.Customers}
 	}
@@ -110,7 +119,7 @@ func (s *Service) listViews(w http.ResponseWriter, r *http.Request) {
 	}
 	out := ViewListResponse{ComputedAt: s.now(), Views: make([]SavedViewJSON, 0, len(vs))}
 	for _, v := range vs {
-		out.Views = append(out.Views, viewJSON(v, p.Admin.ID))
+		out.Views = append(out.Views, viewJSON(v, p.Admin.ID, p.Scope))
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
@@ -133,7 +142,7 @@ func (s *Service) createView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/views/"+v.ID)
-	httpx.WriteJSON(w, http.StatusCreated, ViewResponse{ComputedAt: s.now(), SavedViewJSON: viewJSON(v, p.Admin.ID), Changed: true})
+	httpx.WriteJSON(w, http.StatusCreated, ViewResponse{ComputedAt: s.now(), SavedViewJSON: viewJSON(v, p.Admin.ID, p.Scope), Changed: true})
 }
 
 func (s *Service) patchView(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +157,7 @@ func (s *Service) patchView(w http.ResponseWriter, r *http.Request) {
 		s.failM2(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, ViewResponse{ComputedAt: s.now(), SavedViewJSON: viewJSON(v, p.Admin.ID), Changed: changed})
+	httpx.WriteJSON(w, http.StatusOK, ViewResponse{ComputedAt: s.now(), SavedViewJSON: viewJSON(v, p.Admin.ID, p.Scope), Changed: changed})
 }
 
 func (s *Service) deleteView(w http.ResponseWriter, r *http.Request) {

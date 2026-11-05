@@ -28,9 +28,10 @@ import (
 // fails too.
 
 // scopeParamExempt lists the exported functions and methods outside *Store that
-// take a Scope on purpose, with the reason. It is empty today: the only exported
-// things that take a Scope are Store methods.
-var scopeParamExempt = map[string]string{}
+// take a Scope on purpose, with the reason.
+var scopeParamExempt = map[string]string{
+	"SavedView.AudienceInside": "a pure predicate on a view already read through a scoped Store method (ListSavedViews, GetSavedView): it reads no rows and returns none (M3-INT B.d)",
+}
 
 // parsePackage parses every .go file of the package directory.
 func parsePackage(t *testing.T, includeTests bool) map[string]*ast.File {

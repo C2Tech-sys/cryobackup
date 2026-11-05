@@ -122,6 +122,7 @@ func (s *Service) putSetting(w http.ResponseWriter, r *http.Request) {
 		s.failM2(w, r, err)
 		return
 	}
+	s.committed(r)           // signal now: the read-back below can fail
 	s.Display.Apply(changes) // the next request on either transport uses it
 	vals, err := s.Store.ListSettingValues(r.Context(), p.Scope)
 	if err != nil {

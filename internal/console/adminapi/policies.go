@@ -466,6 +466,7 @@ func (s *Service) patchCustomerPolicy(w http.ResponseWriter, r *http.Request, p 
 		s.failPolicy(w, r, err)
 		return true
 	}
+	s.committed(r) // signal now: the response below evaluates the fleet and can fail
 	resp, err := s.customerResponse(r, p, id)
 	if err != nil {
 		s.failM2(w, r, err)

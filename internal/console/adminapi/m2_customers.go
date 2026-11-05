@@ -407,6 +407,7 @@ func (s *Service) createCustomer(w http.ResponseWriter, r *http.Request) {
 		s.failM2(w, r, err)
 		return
 	}
+	s.committed(r) // signal now: the response below evaluates the fleet and can fail
 	resp, err := s.customerResponse(r, p, c.ID)
 	if err != nil {
 		s.failM2(w, r, err)
@@ -469,6 +470,7 @@ func (s *Service) patchCustomer(w http.ResponseWriter, r *http.Request) {
 		s.failM2(w, r, err)
 		return
 	}
+	s.committed(r) // signal now: the response below evaluates the fleet and can fail
 	resp, err := s.customerResponse(r, p, id)
 	if err != nil {
 		s.failM2(w, r, err)

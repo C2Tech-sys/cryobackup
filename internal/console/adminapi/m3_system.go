@@ -612,6 +612,9 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 		pctx, cancel := context.WithTimeout(ctx, probeNowTimeout)
 		ran, rerr := s.Prober.ProbeNow(pctx)
 		cancel()
+		if ran {
+			s.committed(r) // the probe facts changed: signal now, before the audit and the evaluation, either of which can fail
+		}
 		took := s.now().Sub(started).Milliseconds()
 		out.Ran = ran && rerr == nil
 		result, outcome := "ok", ""

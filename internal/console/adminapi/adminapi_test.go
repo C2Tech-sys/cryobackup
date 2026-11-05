@@ -57,6 +57,12 @@ type session struct {
 	csrf    string
 }
 
+// testPasswordHash is the argon2id hash of the test password, computed once per
+// test binary (M3-INT B.e): every env and every added account shares it, so an
+// env costs one argon2 verify at login instead of a hash and a verify. Under
+// -race one argon2 run takes about a second.
+var testPasswordHash = sync.OnceValues(func() (string, error) { return auth.HashPassword("pw-for-tests-1") })
+
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
@@ -66,7 +72,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	hash, err := auth.HashPassword("pw-for-tests-1")
+	hash, err := testPasswordHash()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +167,7 @@ func csrfFrom(t *testing.T, body []byte) string {
 }
 
 func (e *env) addAdmin(name, role string, scope []string) {
-	h, _ := auth.HashPassword("pw-for-tests-1")
+	h, _ := testPasswordHash()
 	if _, err := e.st.CreateAdmin(context.Background(), store.Admin{Username: name, Email: name + "@example.invalid", Role: role, PasswordHash: h, CustomerScope: scope}); err != nil {
 		e.t.Fatal(err)
 	}
