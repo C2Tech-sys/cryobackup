@@ -256,8 +256,16 @@ func TestM0SliceInProcess(t *testing.T) {
 		t.Fatalf("enroll must carry customer_id and policy_id ULIDs: %q %q", er.CustomerID, er.Policy.PolicyID)
 	}
 	devToken := string(er.DeviceToken)
-	if be.Count("init") != 1 || be.Count("cat_config") != 1 {
-		t.Fatalf("the repository must be initialised and checked through the admin path: init=%d cat=%d", be.Count("init"), be.Count("cat_config"))
+	// The health-prober's storage probe also calls cat_config, for the reserved probe
+	// repository (ADR 0017), whenever its tick lands; count the device's calls only.
+	deviceCats := 0
+	for _, c := range be.Calls() {
+		if c.Method == "cat_config" && c.DeviceID == er.DeviceID {
+			deviceCats++
+		}
+	}
+	if be.Count("init") != 1 || deviceCats != 1 {
+		t.Fatalf("the repository must be initialised and checked through the admin path: init=%d cat=%d", be.Count("init"), deviceCats)
 	}
 	// htpasswd-sync wrote the gateway's login file, with the device and the probe login.
 	htpasswd := filepath.Join(cfg.GatewayAuthDir, "htpasswd")
