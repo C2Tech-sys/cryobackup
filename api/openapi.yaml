@@ -1945,7 +1945,7 @@ paths:
       operationId: listJobs
       tags: [system]
       summary: Job table
-      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`.
+      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`. The health-prober's probe lease and per-probe result rows (`health-prober.*`) are not jobs and are not listed; the probe results are the system health rows.
       x-min-role: AD
       responses:
         '200':

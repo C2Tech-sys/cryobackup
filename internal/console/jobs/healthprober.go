@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/escrow"
 	"github.com/c2tech-sys/cryobackup/internal/console/gateway"
+	"github.com/c2tech-sys/cryobackup/internal/console/maintain"
 	"github.com/c2tech-sys/cryobackup/internal/console/probe"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
@@ -23,9 +25,10 @@ import (
 // NameHealthProber is the health-prober job (architecture §5.7).
 const NameHealthProber = "health-prober"
 
-// The health-prober's job_state rows: one per probe, named after the job, so
-// /system/jobs and the system-health page read every probe result in one place
+// The health-prober's job_state rows: one per probe, named after the job
 // (architecture §4.6: "stored in job_state (last_status, last_error_class)").
+// They are probe results, not jobs: the job listings (/healthz, GET
+// /api/v1/system/jobs) leave them and ProbeLease out (store.IsJobRow).
 const (
 	ProbeRowGateway   = NameHealthProber + ".gateway"
 	ProbeRowStorage   = NameHealthProber + ".storage"
@@ -66,7 +69,16 @@ const (
 	IntegrityTimeout = 5 * time.Minute
 	// DBMeasureTimeout bounds the escrow key query.
 	DBMeasureTimeout = 10 * time.Second
+	// StopWait bounds how long Stop waits for the probes in flight after cancelling them. A probe that
+	// has not ended by then (a hung disk under the database probe, whose disk calls take no context) is
+	// abandoned and logged by name, so a stuck probe never holds serve's shutdown.
+	StopWait = 10 * time.Second
 )
+
+// ClassWorkerStore is the storage probe row's class when the maintenance
+// worker's own settings store failed during the probe (maintain.ProbeRecordClass
+// on an unavailable answer): not checked, never a storage failure.
+const ClassWorkerStore = "worker_store"
 
 // Not-configured reasons, worded for the "not checked" banners (state ProbeRun.Unconfigured).
 const (
@@ -141,6 +153,7 @@ type HealthProber struct {
 	renewing      bool
 	idle          chan struct{} // wakes the renewer when the last probe ends
 	renewEvery    time.Duration // overrides renewInterval (tests)
+	stopWait      time.Duration // overrides StopWait (tests)
 }
 
 func (h *HealthProber) interval() time.Duration {
@@ -352,9 +365,12 @@ func (h *HealthProber) startRenewer(ctx context.Context) {
 	}()
 }
 
-// Stop cancels every probe in flight (ProbeNow's run under the prober's
-// lifetime, not the runner's context), waits for them and releases ProbeLease
-// (serve's shutdown).
+// Stop is serve's shutdown of the prober: it cancels every probe in flight
+// (ProbeNow's run under the prober's lifetime, not the runner's context), waits
+// for them at most StopWait, logs each probe it abandons (by name, never a
+// path), and releases ProbeLease so another console can take over at once. A
+// probe that ignores its context (the database probe's disk calls take none)
+// cannot hold the shutdown.
 func (h *HealthProber) Stop() {
 	h.lifetime() // a prober that never ran has a lifetime to end too
 	h.mu.Lock()
@@ -365,10 +381,36 @@ func (h *HealthProber) Stop() {
 		cancel()
 	}
 	endLife()
-	h.WaitAll()
+	wait := h.stopWait
+	if wait <= 0 {
+		wait = StopWait
+	}
+	done := make(chan struct{})
+	go func() { h.WaitAll(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(wait):
+		for _, row := range h.inFlight() {
+			h.log().Warn("health probe abandoned at shutdown", probeAttr(row))
+		}
+	}
 	rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer rcancel()
-	_ = h.Store.ReleaseJobLease(rctx, ProbeLease, h.holder())
+	if err := h.Store.ReleaseJobLease(rctx, ProbeLease, h.holder()); err != nil {
+		h.log().Warn("health probe lease not released at shutdown; it expires on its own", logx.Class(ClassStore))
+	}
+}
+
+// inFlight lists the probes in flight, sorted.
+func (h *HealthProber) inFlight() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]string, 0, len(h.inflight))
+	for row := range h.inflight {
+		out = append(out, row)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // probeAttr names a probe in a log line by its short name ("gateway",
@@ -585,8 +627,10 @@ func (h *HealthProber) probeGateway(ctx context.Context) result {
 // clean list + cat config passes. repo_missing is a failure of its own class
 // (the probe repository was created once and is gone: an emptied or re-pointed
 // prefix), and so is every other restic verdict. probed is false only when the
-// probe could not reach the worker at all (down, shutting down, busy), which is
-// "not checked" and C07's to report, never a storage pass.
+// probe could not reach the worker at all (down, shutting down, busy), or the
+// worker's own settings store failed during the probe (ClassWorkerStore), which
+// is "not checked" (C02b, and C07 names a worker that is down), never a storage
+// pass and never a storage failure.
 func storageVerdict(err error) (reached, probed bool, class string) {
 	if err == nil {
 		return true, true, ""
@@ -599,7 +643,12 @@ func storageVerdict(err error) (reached, probed bool, class string) {
 		return false, true, "timeout"
 	case errors.As(err, &ae):
 		switch ae.Code {
-		case adminpath.CodeUnavailable, adminpath.CodeBusy:
+		case adminpath.CodeUnavailable:
+			if ae.Class == maintain.ProbeRecordClass {
+				return false, false, ClassWorkerStore
+			}
+			return false, false, ae.Code
+		case adminpath.CodeBusy:
 			return false, false, ae.Code
 		case adminpath.CodeNotFound:
 			return false, true, "probe_unsupported" // a worker that predates the probe repository

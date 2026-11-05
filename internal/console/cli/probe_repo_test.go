@@ -88,14 +88,14 @@ func auditCount(t *testing.T, st *store.Store) int {
 
 // ADR 0017 recovery (M3-T2 delta 2, L3b): `probe-repo reset` is a dry run by
 // default, deletes the marker and writes one audit row only with --confirm,
-// never touches storage, and names the probe repository from the configured
-// bucket and prefix.
+// never touches storage, and names the probe repository from the bucket and
+// prefix the worker recorded in the marker (M3-INT C4).
 func TestProbeRepoResetDryRunThenConfirm(t *testing.T) {
 	t.Setenv("CRYO_MAINTAIN_BUCKET", "")
 	t.Setenv("CRYO_MAINTAIN_PREFIX", "")
 	cfgPath, open := probeRepoDB(t)
 	st := open()
-	if err := st.PutSetting(context.Background(), maintain.SettingProbeRepo, []byte(`{"created_at":1}`), ""); err != nil {
+	if err := st.PutSetting(context.Background(), maintain.SettingProbeRepo, []byte(`{"created_at":1,"bucket":"b","prefix":"tenant-a"}`), ""); err != nil {
 		t.Fatal(err)
 	}
 	_ = st.Close()

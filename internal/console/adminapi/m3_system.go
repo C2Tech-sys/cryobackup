@@ -347,6 +347,9 @@ func (s *Service) systemJobs(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	out := JobListResponse{ComputedAt: now, Jobs: []JobJSON{}}
 	for _, j := range rows {
+		if !store.IsJobRow(j.Name) {
+			continue // the health-prober's lease and per-probe rows are not jobs
+		}
 		seen[j.Name] = true
 		row := JobJSON{Name: j.Name, Registered: registered[j.Name], Status: j.LastStatus, LastStartedAt: j.LastStartedAt, LastFinishedAt: j.LastFinishedAt,
 			LastDurationMS: j.LastDurationMS, LastErrorClass: j.LastErrorClass, RunCount: j.RunCount, NextDueAt: j.NextDueAt, Running: jobRunning(j, now), Overdue: jobOverdue(j, now)}

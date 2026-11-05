@@ -341,7 +341,21 @@ func (s *Store) GetJobState(ctx context.Context, name string) (JobState, error) 
 	return out, err
 }
 
-// ListJobStates returns every job ordered by name.
+// nonJobRowPrefix names the job_state rows that are not jobs: the
+// health-prober's probe lease ("health-prober.probes") and its per-probe result
+// rows ("health-prober.gateway", ...; jobs.ProbeLease and jobs.ProbeRow*). They
+// are never scheduled and the lease row never records a run.
+const nonJobRowPrefix = "health-prober."
+
+// IsJobRow reports whether a job_state row is a job, for the job listings
+// (/healthz, GET /api/v1/system/jobs): false for the health-prober's lease and
+// per-probe rows, whose results the system health rows show instead.
+func IsJobRow(name string) bool {
+	return len(name) < len(nonJobRowPrefix) || name[:len(nonJobRowPrefix)] != nonJobRowPrefix
+}
+
+// ListJobStates returns every job_state row ordered by name: the jobs and the
+// rows that are not jobs (IsJobRow).
 func (s *Store) ListJobStates(ctx context.Context) ([]JobState, error) {
 	var out []JobState
 	err := s.Read(ctx, func(tx *Tx) error {
