@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -75,21 +76,48 @@ func (r fleetRegistrar) Handle(pattern string, h http.Handler) {
 	r.Registrar.Handle(pattern, h)
 }
 
-// fleetSignal calls fleetChanged when h answers with a 2xx status, at the
-// moment the status is written: after the handler's store write has committed
-// and before any byte of the answer reaches the client, so a client that reads
-// the answer and then opens a stream never gets an evaluation from before the
-// change. A failed request signals nothing.
+// fleetSignal signals a fleet change (fleetChanged) once per request: when the
+// handler says its store write has committed (s.committed, called right after
+// the write, so a follow-up that fails and answers 500 still signals), or else
+// when h answers with a 2xx status, at the moment the status is written. Both
+// come after the commit and before any byte of the answer reaches the client,
+// so a client that reads the answer and then opens a stream never gets an
+// evaluation from before the change. A request that committed nothing and
+// failed (any 4xx, a 5xx before the write) signals nothing.
 func (s *Service) fleetSignal(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.ServeHTTP(&fleetWriter{ResponseWriter: w, s: s}, r)
+		fw := &fleetWriter{ResponseWriter: w, s: s}
+		h.ServeHTTP(fw, r.WithContext(context.WithValue(r.Context(), fleetWriterKey{}, fw)))
 	})
+}
+
+// fleetWriterKey carries the request's fleetWriter to s.committed.
+type fleetWriterKey struct{}
+
+// committed tells the fleet-change wrapper that this request's store write has
+// committed: it signals now, once, whatever the handler answers afterwards. The
+// store-write paths of the fleet routes call it right after the write returns
+// without error. On a route that is not wrapped (fleet-neutral) it does nothing.
+func (s *Service) committed(r *http.Request) {
+	if fw, ok := r.Context().Value(fleetWriterKey{}).(*fleetWriter); ok {
+		fw.signal()
+	}
 }
 
 type fleetWriter struct {
 	http.ResponseWriter
-	s       *Service
-	written bool
+	s        *Service
+	written  bool
+	signaled bool
+}
+
+// signal calls fleetChanged once per request.
+func (w *fleetWriter) signal() {
+	if w.signaled {
+		return
+	}
+	w.signaled = true
+	w.s.fleetChanged("")
 }
 
 func (w *fleetWriter) status(code int) {
@@ -98,7 +126,7 @@ func (w *fleetWriter) status(code int) {
 	}
 	w.written = true
 	if code >= 200 && code < 300 {
-		w.s.fleetChanged("")
+		w.signal()
 	}
 }
 

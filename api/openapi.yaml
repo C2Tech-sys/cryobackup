@@ -1852,7 +1852,7 @@ paths:
       operationId: patchView
       tags: [views]
       summary: Edit a saved view
-      description: The owner edits their own view (a shared one only while its audience is inside the owner's scope, 404 otherwise); an admin edits any view they can see. Absent fields are unchanged. Making a view shared needs an audience in the patch; making it private clears the audience. A shared view's audience is checked again (400 as on create) whenever the audience, the filter or the sharing changes. A patch that changes nothing writes no audit row.
+      description: The owner edits their own view; an admin edits any view they can see. When the owner's shared view has an audience past the owner's scope (`locked`), the owner may only make it private (shared false and no other field); any other change answers 404. Absent fields are unchanged. Making a view shared needs an audience in the patch; making it private clears the audience. A shared view's audience is checked again (400 as on create) whenever the audience, the filter or the sharing changes. A patch that changes nothing writes no audit row.
       x-min-role: SELF
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -1878,7 +1878,7 @@ paths:
       operationId: deleteView
       tags: [views]
       summary: Delete a saved view
-      description: The owner deletes their own view (a shared one only while its audience is inside the owner's scope, 404 otherwise); an admin any view they can see.
+      description: The owner deletes their own view (a `locked` one included, since deleting only reduces who sees it); an admin any view they can see.
       x-min-role: SELF
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -1945,7 +1945,7 @@ paths:
       operationId: listJobs
       tags: [system]
       summary: Job table
-      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`.
+      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`. The health-prober's probe lease and per-probe result rows (`health-prober.*`) are not jobs and are not listed; the probe results are the system health rows.
       x-min-role: AD
       responses:
         '200':
@@ -1981,7 +1981,7 @@ paths:
       operationId: probeStorageTarget
       tags: [system]
       summary: Probe the gateway, storage and certificates now
-      description: Runs the health-prober job now (lease-guarded) and reads three checks (gateway, storage including the quota banner, certificates) from the banners the engine raises, the "not checked" banners included. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt.
+      description: Runs the health-prober's gateway probe (which also reads the gateway certificate's expiry) and storage probe now under the probe lease, waits for them (at most 90 s; a probe already in flight is waited for, not doubled), and reads three checks (gateway, storage including the quota banner, certificates). A check reads only a fact produced at or after the request started; an older one is `not_checked`. A fresh fact is judged by the banners the engine raises from it, the "not checked" banners included, and a probe that failed just now is `failed` before its streak raises a banner. When another console holds the probe lease nothing is probed here and the answer is 409. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt.
       x-min-role: AD
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -3726,6 +3726,7 @@ components:
         sort: {type: array, items: {type: object}}
         shared: {type: boolean}
         audience: {$ref: '#/components/schemas/ViewAudience'}
+        locked: {type: boolean, description: "True on your own shared view whose audience reaches past your scope (you lost one of its customers): you may make it private (a patch of shared false and nothing else) or delete it; any other change answers 404."}
         created_at: {$ref: '#/components/schemas/Timestamp'}
         updated_at: {$ref: '#/components/schemas/Timestamp'}
     ViewAudience:
@@ -3905,9 +3906,10 @@ components:
         reason: {type: string, description: Why the probe could not run; the checks are then not_checked.}
         job:
           type: object
+          description: This request's probe run. ok when the probes ran and ended within the bound; error with error_class timeout or failed otherwise.
           properties:
-            status: {type: string}
-            error_class: {type: string}
+            status: {type: string, enum: [ok, error]}
+            error_class: {type: string, enum: [timeout, failed]}
             duration_ms: {type: integer}
         checks:
           type: array

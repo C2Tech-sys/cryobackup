@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
@@ -41,8 +42,33 @@ func (w *Worker) probeSlot() time.Duration {
 }
 
 // SettingProbeRepo is the settings key that records the probe repository's
-// creation: {"created_at": <ms>}.
+// creation: a ProbeRepoMarker.
 const SettingProbeRepo = "storage_probe_repo"
+
+// ProbeRepoMarker is the value of SettingProbeRepo: when the worker recorded the
+// probe repository, and the bucket and prefix it used then (its own
+// configuration: CRYO_MAINTAIN_BUCKET and CRYO_MAINTAIN_PREFIX, else the default
+// storage target). `cryo-console probe-repo reset` reads the location from here
+// rather than guessing it from its own environment. A marker written before the
+// location was recorded has only created_at.
+type ProbeRepoMarker struct {
+	CreatedAt int64  `json:"created_at"`
+	Bucket    string `json:"bucket,omitempty"`
+	Prefix    string `json:"prefix,omitempty"`
+}
+
+// Location is <bucket>/<prefix>/probe as recorded, and false when the marker
+// names no bucket (an older marker).
+func (m ProbeRepoMarker) Location() (string, bool) {
+	b := strings.Trim(m.Bucket, "/")
+	if b == "" {
+		return "", false
+	}
+	if p := strings.Trim(m.Prefix, "/"); p != "" {
+		b += "/" + p
+	}
+	return b + "/" + adminpath.ProbeRepoID, true
+}
 
 // ProbeRepoKeyer is the optional interface of a KeyUnwrapper that can supply
 // the probe repository's password (derived from the master key; the console
@@ -54,6 +80,24 @@ type ProbeRepoKeyer interface {
 
 // errProbeKey: the probe repository's password is not available.
 var errProbeKey = errors.New("maintain: no probe repository password")
+
+// ProbeRecordClass is the class of the answer when the worker's own settings
+// store fails during the storage probe (reading or arming the SettingProbeRepo
+// guard): the code is adminpath.CodeUnavailable, so the console reads it as "not
+// checked" (C02b), never as a storage failure (C02). It says nothing about
+// storage: the list and cat config may well have passed.
+const ProbeRecordClass = restic.ClassInternal
+
+// probeStoreErr is the answer for a settings-store failure inside the probe. It
+// is logged without any identifier (no device, bucket or path); a cancelled
+// probe stays a cancellation.
+func (w *Worker) probeStoreErr(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	w.log.Warn("storage probe not completed: the worker settings store failed", attrClass("store"))
+	return adminpath.NewError(adminpath.CodeUnavailable, ProbeRecordClass)
+}
 
 func (w *Worker) probeTarget() (*target, error) {
 	k, ok := w.keys.(ProbeRepoKeyer)
@@ -122,7 +166,7 @@ func (w *Worker) probeStorage(ctx context.Context) (restic.Config, error) {
 		}
 		created, serr := w.probeRepoCreated(ctx)
 		if serr != nil {
-			return restic.Config{}, w.storeErr(ctx, serr)
+			return restic.Config{}, w.probeStoreErr(ctx) // not a storage verdict: "not checked"
 		}
 		if created {
 			// It existed and is gone: the prefix was emptied or re-pointed. Never re-create silently.
@@ -157,20 +201,22 @@ func (w *Worker) probeStorage(ctx context.Context) (restic.Config, error) {
 	return cfg, nil
 }
 
-// recordProbeRepo writes SettingProbeRepo unless it is already there.
+// recordProbeRepo writes SettingProbeRepo unless it is already there. A
+// settings-store failure is probeStoreErr ("not checked"), never an internal
+// error the console would count as a storage failure.
 func (w *Worker) recordProbeRepo(ctx context.Context) error {
 	created, err := w.probeRepoCreated(ctx)
 	if err != nil {
-		return w.storeErr(ctx, err)
+		return w.probeStoreErr(ctx)
 	}
 	if created {
 		return nil
 	}
-	val, _ := json.Marshal(map[string]int64{"created_at": w.clock().UnixMilli()})
+	val, _ := json.Marshal(ProbeRepoMarker{CreatedAt: w.clock().UnixMilli(), Bucket: w.cfg.Bucket, Prefix: w.cfg.Prefix})
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
 	defer cancel()
 	if err := w.st.PutSetting(rctx, SettingProbeRepo, val, ""); err != nil {
-		return adminpath.NewError(adminpath.CodeInternal, "")
+		return w.probeStoreErr(ctx)
 	}
 	return nil
 }

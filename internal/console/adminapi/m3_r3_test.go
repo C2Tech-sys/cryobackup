@@ -161,12 +161,11 @@ func TestM3EventStreamHealthyReaderOutlivesTheWriteTimeout(t *testing.T) { // r3
 	}
 }
 
-// lostLeaseRunner registers the health prober but always loses its lease, as when
-// another holder takes it between the busy check and the run.
-type lostLeaseRunner struct{}
+// lostLeaseProber always finds the probe lease held by another console, so
+// nothing is probed (M3-INT: the probe runs through Service.Prober).
+type lostLeaseProber struct{}
 
-func (lostLeaseRunner) Names() []string { return []string{proberJob} }
-func (lostLeaseRunner) RunOnce(context.Context, string) (bool, error) {
+func (lostLeaseProber) ProbeNow(context.Context) (bool, error) {
 	return false, nil
 }
 
@@ -176,7 +175,7 @@ func TestM3StorageProbeThatLosesTheLeaseAuditsTheConflict(t *testing.T) { // F19
 	e := newEnv(t)
 	owner := e.login("admin", pw)
 	target := e.firstStorageTarget()
-	e.svc.Jobs = lostLeaseRunner{}
+	e.svc.Prober = lostLeaseProber{}
 	if res, b := e.req("POST", "/api/v1/storage-targets/"+target+"/probe", owner, nil); res.StatusCode != 409 {
 		t.Fatalf("probe that lost the lease = %d %s, want 409", res.StatusCode, b)
 	}

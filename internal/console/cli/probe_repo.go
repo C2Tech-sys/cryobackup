@@ -2,12 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 
-	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/maintain"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
@@ -20,10 +18,23 @@ const probeRepoUsage = `usage: cryo-console probe-repo reset [--config config.js
          It never deletes anything on storage: remove the old probe repository yourself first.
 `
 
+// unknownLocation is said instead of a path when the marker does not record
+// where the worker put the probe repository. The worker takes its location from
+// its own environment (CRYO_MAINTAIN_BUCKET, CRYO_MAINTAIN_PREFIX), else the
+// default storage target; this command runs in another process and cannot see
+// that environment, so it never prints a path it would have to guess.
+const unknownLocation = "the probe repository's location is not recorded in the marker (it predates M3-INT), and this command cannot read the maintenance worker's environment: " +
+	"it is <bucket>/<prefix>/probe, where bucket and prefix are the worker's CRYO_MAINTAIN_BUCKET and CRYO_MAINTAIN_PREFIX, or the default storage target's when those are unset"
+
+// probeRepoBeforeReset, when set, runs between reading the marker and deleting
+// it (tests: another reset that wins the race).
+var probeRepoBeforeReset func(*store.Store)
+
 // runProbeRepo is the recovery tool of ADR 0017. Following the operator's
 // script rules it is a dry run by default and idempotent: --confirm deletes
 // the marker and writes one audit row in the same transaction (an audit that
-// fails rolls the change back), and a second run finds nothing to do.
+// fails rolls the change back), and a second run finds nothing to do. The
+// probe repository's location is the one the worker recorded in the marker.
 func runProbeRepo(args []string, io IO) int {
 	if len(args) == 0 || args[0] != "reset" {
 		if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
@@ -52,26 +63,31 @@ func runProbeRepo(args []string, io IO) int {
 	}
 	defer st.Close()
 
-	location := probeRepoLocation(ctx, st)
-	_, gerr := st.GetSetting(ctx, maintain.SettingProbeRepo)
+	raw, gerr := st.GetSetting(ctx, maintain.SettingProbeRepo)
 	switch {
 	case errors.Is(gerr, store.ErrNotFound):
 		fmt.Fprintln(io.Stdout, "no storage probe repository marker is set: nothing to reset.")
-		fmt.Fprintf(io.Stdout, "the next probe creates the probe repository at %s if it does not exist.\n", location)
+		fmt.Fprintln(io.Stdout, "the next probe creates the probe repository under the maintenance worker's bucket and prefix if it does not exist.")
 		return ExitOK
 	case gerr != nil:
 		fmt.Fprintln(io.Stderr, "cryo-console probe-repo:", sanitize(gerr))
 		return ExitFailed
 	}
+	location := markerLocation(raw.Value)
 	if !*confirm {
 		fmt.Fprintln(io.Stdout, "dry run: would delete the settings row storage_probe_repo and write one audit row.")
-		fmt.Fprintf(io.Stdout, "before you confirm, remove the old probe repository on storage yourself: %s\n", location)
+		fmt.Fprintln(io.Stdout, "before you confirm, remove the old probe repository on storage yourself: "+location)
 		fmt.Fprintln(io.Stdout, "this command never deletes anything on storage. Re-run with --confirm to reset the marker.")
 		return ExitOK
 	}
+	if probeRepoBeforeReset != nil {
+		probeRepoBeforeReset(st)
+	}
 	var auditErr error
+	deleted := false
 	err = st.Write(ctx, func(tx *store.Tx) error {
-		deleted, err := tx.DeleteSetting(maintain.SettingProbeRepo)
+		var err error
+		deleted, err = tx.DeleteSetting(maintain.SettingProbeRepo)
 		if err != nil || !deleted {
 			return err
 		}
@@ -86,30 +102,27 @@ func runProbeRepo(args []string, io IO) int {
 	case err != nil:
 		fmt.Fprintln(io.Stderr, "cryo-console probe-repo:", sanitize(err))
 		return ExitFailed
+	case !deleted:
+		// Gone between the read and the delete: another reset (or the operator by hand) removed it.
+		fmt.Fprintln(io.Stdout, "the storage probe repository marker was already gone when this run went to delete it: nothing was deleted and nothing was audited.")
+		return ExitOK
 	}
 	fmt.Fprintln(io.Stdout, "storage probe repository marker deleted (audited).")
-	fmt.Fprintf(io.Stdout, "nothing was deleted on storage: if the old probe repository is still there, remove it yourself: %s\n", location)
-	fmt.Fprintln(io.Stdout, "the next probe creates a fresh probe repository there.")
+	fmt.Fprintln(io.Stdout, "nothing was deleted on storage: if the old probe repository is still there, remove it yourself: "+location)
+	fmt.Fprintln(io.Stdout, "the next probe creates a fresh probe repository under the maintenance worker's bucket and prefix.")
 	return ExitOK
 }
 
-// probeRepoLocation is <bucket>/<prefix>/probe as the maintenance worker
-// addresses it: CRYO_MAINTAIN_BUCKET and CRYO_MAINTAIN_PREFIX when set (the
-// worker's own override), else the default storage target. Only the configured
-// bucket and prefix are used.
-func probeRepoLocation(ctx context.Context, st *store.Store) string {
-	bucket, prefix := os.Getenv("CRYO_MAINTAIN_BUCKET"), os.Getenv("CRYO_MAINTAIN_PREFIX")
-	if bucket == "" {
-		if tgt, err := st.DefaultStorageTarget(ctx); err == nil {
-			bucket, prefix = tgt.Bucket, tgt.Prefix
-		}
+// markerLocation is the probe repository's location as the worker recorded it
+// in the marker, or unknownLocation when the marker does not say (an older
+// marker, or one that does not parse).
+func markerLocation(raw []byte) string {
+	var m maintain.ProbeRepoMarker
+	if json.Unmarshal(raw, &m) != nil {
+		return unknownLocation
 	}
-	if bucket == "" {
-		return "<bucket>/<prefix>/" + adminpath.ProbeRepoID + " (no default storage target is configured)"
+	if loc, ok := m.Location(); ok {
+		return loc
 	}
-	loc := strings.Trim(bucket, "/")
-	if p := strings.Trim(prefix, "/"); p != "" {
-		loc += "/" + p
-	}
-	return loc + "/" + adminpath.ProbeRepoID
+	return unknownLocation
 }

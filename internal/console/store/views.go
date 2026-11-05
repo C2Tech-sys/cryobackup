@@ -409,13 +409,23 @@ func (s *Store) CreateSavedViewAudited(ctx context.Context, scope Scope, in Save
 	return out, err
 }
 
+// AudienceInside reports whether v is private or shared with an audience that
+// lies inside scope. The owner of a shared view whose audience reaches past
+// their scope (they lost one of its customers) may only make it private or
+// delete it (editableView); the API marks such a view locked so the list and
+// the actions agree.
+func (v SavedView) AudienceInside(scope Scope) bool {
+	return !v.Shared || audienceInScope(scope, v.Audience)
+}
+
 // editableView loads view id for a change by actor. Not visible is ErrNotFound;
 // visible but another admin's is ErrScope unless asAdmin (the AD role). The
-// owner of a shared view may change it only while its audience is inside their
-// scope: an owner who has lost one of its customers gets ErrNotFound, as for a
-// view they cannot see, so their edits never reach accounts they no longer
-// share a customer with (an all-customer admin can still delete it).
-func editableView(tx *Tx, scope Scope, actor AuditActor, id string, asAdmin bool) (SavedView, error) {
+// owner of a shared view whose audience is no longer inside their scope may
+// only reduce its exposure (reduces: delete it, or make it private and change
+// nothing else); any other change is ErrNotFound, as for a view they cannot
+// see, so their edits never reach accounts they no longer share a customer
+// with. An all-customer admin can still change or delete it.
+func editableView(tx *Tx, scope Scope, actor AuditActor, id string, asAdmin, reduces bool) (SavedView, error) {
 	v, err := one(tx, `SELECT `+viewCols+viewFrom+` WHERE v.id = ?`, []any{id}, scanView)
 	if err != nil {
 		return SavedView{}, err
@@ -423,7 +433,7 @@ func editableView(tx *Tx, scope Scope, actor AuditActor, id string, asAdmin bool
 	if !visibleView(scope, actor.AdminID, v) {
 		return SavedView{}, ErrNotFound
 	}
-	if v.Shared && !audienceInScope(scope, v.Audience) {
+	if !v.AudienceInside(scope) && !reduces {
 		return SavedView{}, ErrNotFound // the owner's own shared view, for customers they no longer see
 	}
 	if !(v.OwnerID != "" && v.OwnerID == actor.AdminID) && !asAdmin {
@@ -452,8 +462,10 @@ func (s *Store) UpdateSavedViewAudited(ctx context.Context, scope Scope, id stri
 	if len(bad) > 0 {
 		return SavedView{}, false, validation(bad)
 	}
+	// Making the view private and nothing else only reduces who sees it.
+	private := p.Shared != nil && !*p.Shared && p.Name == nil && p.Filter == nil && p.Columns == nil && p.Sort == nil && p.Audience == nil
 	err = s.Write(ctx, func(tx *Tx) error {
-		cur, err := editableView(tx, scope, actor, id, asAdmin)
+		cur, err := editableView(tx, scope, actor, id, asAdmin, private)
 		if err != nil {
 			return err
 		}
@@ -551,7 +563,7 @@ func (s *Store) DeleteSavedViewAudited(ctx context.Context, scope Scope, id stri
 		return err
 	}
 	return s.Write(ctx, func(tx *Tx) error {
-		cur, err := editableView(tx, scope, actor, id, asAdmin)
+		cur, err := editableView(tx, scope, actor, id, asAdmin, true) // a delete only reduces exposure
 		if err != nil {
 			return err
 		}

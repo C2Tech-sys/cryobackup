@@ -10,7 +10,8 @@ import (
 
 // StoreHealth builds the /healthz function for a store and master key: a
 // database read, the applied schema version against the newest embedded
-// migration, the master key and the last status of every job. Nothing in the
+// migration, the master key and the last status of every job (store.IsJobRow:
+// the health-prober's lease and per-probe rows are not jobs). Nothing in the
 // answer is a path or a name from the data.
 func StoreHealth(st *store.Store, master *escrow.MasterKey, fixtures bool) func(context.Context) Health {
 	return func(ctx context.Context) Health {
@@ -27,6 +28,9 @@ func StoreHealth(st *store.Store, master *escrow.MasterKey, fixtures bool) func(
 		if jobs, err := st.ListJobStates(ctx); err == nil && len(jobs) > 0 {
 			h.Jobs = map[string]string{}
 			for _, j := range jobs {
+				if !store.IsJobRow(j.Name) {
+					continue // the health-prober's lease and per-probe rows are not jobs
+				}
 				status := j.LastStatus
 				if status == "" {
 					status = "never_ran"

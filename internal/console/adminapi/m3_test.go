@@ -1123,16 +1123,9 @@ func TestM3StorageProbe(t *testing.T) { // F18 F19, L1
 		t.Errorf("probe wrote %d audit rows", e.audits()-before)
 	}
 
-	// With the job: it runs now, and the checks are read from the banners the engine raises.
-	runner := jobs.NewRunner(e.st, "probe-test", nil)
-	failing := false
-	runner.Add(jobs.Job{Name: proberJob, Every: time.Minute, Run: func(context.Context) error {
-		if failing {
-			return &jobs.ClassError{Class: jobs.ClassIO}
-		}
-		return nil
-	}})
-	e.svc.Jobs = runner
+	// With a prober (the real one, M3-INT): it probes now, and the checks are read from the
+	// facts it produced and the banners the engine raises from them.
+	_, hook := e.realProber(newProbeBackend(), "probe-test")
 	pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
 	checkScope(pr)
 	if !pr.Ran || pr.Job == nil || pr.Job.Status != "ok" || len(pr.Checks) != 3 {
@@ -1179,10 +1172,11 @@ func TestM3StorageProbe(t *testing.T) { // F18 F19, L1
 	}
 	// A prober that itself fails is not a pass.
 	e.setExtra(nil)
-	failing = true
+	real := *hook.p.Load()
+	hook.set(failingProber{})
 	pr = decode[ProbeResponse](t, mustBody(e, "POST", path, owner, nil))
 	checkScope(pr)
-	if pr.Ran || pr.Job == nil || pr.Job.Status != "error" || pr.Job.ErrorClass != jobs.ClassIO {
+	if pr.Ran || pr.Job == nil || pr.Job.Status != "error" || pr.Job.ErrorClass != "failed" {
 		t.Fatalf("a failing prober: %+v", pr)
 	}
 	for _, c := range pr.Checks {
@@ -1190,8 +1184,10 @@ func TestM3StorageProbe(t *testing.T) { // F18 F19, L1
 			t.Errorf("%s = %s although the prober failed", c.ID, c.Status)
 		}
 	}
-	// Lease held elsewhere: 409.
-	if ok, err := e.st.AcquireJobLease(context.Background(), proberJob, "someone-else", time.Hour); err != nil || !ok {
+	// Lease held elsewhere: 409. This console's lease from the probes above lapses first.
+	hook.set(real)
+	e.clk.Advance(10 * time.Minute)
+	if ok, err := e.st.AcquireJobLease(context.Background(), jobs.ProbeLease, "someone-else", time.Hour); err != nil || !ok {
 		t.Fatal(err)
 	}
 	if res, _ := e.req("POST", path, owner, nil); res.StatusCode != 409 {

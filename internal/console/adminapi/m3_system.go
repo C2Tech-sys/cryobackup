@@ -28,11 +28,6 @@ type JobRunner interface {
 	RunOnce(ctx context.Context, name string) (ran bool, err error)
 }
 
-// proberJob is the job_state name of the health-prober job, which feeds the
-// gateway, storage, SMTP and certificate banners (architecture §5.7). A console
-// without it cannot say any of those is fine: they read "not checked".
-const proberJob = "health-prober"
-
 // jobRunTimeout bounds one manual job run.
 const jobRunTimeout = 15 * time.Minute
 
@@ -352,6 +347,9 @@ func (s *Service) systemJobs(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	out := JobListResponse{ComputedAt: now, Jobs: []JobJSON{}}
 	for _, j := range rows {
+		if !store.IsJobRow(j.Name) {
+			continue // the health-prober's lease and per-probe rows are not jobs
+		}
 		seen[j.Name] = true
 		row := JobJSON{Name: j.Name, Registered: registered[j.Name], Status: j.LastStatus, LastStartedAt: j.LastStartedAt, LastFinishedAt: j.LastFinishedAt,
 			LastDurationMS: j.LastDurationMS, LastErrorClass: j.LastErrorClass, RunCount: j.RunCount, NextDueAt: j.NextDueAt, Running: jobRunning(j, now), Overdue: jobOverdue(j, now)}
@@ -473,8 +471,24 @@ func (s *Service) systemJobRun(w http.ResponseWriter, r *http.Request) {
 
 // ---- storage-targets/{id}/probe ----
 
+// HealthProbe runs the console's health probes now (jobs.HealthProber satisfies
+// it; cli wires it). ProbeNow takes the probe lease and returns ran false, nil
+// when another console holds it, so nothing was probed here. Holding it, it
+// runs the gateway probe (which also reads the gateway certificate's expiry)
+// and the storage probe, or waits for the run already in flight, and returns
+// once both have recorded their facts, bounded by ctx (ran true and ctx's
+// error when the wait ran out).
+type HealthProbe interface {
+	ProbeNow(ctx context.Context) (ran bool, err error)
+}
+
+// probeNowTimeout bounds the wait for the probes: the storage probe's own bound
+// (45 s) with room for the gateway probe beside it.
+const probeNowTimeout = 90 * time.Second
+
 // ProbeCheckJSON is the result of one probe check. Status is ok, warn, failed or
-// not_checked; ok only after the prober ran in this call and raised nothing.
+// not_checked; ok only when the probe this request asked for produced the fact
+// and raised nothing.
 type ProbeCheckJSON struct {
 	ID      string   `json:"id"`
 	Status  string   `json:"status"`
@@ -494,7 +508,8 @@ const (
 	probeNote  = "The engine records gateway, storage, certificate and quota facts for the console as a whole, not per storage target. These checks speak for the whole console; the target named here is the one you asked about, and its own state is not separately measured."
 )
 
-// ProbeJobJSON is the health-prober job's record after the run.
+// ProbeJobJSON is the record of this request's probe run: ok when the probes
+// ran and every one ended within the bound, error (with a class) otherwise.
 type ProbeJobJSON struct {
 	Status     string `json:"status"`
 	ErrorClass string `json:"error_class,omitempty"`
@@ -517,6 +532,55 @@ type ProbeResponse struct {
 	Note  string `json:"note"`
 }
 
+// probeChecks judges the gateway, storage and certificates checks of a probe
+// that began at since. A check reads only a fact produced at or after since:
+// an older one (the probe did not finish, the worker was busy, the gateway is
+// not configured) is not_checked whatever it said, because it is not evidence
+// of now. A fresh fact is then judged by the banners the engine raised from it
+// (the not-checked "b" banners included), by C00, and by the run itself: a probe
+// that failed just now is failed even before its streak raises a banner. The
+// certificates check reads the gateway run: a failed one read no certificate.
+func probeChecks(banners []state.Banner, facts state.ProbeFacts, since time.Time) []ProbeCheckJSON {
+	from := state.Millis(since.UnixMilli())
+	fresh := func(r *state.ProbeRun) bool { return r != nil && r.LastRunAt != 0 && r.LastRunAt >= from }
+	failedNow := func(r *state.ProbeRun) bool { return r.LastOKAt != r.LastRunAt }
+	staleWhy := func(r *state.ProbeRun, what string) string {
+		if r != nil && r.Unconfigured != "" {
+			return "not checked: " + r.Unconfigured
+		}
+		return "the " + what + " probe produced no result during this request, so its older result is not evidence of now"
+	}
+	_, c00 := worstOf(banners, []string{bannerNotWired})
+	out := make([]ProbeCheckJSON, 0, 3)
+	for _, c := range []struct {
+		id, what string
+		run      *state.ProbeRun
+	}{{"gateway", "gateway", facts.Gateway}, {"storage", "storage", facts.Storage}, {"certificates", "gateway", facts.Gateway}} {
+		ids, worst := worstOf(banners, healthRowBanners[c.id])
+		if ids == nil {
+			ids = []string{}
+		}
+		chk := ProbeCheckJSON{ID: c.id, Status: statusOK, Banners: ids, Scope: probeScope}
+		switch {
+		case !fresh(c.run):
+			chk.Status, chk.Detail = statusNotChecked, staleWhy(c.run, c.what)
+		case c.id == "certificates" && failedNow(c.run):
+			chk.Status, chk.Detail = statusNotChecked, "the gateway probe failed just now, so no certificate was read"
+		case c.id != "certificates" && failedNow(c.run):
+			chk.Status, chk.Detail = statusFailed, "the "+c.what+" probe failed just now ("+c.run.LastErrorClass+")"
+			if worst == statusFailed {
+				chk.Detail = ""
+			}
+		case worst != "":
+			chk.Status = worst
+		case c00 != "":
+			chk.Status, chk.Detail = statusNotChecked, "console self-checks are not wired (C00)"
+		}
+		out = append(out, chk)
+	}
+	return out
+}
+
 func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 	p, _ := auth.FromContext(r.Context())
 	ctx := r.Context()
@@ -525,28 +589,15 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	runnable := s.Jobs != nil && slices.Contains(s.Jobs.Names(), proberJob)
-	if runnable {
-		busy, err := s.jobBusy(ctx, proberJob)
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		if busy {
-			httpx.Problem(w, r, api.CodeConflict, 0)
-			return
-		}
-	}
 	// Exactly one audit row per probe. Without a prober nothing runs: the row is
-	// written first and a refused audit refuses the probe. With one, the run's
-	// lease is taken inside RunOnce, so whether the probe ran is known only after
-	// it: the row is written then, with the outcome (ok; error "conflict" for a
-	// lost lease, answered 409; error "failed" for a prober that failed). A refused
-	// audit then answers 500; the probe itself only refreshes health facts.
+	// written first and a refused audit refuses the probe. With one, the probe
+	// lease is taken inside ProbeNow, so whether the probe ran is known only after
+	// it: the row is written then, with the outcome (ok; error "conflict" when
+	// another console holds the lease, answered 409; error "timeout" or "failed"
+	// for probes that did not finish). It is written even when the client has gone
+	// (auditOutcome). A refused audit then answers 500; the probe itself only
+	// refreshes health facts.
 	const auditAction = "storage_target.probe"
-	if !runnable && !s.auditAccepted(w, r, p, auditAction, "storage_target", t.ID) {
-		return
-	}
 	out := ProbeResponse{TargetID: t.ID, Target: t.Name, Checks: []ProbeCheckJSON{}, Scope: probeScope, Note: probeNote}
 	notChecked := func(reason string) {
 		out.Reason = reason
@@ -554,23 +605,31 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 			out.Checks = append(out.Checks, ProbeCheckJSON{ID: id, Status: statusNotChecked, Detail: reason, Banners: []string{}, Scope: probeScope})
 		}
 	}
-	if !runnable {
-		notChecked("the health-prober job is not registered in this console")
-	} else {
-		pctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		ran, rerr := s.Jobs.RunOnce(pctx, proberJob)
-		cancel()
-		out.Ran = ran
-		if row, gerr := s.Store.GetJobState(ctx, proberJob); gerr == nil {
-			out.Job = &ProbeJobJSON{Status: row.LastStatus, ErrorClass: row.LastErrorClass, DurationMS: row.LastDurationMS}
+	if s.Prober == nil {
+		if !s.auditAccepted(w, r, p, auditAction, "storage_target", t.ID) {
+			return
 		}
+		notChecked("the health prober does not run in this console")
+	} else {
+		started := s.now()
+		pctx, cancel := context.WithTimeout(ctx, probeNowTimeout)
+		ran, rerr := s.Prober.ProbeNow(pctx)
+		cancel()
+		if ran {
+			s.committed(r) // the probe facts changed: signal now, before the audit and the evaluation, either of which can fail
+		}
+		took := s.now().Sub(started).Milliseconds()
+		out.Ran = ran && rerr == nil
 		result, outcome := "ok", ""
 		switch {
 		case !ran && rerr == nil:
 			result, outcome = "error", "conflict"
+		case errors.Is(rerr, context.DeadlineExceeded):
+			result, outcome = "error", "timeout"
 		case rerr != nil:
 			result, outcome = "error", "failed"
 		}
+		out.Job = &ProbeJobJSON{Status: result, ErrorClass: outcome, DurationMS: &took}
 		var details map[string]any
 		if outcome != "" {
 			details = map[string]any{"outcome": outcome}
@@ -580,32 +639,25 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case !ran && rerr == nil:
-			httpx.Problem(w, r, api.CodeConflict, 0) // lost the lease to another run between the check and now
+			httpx.Problem(w, r, api.CodeConflict, 0) // another console holds the probe lease: nothing ran here
 			return
+		case outcome == "timeout":
+			notChecked("the probes did not finish within " + probeNowTimeout.String())
 		case rerr != nil:
-			out.Ran = false
-			notChecked("the health-prober job failed to run")
+			notChecked("the health prober failed to run")
 		default:
+			// The facts are read before the evaluation, so the banners are judged from
+			// facts at least as new as the ones the freshness test reads.
+			var facts state.ProbeFacts
+			if s.Fleet.Probes != nil {
+				facts = s.Fleet.Probes()
+			}
 			f, ferr := s.Fleet.Fleet(ctx, p.Scope)
 			if ferr != nil {
 				s.fail(w, r, ferr)
 				return
 			}
-			_, c00 := worstOf(f.View.Banners, []string{bannerNotWired})
-			for _, c := range []struct{ id, row string }{{"gateway", "gateway"}, {"storage", "storage"}, {"certificates", "certificates"}} {
-				ids, worst := worstOf(f.View.Banners, healthRowBanners[c.row])
-				chk := ProbeCheckJSON{ID: c.id, Status: statusOK, Banners: ids, Scope: probeScope}
-				switch {
-				case worst != "":
-					chk.Status = worst
-				case c00 != "":
-					chk.Status, chk.Detail = statusNotChecked, "console self-checks are not wired (C00)"
-				}
-				if chk.Banners == nil {
-					chk.Banners = []string{}
-				}
-				out.Checks = append(out.Checks, chk)
-			}
+			out.Checks = probeChecks(f.View.Banners, facts, started)
 		}
 	}
 	if s.Backend != nil {

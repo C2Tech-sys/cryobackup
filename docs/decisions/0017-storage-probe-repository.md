@@ -24,21 +24,28 @@ earlier decision.
   The console binary's key unwrapper supplies it (`maintain.ProbeRepoKeyer`).
 - **Creation, once.** When the list answers exit 10 and the settings row `storage_probe_repo` is absent, the worker
   creates the repository with `restic init` (storage-side only; nothing reaches the console host's disk, ADR
-  0008) and records `{"created_at": ms}` in that row. A console with no enrolled device thus reaches a healthy C02.
+  0008) and records `{"created_at": ms, "bucket": ..., "prefix": ...}` in that row: the bucket and prefix the
+  worker used (M3-INT; a row written earlier has only `created_at`). A console with no enrolled device thus reaches a healthy C02.
   The first clean list + cat config also writes the row when it is missing, so a probe repository that already
   existed (a rebuilt database with the same key and prefix, an init cut short after its config was written) arms
   the guard below too.
 - **Missing after creation is a failure.** With the row present, exit 10 is `repo_missing`: never a pass, never
   re-created. The console's prober counts it, like every restic verdict other than success, as a failed storage
   probe with its own class (two in a row raise C02). A worker it cannot reach (down, busy) is "not checked" (C02b,
-  and C07 names the worker), never a pass.
+  and C07 names the worker), never a pass. So is a failure of the worker's own settings store during the probe
+  (reading or arming the row above): the worker answers `unavailable` with class `internal`
+  (`maintain.ProbeRecordClass`), which the prober records as `worker_store`, never as a storage failure (M3-INT).
 - **Busy is bounded, not a timeout.** Each step of the probe waits at most `maintain.ProbeSlotWait` (3 s) for one of
   the worker's concurrency slots (shared with dump streams, browsing and the scheduler) and otherwise answers
   `busy`. Chosen over reserving a slot for probes because it changes nothing for the other callers and needs no
   new configuration; the cost is that a worker saturated for three prober intervals shows C02b until a slot frees.
 - **One prober.** The console's probes run only while that process holds the `health-prober.probes` lease, renewed
   while any probe is in flight; a second console probes nothing (it shows the not-checked warnings), so two
-  consoles never overlap probes or the first-boot `restic init`.
+  consoles never overlap probes or the first-boot `restic init`. The on-demand probe
+  (`POST /api/v1/storage-targets/{id}/probe`, M3-INT) takes the same lease: it runs the gateway and storage
+  probes now (or waits for the run already in flight), waits for their facts, and answers 409 when another
+  console holds the lease. Its checks read only facts produced during the request; anything older is
+  `not_checked`.
 
 ## Consequences
 
@@ -46,7 +53,10 @@ earlier decision.
 - After an intentional move of the prefix, or a new master key (the probe password changes, so cat config answers
   wrong_password), the operator removes the old `<bucket>/<prefix>/probe` on storage and runs
   `cryo-console probe-repo reset --confirm` (a dry run without `--confirm`; it deletes only the settings row,
-  writes one audit row and never touches storage). The next probe creates a fresh repository. Until then C02 stays
+  writes one audit row and never touches storage). It names the old repository from the bucket and prefix the
+  worker recorded in the row, never from its own environment (the worker's CRYO_MAINTAIN_BUCKET and
+  CRYO_MAINTAIN_PREFIX are invisible to it); for a row without them it prints no path and says where the
+  location comes from (M3-INT). The next probe creates a fresh repository. Until then C02 stays
   raised, which is the intended loud default.
 - A prefix that is wrong from the first day is not detected by this probe (the repository is created there); the
   device repositories' own checks (enrollment init, escrow verification) cover that case.
