@@ -51,10 +51,14 @@ const (
 // EventSource is the hub the stream listens to (ui.Hub satisfies it). Watch
 // returns a channel of signals and the function that stops watching; a slow
 // reader loses signals, never blocks the hub. DeviceChanged tells the hub that
-// a device changed (an API write), so every open stream re-renders.
+// a device changed (an API write), so every open stream re-renders. Generation
+// counts the hub's signals and grows before each one is delivered (a lost signal
+// still counts), so a watcher that reads it after a signal sees that signal
+// counted.
 type EventSource interface {
 	Watch() (<-chan Signal, func())
 	DeviceChanged(deviceID string)
+	Generation() uint64
 }
 
 // DefaultMaxEventStreams is how many event streams may be open at once when
@@ -84,6 +88,7 @@ const DefaultEventWriteTimeout = 30 * time.Second
 
 // sseShareDefault is how long one fleet evaluation may serve every stream of the
 // same scope: a change that fans out to N streams costs one evaluation, not N.
+// The window only bounds the reuse; a change ends it at once (changeGeneration).
 const sseShareDefault = time.Second
 
 const (
@@ -110,11 +115,28 @@ func (s *Service) sseTimings() (refresh, gap time.Duration) {
 }
 
 // sharedEval is the newest evaluation of one scope, for every stream of it.
+// gen is the change generation read before the evaluation started.
 type sharedEval struct {
 	mu    sync.Mutex
 	at    time.Time
+	gen   uint64
 	fleet health.Fleet
 	ok    bool
+}
+
+// changeGeneration counts the changes the stream can know of: every hub signal
+// (Events.Generation) and every change made through this API that tells the hub
+// (deviceChanged bumps apiGen before it tells anyone). Both counters only grow,
+// so their sum only grows, and it has grown before any stream can hear of the
+// change. An evaluation is tagged with the value read before it started; it is
+// reused only while that value is still current, so an evaluation that may
+// predate a change is never served after the change.
+func (s *Service) changeGeneration() uint64 {
+	g := s.apiGen.Load()
+	if s.Events != nil {
+		g += s.Events.Generation()
+	}
+	return g
 }
 
 // scopeKey names a scope the way the hub does, so equal scopes share.
@@ -128,11 +150,13 @@ func scopeKey(sc store.Scope) string {
 }
 
 // sharedFleet evaluates the fleet for scope, reusing the newest successful
-// evaluation of the same scope when it is younger than the share window.
-// Concurrent callers of one scope wait for the evaluation in flight instead of
-// starting their own. A failed evaluation is returned, never kept: the next
-// caller tries again.
-func (s *Service) sharedFleet(ctx context.Context, scope store.Scope) (health.Fleet, error) {
+// evaluation of the same scope when it is younger than the share window and no
+// change has happened since it started (its generation is current). Concurrent
+// callers of one scope wait for the evaluation in flight instead of starting
+// their own. A failed evaluation is returned, never kept: the next caller tries
+// again. gen is the generation of the answer: no change counted at or below it
+// is missing from it.
+func (s *Service) sharedFleet(ctx context.Context, scope store.Scope) (f health.Fleet, gen uint64, err error) {
 	key := scopeKey(scope)
 	s.evalMu.Lock()
 	if s.evals == nil {
@@ -150,16 +174,17 @@ func (s *Service) sharedFleet(ctx context.Context, scope store.Scope) (health.Fl
 	}
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
-	if ev.ok && time.Since(ev.at) < window {
-		return ev.fleet, nil
+	gen = s.changeGeneration() // read before evaluating: a change during the evaluation makes it stale
+	if ev.ok && ev.gen == gen && time.Since(ev.at) < window {
+		return ev.fleet, ev.gen, nil
 	}
-	f, err := s.Fleet.Fleet(ctx, scope)
+	f, err = s.Fleet.Fleet(ctx, scope)
 	if err != nil {
 		ev.ok = false
-		return health.Fleet{}, err
+		return health.Fleet{}, 0, err
 	}
-	ev.fleet, ev.at, ev.ok = f, time.Now(), true
-	return f, nil
+	ev.fleet, ev.at, ev.gen, ev.ok = f, time.Now(), gen, true
+	return f, gen, nil
 }
 
 // streamSlots takes one slot for the principal and one global slot, in that
@@ -368,17 +393,21 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 	defer pingT.Stop()
 
 	var lastBanners string
-	emit := func(ctx context.Context) bool {
+	// emit sends the fleet of the caller's scope. alive is false when the stream
+	// must end; gen is the change generation the fleet sent is current for (the
+	// maximum on a stream.error: the client has been told the state is stale, and
+	// the next signal tries again).
+	emit := func(ctx context.Context) (alive bool, gen uint64) {
 		refreshT.Reset(period()) // an emit of any cause restarts the watchdog
-		f, err := s.sharedFleet(ctx, p.Scope)
+		f, gen, err := s.sharedFleet(ctx, p.Scope)
 		if err != nil {
 			s.log().Warn("event stream: fleet not evaluated", logx.Class("fleet"))
-			return s.writeSSE(w, rc, fl, "stream.error", StreamErrorJSON{ComputedAt: s.now(), Class: "fleet_unavailable"}) == nil
+			return s.writeSSE(w, rc, fl, "stream.error", StreamErrorJSON{ComputedAt: s.now(), Class: "fleet_unavailable"}) == nil, ^uint64(0)
 		}
 		fd := fleetData{Fleet: f, names: map[string]string{}, Devices: f.View.Devices, Customers: f.View.Customers, Collapses: f.View.Collapses}
 		if topics[sseTopicFleet] {
 			if s.writeSSE(w, rc, fl, "fleet.state", buildSummary(fd)) != nil {
-				return false
+				return false, gen
 			}
 		}
 		if topics[sseTopicBanner] {
@@ -387,13 +416,13 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 			if string(key) != lastBanners {
 				lastBanners = string(key)
 				if s.writeSSE(w, rc, fl, "banner.update", BannerUpdateJSON{StampJSON: fd.stamp(), Banners: bj}) != nil {
-					return false
+					return false, gen
 				}
 			}
 		}
-		return true
+		return true, gen
 	}
-	if !emit(r.Context()) {
+	if alive, _ := emit(r.Context()); !alive {
 		return
 	}
 
@@ -416,7 +445,16 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 		}
 		return inScope[id]
 	}
-	dirty := false
+	// dirty is set by a signal; dirtyGen is the change generation read when it was
+	// received (it already counts that signal). The flag is cleared only by an emit
+	// whose fleet is at least that current, never by an older (cached) one.
+	dirty, dirtyGen := false, uint64(0)
+	markDirty := func() {
+		dirty = true
+		if g := s.changeGeneration(); g > dirtyGen {
+			dirtyGen = g
+		}
+	}
 	for {
 		select {
 		case <-r.Context().Done():
@@ -434,21 +472,27 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 				}
-				dirty = true
+				markDirty()
 			case SignalChange, SignalRefresh:
-				dirty = true
+				markDirty()
 			}
 		case <-gapT.C:
 			if dirty {
-				dirty = false
-				if !emit(r.Context()) {
+				alive, gen := emit(r.Context())
+				if !alive {
 					return
+				}
+				if gen >= dirtyGen {
+					dirty = false
 				}
 			}
 		case <-refreshT.C:
-			dirty = false
-			if !emit(r.Context()) {
+			alive, gen := emit(r.Context())
+			if !alive {
 				return
+			}
+			if gen >= dirtyGen {
+				dirty = false
 			}
 		case <-pingT.C:
 			_ = rc.SetWriteDeadline(time.Now().Add(s.writeTimeout()))

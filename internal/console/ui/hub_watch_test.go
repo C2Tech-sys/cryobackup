@@ -110,3 +110,23 @@ func TestWatchHearsTheRefreshTick(t *testing.T) {
 		t.Fatalf("refresh tick: %+v", sg)
 	}
 }
+
+// M3-T3 r3 M1: Generation has counted a signal by the time a watcher receives
+// it, and counts signals a full (slow) watcher loses.
+func TestWatchGenerationCountsEverySignalBeforeDelivery(t *testing.T) {
+	h := NewHub(time.Hour, nil)
+	ch, stop := h.Watch()
+	defer stop()
+	g0 := h.Generation()
+	h.DeviceChanged("dev-1")
+	recvSignal(t, ch)
+	if g := h.Generation(); g != g0+1 {
+		t.Fatalf("after one signal Generation = %d, want %d", g, g0+1)
+	}
+	for i := 0; i < 100; i++ { // more than the watcher's buffer holds: most are lost
+		h.RunProgress("dev-2", "run-1")
+	}
+	if g := h.Generation(); g != g0+101 {
+		t.Fatalf("Generation = %d after 101 signals, want %d (a lost signal still counts)", g, g0+101)
+	}
+}

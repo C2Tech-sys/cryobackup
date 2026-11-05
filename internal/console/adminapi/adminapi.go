@@ -115,6 +115,9 @@ type Service struct {
 	streamsOf                    map[string]int
 	evalMu                       sync.Mutex
 	evals                        map[string]*sharedEval
+	// apiGen counts the device changes made through this API (deviceChanged); with
+	// the hub's Generation it is the event stream's change generation (m3_events.go).
+	apiGen atomic.Uint64
 }
 
 func (s *Service) now() time.Time {

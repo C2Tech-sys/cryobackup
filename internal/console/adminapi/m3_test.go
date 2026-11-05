@@ -1407,7 +1407,11 @@ type fakeSource struct {
 	mu      sync.Mutex
 	chans   []chan Signal
 	changed []string
+	gen     atomic.Uint64
 }
+
+// Generation counts the signals sent, like the real hub's.
+func (f *fakeSource) Generation() uint64 { return f.gen.Load() }
 
 func (f *fakeSource) Watch() (<-chan Signal, func()) {
 	ch := make(chan Signal, 16)
@@ -1434,6 +1438,7 @@ func (f *fakeSource) DeviceChanged(id string) {
 }
 
 func (f *fakeSource) send(sg Signal) {
+	f.gen.Add(1) // before delivery, like the real hub
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// Never blocks, like the real hub: a stream that has stopped reading (or has

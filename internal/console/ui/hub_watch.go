@@ -24,8 +24,17 @@ func (h *Hub) Watch() (<-chan hubsig.Signal, func()) {
 	}
 }
 
-// notify passes a signal to every watcher, without blocking.
+// Generation counts the hub's signals: it grows by one before every signal is
+// passed to the watchers, including a signal a slow watcher loses. The admin
+// event stream keys its shared fleet evaluation to it, so an evaluation made
+// before a change is never served after it.
+func (h *Hub) Generation() uint64 { return h.gen.Load() }
+
+// notify passes a signal to every watcher, without blocking. The generation is
+// bumped first, so a watcher that reads Generation after receiving sg sees a
+// value that already counts it.
 func (h *Hub) notify(sg hubsig.Signal) {
+	h.gen.Add(1)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for ch := range h.watchers {

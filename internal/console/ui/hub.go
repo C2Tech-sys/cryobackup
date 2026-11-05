@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
@@ -83,6 +84,8 @@ type Hub struct {
 	progress map[string]string // run id -> device id, drained by the next flush
 	// watchers are the admin API's event streams (hub_watch.go, M3-T3).
 	watchers map[chan hubsig.Signal]struct{}
+	// gen counts the signals passed to watchers (Generation, hub_watch.go).
+	gen atomic.Uint64
 }
 
 // NewHub returns a Hub with the architecture's cadences.

@@ -383,8 +383,11 @@ func (s *Service) pauseResponse(res store.PauseResult) DevicePauseResponse {
 }
 
 // deviceChanged tells the listening parts of the console a device changed: the
-// agent's open command poll, and the event stream.
+// agent's open command poll, and the event stream. The change generation is
+// bumped first, so a stream that connects after this call (and before the hub's
+// signal reaches anyone) does not reuse a fleet evaluated before the change.
 func (s *Service) deviceChanged(id string) {
+	s.apiGen.Add(1)
 	if s.WakeAgent != nil {
 		s.WakeAgent(id)
 	}
