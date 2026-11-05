@@ -1414,7 +1414,16 @@ func (f *fakeSource) Watch() (<-chan Signal, func()) {
 	f.mu.Lock()
 	f.chans = append(f.chans, ch)
 	f.mu.Unlock()
-	return ch, func() {}
+	return ch, func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for i, c := range f.chans {
+			if c == ch {
+				f.chans = append(f.chans[:i], f.chans[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
 func (f *fakeSource) DeviceChanged(id string) {
@@ -1427,8 +1436,13 @@ func (f *fakeSource) DeviceChanged(id string) {
 func (f *fakeSource) send(sg Signal) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Never blocks, like the real hub: a stream that has stopped reading (or has
+	// gone) must not hang the test.
 	for _, c := range f.chans {
-		c <- sg
+		select {
+		case c <- sg:
+		default:
+		}
 	}
 }
 
