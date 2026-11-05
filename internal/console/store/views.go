@@ -149,16 +149,23 @@ func visibleView(scope Scope, viewer string, v SavedView) bool {
 	if v.OwnerID != "" && v.OwnerID == viewer {
 		return true
 	}
-	if !v.Shared || v.Audience == nil {
+	return v.Shared && audienceInScope(scope, v.Audience)
+}
+
+// audienceInScope reports whether a shared view's audience lies inside scope:
+// all customers needs an all-customer scope, a set of customers needs every one.
+// No audience, or an unreadable one, is never inside (fail closed).
+func audienceInScope(scope Scope, a *ViewAudience) bool {
+	if a == nil {
 		return false
 	}
-	if v.Audience.All {
+	if a.All {
 		return scope.All
 	}
-	if len(v.Audience.Customers) == 0 {
+	if len(a.Customers) == 0 {
 		return false
 	}
-	for _, id := range v.Audience.Customers {
+	for _, id := range a.Customers {
 		if !scope.Allows(id) {
 			return false
 		}
@@ -403,7 +410,11 @@ func (s *Store) CreateSavedViewAudited(ctx context.Context, scope Scope, in Save
 }
 
 // editableView loads view id for a change by actor. Not visible is ErrNotFound;
-// visible but another admin's is ErrScope unless asAdmin (the AD role).
+// visible but another admin's is ErrScope unless asAdmin (the AD role). The
+// owner of a shared view may change it only while its audience is inside their
+// scope: an owner who has lost one of its customers gets ErrNotFound, as for a
+// view they cannot see, so their edits never reach accounts they no longer
+// share a customer with (an all-customer admin can still delete it).
 func editableView(tx *Tx, scope Scope, actor AuditActor, id string, asAdmin bool) (SavedView, error) {
 	v, err := one(tx, `SELECT `+viewCols+viewFrom+` WHERE v.id = ?`, []any{id}, scanView)
 	if err != nil {
@@ -411,6 +422,9 @@ func editableView(tx *Tx, scope Scope, actor AuditActor, id string, asAdmin bool
 	}
 	if !visibleView(scope, actor.AdminID, v) {
 		return SavedView{}, ErrNotFound
+	}
+	if v.Shared && !audienceInScope(scope, v.Audience) {
+		return SavedView{}, ErrNotFound // the owner's own shared view, for customers they no longer see
 	}
 	if !(v.OwnerID != "" && v.OwnerID == actor.AdminID) && !asAdmin {
 		return SavedView{}, ErrScope

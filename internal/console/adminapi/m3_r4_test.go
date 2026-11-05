@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
+	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
 // M3-T3 fix round 4: every API mutation that can change what the fleet
@@ -206,5 +207,37 @@ func TestM3EventStreamWithoutAHubSeesAnAPIChange(t *testing.T) { // F18, r4 LOW-
 	b, _ := e.openStream("/api/v1/events?topics=fleet", owner)
 	if got := summaryOf(t, b.next("fleet.state", 5*time.Second)); got.Devices.Paused != before.Devices.Paused+1 {
 		t.Errorf("without a hub, a stream connecting after the pause shows paused %d, want %d", got.Devices.Paused, before.Devices.Paused+1)
+	}
+}
+
+// r4 LOW-4 through the API: an owner who loses the customer a shared view is for
+// gets 404 renaming or deleting it; an all-customer admin can still delete it.
+func TestM3SharedViewOwnerWhoLostTheAudienceGets404(t *testing.T) { // F06, r4 LOW-4
+	e := newEnv(t)
+	admin := e.login("admin", pw)
+	nw, summit := e.customerNamed("Northwind Dental"), e.customerNamed("Summit Eye Care")
+	e.addAdmin("m3-r4-owner", "read_only", []string{nw.ID, summit.ID})
+	sess := e.login("m3-r4-owner", pw)
+	v := decode[ViewResponse](t, e.mustReq("POST", "/api/v1/views", sess, CreateViewRequest{Name: "For Summit", Entity: "devices", Shared: true,
+		Audience: &ViewAudienceJSON{CustomerIDs: []string{summit.ID}}}, 201))
+	acct, err := e.st.GetAdminByUsername(context.Background(), "m3-r4-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, _, err := tx.UpdateAdminRoleScope(acct.ID, "read_only", []string{nw.ID})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	n := "pushed to Summit"
+	if res, b := e.req("PATCH", "/api/v1/views/"+v.ID, sess, PatchViewRequest{Name: &n}); res.StatusCode != 404 {
+		t.Errorf("rename after losing Summit = %d %s, want 404", res.StatusCode, b)
+	}
+	if res, b := e.req("DELETE", "/api/v1/views/"+v.ID, sess, nil); res.StatusCode != 404 {
+		t.Errorf("delete after losing Summit = %d %s, want 404", res.StatusCode, b)
+	}
+	if res, b := e.req("DELETE", "/api/v1/views/"+v.ID, admin, nil); res.StatusCode != 204 {
+		t.Errorf("an all-customer admin deleting it = %d %s, want 204", res.StatusCode, b)
 	}
 }

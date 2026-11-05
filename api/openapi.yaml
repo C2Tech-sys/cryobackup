@@ -1852,7 +1852,7 @@ paths:
       operationId: patchView
       tags: [views]
       summary: Edit a saved view
-      description: The owner edits their own view; an admin edits any view they can see. Absent fields are unchanged. Making a view shared needs an audience in the patch; making it private clears the audience. A shared view's audience is checked again (400 as on create) whenever the audience, the filter or the sharing changes. A patch that changes nothing writes no audit row.
+      description: The owner edits their own view (a shared one only while its audience is inside the owner's scope, 404 otherwise); an admin edits any view they can see. Absent fields are unchanged. Making a view shared needs an audience in the patch; making it private clears the audience. A shared view's audience is checked again (400 as on create) whenever the audience, the filter or the sharing changes. A patch that changes nothing writes no audit row.
       x-min-role: SELF
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -1878,7 +1878,7 @@ paths:
       operationId: deleteView
       tags: [views]
       summary: Delete a saved view
-      description: The owner deletes their own view; an admin any view they can see.
+      description: The owner deletes their own view (a shared one only while its audience is inside the owner's scope, 404 otherwise); an admin any view they can see.
       x-min-role: SELF
       parameters:
         - {$ref: '#/components/parameters/Id'}

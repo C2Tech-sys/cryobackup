@@ -138,7 +138,11 @@ func TestSharedViewAudienceIsRefusedOutsideTheSharersScope(t *testing.T) { // r3
 	if len(v.Audience.Customers) != 2 || visibleTo(t, w, alpha, v.ID) {
 		t.Errorf("audience Alpha and Bravo: %+v, visible to Alpha alone = %v (want false)", v.Audience, visibleTo(t, w, alpha, v.ID))
 	}
-	v, _, err = w.s.UpdateSavedViewAudited(w.ctx, alpha, priv.ID, SavedViewPatch{Shared: &no}, scoped, false)
+	// Its audience now reaches past the owner's scope: the owner can no longer change it (r4 LOW-4); the admin makes it private.
+	if _, _, err := w.s.UpdateSavedViewAudited(w.ctx, alpha, priv.ID, SavedViewPatch{Shared: &no}, scoped, false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the Alpha owner changing a view for Alpha and Bravo = %v, want ErrNotFound", err)
+	}
+	v, _, err = w.s.UpdateSavedViewAudited(w.ctx, ScopeAll(), priv.ID, SavedViewPatch{Shared: &no}, actorOf(w), true)
 	ok(t, err)
 	if v.Shared || v.Audience != nil {
 		t.Errorf("made private: shared %v audience %+v", v.Shared, v.Audience)
@@ -159,3 +163,40 @@ func alphaOperator(t *testing.T, w *world) AuditActor {
 		CustomerScope: []string{w.custA.ID}, PasswordHash: "$argon2id$test"}))
 	return AuditActor{AdminID: a.ID, Username: a.Username, Method: "api"}
 }
+
+// r4 LOW-4: an owner who has lost a customer cannot edit or delete their own
+// shared view whose audience is that customer: 404, as for a view they cannot
+// see, so no text of theirs reaches accounts they no longer share a customer
+// with. Their other views stay editable; an all-customer admin can still delete it.
+func TestOwnerWhoLostTheAudienceCannotEditTheSharedView(t *testing.T) { // r4 LOW-4
+	w := seed(t)
+	owner := alphaOperator(t, w)
+	both := ScopeOf(w.custA.ID, w.custB.ID)
+	forB := must[SavedView](t)(w.s.CreateSavedViewAudited(w.ctx, both, SavedViewInput{Name: "For Bravo", Entity: "devices", Shared: true,
+		Audience: &ViewAudience{Customers: []string{w.custB.ID}}}, owner))
+	forA := must[SavedView](t)(w.s.CreateSavedViewAudited(w.ctx, both, SavedViewInput{Name: "For Alpha", Entity: "devices", Shared: true,
+		Audience: &ViewAudience{Customers: []string{w.custA.ID}}}, owner))
+	priv := must[SavedView](t)(w.s.CreateSavedViewAudited(w.ctx, both, SavedViewInput{Name: "Mine", Entity: "devices"}, owner))
+
+	alphaOnly := ScopeOf(w.custA.ID) // the owner lost Bravo
+	n := "Renamed after losing Bravo"
+	if _, _, err := w.s.UpdateSavedViewAudited(w.ctx, alphaOnly, forB.ID, SavedViewPatch{Name: &n}, owner, false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("rename of the view for Bravo by an owner scoped to Alpha = %v, want ErrNotFound", err)
+	}
+	if err := w.s.DeleteSavedViewAudited(w.ctx, alphaOnly, forB.ID, owner, false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("delete of the view for Bravo by an owner scoped to Alpha = %v, want ErrNotFound", err)
+	}
+	if got := must[SavedView](t)(w.s.GetSavedView(w.ctx, ScopeAll(), w.admin.ID, forB.ID)); got.Name != "For Bravo" {
+		t.Errorf("the refused rename changed the name to %q", got.Name)
+	}
+	for _, id := range []string{forA.ID, priv.ID} {
+		if _, _, err := w.s.UpdateSavedViewAudited(w.ctx, alphaOnly, id, SavedViewPatch{Name: ptrTo(uniq("still mine"))}, owner, false); err != nil {
+			t.Errorf("the owner's view %s inside their scope: %v", id, err)
+		}
+	}
+	if err := w.s.DeleteSavedViewAudited(w.ctx, ScopeAll(), forB.ID, actorOf(w), true); err != nil {
+		t.Errorf("an all-customer admin deleting it: %v", err)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
