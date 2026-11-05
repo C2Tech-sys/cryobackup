@@ -29,7 +29,11 @@ func TestServeShutdownWaitsForAManualJobRun(t *testing.T) { // M3-STORE1 C1
 
 	entered := make(chan struct{})
 	var lastWrite atomic.Pointer[error]
-	app.Runner.Add(jobs.Job{Name: "test-slow", Every: time.Hour, Lease: time.Hour, Run: func(ctx context.Context) error {
+	// On a runner that is never started: on the App's own, the job's schedule would
+	// also run it within 5 s of the start, and run-now would then answer 409.
+	manual := jobs.NewRunner(app.Store, "test-manual", nil)
+	app.Admin.Jobs = manual
+	manual.Add(jobs.Job{Name: "test-slow", Every: time.Hour, Lease: time.Hour, Run: func(ctx context.Context) error {
 		close(entered)
 		<-ctx.Done() // never, on the old code: the run's context outlived shutdown
 		time.Sleep(50 * time.Millisecond)
@@ -54,7 +58,11 @@ func TestServeShutdownWaitsForAManualJobRun(t *testing.T) { // M3-STORE1 C1
 	ctx, stop := context.WithCancel(bg)
 	defer stop()
 	returned := make(chan error, 1)
-	go func() { returned <- app.Run(ctx) }()
+	runEnded := make(chan struct{})
+	go func() { defer close(runEnded); returned <- app.Run(ctx) }()
+	// Before app.Close (cleanups are LIFO): whatever the test's path, Run has ended
+	// and closed the App before the cleanup closes it too.
+	t.Cleanup(func() { stop(); <-runEnded })
 
 	// The server comes up in the background: retry until it answers.
 	req, _ := http.NewRequest("POST", "http://"+app.Server.AdminAddr()+"/api/v1/system/jobs/test-slow/run", nil)

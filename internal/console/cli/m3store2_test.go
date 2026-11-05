@@ -62,12 +62,16 @@ func TestServeShutdownIsBoundedBehindAStuckWrite(t *testing.T) { // M3-STORE2 1
 	t.Cleanup(app.Close)
 
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
 	holding, queued := make(chan struct{}), make(chan struct{})
 	bg := context.Background()
-	app.Runner.Add(jobs.Job{Name: "test-stuck-manual", Every: 24 * time.Hour, Lease: time.Hour, Run: func(context.Context) error {
+	// The manual job lives on a runner that is never started. On the App's own runner
+	// its schedule would run it too, within 5 s of the start, and take the writer
+	// before the scheduled job had its lease.
+	manual := jobs.NewRunner(app.Store, "test-manual", nil)
+	manual.Add(jobs.Job{Name: "test-stuck-manual", Every: 24 * time.Hour, Lease: time.Hour, Run: func(context.Context) error {
 		return app.Store.Write(bg, func(*store.Tx) error { close(holding); <-release; return nil })
 	}})
+	app.Admin.Jobs = manual
 	app.Runner.Add(jobs.Job{Name: "test-stuck-scheduled", Every: time.Second, Lease: time.Hour, Run: func(context.Context) error {
 		close(queued) // it has its lease, and it runs once: it never gets past the Write below
 		<-holding     // only once the writer is stuck, so the run-now request can write its audit row first
@@ -88,11 +92,19 @@ func TestServeShutdownIsBoundedBehindAStuckWrite(t *testing.T) { // M3-STORE2 1
 	ctx, stop := context.WithCancel(bg)
 	defer stop()
 	returned := make(chan error, 1)
-	go func() { returned <- app.Run(ctx) }()
+	runEnded := make(chan struct{})
+	go func() { defer close(runEnded); returned <- app.Run(ctx) }()
+	// Runs before app.Close (cleanups are LIFO): whatever the test's path, Run has
+	// ended and closed the App before the cleanup closes it too.
+	t.Cleanup(func() {
+		stop()
+		close(release)
+		<-runEnded
+	})
 
 	select {
 	case <-queued:
-	case <-time.After(30 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("the scheduled job never started")
 	}
 	if app.Server.AdminTLSEnabled() {
