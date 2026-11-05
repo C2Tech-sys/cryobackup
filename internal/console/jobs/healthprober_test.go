@@ -55,7 +55,7 @@ type proberRig struct {
 	status atomic.Int64 // the fake gateway's answer
 	logs   *syncBuf
 	clk    *testClock
-	ctx    context.Context // the runner's context; cancelled at cleanup so no probe outlives the test
+	ctx    context.Context // what the rig's ticks are called with; probes never run under it, so cleanup ends them with Stop
 }
 
 // waitBounded runs wait and fails the test with what instead of hanging when it

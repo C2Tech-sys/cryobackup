@@ -165,7 +165,6 @@ type HealthProber struct {
 	idle          chan struct{} // wakes the renewer when the last probe ends
 	renewEvery    time.Duration // overrides renewInterval (tests)
 	stopWait      time.Duration // overrides StopWait (tests)
-	renewTick     time.Duration // the period the newest renewer was started with
 }
 
 func (h *HealthProber) interval() time.Duration {
@@ -400,7 +399,6 @@ func (h *HealthProber) startRenewer() {
 		return
 	}
 	h.renewing = true
-	h.renewTick = every // the period the ticker below uses (tests pin it inside the TTL)
 	h.mu.Unlock()
 	idle := h.idleC()
 	h.background.Add(1)
@@ -456,12 +454,13 @@ func (h *HealthProber) startRenewer() {
 	}()
 }
 
-// Stop is serve's shutdown of the prober: it cancels every probe in flight
-// (ProbeNow's run under the prober's lifetime, not the runner's context), waits
-// for them at most StopWait, logs each probe it abandons (by name, never a
-// path), and releases ProbeLease so another console can take over at once. A
-// probe that ignores its context (the database probe's disk calls take none)
-// cannot hold the shutdown.
+// Stop is serve's shutdown of the prober: it refuses every later Run and
+// ProbeNow, cancels every probe in flight (they all run under the prober's
+// lifetime, never under a caller's or the runner's context), waits at most
+// StopWait for them and for the calls already taking the lease, logs each probe
+// it abandons (by name, never a path), and releases ProbeLease so another console
+// can take over at once. A probe that ignores its context (the database probe's
+// disk calls take none) cannot hold the shutdown.
 func (h *HealthProber) Stop() {
 	h.lifetime() // a prober that never ran has a lifetime to end too
 	h.mu.Lock()
