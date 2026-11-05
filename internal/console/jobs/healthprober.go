@@ -178,6 +178,10 @@ type HealthProber struct {
 	idle          chan struct{} // wakes the renewer when the last probe ends
 	renewEvery    time.Duration // overrides renewInterval (tests)
 	stopWait      time.Duration // overrides StopWait (tests)
+	releaseWait   time.Duration // overrides StopReleaseTimeout (tests)
+	// releaseLease replaces the store call that frees ProbeLease at Stop (tests: nothing
+	// else can hang the way a COMMIT on a hung disk does).
+	releaseLease func(ctx context.Context) error
 }
 
 func (h *HealthProber) interval() time.Duration {
@@ -499,10 +503,35 @@ func (h *HealthProber) Stop() {
 			h.log().Warn("health probe abandoned at shutdown", probeAttr(row))
 		}
 	}
-	rctx, rcancel := context.WithTimeout(context.Background(), StopReleaseTimeout)
+	h.releaseAtStop()
+}
+
+// releaseAtStop frees ProbeLease so another console can take over at once, waiting
+// at most StopReleaseTimeout. The context alone cannot bound this: a COMMIT runs
+// uncancellable (store.Write), so a hung disk holds the call however its context
+// ends. Stop then stops waiting and the lease expires at its TTL.
+func (h *HealthProber) releaseAtStop() {
+	wait := h.releaseWait
+	if wait <= 0 {
+		wait = StopReleaseTimeout
+	}
+	release := h.releaseLease
+	if release == nil {
+		release = func(ctx context.Context) error { return h.Store.ReleaseJobLease(ctx, ProbeLease, h.holder()) }
+	}
+	rctx, rcancel := context.WithTimeout(context.Background(), wait)
 	defer rcancel()
-	if err := h.Store.ReleaseJobLease(rctx, ProbeLease, h.holder()); err != nil {
-		h.log().Warn("health probe lease not released at shutdown; it expires on its own", logx.Class(ClassStore))
+	done := make(chan error, 1)
+	go func() { done <- release(rctx) }()
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			h.log().Warn("health probe lease not released at shutdown; it expires on its own", logx.Class(ClassStore))
+		}
+	case <-t.C:
+		h.log().Warn("health probe lease release abandoned at shutdown; it expires on its own", logx.Class(ClassStore))
 	}
 }
 

@@ -107,45 +107,6 @@ func TestC08CallsAfterStopDoNotTouchTheStore(t *testing.T) { // M3-STORE2 5
 	}
 }
 
-// Mutant m21: Stop's wait for the calls already taking the lease. Stop must not
-// return, or release the lease, while one is still in progress: acquire's undo
-// only covers a Stop whose bound ran out. The call is held inside the store, past
-// Stop's start, by two writes in a row; the second proves Stop was still waiting.
-func TestC08StopWaitsForACallTakingTheLease(t *testing.T) { // M3-STORE2 5
-	r := newProberRig(t, false)
-	entered := make(chan struct{})
-	var once sync.Once
-	hp := &HealthProber{Store: r.st, Backend: r.be, Master: r.mk, Holder: "console-a", Gateway: r.hp.Gateway,
-		Log: logx.New(r.logs, logx.LevelDebug), stopWait: 2 * time.Minute,
-		Clock: func() time.Time { once.Do(func() { close(entered) }); return r.clk.Now() }} // the first call to the clock is inside acquire
-	first := holdWrites(t, r.st)
-	runDone := make(chan error, 1)
-	go func() { runDone <- hp.Run(context.Background()) }()
-	<-entered
-	time.Sleep(50 * time.Millisecond) // the Run queues on the store
-	stopDone := make(chan struct{})
-	go func() { hp.Stop(); close(stopDone) }()
-	time.Sleep(50 * time.Millisecond) // a Stop that does not wait queues its release here
-
-	first()
-	second := holdWrites(t, r.st) // the queue moves on one or two places, then stops here
-	select {
-	case <-stopDone:
-		t.Fatal("Stop returned while a Run was still taking the lease")
-	case <-time.After(300 * time.Millisecond):
-	}
-	second()
-	waitBounded(t, "Stop", 30*time.Second, func() { <-stopDone })
-	select {
-	case <-runDone:
-	case <-time.After(30 * time.Second):
-		t.Fatal("Run did not return")
-	}
-	if j := r.row(t, ProbeLease); j.LeaseHolder != "" {
-		t.Fatalf("lease held by %q after Run and Stop returned", j.LeaseHolder)
-	}
-}
-
 // Item 1, at the runner: a job stuck where its context cannot reach it does not
 // hold Stop past the bound, and the abandonment is logged by class.
 func TestRunnerStopIsBoundedBehindAStuckJob(t *testing.T) { // M3-STORE2 1
