@@ -102,7 +102,13 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	if err2 != nil {
 		return nil, fmt.Errorf("cli: cannot open the database: %w", sanitize(err2))
 	}
-	a.cleanup = append(a.cleanup, func() { _ = a.Store.Close() })
+	a.cleanup = append(a.cleanup, func() {
+		if err := a.Store.Close(); errors.Is(err, store.ErrCloseAbandoned) {
+			a.log.Error("database not closed cleanly: work still in flight; exiting, the next start recovers it", logx.Class("store_close_abandoned"))
+		} else if err != nil {
+			a.log.Error("database not closed cleanly", logx.Class(jobs.ClassStore))
+		}
+	})
 
 	// The master key. Without it the console still starts and says so (banner C12, 503 on enroll).
 	switch {
@@ -260,6 +266,7 @@ func (a *App) Run(ctx context.Context) error {
 	go func() { defer wg.Done(); a.Hub.Run(ctx) }()
 	go func() { defer wg.Done(); a.Endpoint.Run(ctx) }() // after Listen: the first probe meets a bound listener
 	a.Runner.Start(ctx)
+	// Every step below is bounded: shutdownWorstCase is the sum.
 	err := a.Server.Serve(ctx)
 	a.Runner.Stop()
 	a.Admin.BeginShutdown() // no new run-now or POST probe; the manual job runs in flight are cancelled
@@ -273,9 +280,20 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 // backgroundShutdownWait bounds how long Run waits for manual job runs and POST
-// probes after cancelling them. One that ignores its cancellation is abandoned
-// and logged, and meets a closed store: it cannot hold the shutdown.
+// probes after cancelling them. One that ignores its cancellation is abandoned and
+// logged. If it is not inside a store call it then meets a closed store; if it is
+// stuck inside a Write, Store.Close gives up after its own bound and the process
+// exits with that transaction unfinished. Either way it cannot hold the shutdown.
 const backgroundShutdownWait = 10 * time.Second
+
+// shutdownWorstCase is the longest Run takes to return once its context ends, with
+// every step using its whole bound, each one after the last. The Hub and the
+// endpoint self-probe take the context and are not counted.
+const shutdownWorstCase = server.ShutdownGrace + // the HTTP server drains
+	jobs.RunnerStopWait + // the scheduled jobs stop
+	jobs.StopWait + jobs.StopReleaseTimeout + // the prober stops and frees its lease
+	backgroundShutdownWait + // manual job runs and POST probes end
+	store.CloseWait // the database closes (55 s in all)
 
 // Close releases everything Build opened. It is safe to call twice.
 func (a *App) Close() {
