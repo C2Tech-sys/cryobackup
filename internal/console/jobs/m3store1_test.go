@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -115,16 +116,25 @@ func TestC08ProbeNowWaitingOnACancelledRunDidNotRun(t *testing.T) { // M3-STORE1
 	case <-time.After(5 * time.Second):
 		t.Fatal("the storage probe never started")
 	}
-	deadline := time.Now().Add(5 * time.Second) // the gateway probe of the tick has ended; only storage is in flight
-	for r.hp.Facts().Gateway.LastRunAt == 0 && time.Now().Before(deadline) {
+	deadline := time.Now().Add(30 * time.Second) // the tick's gateway probe has ended, so ProbeNow starts its own
+	for slices.Contains(r.hp.inFlight(), ProbeRowGateway) && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	r.hp.loseLease() // its context is cancelled; the probe has not noticed
 	answer := probeNowAsync(r.hp)
-	select {
-	case a := <-answer:
-		t.Fatalf("ProbeNow answered (%v, %v) with the run still in flight", a.ran, a.err)
-	case <-time.After(100 * time.Millisecond):
+	// ProbeNow's own gateway probe has been recorded: it started that just before it
+	// claimed the storage probe, so it is now waiting on the cancelled run. No fixed
+	// sleep says this on a loaded machine: a ProbeNow that reached the store only
+	// after the release would claim the probe itself, and that would be a real run.
+	for r.row(t, ProbeRowGateway).RunCount < 2 {
+		select {
+		case a := <-answer:
+			t.Fatalf("ProbeNow answered (%v, %v) with the run still in flight", a.ran, a.err)
+		case <-time.After(5 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ProbeNow never started its gateway probe")
+		}
 	}
 	close(be.release)
 	wantNotRan(t, answer)
