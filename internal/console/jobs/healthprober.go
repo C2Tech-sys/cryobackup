@@ -154,6 +154,7 @@ type HealthProber struct {
 	idle          chan struct{} // wakes the renewer when the last probe ends
 	renewEvery    time.Duration // overrides renewInterval (tests)
 	stopWait      time.Duration // overrides StopWait (tests)
+	renewTick     time.Duration // the period the newest renewer was started with
 }
 
 func (h *HealthProber) interval() time.Duration {
@@ -298,12 +299,18 @@ func (h *HealthProber) idleC() chan struct{} {
 }
 
 // probeContext is the context the probes run under while this process holds
-// ProbeLease: one per holding period, cancelled when the lease is lost.
-func (h *HealthProber) probeContext(ctx context.Context) context.Context {
+// ProbeLease: one per holding period, cancelled when the lease is lost or by
+// Stop. It is derived from the prober's own lifetime only, never from a
+// caller's context (a request, one Run, a run-now): a caller that ends must not
+// cancel probes in flight, nor leave a cancelled context to a later tick. The
+// caller's context only bounds how long it waits (ProbeNow) or how long it
+// takes the lease (Run).
+func (h *HealthProber) probeContext() context.Context {
+	life := h.lifetime()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.pctx == nil || h.pctx.Err() != nil {
-		h.pctx, h.pcancel = context.WithCancel(ctx)
+		h.pctx, h.pcancel = context.WithCancel(life)
 	}
 	return h.pctx
 }
@@ -322,18 +329,20 @@ func (h *HealthProber) loseLease() {
 
 // startRenewer renews ProbeLease while any probe is in flight (the background
 // integrity check can outlive several ticks), and cancels the probes when the
-// store says another process has it.
-func (h *HealthProber) startRenewer(ctx context.Context) {
+// store says another process has it. Like the probes, it lives under the
+// prober's lifetime (Stop ends it), never under a caller's context.
+func (h *HealthProber) startRenewer() {
+	life := h.lifetime()
+	every := h.renewInterval()
 	h.mu.Lock()
 	if h.renewing {
 		h.mu.Unlock()
 		return
 	}
 	h.renewing = true
+	h.renewTick = every // the period the ticker below uses (tests pin it inside the TTL)
 	h.mu.Unlock()
 	idle := h.idleC()
-	every := h.renewInterval()
-	life := h.lifetime()
 	h.background.Add(1)
 	go func() {
 		defer h.background.Done()
@@ -348,15 +357,13 @@ func (h *HealthProber) startRenewer(ctx context.Context) {
 				return // the next tick takes the lease again
 			}
 			select {
-			case <-ctx.Done():
-				return
 			case <-life.Done():
 				return // Stop: the lease is released and never renewed again
 			case <-idle:
 				continue
 			case <-t.C:
 			}
-			got, err := h.Store.AcquireJobLease(context.WithoutCancel(ctx), ProbeLease, h.holder(), h.leaseTTL())
+			got, err := h.Store.AcquireJobLease(context.WithoutCancel(life), ProbeLease, h.holder(), h.leaseTTL())
 			if err == nil && !got {
 				h.loseLease()
 				return
@@ -450,8 +457,8 @@ func (h *HealthProber) Run(ctx context.Context) error {
 		h.loseLease() // another console probes; nothing runs here
 		return nil
 	}
-	pctx := h.probeContext(ctx)
-	defer h.startRenewer(ctx)
+	pctx := h.probeContext() // the prober's, not ctx: Run returns before its probes end
+	defer h.startRenewer()
 	for _, p := range []struct {
 		row string
 		fn  func(context.Context) result
@@ -513,10 +520,9 @@ func (h *HealthProber) ProbeNow(ctx context.Context) (ran bool, err error) {
 		h.loseLease() // another console probes; nothing runs here
 		return false, nil
 	}
-	life := h.lifetime()
-	pctx := h.probeContext(life)
+	pctx := h.probeContext() // the prober's, not ctx: ctx bounds only the wait below
 	waits := []<-chan struct{}{h.start(pctx, ProbeRowGateway, h.probeGateway), h.start(pctx, ProbeRowStorage, h.probeStorage)}
-	h.startRenewer(life)
+	h.startRenewer()
 	for _, done := range waits {
 		select {
 		case <-done:

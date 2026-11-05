@@ -108,7 +108,7 @@ func newProberRig(t *testing.T, withFleet bool) *proberRig {
 	r.ctx = ctx
 	t.Cleanup(func() { // runs before the store closes (cleanups are LIFO)
 		cancel()
-		waitBounded(t, "the probes at cleanup", 10*time.Second, r.hp.WaitAll)
+		waitBounded(t, "the probes at cleanup", 15*time.Second, r.hp.Stop) // the probes run under the prober's lifetime: Stop ends them
 	})
 	return r
 }
@@ -398,7 +398,7 @@ func TestC17IntegrityHangDoesNotStaleTheOtherProbes(t *testing.T) {
 			r.clk.Advance(time.Minute)
 		}
 		done := make(chan struct{})
-		go func() { _ = r.hp.Run(ctx); r.hp.Wait(); close(done) }() // ctx is the test's own, so cancel() below ends the hung check
+		go func() { _ = r.hp.Run(ctx); r.hp.Wait(); close(done) }()
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
@@ -421,8 +421,14 @@ func TestC17IntegrityHangDoesNotStaleTheOtherProbes(t *testing.T) {
 	if calls.Load() != 1 || violations.Load() != 0 {
 		t.Fatalf("integrity started %d times (want 1); SMTP violations %d", calls.Load(), violations.Load())
 	}
+	// M3-INT2: the probes run under the prober's own lifetime, not a tick's context, so it is Stop
+	// (serve's shutdown) that cancels the hung check; it ends at once, and nothing is abandoned.
 	cancel()
-	waitBounded(t, "the cancelled integrity check", 10*time.Second, r.hp.WaitAll)
+	waitBounded(t, "Stop with the hung integrity check", 10*time.Second, r.hp.Stop)
+	waitBounded(t, "the cancelled integrity check", 2*time.Second, r.hp.WaitAll)
+	if strings.Contains(r.logs.String(), "abandoned") {
+		t.Fatal("Stop abandoned an integrity check that honours its context")
+	}
 }
 
 // M3-T2 M1: an integrity check that times out backs off for a day instead of
