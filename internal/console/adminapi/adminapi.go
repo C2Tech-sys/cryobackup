@@ -129,6 +129,7 @@ func (s *Service) now() time.Time {
 
 // Register adds the routes to r.
 func (s *Service) Register(r httpx.Registrar) {
+	r = fleetRegistrar{Registrar: r, s: s} // every mutating route signals a fleet change (fleetchange.go)
 	r.Handle(PatternLogin, http.HandlerFunc(s.login))
 	ro := func(h http.HandlerFunc) http.Handler { return s.Auth.Require(auth.RoleReadOnly, auth.ModeAPI, h) }
 	op := func(h http.HandlerFunc) http.Handler { return s.Auth.Require(auth.RoleOperator, auth.ModeAPI, h) }

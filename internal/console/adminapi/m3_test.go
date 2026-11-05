@@ -1518,8 +1518,9 @@ func TestM3EventStreamDeliversAndIsScoped(t *testing.T) { // F05 F18
 	e.mustReq("POST", "/api/v1/devices/"+e.held.ID+"/pause", op, DevicePauseRequest{Reason: "x", Indefinite: true}, 200)
 	st.next("fleet.state", 5*time.Second)
 	src.mu.Lock()
-	if len(src.changed) != 1 || src.changed[0] != e.held.ID {
-		t.Errorf("the hub was told %v", src.changed)
+	// The pause names its device; the route's fleet signal (fleetchange.go) adds a signal for no one device.
+	if len(src.changed) != 2 || src.changed[0] != e.held.ID || src.changed[1] != "" {
+		t.Errorf("the hub was told %v, want the paused device and then the route's fleet signal", src.changed)
 	}
 	src.mu.Unlock()
 
