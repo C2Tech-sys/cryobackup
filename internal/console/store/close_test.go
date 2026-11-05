@@ -119,3 +119,36 @@ func TestCloseWithNothingInFlightIsClean(t *testing.T) { // M3-STORE2 1
 		t.Fatalf("Write after Close = %v, want ErrClosed", err)
 	}
 }
+
+// Mutant m04: new work is refused from the moment Close begins, not from the moment it
+// gets the writer. Once a Close has been abandoned behind a stuck Write it never gets
+// the writer, so a new Write would queue for ever and a new Read would still run.
+func TestCloseAbandonedRefusesNewWork(t *testing.T) { // M3-STORE3 6
+	bg := context.Background()
+	s, err := OpenMemory(bg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.closeWait = 100 * time.Millisecond
+	entered, release, ended := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		ended <- s.Write(bg, func(*Tx) error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	defer func() { close(release); <-ended }()
+	wantAbandonedWithin(t, s, 30*time.Second)
+
+	got := make(chan error, 1)
+	go func() { got <- s.Write(bg, func(*Tx) error { return nil }) }()
+	select {
+	case err := <-got:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("a Write after an abandoned Close = %v, want ErrClosed", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a Write after an abandoned Close queued behind the stuck one")
+	}
+	if err := s.Read(bg, func(*Tx) error { return nil }); !errors.Is(err, ErrClosed) {
+		t.Fatalf("a Read after an abandoned Close = %v, want ErrClosed", err)
+	}
+}
