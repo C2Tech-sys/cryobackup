@@ -39,7 +39,9 @@
     "max_block_minutes": 15,
     "login_lock_after": 5,
     "login_lock_minutes": 15,
-    "commands_long_poll_max_s": 30
+    "commands_long_poll_max_s": 30,
+    "event_streams_max": 32,
+    "event_streams_per_account": 4
   },
   "restore_stream": {
     "min_bytes": 65536,

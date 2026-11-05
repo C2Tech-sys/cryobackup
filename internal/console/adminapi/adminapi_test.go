@@ -48,6 +48,8 @@ type env struct {
 	dev  store.Device
 	held store.Device
 	mfa  *mfaState
+	// extra is the Evaluator's Extra banners, swappable while streams run (setExtra, m3_hooks_test.go).
+	extra *bannerHook
 }
 
 type session struct {
@@ -76,13 +78,16 @@ func newEnv(t *testing.T) *env {
 	be := &fixtures.Backend{}
 	rest := &restores.Service{Store: st, Backend: be, Master: mk, ArtifactsDir: dir, Clock: clk.Now}
 	am := auth.NewManager(st, 12*time.Hour, 7*24*time.Hour, 100, 5, 15*time.Minute, clk.Now)
+	// Fleet.Extra is set once, here, before the server starts; tests change the banners through
+	// e.setExtra, never by writing the field while a handler or a stream may be evaluating.
+	extra := &bannerHook{}
 	svc := &Service{Auth: am, Store: st, Restores: rest, Backend: be, Clock: clk.Now,
-		Fleet: &health.Evaluator{Store: st, Clock: clk.Now, MasterLoaded: mk.Loaded}}
+		Fleet: &health.Evaluator{Store: st, Clock: clk.Now, MasterLoaded: mk.Loaded, Extra: extra.banners}}
 	mux := http.NewServeMux()
 	svc.Register(muxReg{mux})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	e := &env{t: t, st: st, clk: clk, srv: srv, svc: svc, rest: rest, be: be, dir: dir}
+	e := &env{t: t, st: st, clk: clk, srv: srv, svc: svc, rest: rest, be: be, dir: dir, extra: extra}
 	e.mfa = newMFA(am, mk) // accounts_test.go: the MFA step of e.login
 	find := func(h string) store.Device {
 		l, _ := st.ListDevices(ctx, store.ScopeAll(), store.ListDevicesOptions{Search: h})

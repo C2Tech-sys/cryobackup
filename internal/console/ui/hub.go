@@ -7,10 +7,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
+	"github.com/c2tech-sys/cryobackup/internal/console/hubsig"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
@@ -80,6 +82,10 @@ type Hub struct {
 	subs     map[*Sub]struct{}
 	dirty    bool
 	progress map[string]string // run id -> device id, drained by the next flush
+	// watchers are the admin API's event streams (hub_watch.go, M3-T3).
+	watchers map[chan hubsig.Signal]struct{}
+	// gen counts the signals passed to watchers (Generation, hub_watch.go).
+	gen atomic.Uint64
 }
 
 // NewHub returns a Hub with the architecture's cadences.
@@ -124,6 +130,7 @@ func (h *Hub) DeviceChanged(deviceID string) {
 	h.mu.Lock()
 	h.dirty = true
 	h.mu.Unlock()
+	h.notify(hubsig.Signal{Kind: hubsig.Change, DeviceID: deviceID})
 }
 
 // RunProgress records live progress; it also dirties the fleet so device pages refresh.
@@ -132,6 +139,7 @@ func (h *Hub) RunProgress(deviceID, runID string) {
 	h.dirty = true
 	h.progress[runID] = deviceID
 	h.mu.Unlock()
+	h.notify(hubsig.Signal{Kind: hubsig.Progress, DeviceID: deviceID, RunID: runID})
 }
 
 // send delivers to one subscriber; a subscriber that cannot keep up is dropped
@@ -221,6 +229,7 @@ func (h *Hub) Run(ctx context.Context) {
 				}
 			}
 		case <-refreshC:
+			h.notify(hubsig.Signal{Kind: hubsig.Refresh})
 			h.flush(ctx)
 		case <-coalesceC:
 			h.mu.Lock()

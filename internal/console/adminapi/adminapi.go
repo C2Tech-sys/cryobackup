@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,6 +54,7 @@ func Patterns() []string {
 	p = append(p, commandPatterns()...)    // M2-W2C: commands, run cancel, identity resolve (commands.go)
 	p = append(p, auditPatterns()...)      // M2-W3A: audit trail (audit.go)
 	p = append(p, settingsPatterns()...)   // M2-W3A: console settings (settings.go)
+	p = append(p, m3Patterns()...)         // M3-T3: state, fleet, runs, views, system, status, events, metrics (m3*.go)
 	return p
 }
 
@@ -86,6 +88,36 @@ type Service struct {
 	// SyncGateway, when set, is called after a device is retired so the gateway's
 	// htpasswd file drops its login at once instead of at the next five-minute run.
 	SyncGateway func()
+	// Jobs is the console's job runner (jobs.Runner), for the job table and "run
+	// now" (M3-T3). Nil answers "run now" with 503 and lists only the job_state rows.
+	Jobs JobRunner
+	// Events is the SSE hub (ui.Hub) the admin event stream listens to (M3-T3). Nil
+	// leaves GET /api/v1/events on its refresh tick alone: the stream still
+	// delivers, just not on every device change.
+	Events EventSource
+	// MaxEventStreams caps the open event streams; over it GET /api/v1/events answers
+	// 503 with Retry-After. Zero means DefaultMaxEventStreams, negative means no cap.
+	// (The console config key is not wired: config/** belongs to M3-T2.)
+	MaxEventStreams int
+	// MaxEventStreamsPerPrincipal caps the open event streams of one account (one
+	// token, for token callers, is its own principal); over it the answer is 429 with
+	// Retry-After, and no global slot is taken. Zero means
+	// DefaultMaxEventStreamsPerPrincipal, negative means no per-principal cap. One
+	// read-only account or token therefore cannot take every global slot.
+	MaxEventStreamsPerPrincipal int
+	// sseWriteTimeout (zero: DefaultEventWriteTimeout) and sseRevalidate (zero: the
+	// ping interval) are the stream's write deadline and credential re-check period.
+	sseWriteTimeout, sseRevalidate time.Duration
+	// sseRefresh, sseGap and sseShare override the event stream's cadences (tests).
+	sseRefresh, sseGap, sseShare time.Duration
+	streamMu                     sync.Mutex
+	streamsOpen                  int
+	streamsOf                    map[string]int
+	evalMu                       sync.Mutex
+	evals                        map[string]*sharedEval
+	// apiGen counts the device changes made through this API (deviceChanged); with
+	// the hub's Generation it is the event stream's change generation (m3_events.go).
+	apiGen atomic.Uint64
 }
 
 func (s *Service) now() time.Time {
@@ -97,6 +129,7 @@ func (s *Service) now() time.Time {
 
 // Register adds the routes to r.
 func (s *Service) Register(r httpx.Registrar) {
+	r = fleetRegistrar{Registrar: r, s: s} // every mutating route signals a fleet change (fleetchange.go)
 	r.Handle(PatternLogin, http.HandlerFunc(s.login))
 	ro := func(h http.HandlerFunc) http.Handler { return s.Auth.Require(auth.RoleReadOnly, auth.ModeAPI, h) }
 	op := func(h http.HandlerFunc) http.Handler { return s.Auth.Require(auth.RoleOperator, auth.ModeAPI, h) }
@@ -115,6 +148,7 @@ func (s *Service) Register(r httpx.Registrar) {
 	s.registerCommands(r) // M2-W2C (commands.go)
 	s.registerAudit(r)    // M2-W3A (audit.go)
 	s.registerSettings(r) // M2-W3A (settings.go)
+	s.registerM3(r)       // M3-T3 (m3.go)
 }
 
 // display is one consistent reading of the display zone (the live preference,

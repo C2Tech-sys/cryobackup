@@ -201,7 +201,8 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		HtpasswdSync: a.Htpasswd.Sig.Notify, Limits: cfg.RateLimits, Notifier: agentapi.NewNotifier()}
 	wake := a.Agent.Notifier.Notify // M2-W2C: a queued command wakes the device's open long poll
 	a.Admin = &adminapi.Service{Auth: a.Auth, Store: a.Store, Fleet: fleet, Restores: a.Restores, Backend: a.Backend, Clock: a.clock, Log: a.log, Loc: disp.Loc(), Display: disp,
-		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify}
+		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify,
+		Events: a.Hub, MaxEventStreams: cfg.RateLimits.EventStreamsMax, MaxEventStreamsPerPrincipal: cfg.RateLimits.EventStreamsPerAccount}
 	u, err := ui.New(&ui.Service{Auth: a.Auth, Store: a.Store, Fleet: fleet, Restores: a.Restores, Backend: a.Backend, Hub: a.Hub, Clock: a.clock, Loc: disp.Loc(), Display: disp,
 		Zone: disp.Zone(), Refresh: disp.RefreshS(), Fixtures: fix, Log: a.log, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status,
 		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify})
@@ -224,6 +225,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	a.Server = srv
 
 	a.Runner = jobs.NewRunner(a.Store, holderID(), a.log)
+	a.Admin.Jobs = a.Runner // run-now and the storage probe (M3-T3); the runner exists only after the server
 	if !fix {
 		a.Runner.Add(a.Htpasswd.Job())
 		a.Runner.Add((&jobs.HeartbeatRingTrim{Store: a.Store}).Job())

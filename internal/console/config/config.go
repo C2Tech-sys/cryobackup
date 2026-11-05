@@ -56,6 +56,11 @@ type RateLimits struct {
 	LoginLockAfter       int `json:"login_lock_after"`
 	LoginLockMinutes     int `json:"login_lock_minutes"`
 	CommandsLongPollMaxS int `json:"commands_long_poll_max_s"`
+	// EventStreamsMax caps the open admin event streams (GET /api/v1/events,
+	// M3-T3) console-wide, and EventStreamsPerAccount the streams one account or
+	// API token may hold; over either the stream is refused (503 / 429).
+	EventStreamsMax        int `json:"event_streams_max"`
+	EventStreamsPerAccount int `json:"event_streams_per_account"`
 }
 
 // RestoreStream is the minimum-rate guard of a technician download (ADR 0008
@@ -195,18 +200,20 @@ func Default() Config {
 		RefreshIntervalS: 30,
 		Session:          Session{IdleH: 12, AbsoluteH: 168},
 		RateLimits: RateLimits{
-			EnrollPerMinPerIP:    10,
-			FailedAuthPerMinIP:   30,
-			HeartbeatIntervalS:   20,
-			RunsPerMin:           30,
-			SnapshotsPerMin:      6,
-			PolicyPerMin:         6,
-			LoginPerMinPerIP:     10,
-			MaxConns:             1024,
-			MaxBlockMinutes:      15,
-			LoginLockAfter:       5,
-			LoginLockMinutes:     15,
-			CommandsLongPollMaxS: 30,
+			EnrollPerMinPerIP:      10,
+			FailedAuthPerMinIP:     30,
+			HeartbeatIntervalS:     20,
+			RunsPerMin:             30,
+			SnapshotsPerMin:        6,
+			PolicyPerMin:           6,
+			LoginPerMinPerIP:       10,
+			MaxConns:               1024,
+			MaxBlockMinutes:        15,
+			LoginLockAfter:         5,
+			LoginLockMinutes:       15,
+			CommandsLongPollMaxS:   30,
+			EventStreamsMax:        32,
+			EventStreamsPerAccount: 4,
 		},
 		RestoreStream:   RestoreStream{MinBytes: 64 << 10, WindowS: 120, FirstByteS: 300},
 		SMTP:            SMTP{Security: "starttls"},
@@ -442,6 +449,7 @@ func (c Config) Validate() error {
 		"rate_limits.login_per_min_per_ip": rl.LoginPerMinPerIP, "rate_limits.max_conns": rl.MaxConns,
 		"rate_limits.max_block_minutes": rl.MaxBlockMinutes, "rate_limits.login_lock_after": rl.LoginLockAfter,
 		"rate_limits.login_lock_minutes": rl.LoginLockMinutes, "rate_limits.commands_long_poll_max_s": rl.CommandsLongPollMaxS,
+		"rate_limits.event_streams_max": rl.EventStreamsMax, "rate_limits.event_streams_per_account": rl.EventStreamsPerAccount,
 	} {
 		if v < 1 {
 			add("%s must be at least 1", name)

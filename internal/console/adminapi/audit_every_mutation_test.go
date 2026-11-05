@@ -10,9 +10,11 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
+	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
@@ -436,6 +438,63 @@ func auditMutationCases() map[string]mutation {
 			build: func(e *env, s *session) func() call {
 				return func() call {
 					return call{method: "PATCH", path: "/api/v1/devices/" + e.dev.ID, body: map[string]any{"notes": "edited by the audit test"}}
+				}
+			},
+		},
+		// ---- M3-T3: pause, resume, saved views, jobs, storage probe ----
+		PatternDevicePause: {
+			build: func(e *env, s *session) func() call {
+				// EXAM-ROOM-3 has an open run: the pause also queues its cancel, and that is still one audit row.
+				d := e.deviceNamed("EXAM-ROOM-3")
+				return func() call {
+					return call{method: "POST", path: "/api/v1/devices/" + d.ID + "/pause", body: DevicePauseRequest{Reason: "audit test", DurationHours: ptr(4)}}
+				}
+			},
+		},
+		PatternDeviceResume: {
+			build: func(e *env, s *session) func() call {
+				e.mustReq("POST", "/api/v1/devices/"+e.dev.ID+"/pause", s, DevicePauseRequest{Reason: "audit test", Indefinite: true}, 200)
+				return func() call { return call{method: "POST", path: "/api/v1/devices/" + e.dev.ID + "/resume"} }
+			},
+		},
+		PatternViewCreate: {
+			status: 201,
+			build: func(e *env, s *session) func() call {
+				return func() call {
+					return call{method: "POST", path: "/api/v1/views", body: CreateViewRequest{Name: "audit view", Entity: "devices", Shared: true, Audience: &ViewAudienceJSON{AllCustomers: true}}}
+				}
+			},
+		},
+		PatternViewPatch: {
+			build: func(e *env, s *session) func() call {
+				v := decode[ViewResponse](e.t, e.mustReq("POST", "/api/v1/views", s, CreateViewRequest{Name: "audit view", Entity: "runs"}, 201))
+				return func() call {
+					return call{method: "PATCH", path: "/api/v1/views/" + v.ID, body: PatchViewRequest{Name: ptr("audit view renamed")}}
+				}
+			},
+		},
+		PatternViewDelete: {
+			status: 204,
+			build: func(e *env, s *session) func() call {
+				v := decode[ViewResponse](e.t, e.mustReq("POST", "/api/v1/views", s, CreateViewRequest{Name: "audit view", Entity: "customers"}, 201))
+				return func() call { return call{method: "DELETE", path: "/api/v1/views/" + v.ID} }
+			},
+		},
+		PatternSystemJobRun: {
+			status: 202,
+			build: func(e *env, s *session) func() call {
+				// The audit row is written before the run is accepted, and a refused audit starts nothing.
+				r := jobs.NewRunner(e.st, "audit-test", nil)
+				r.Add(jobs.Job{Name: "audit-test-job", Every: time.Hour, Run: func(context.Context) error { return nil }})
+				e.svc.Jobs = r
+				e.t.Cleanup(jobBackground.Wait)
+				return func() call { return call{method: "POST", path: "/api/v1/system/jobs/audit-test-job/run"} }
+			},
+		},
+		PatternStorageTargetProbe: {
+			build: func(e *env, s *session) func() call {
+				return func() call {
+					return call{method: "POST", path: "/api/v1/storage-targets/" + e.firstStorageTarget() + "/probe"}
 				}
 			},
 		},
