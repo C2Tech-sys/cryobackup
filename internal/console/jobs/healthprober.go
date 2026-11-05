@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -75,6 +76,11 @@ const (
 	StopWait = 10 * time.Second
 )
 
+// errProbesCancelled is ProbeNow's answer when the probes it asked for ended
+// without a result, so ran is false: the lease was lost, or Stop began (or had
+// finished). It wraps context.Canceled because that is what happened to them.
+var errProbesCancelled = fmt.Errorf("jobs: the probes were cancelled before they finished: %w", context.Canceled)
+
 // ClassWorkerStore is the storage probe row's class when the maintenance
 // worker's own settings store failed during the probe (maintain.ProbeRecordClass
 // on an unavailable answer): not checked, never a storage failure.
@@ -141,7 +147,7 @@ type HealthProber struct {
 	escrowIDs     []string
 	escrowReadAt  time.Time // zero: the escrow key ids are not known (never read, or the newest read failed)
 	integrityNext time.Time
-	inflight      map[string]chan struct{} // a probe in flight; its channel is closed when it ends
+	inflight      map[string]*probeRun // a probe in flight
 	logged        map[string]string
 	probes        sync.WaitGroup // the per-tick probes
 	background    sync.WaitGroup // the integrity check and the lease renewer
@@ -150,6 +156,7 @@ type HealthProber struct {
 	pcancel       context.CancelFunc
 	life          context.Context // this prober's lifetime: cancelled by Stop
 	lifeCancel    context.CancelFunc
+	stopped       bool // Stop has begun: nothing takes the lease or starts a probe any more
 	renewing      bool
 	idle          chan struct{} // wakes the renewer when the last probe ends
 	renewEvery    time.Duration // overrides renewInterval (tests)
@@ -250,21 +257,31 @@ type result struct {
 	started, finished  time.Time
 }
 
+// probeRun is one probe in flight. done closes once it has ended and written its
+// facts and its row. ran, set before done closes, says whether it produced a
+// result: false when it was cancelled or panicked, so nothing was learned.
+type probeRun struct {
+	done chan struct{}
+	ran  bool
+}
+
+// probed reports whether r is a probe's result, not a cancellation or a panic.
+func (r result) probed() bool { return r.row != "" && r.class != ClassPanic }
+
 // claimOrWait marks a probe in flight and returns claimed true or, when its
-// previous run has not finished, returns that run's channel and claimed false.
-// Either way the channel is closed when the run in flight ends.
-func (h *HealthProber) claimOrWait(row string) (done <-chan struct{}, claimed bool) {
+// previous run has not finished, returns that run and claimed false.
+func (h *HealthProber) claimOrWait(row string) (run *probeRun, claimed bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.inflight == nil {
-		h.inflight = map[string]chan struct{}{}
+		h.inflight = map[string]*probeRun{}
 	}
-	if ch, busy := h.inflight[row]; busy {
-		return ch, false
+	if r, busy := h.inflight[row]; busy {
+		return r, false
 	}
-	ch := make(chan struct{})
-	h.inflight[row] = ch
-	return ch, true
+	r := &probeRun{done: make(chan struct{})}
+	h.inflight[row] = r
+	return r, true
 }
 
 // claim marks a probe in flight; false when its previous run has not finished.
@@ -273,10 +290,11 @@ func (h *HealthProber) claim(row string) bool {
 	return claimed
 }
 
-func (h *HealthProber) release(row string) {
+func (h *HealthProber) release(row string, ran bool) {
 	h.mu.Lock()
-	if ch, ok := h.inflight[row]; ok {
-		close(ch)
+	if r, ok := h.inflight[row]; ok {
+		r.ran = ran
+		close(r.done)
 	}
 	delete(h.inflight, row)
 	idle := len(h.inflight) == 0
@@ -381,6 +399,7 @@ func (h *HealthProber) startRenewer() {
 func (h *HealthProber) Stop() {
 	h.lifetime() // a prober that never ran has a lifetime to end too
 	h.mu.Lock()
+	h.stopped = true
 	cancel, endLife := h.pcancel, h.lifeCancel
 	h.pctx, h.pcancel = nil, nil
 	h.mu.Unlock()
@@ -476,42 +495,57 @@ func (h *HealthProber) Run(ctx context.Context) error {
 		h.background.Add(1)
 		go func() {
 			defer h.background.Done()
-			defer h.release(ProbeRowIntegrity)
-			h.finish(pctx, h.safeProbe(pctx, ProbeRowIntegrity, h.probeIntegrity))
+			var r result
+			defer func() { h.release(ProbeRowIntegrity, r.probed()) }()
+			r = h.safeProbe(pctx, ProbeRowIntegrity, h.probeIntegrity)
+			h.finish(pctx, r)
 		}()
 	}
 	return ctx.Err()
 }
 
 // start runs one per-tick probe in its own goroutine under pctx, unless its
-// previous run is still in flight. It returns the channel that is closed when
-// the run in flight (this one or the earlier one) has ended and written its
-// facts and its row.
-func (h *HealthProber) start(pctx context.Context, row string, fn func(context.Context) result) <-chan struct{} {
-	done, claimed := h.claimOrWait(row)
+// previous run is still in flight. It returns the run in flight (this one or
+// the earlier one), whose done closes when it has ended and written its facts
+// and its row.
+func (h *HealthProber) start(pctx context.Context, row string, fn func(context.Context) result) *probeRun {
+	run, claimed := h.claimOrWait(row)
 	if !claimed {
-		return done
+		return run
 	}
 	h.probes.Add(1)
 	go func() {
 		defer h.probes.Done()
-		defer h.release(row) // after finish: the channel closes once the facts and the row are written
-		h.finish(pctx, h.safeProbe(pctx, row, fn))
+		var r result
+		defer func() { h.release(row, r.probed()) }() // after finish: done closes once the facts and the row are written
+		r = h.safeProbe(pctx, row, fn)
+		h.finish(pctx, r)
 	}()
-	return done
+	return run
 }
 
 // ProbeNow is the on-demand probe (POST /api/v1/storage-targets/{id}/probe).
 // It takes ProbeLease like a tick; when another console holds it nothing is
-// probed here and ran is false. Holding it, it starts the gateway probe (which
-// also reads the gateway certificate's expiry: the certificates check) and the
-// storage probe, and waits until both have ended and written their facts,
-// bounded by ctx. A probe already in flight from a tick is waited for, not
-// started twice. The probes run under the lease's context, not ctx: a caller
-// that gives up stops waiting, it never cuts a probe short (whose result still
-// lands in Facts). The SMTP, maintain RPC, database, master-key and integrity
-// probes keep their own schedule.
+// probed here and the answer is (false, nil). Holding it, it starts the gateway
+// probe (which also reads the gateway certificate's expiry: the certificates
+// check) and the storage probe, and waits until both have ended and written
+// their facts, bounded by ctx. A probe already in flight from a tick is waited
+// for, not started twice. The probes run under the lease's context, not ctx: a
+// caller that gives up stops waiting (true, ctx.Err()), it never cuts a probe
+// short (whose result still lands in Facts). The SMTP, maintain RPC, database,
+// master-key and integrity probes keep their own schedule.
+//
+// ran is true only when the probes ran or were left running. Probes that ended
+// without a result (the lease was lost mid-wait, Stop began or had finished, one
+// panicked, or the run waited for was cancelled under an earlier lease) answer
+// (false, errProbesCancelled).
 func (h *HealthProber) ProbeNow(ctx context.Context) (ran bool, err error) {
+	h.mu.Lock()
+	stopped := h.stopped
+	h.mu.Unlock()
+	if stopped {
+		return false, errProbesCancelled
+	}
 	got, err := h.Store.AcquireJobLease(ctx, ProbeLease, h.holder(), h.leaseTTL())
 	if err != nil {
 		return false, err
@@ -521,11 +555,16 @@ func (h *HealthProber) ProbeNow(ctx context.Context) (ran bool, err error) {
 		return false, nil
 	}
 	pctx := h.probeContext() // the prober's, not ctx: ctx bounds only the wait below
-	waits := []<-chan struct{}{h.start(pctx, ProbeRowGateway, h.probeGateway), h.start(pctx, ProbeRowStorage, h.probeStorage)}
+	runs := []*probeRun{h.start(pctx, ProbeRowGateway, h.probeGateway), h.start(pctx, ProbeRowStorage, h.probeStorage)}
 	h.startRenewer()
-	for _, done := range waits {
+	for _, run := range runs {
 		select {
-		case <-done:
+		case <-run.done:
+			if !run.ran {
+				return false, errProbesCancelled
+			}
+		case <-pctx.Done():
+			return false, errProbesCancelled
 		case <-ctx.Done():
 			return true, ctx.Err()
 		}
