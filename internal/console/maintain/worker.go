@@ -63,6 +63,10 @@ type Worker struct {
 
 	storageOK atomic.Pointer[bool] // last storage probe result; nil until a call reached the repository
 	seq       atomic.Uint64        // request ids of scheduler-originated calls
+	// probeSlotWait overrides ProbeSlotWait (tests).
+	probeSlotWait time.Duration
+	// renewEvery is how often a pass renews the scheduler lease; zero means a third of leaseTTL (tests shorten it).
+	renewEvery time.Duration
 
 	mu         sync.Mutex
 	retryAfter map[string]time.Time // step 1 reschedule, per device
@@ -416,9 +420,26 @@ type execResult struct {
 // non-nil when the call could not run at all: context done, a slot never
 // freed, or a start failure (an internal admin-path error).
 func (w *Worker) exec(ctx context.Context, t *target, cmd restic.Command, timeout time.Duration, onStdout func(io.Reader) error) (execResult, error) {
+	return w.execSlot(ctx, t, cmd, timeout, 0, onStdout)
+}
+
+// execSlot is exec with a bounded wait for the concurrency slot: with
+// slotWait > 0, a slot that does not come free within slotWait is busy
+// (adminpath.CodeBusy) instead of a wait until ctx ends. The storage probe uses
+// it (ADR 0017), so a worker whose slots are all taken answers "busy" (not
+// checked) and never makes the probe time out as if storage were down.
+func (w *Worker) execSlot(ctx context.Context, t *target, cmd restic.Command, timeout, slotWait time.Duration, onStdout func(io.Reader) error) (execResult, error) {
+	var busy <-chan time.Time
+	if slotWait > 0 {
+		tm := time.NewTimer(slotWait)
+		defer tm.Stop()
+		busy = tm.C
+	}
 	select {
 	case w.sem <- struct{}{}:
 		defer func() { <-w.sem }()
+	case <-busy:
+		return execResult{}, adminpath.NewError(adminpath.CodeBusy, "")
 	case <-ctx.Done():
 		return execResult{}, ctx.Err()
 	}

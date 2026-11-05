@@ -377,7 +377,8 @@ var globalMethods = map[string]string{
 	"AppendAudit":              "audit trail is append-only; customer_id is data, not an access path",
 	"LoadDisplayPrefs":         "global configuration (M2-W3A: the display zone and refresh interval)",
 	"PutOperatorSetting":       "global configuration (M2-W3A: init stores the operator zone)",
-	"AcquireJobLease":          "job state", "ReleaseJobLease": "job state", "RecordJobRun": "job state", "GetJobState": "job state", "ListJobStates": "job state",
+	"ActiveEscrowKeyIDs":       "health-prober (C12): key generation ids only", "SweepAbandonedRuns": "abandoned-run-sweeper job",
+	"AcquireJobLease": "job state", "ReleaseJobLease": "job state", "RecordJobRun": "job state", "GetJobState": "job state", "ListJobStates": "job state",
 }
 
 var scopeType = reflect.TypeOf(Scope{})

@@ -111,8 +111,36 @@ func ProbeRunsPerMinute(intervalS int) int {
 	return (60+intervalS-1)/intervalS + 1
 }
 
-// SMTP is accepted and validated in M0 but not used until M4. The password is
-// never in this file: password_file names a mounted file.
+// HealthProber configures the health-prober job (architecture §5.7, banners
+// C01, C02, C03, C05, C07, C11, C12). IntervalS is its period (default 60,
+// 30 to 300). GatewayCAFile is an optional PEM bundle of extra roots for a
+// gateway certificate from a private CA (empty: the system roots); when it is
+// set but cannot be read the gateway probe does not run and the board says so
+// (C01b). The probe authenticates as the reserved probe login, whose password
+// is derived from the master key and never configured.
+type HealthProber struct {
+	IntervalS     int    `json:"interval_s"`
+	GatewayCAFile string `json:"gateway_ca_file"`
+}
+
+// HealthcheckPing configures the healthcheck-ping job (architecture §5.7): an
+// outbound request to an external dead-man's switch (a healthchecks-style
+// monitor of the operator's choosing), sent every IntervalS seconds (default
+// 300, 60 to 3600) only while the alarm-evaluator is healthy, so the monitor
+// alerts when the console's alerting stops. It is off while URL is empty, the
+// default: nothing is sent anywhere unless the operator names a URL. Method is
+// GET (default) or POST with an empty body. The URL often carries a monitor
+// token, so it is never logged.
+type HealthcheckPing struct {
+	URL       string `json:"url"`
+	Method    string `json:"method"`
+	IntervalS int    `json:"interval_s"`
+}
+
+// SMTP is validated in M0; M3's health-prober connects and says EHLO when a
+// host is set (no mail, no login; an empty host is the C03b "not configured"
+// warning); sending is M4. The password is never in this file: password_file
+// names a mounted file.
 type SMTP struct {
 	Host         string `json:"host"`
 	Port         int    `json:"port"`
@@ -128,28 +156,30 @@ type SMTP struct {
 // tls.cert is CRYO_TLS_CERT and rate_limits.runs_per_min is
 // CRYO_RATE_LIMITS_RUNS_PER_MIN.
 type Config struct {
-	DataDir          string        `json:"data_dir"`
-	DBPath           string        `json:"db_path"`
-	MasterKeyPath    string        `json:"master_key_path"`
-	AgentListen      string        `json:"agent_listen"`
-	AdminListen      string        `json:"admin_listen"`
-	AdminAllowPublic bool          `json:"admin_allow_public"`
-	InsecureHTTPLab  bool          `json:"insecure_http_for_lab"`
-	TLS              TLS           `json:"tls"`
-	Admin            Admin         `json:"admin"`
-	PublicURL        string        `json:"public_url"`
-	GatewayURL       string        `json:"gateway_url"`
-	GatewayAuthDir   string        `json:"gateway_auth_dir"`
-	ArtifactsDir     string        `json:"artifacts_dir"` // where the operator places the agent MSI (shown on /downloads, hashed for the deployment snippets) and agent releases (M11); never restore data (ADR 0008)
-	AdminpathSocket  string        `json:"adminpath_socket"`
-	DisplayTimezone  string        `json:"display_timezone"`
-	RefreshIntervalS int           `json:"refresh_interval_s"`
-	Session          Session       `json:"session"`
-	RateLimits       RateLimits    `json:"rate_limits"`
-	RestoreStream    RestoreStream `json:"restore_stream"`
-	SMTP             SMTP          `json:"smtp"`
-	AgentProbe       AgentProbe    `json:"agent_probe"`
-	Fixtures         bool          `json:"fixtures"`
+	DataDir          string          `json:"data_dir"`
+	DBPath           string          `json:"db_path"`
+	MasterKeyPath    string          `json:"master_key_path"`
+	AgentListen      string          `json:"agent_listen"`
+	AdminListen      string          `json:"admin_listen"`
+	AdminAllowPublic bool            `json:"admin_allow_public"`
+	InsecureHTTPLab  bool            `json:"insecure_http_for_lab"`
+	TLS              TLS             `json:"tls"`
+	Admin            Admin           `json:"admin"`
+	PublicURL        string          `json:"public_url"`
+	GatewayURL       string          `json:"gateway_url"`
+	GatewayAuthDir   string          `json:"gateway_auth_dir"`
+	ArtifactsDir     string          `json:"artifacts_dir"` // where the operator places the agent MSI (shown on /downloads, hashed for the deployment snippets) and agent releases (M11); never restore data (ADR 0008)
+	AdminpathSocket  string          `json:"adminpath_socket"`
+	DisplayTimezone  string          `json:"display_timezone"`
+	RefreshIntervalS int             `json:"refresh_interval_s"`
+	Session          Session         `json:"session"`
+	RateLimits       RateLimits      `json:"rate_limits"`
+	RestoreStream    RestoreStream   `json:"restore_stream"`
+	SMTP             SMTP            `json:"smtp"`
+	AgentProbe       AgentProbe      `json:"agent_probe"`
+	HealthProber     HealthProber    `json:"health_prober"`
+	HealthcheckPing  HealthcheckPing `json:"healthcheck_ping"`
+	Fixtures         bool            `json:"fixtures"`
 }
 
 // Default returns the defaults: loopback admin listener, public agent listener
@@ -178,9 +208,11 @@ func Default() Config {
 			LoginLockMinutes:     15,
 			CommandsLongPollMaxS: 30,
 		},
-		RestoreStream: RestoreStream{MinBytes: 64 << 10, WindowS: 120, FirstByteS: 300},
-		SMTP:          SMTP{Security: "starttls"},
-		AgentProbe:    AgentProbe{IntervalS: 180},
+		RestoreStream:   RestoreStream{MinBytes: 64 << 10, WindowS: 120, FirstByteS: 300},
+		SMTP:            SMTP{Security: "starttls"},
+		AgentProbe:      AgentProbe{IntervalS: 180},
+		HealthProber:    HealthProber{IntervalS: 60},
+		HealthcheckPing: HealthcheckPing{Method: "GET", IntervalS: 300},
 	}
 }
 
@@ -443,6 +475,21 @@ func (c Config) Validate() error {
 	}
 	if fa := c.RateLimits.FailedAuthPerMinIP; fa >= 1 && 2*ProbeRunsPerMinute(c.AgentProbe.IntervalS) > fa {
 		add("agent_probe.interval_s is too short for rate_limits.failed_auth_per_min_per_ip: the probe's runs per minute may use at most half of that allowance, or the probe could get the console's own address blocked")
+	}
+	if c.HealthProber.IntervalS < 30 || c.HealthProber.IntervalS > 300 {
+		add("health_prober.interval_s must be between 30 and 300")
+	}
+	hp := c.HealthcheckPing
+	if hp.IntervalS < 60 || hp.IntervalS > 3600 {
+		add("healthcheck_ping.interval_s must be between 60 and 3600")
+	}
+	if hp.Method != "GET" && hp.Method != "POST" {
+		add("healthcheck_ping.method must be GET or POST")
+	}
+	if hp.URL != "" {
+		if u, err := url.Parse(hp.URL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			add("healthcheck_ping.url must be an http or https URL") // the value is not echoed: it may carry a token
+		}
 	}
 	if c.SMTP.Host != "" {
 		if c.SMTP.Port < 1 || c.SMTP.Port > 65535 {

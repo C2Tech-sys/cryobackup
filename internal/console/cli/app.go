@@ -26,6 +26,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/console/ui"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // BuildOptions tune Build; the zero value is production.
@@ -59,6 +60,8 @@ type App struct {
 	Probe    *Probe
 	// Endpoint is the self-probe of the public agent endpoint (ADR 0013, banners C04, C05, C04b).
 	Endpoint *probe.Prober
+	// Prober is the health-prober job (M3; nil in fixtures mode, which uses canned probe facts).
+	Prober   *jobs.HealthProber
 	Htpasswd *jobs.HtpasswdSync
 	// Display is the live display zone and refresh interval (M2-W3A) shared by the UI and the API.
 	Display *store.DisplayPrefs
@@ -170,9 +173,15 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	}
 	a.Display = disp
 
-	a.Probe = NewProbe(a.Backend, a.clock, fix)
 	a.Endpoint = newEndpointProbe(cfg, a.clock, a.log)
-	fleet := &health.Evaluator{Store: a.Store, Clock: a.clock, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status, Endpoint: a.Endpoint.Status}
+	if !fix {
+		a.Prober = newHealthProber(cfg, a)
+		a.Probe = NewProbe(a.Prober.MaintainRPC, a.clock, false)
+	} else {
+		a.Probe = NewProbe(nil, a.clock, true)
+	}
+	fleet := &health.Evaluator{Store: a.Store, Clock: a.clock, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status, Endpoint: a.Endpoint.Status,
+		Probes: a.probeSource(fix), Refresh: func() time.Duration { return time.Duration(disp.RefreshS()) * time.Second }}
 	idle := time.Duration(cfg.Session.IdleH) * time.Hour
 	abs := time.Duration(cfg.Session.AbsoluteH) * time.Hour
 	a.Auth = auth.NewManager(a.Store, idle, abs, cfg.RateLimits.LoginPerMinPerIP, cfg.RateLimits.LoginLockAfter,
@@ -221,6 +230,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		a.Runner.Add((&jobs.RestorePurge{Svc: a.Restores}).Job())
 		a.Runner.Add((&jobs.SessionExpire{Store: a.Store}).Job())
 		a.Runner.Add((&jobs.CommandExpiry{Store: a.Store}).Job())
+		a.addMonitorJobs(cfg, fleet)
 	}
 	return a, nil
 }
@@ -232,21 +242,24 @@ func holderID() string {
 	return fmt.Sprintf("serve-%x", b) + "-" + sanitizeToken(h)
 }
 
-// Run serves until ctx is cancelled: it starts the SSE hub, the job runner and
-// the maintenance probe, binds both listeners and serves. Close is called on return.
+// Run serves until ctx is cancelled: it starts the SSE hub, the job runner
+// (the health-prober among its jobs) and the agent-endpoint self-probe, binds
+// both listeners and serves. Close is called on return.
 func (a *App) Run(ctx context.Context) error {
 	defer a.Close()
 	if err := a.Server.Listen(); err != nil {
 		return err
 	}
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(2)
 	go func() { defer wg.Done(); a.Hub.Run(ctx) }()
-	go func() { defer wg.Done(); a.Probe.Run(ctx) }()
 	go func() { defer wg.Done(); a.Endpoint.Run(ctx) }() // after Listen: the first probe meets a bound listener
 	a.Runner.Start(ctx)
 	err := a.Server.Serve(ctx)
 	a.Runner.Stop()
+	if a.Prober != nil {
+		a.Prober.Stop() // its probes run detached from the runner; ctx is done, so they end promptly; frees the probe lease
+	}
 	wg.Wait()
 	return err
 }
@@ -259,58 +272,34 @@ func (a *App) Close() {
 	a.cleanup = nil
 }
 
-// ---- maintenance worker probe (banner C07) ----
+// ---- maintenance worker reachability for the UI (banner C07) ----
 
-// Probe pings the maintenance worker over the admin path and remembers the
-// answer. It is the console's only evidence for C07 until the M3 prober.
+// Probe reports the maintenance worker's reachability to the UI, read from the
+// health-prober's maintain RPC probe (the same run that feeds banner C07; the
+// prober pings the worker every period, so there is no second timer here).
 type Probe struct {
-	be    adminpath.Backend
+	src   func() state.ProbeRun
 	clock func() time.Time
-	mu    sync.Mutex
-	st    health.MaintainStatus
+	fixed bool
 }
 
-// NewProbe returns a Probe; with assumeUp (fixtures) the status starts reachable.
-func NewProbe(be adminpath.Backend, clock func() time.Time, assumeUp bool) *Probe {
-	p := &Probe{be: be, clock: clock}
-	if assumeUp {
-		p.st = health.MaintainStatus{Known: true, Reachable: true, LastOK: clock()}
-	}
-	return p
+// NewProbe returns a Probe over src; with assumeUp (fixtures) it always reports reachable.
+func NewProbe(src func() state.ProbeRun, clock func() time.Time, assumeUp bool) *Probe {
+	return &Probe{src: src, clock: clock, fixed: assumeUp}
 }
 
-// Status is the last probe result.
+// Status is the newest maintain RPC probe: Known once one completed, Reachable when it passed.
 func (p *Probe) Status() health.MaintainStatus {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.st
-}
-
-// Once pings now.
-func (p *Probe) Once(ctx context.Context) {
-	cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
-	_, err := p.be.Ping(cctx)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.st.Known = true
-	p.st.Reachable = err == nil
-	if err == nil {
-		p.st.LastOK = p.clock()
+	if p.fixed {
+		return health.MaintainStatus{Known: true, Reachable: true, LastOK: p.clock()}
 	}
-}
-
-// Run pings every 30 s until ctx is cancelled (first ping at once).
-func (p *Probe) Run(ctx context.Context) {
-	p.Once(ctx)
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			p.Once(ctx)
-		}
+	if p.src == nil {
+		return health.MaintainStatus{}
 	}
+	r := p.src()
+	st := health.MaintainStatus{Known: r.LastRunAt != 0, Reachable: r.LastRunAt != 0 && r.ConsecutiveFailures == 0}
+	if t, ok := r.LastOKAt.Time(); ok {
+		st.LastOK = t
+	}
+	return st
 }

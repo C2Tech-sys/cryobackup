@@ -3,7 +3,9 @@
 // runs, records its outcome there when it ends (job_state feeds the health
 // banners and /healthz), is isolated from panics and is safe to run twice.
 // M0 jobs: htpasswd-sync, heartbeat-ring-trim, restore-purge, session-expire and
-// command-expiry.
+// command-expiry. M3 jobs: health-prober (healthprober.go), alarm-evaluator
+// (the loop, no notifications until M4), abandoned-run-sweeper and the optional
+// healthcheck-ping (monitor.go).
 package jobs
 
 import (

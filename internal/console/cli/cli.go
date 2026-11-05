@@ -29,6 +29,7 @@ commands:
   target    list storage targets; set a target's fleet cap (max_concurrent_backups)
   user      manage admin accounts (add, passwd, list, disable)
   maintain  server-side maintenance worker and admin-path socket
+  probe-repo reset  clear the storage probe repository marker (dry run unless --confirm; ADR 0017)
   doctor    check configuration, database, master key and listener binds
   version   print the build stamp
 `
@@ -70,6 +71,8 @@ func Main(args []string, io IO) int {
 		return runDoctor(rest, io)
 	case "maintain":
 		return runMaintain(rest, io)
+	case "probe-repo":
+		return runProbeRepo(rest, io)
 	case "help", "-h", "--help":
 		Usage(io.Stdout)
 		return ExitOK

@@ -146,6 +146,10 @@ func TestServeProbesItsOwnAgentEndpoint(t *testing.T) {
 	if c05 == nil || c05.Severity != state.SeverityAlarm || c05.Text != "Agent listener certificate expires in 10 days." {
 		t.Fatalf("C05: %+v", c05)
 	}
+	// The probe records its result before it logs the change (probe.record), so wait for the line.
+	for !strings.Contains(logs.String(), "agent endpoint probe passing") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if out := logs.String(); !strings.Contains(out, "agent endpoint probe passing") || strings.Contains(out, "localhost") {
 		t.Fatalf("probe logs (path-free, host-free):\n%s", out)
 	}
@@ -205,9 +209,19 @@ func TestServeWithoutPublicURLWarnsOnce(t *testing.T) {
 			t.Fatalf("critical %s: %s", b.ID, b.Text)
 		}
 	}
-	// C00 (self-checks not wired) stays until store.LoadWorld supplies probe facts (M3-T2).
-	if strings.Join(got, ",") != "C00,C04b" || !strings.Contains(f.View.Banners[1].Text, "public_url is not set") {
+	// M3-T2: serve is wired (no C00). Before the health-prober's first run every other check is
+	// "not checked" (C01b, C02b, C03b, C06b, C07b, C11): loud, never critical, never clear.
+	var c04b *state.Banner
+	for i := range f.View.Banners {
+		if b := &f.View.Banners[i]; b.ID == "C04b" {
+			c04b = b
+		}
+	}
+	if strings.Contains(","+strings.Join(got, ",")+",", ",C00,") || c04b == nil || !strings.Contains(c04b.Text, "public_url is not set") {
 		t.Fatalf("banners %v", got)
+	}
+	if f.View.AllClear() {
+		t.Fatal("a console whose checks have not run reads all clear")
 	}
 }
 
@@ -231,8 +245,8 @@ func TestFixturesShowTheEndpointBanner(t *testing.T) {
 	for _, b := range f.View.Banners {
 		ids = append(ids, b.ID)
 	}
-	// C00 (self-checks not wired) stays until store.LoadWorld supplies probe facts (M3-T2).
-	if strings.Join(ids, ",") != "C00,C05" || f.View.Banners[1].Text != "Agent listener certificate expires in 12 days." {
+	// M3-T2: fixtures mode is wired with healthy canned probe facts, so only the ADR 0013 banner shows.
+	if strings.Join(ids, ",") != "C05" || f.View.Banners[0].Text != "Agent listener certificate expires in 12 days." {
 		t.Fatalf("fixtures banners: %v %+v", ids, f.View.Banners)
 	}
 	for id, want := range map[string]string{"C04": "AGENT API UNREACHABLE", "C05": "CERTIFICATE EXPIRING", "C04b": "AGENT API NOT CHECKED"} {

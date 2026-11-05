@@ -178,11 +178,10 @@ func TestTenDayStrips(t *testing.T) {
 	if _, ok := byHost["OLD-RECEPTION-PC"]; ok {
 		t.Fatal("retired devices have no strip")
 	}
-	// A parked device renders all cells as none.
-	for _, c := range byHost["XRAY-OLD-01"] {
-		if c.Kind != DayNone {
-			t.Fatalf("parked strip: %+v", byHost["XRAY-OLD-01"])
-		}
+	// A parked device renders none from its pause day on (§4.7, M3-T2); the days before keep their runs.
+	parked := byHost["XRAY-OLD-01"]
+	if parked[StripDays-1].Kind != DayNone || parked[StripDays-2].Kind != DayNone {
+		t.Fatalf("parked strip after the pause: %+v", parked)
 	}
 	// A healthy device has a run of green days ending yesterday or today.
 	ok := byHost["OPS-ND-01"]

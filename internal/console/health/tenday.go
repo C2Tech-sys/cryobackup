@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
@@ -86,12 +87,16 @@ func TenDay(ctx context.Context, st *store.Store, scope store.Scope, view state.
 			DisplayZone:  defaultLoc,
 			EnrolledAt:   enrolled[d.ID],
 			PendingFirst: d.Primary == state.StatePendingFirst,
+			NoSchedule:   slices.Contains(d.Attrs, state.AttrNoSchedule),
 			Hours:        hoursOf[d.ID],
 		}
 		if d.Primary == state.StatePaused {
-			// Unchanged pre-M3 rendering: a device paused now shows every cell as none.
-			// (§4.7 asks only for the paused days; passing d.Since would do that.)
-			f.PausedAt = time.Unix(0, 0)
+			// §4.7: only the days from the pause day on are none; the days before keep their runs.
+			// PAUSED's Since is paused_at; a pause whose time the engine could not read greys every cell.
+			f.PausedAt = d.Since
+			if f.PausedAt.IsZero() {
+				f.PausedAt = time.Unix(0, 0)
+			}
 		}
 		out[d.ID] = state.TenDayStrip(f, now)
 	}
