@@ -170,7 +170,9 @@
 //	     maintain`) not finished for 30 min: critical. RPC never probed or stale, the scheduler's heartbeat not
 //	     supplied, or its first run pending within 30 min of the start: C07b warning.
 //	C10  snapshot (World.LoadedAt) older than 2 refresh intervals, unknown, or the stream disconnected: warning.
-//	C11  one banner listing every cause: integrity failed or self-backup verify failed is critical; disk under
+//	C11  one banner listing every cause: integrity failed, self-backup verify failed or the maintenance worker
+//	     unable to read or write this database on WorkerStoreFailuresToCritical storage probes in a row is
+//	     critical (one failure raises nothing; a garbled streak is a warning); disk under
 //	     10 % free, WAL over 1 GiB, self-backup older than 26 h, never written or not supplied, a garbled disk
 //	     figure (negative, or free above total), and anything not measured are warnings: integrity never run or older than IntegrityMaxAge (8 d: startup plus weekly), disk and
 //	     WAL never measured or older than DBMeasureMaxAge (15 min: the prober measures every run). A stale

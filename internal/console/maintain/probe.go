@@ -83,9 +83,11 @@ var errProbeKey = errors.New("maintain: no probe repository password")
 
 // ProbeRecordClass is the class of the answer when the worker's own settings
 // store fails during the storage probe (reading or arming the SettingProbeRepo
-// guard): the code is adminpath.CodeUnavailable, so the console reads it as "not
-// checked" (C02b), never as a storage failure (C02). It says nothing about
-// storage: the list and cat config may well have passed.
+// guard): the code is adminpath.CodeUnavailable, so for storage the console reads
+// it as "not checked" (C02b), never as a storage failure (C02). It says nothing
+// about storage: the list and cat config may well have passed. It does say the
+// worker cannot use the console database, so two in a row raise C11 critical
+// (state.DatabaseFacts.WorkerStoreFailures, ADR 0017).
 const ProbeRecordClass = restic.ClassInternal
 
 // probeStoreErr is the answer for a settings-store failure inside the probe. It
