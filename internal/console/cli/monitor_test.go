@@ -51,6 +51,14 @@ func TestC21ServeSuppliesEveryProbeFactsPointer(t *testing.T) {
 	if app.Prober == nil {
 		t.Fatal("serve built no health-prober")
 	}
+	// Before the first master-key read the generation comparison is not done: MasterKey is nil (C12b).
+	if p := serveProbeFacts(t, app, true); p.MasterKey != nil {
+		t.Fatalf("a comparison before any escrow read: %+v", p.MasterKey)
+	}
+	if err := app.Prober.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.Prober.WaitAll()
 	page := serveProbeFacts(t, app, true)
 	if !page.Wired {
 		t.Fatal("serve's probe facts are not wired: C00 would show")

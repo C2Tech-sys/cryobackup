@@ -23,29 +23,35 @@ const NameHealthProber = "health-prober"
 // The health-prober's job_state rows: one per probe, named after the job, so
 // /system/jobs and the system-health page read every probe result in one place
 // (architecture §4.6: "stored in job_state (last_status, last_error_class)").
-// Only the lease holder of health-prober writes them.
 const (
 	ProbeRowGateway   = NameHealthProber + ".gateway"
 	ProbeRowStorage   = NameHealthProber + ".storage"
 	ProbeRowSMTP      = NameHealthProber + ".smtp"
 	ProbeRowMaintain  = NameHealthProber + ".maintain-rpc"
 	ProbeRowDatabase  = NameHealthProber + ".database"
+	ProbeRowIntegrity = NameHealthProber + ".integrity"
 	ProbeRowMasterKey = NameHealthProber + ".master-key"
 	ProbeRowEndpoint  = NameHealthProber + ".agent-endpoint"
 )
 
-// Bounds of the health-prober (every one well inside its 60 s period, except the
-// integrity check, which runs at start-up and weekly).
+// Bounds and cadences of the health-prober. Every probe but the integrity check
+// runs on each 60 s tick unless its previous run is still in flight, and each
+// is bounded well inside the period; the integrity check runs in the background.
 const (
 	// DefaultProberInterval is the §5.7 period.
 	DefaultProberInterval = state.DefaultProberInterval
 	// MaintainPingTimeout bounds the maintain RPC ping (the adminpath ping timeout).
 	MaintainPingTimeout = 5 * time.Second
-	// StorageProbeTimeout bounds the storage probe (restic cat config through the maintain RPC).
+	// StorageProbeTimeout bounds the storage probe (list + cat config on the probe repository, ADR 0017).
 	StorageProbeTimeout = 45 * time.Second
-	// IntegrityEvery is how often PRAGMA integrity_check runs after the start-up check.
+	// IntegrityEvery is how often PRAGMA integrity_check runs after a passing check (start-up, then weekly).
 	IntegrityEvery = 7 * 24 * time.Hour
-	// IntegrityTimeout bounds one integrity check.
+	// IntegrityRetryAfter is the back-off after a check that failed, errored or timed out: a day, not the
+	// next tick, so a database too large for IntegrityTimeout is not scanned every minute.
+	IntegrityRetryAfter = 24 * time.Hour
+	// IntegrityTimeout bounds one integrity check. It runs in one read transaction whose context ends at
+	// this deadline (the SQLite driver interrupts the statement), so it cannot hold back WAL checkpoints
+	// for longer.
 	IntegrityTimeout = 5 * time.Minute
 	// DBMeasureTimeout bounds the escrow key query.
 	DBMeasureTimeout = 10 * time.Second
@@ -53,28 +59,27 @@ const (
 
 // Not-configured reasons, worded for the "not checked" banners (state ProbeRun.Unconfigured).
 const (
-	unconfGatewayURL  = "gateway_url is not set"
-	unconfMasterKey   = "the master key is not loaded, so the probe login has no password"
-	unconfSMTP        = "SMTP is not configured"
-	unconfNoRepoProbe = "no device repository with an escrowed key exists yet to probe"
+	unconfGatewayURL = "gateway_url is not set"
+	unconfMasterKey  = "the master key is not loaded, so the probe login has no password"
+	unconfSMTP       = "SMTP is not configured"
 )
 
-// HealthProber is the health-prober job (architecture §4.6, §5.7): every 60 s,
-// under its lease, it probes the gateway (TLS and an authenticated GET of
-// /probe/config as the reserved probe login, with the certificate's notAfter),
-// storage (restic cat config on a device repository through the maintain RPC,
-// rotating over the fleet), SMTP (connect and EHLO, no mail; not configured is
-// the C03b warning), the maintain RPC (ping), the console database (integrity
-// at start-up and weekly, free disk and WAL size every run) and the master key
-// (loaded, and its generation against the active escrows). It mirrors the
-// agent-endpoint self-probe (internal/console/probe, its own 3-minute timer,
-// ADR 0013) into job_state so every probe result is in one place.
+// HealthProber is the health-prober job (architecture §4.6, §5.7). Each tick,
+// under its lease, it starts every probe whose previous run has finished: the
+// gateway (TLS and an authenticated GET of /probe/config as the reserved probe
+// login, with the certificate's notAfter), storage (list + cat config on the
+// probe repository through the maintain RPC, ADR 0017), SMTP (connect and EHLO,
+// no mail; not configured is the C03b warning), the maintain RPC (ping), the
+// console database's free disk and WAL size, and the master key (loaded, and
+// its generation against the active escrows). PRAGMA integrity_check runs in
+// the background at start-up and weekly. The agent-endpoint self-probe keeps
+// its own 3-minute timer (ADR 0013) and is mirrored into job_state here.
 //
+// The probes do not wait for each other: a slow one only ages its own facts.
 // Results live in memory (Facts) and in one job_state row per probe. Logs are
 // path-free and token-free: a probe name and a class, only on a change. A probe
 // that cannot run is "not checked" (Unconfigured), never healthy and never a
-// failure of the thing it would have probed. Run never blocks start-up: the
-// runner starts it after the listeners are bound.
+// failure of the thing it would have probed.
 type HealthProber struct {
 	Store   *store.Store
 	Backend adminpath.Backend
@@ -90,20 +95,31 @@ type HealthProber struct {
 	Endpoint func() probe.Status
 	// Interval is the period; zero means DefaultProberInterval.
 	Interval time.Duration
+	// StorageTimeout bounds the storage probe; zero means StorageProbeTimeout.
+	StorageTimeout time.Duration
+	// IntegrityCheck runs the integrity check; nil means Store.IntegrityCheck.
+	IntegrityCheck func(ctx context.Context) (string, error)
+	// IntegrityTimeout bounds it; zero means the IntegrityTimeout constant.
+	IntegrityTimeout time.Duration
+	// EscrowKeyIDs reads the active escrows' master key ids; nil means Store.ActiveEscrowKeyIDs.
+	EscrowKeyIDs func(ctx context.Context) ([]string, error)
 	// Clock is the console clock; nil means time.Now.
 	Clock func() time.Time
 	Log   *logx.Logger
 	// Started is when this console process started (ProbeFacts.StartedAt).
 	Started time.Time
 
-	mu           sync.Mutex
-	gw, st, sm   state.ProbeRun
-	rpc          state.ProbeRun
-	db           state.DatabaseFacts
-	escrowIDs    []string
-	integrityAt  time.Time
-	storageAfter string
-	logged       map[string]string
+	mu            sync.Mutex
+	gw, st, sm    state.ProbeRun
+	rpc           state.ProbeRun
+	db            state.DatabaseFacts
+	escrowIDs     []string
+	escrowReadAt  time.Time // zero: the escrow key ids are not known (never read, or the newest read failed)
+	integrityNext time.Time
+	inflight      map[string]bool
+	logged        map[string]string
+	probes        sync.WaitGroup // the per-tick probes
+	background    sync.WaitGroup // the integrity check
 }
 
 func (h *HealthProber) interval() time.Duration {
@@ -127,10 +143,9 @@ func (h *HealthProber) log() *logx.Logger {
 	return logx.Default()
 }
 
-// Job returns the schedule for the runner. The lease outlives one run's longest
-// bound (the integrity check) so a second console cannot probe concurrently.
+// Job returns the schedule for the runner.
 func (h *HealthProber) Job() Job {
-	return Job{Name: NameHealthProber, Every: h.interval(), Lease: IntegrityTimeout + time.Minute, Run: h.Run}
+	return Job{Name: NameHealthProber, Every: h.interval(), Lease: 2 * h.interval(), Run: h.Run}
 }
 
 func ms(t time.Time) state.Millis {
@@ -164,38 +179,83 @@ type result struct {
 	started, finished  time.Time
 }
 
-// Run is one health-prober pass: every probe concurrently, each under its own
-// bound, then one job_state row per probe. It returns an error only when the
-// rows cannot be written; a failing probe is a result, not a job failure.
+// claim marks a probe in flight; false when its previous run has not finished.
+func (h *HealthProber) claim(row string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflight == nil {
+		h.inflight = map[string]bool{}
+	}
+	if h.inflight[row] {
+		return false
+	}
+	h.inflight[row] = true
+	return true
+}
+
+func (h *HealthProber) release(row string) {
+	h.mu.Lock()
+	delete(h.inflight, row)
+	h.mu.Unlock()
+}
+
+// Run is one health-prober tick: it starts every probe that is not still in
+// flight from an earlier tick, each in its own goroutine under its own bound,
+// and the integrity check when it is due, and returns without waiting for
+// them. Each probe records its own job_state row when it ends. Wait and
+// WaitAll wait for them (tests, shutdown).
 func (h *HealthProber) Run(ctx context.Context) error {
-	var wg sync.WaitGroup
-	results := make(chan result, 8)
-	for _, p := range []func(context.Context) result{h.probeGateway, h.probeStorage, h.probeSMTP, h.probeMaintain, h.probeDatabase, h.probeMasterKey, h.mirrorEndpoint} {
-		wg.Add(1)
+	for _, p := range []struct {
+		row string
+		fn  func(context.Context) result
+	}{
+		{ProbeRowGateway, h.probeGateway}, {ProbeRowStorage, h.probeStorage}, {ProbeRowSMTP, h.probeSMTP},
+		{ProbeRowMaintain, h.probeMaintain}, {ProbeRowDatabase, h.probeDatabase}, {ProbeRowMasterKey, h.probeMasterKey},
+		{ProbeRowEndpoint, h.mirrorEndpoint},
+	} {
+		if !h.claim(p.row) {
+			continue // still running: only its own facts age
+		}
+		h.probes.Add(1)
 		go func() {
-			defer wg.Done()
-			if r := p(ctx); r.row != "" {
-				results <- r
-			}
+			defer h.probes.Done()
+			defer h.release(p.row)
+			h.finish(ctx, p.fn(ctx))
 		}()
 	}
-	wg.Wait()
-	close(results)
-	var errs []error
-	for r := range results {
-		h.logChange(r)
-		if r.finished.Before(r.started) {
-			r.finished = r.started
-		}
-		if err := h.Store.RecordJobRun(context.WithoutCancel(ctx), r.row, store.JobRun{Status: r.status, ErrorClass: r.class,
-			StartedAt: r.started, FinishedAt: r.finished}); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(errs) > 0 {
-		return &ClassError{Class: ClassStore, Err: errors.Join(errs...)}
+	h.mu.Lock()
+	due := !h.now().Before(h.integrityNext)
+	h.mu.Unlock()
+	if due && h.claim(ProbeRowIntegrity) {
+		h.background.Add(1)
+		go func() {
+			defer h.background.Done()
+			defer h.release(ProbeRowIntegrity)
+			h.finish(ctx, h.probeIntegrity(ctx))
+		}()
 	}
 	return ctx.Err()
+}
+
+// Wait waits for the per-tick probes started so far (not the integrity check).
+func (h *HealthProber) Wait() { h.probes.Wait() }
+
+// WaitAll waits for every probe, the integrity check included.
+func (h *HealthProber) WaitAll() { h.probes.Wait(); h.background.Wait() }
+
+// finish logs a change and writes the probe's job_state row.
+func (h *HealthProber) finish(ctx context.Context, r result) {
+	if r.row == "" {
+		return
+	}
+	h.logChange(r)
+	if r.finished.Before(r.started) {
+		r.finished = r.started
+	}
+	if err := h.Store.RecordJobRun(context.WithoutCancel(ctx), r.row, store.JobRun{Status: r.status, ErrorClass: r.class,
+		StartedAt: r.started, FinishedAt: r.finished}); err != nil {
+		h.log().Error("health probe state not recorded", logx.Str("probe", r.row), logx.Class(ClassStore))
+	}
 }
 
 // logChange logs a probe's status only when it changes (path-free: the probe and its class).
@@ -273,11 +333,12 @@ func (h *HealthProber) probeGateway(ctx context.Context) result {
 	return result{row: ProbeRowGateway, status: statusOf(o.OK), class: o.Class, started: start, finished: end}
 }
 
-// storageVerdict classifies a cat config answer for the storage probe: reached
-// is true when restic got to the repository (success, or an answer only the
-// repository could give: missing, wrong key, locked); probed is false when the
-// probe could not run at all (the worker is down or refused the device), which
-// is "not checked", never a storage failure.
+// storageVerdict classifies the probe repository's answer (ADR 0017): only a
+// clean list + cat config passes. repo_missing is a failure of its own class
+// (the probe repository was created once and is gone: an emptied or re-pointed
+// prefix), and so is every other restic verdict. probed is false only when the
+// probe could not reach the worker at all (down, shutting down, busy), which is
+// "not checked" and C07's to report, never a storage pass.
 func storageVerdict(err error) (reached, probed bool, class string) {
 	if err == nil {
 		return true, true, ""
@@ -290,37 +351,28 @@ func storageVerdict(err error) (reached, probed bool, class string) {
 		return false, true, "timeout"
 	case errors.As(err, &ae):
 		switch ae.Code {
-		case adminpath.CodeRepoMissing, adminpath.CodeWrongPassword, adminpath.CodeLocked:
-			return true, true, ""
-		case adminpath.CodeStorageUnreachable, adminpath.CodeTimeout, adminpath.CodeResticFailed:
-			c := ae.Code
+		case adminpath.CodeUnavailable, adminpath.CodeBusy:
+			return false, false, ae.Code
+		case adminpath.CodeNotFound:
+			return false, true, "probe_unsupported" // a worker that predates the probe repository
+		case adminpath.CodeStorageUnreachable, adminpath.CodeResticFailed:
 			if ae.Class != "" {
-				c = string(ae.Class)
+				return false, true, string(ae.Class)
 			}
-			return false, true, c
 		}
-		return false, false, ae.Code
+		return false, true, ae.Code
 	}
-	return false, false, "internal"
+	return false, true, "internal"
 }
 
 func (h *HealthProber) probeStorage(ctx context.Context) result {
 	start := h.now()
-	h.mu.Lock()
-	after := h.storageAfter
-	h.mu.Unlock()
-	dev, err := h.Store.NextStorageProbeDevice(ctx, after)
-	if err != nil {
-		return result{row: ProbeRowStorage, status: "skipped", class: ClassStore, started: start, finished: h.now()}
+	timeout := h.StorageTimeout
+	if timeout <= 0 {
+		timeout = StorageProbeTimeout
 	}
-	if dev == "" {
-		h.mu.Lock()
-		h.st = state.ProbeRun{Unconfigured: unconfNoRepoProbe}
-		h.mu.Unlock()
-		return result{row: ProbeRowStorage, status: "skipped", class: "no_repository", started: start, finished: start}
-	}
-	cctx, cancel := context.WithTimeout(ctx, StorageProbeTimeout)
-	_, err = h.Backend.CatConfig(cctx, adminpath.DeviceRequest{DeviceID: dev})
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	_, err := h.Backend.CatConfig(cctx, adminpath.DeviceRequest{DeviceID: adminpath.ProbeRepoID})
 	cancel()
 	end := h.now()
 	if ctx.Err() != nil {
@@ -329,12 +381,8 @@ func (h *HealthProber) probeStorage(ctx context.Context) result {
 	reached, probed, class := storageVerdict(err)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.storageAfter = dev
 	if !probed {
 		// Not a run: the newest real result stays and ages into "not checked" (C02b); C07 names the worker.
-		if h.st.Unconfigured != "" {
-			h.st = state.ProbeRun{}
-		}
 		return result{row: ProbeRowStorage, status: "skipped", class: class, started: start, finished: end}
 	}
 	record(&h.st, end, reached, class, time.Time{})
@@ -382,26 +430,9 @@ func (h *HealthProber) probeMaintain(ctx context.Context) result {
 	return result{row: ProbeRowMaintain, status: statusOf(err == nil), class: class, started: start, finished: end}
 }
 
-func (h *HealthProber) probeDatabase(ctx context.Context) result {
+// probeDatabase measures free disk and the WAL size every tick (C11).
+func (h *HealthProber) probeDatabase(context.Context) result {
 	start := h.now()
-	h.mu.Lock()
-	due := h.integrityAt.IsZero() || start.Sub(h.integrityAt) >= IntegrityEvery
-	h.mu.Unlock()
-	var integrityOK, integrityRan bool
-	var problems []string
-	if due {
-		ictx, cancel := context.WithTimeout(ctx, IntegrityTimeout)
-		res, err := h.Store.IntegrityCheck(ictx)
-		cancel()
-		if ctx.Err() != nil {
-			return result{}
-		}
-		if err == nil {
-			integrityRan, integrityOK = true, res == "ok"
-		} else {
-			problems = append(problems, "integrity_unavailable")
-		}
-	}
 	free, total, derr := probe.DiskSpace(filepath.Dir(h.Store.Path()))
 	var wal int64
 	walErr := error(nil)
@@ -411,65 +442,108 @@ func (h *HealthProber) probeDatabase(ctx context.Context) result {
 		walErr = err // a WAL that exists but cannot be read is not "0 bytes"
 	}
 	end := h.now()
+	if derr != nil || walErr != nil {
+		return result{row: ProbeRowDatabase, status: "error", class: "disk_unmeasured", started: start, finished: end}
+	}
+	h.mu.Lock()
+	h.db.MeasuredAt, h.db.FreeBytes, h.db.TotalBytes, h.db.WALBytes = ms(end), free, total, wal
+	h.mu.Unlock()
+	return result{row: ProbeRowDatabase, status: "ok", started: start, finished: end}
+}
+
+// probeIntegrity is PRAGMA integrity_check (C11), in the background: at
+// start-up, then IntegrityEvery after a passing check, and IntegrityRetryAfter
+// after a failing, erroring or timed-out one. A result other than "ok" is a
+// failed check. A check that could not finish keeps the previous result, which
+// ages into the "integrity not run for N days" cause.
+func (h *HealthProber) probeIntegrity(ctx context.Context) result {
+	start := h.now()
+	check := h.IntegrityCheck
+	if check == nil {
+		check = h.Store.IntegrityCheck
+	}
+	timeout := h.IntegrityTimeout
+	if timeout <= 0 {
+		timeout = IntegrityTimeout
+	}
+	ictx, cancel := context.WithTimeout(ctx, timeout)
+	res, err := check(ictx)
+	cancel()
+	end := h.now()
+	if ctx.Err() != nil {
+		return result{}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if integrityRan {
-		h.integrityAt = end
-		h.db.IntegrityCheckedAt, h.db.IntegrityOK = ms(end), integrityOK
-		if !integrityOK {
-			problems = append(problems, "integrity_failed")
+	if err != nil {
+		h.integrityNext = end.Add(IntegrityRetryAfter)
+		class := "integrity_unavailable"
+		if errors.Is(err, context.DeadlineExceeded) || ictx.Err() != nil {
+			class = ClassTimeout
 		}
-	} else if due {
-		// The check could not run: retry next pass, and keep the previous result ageing towards C11.
-		h.integrityAt = time.Time{}
+		return result{row: ProbeRowIntegrity, status: "error", class: class, started: start, finished: end}
 	}
-	if derr == nil && walErr == nil {
-		h.db.MeasuredAt, h.db.FreeBytes, h.db.TotalBytes, h.db.WALBytes = ms(end), free, total, wal
-	} else {
-		problems = append(problems, "disk_unmeasured")
+	ok := res == "ok"
+	h.db.IntegrityCheckedAt, h.db.IntegrityOK = ms(end), ok
+	if !ok {
+		h.integrityNext = end.Add(IntegrityRetryAfter)
+		return result{row: ProbeRowIntegrity, status: "error", class: "integrity_failed", started: start, finished: end}
 	}
-	if len(problems) == 0 {
-		return result{row: ProbeRowDatabase, status: "ok", started: start, finished: end}
-	}
-	return result{row: ProbeRowDatabase, status: "error", class: problems[0], started: start, finished: end}
+	h.integrityNext = end.Add(IntegrityEvery)
+	return result{row: ProbeRowIntegrity, status: "ok", started: start, finished: end}
 }
 
 func (h *HealthProber) probeMasterKey(ctx context.Context) result {
 	start := h.now()
+	read := h.EscrowKeyIDs
+	if read == nil {
+		read = h.Store.ActiveEscrowKeyIDs
+	}
 	cctx, cancel := context.WithTimeout(ctx, DBMeasureTimeout)
-	ids, err := h.Store.ActiveEscrowKeyIDs(cctx)
+	ids, err := read(cctx)
 	cancel()
 	end := h.now()
 	if err != nil {
 		if ctx.Err() != nil {
 			return result{}
 		}
+		// The comparison was not made: forget the previous ids, so Facts reports "not checked" (C12b).
+		h.mu.Lock()
+		h.escrowIDs, h.escrowReadAt = nil, time.Time{}
+		h.mu.Unlock()
 		return result{row: ProbeRowMasterKey, status: "error", class: ClassStore, started: start, finished: end}
 	}
 	h.mu.Lock()
-	h.escrowIDs = ids
+	h.escrowIDs, h.escrowReadAt = ids, end
 	h.mu.Unlock()
-	mk := h.masterKeyFacts(ids)
-	switch {
-	case !mk.Loaded:
+	if !h.Master.Loaded() {
 		return result{row: ProbeRowMasterKey, status: "error", class: ClassMasterKey, started: start, finished: end}
-	default:
-		for _, id := range ids {
-			if id != mk.KeyID {
-				return result{row: ProbeRowMasterKey, status: "error", class: "generation_mismatch", started: start, finished: end}
-			}
+	}
+	for _, id := range ids {
+		if id != h.Master.KeyID() {
+			return result{row: ProbeRowMasterKey, status: "error", class: "generation_mismatch", started: start, finished: end}
 		}
 	}
 	return result{row: ProbeRowMasterKey, status: "ok", started: start, finished: end}
 }
 
-func (h *HealthProber) masterKeyFacts(ids []string) state.MasterKeyFacts {
-	mk := state.MasterKeyFacts{Loaded: h.Master.Loaded(), EscrowKeyIDs: append([]string(nil), ids...)}
-	if mk.Loaded {
-		mk.KeyID = h.Master.KeyID()
+// masterKeyFacts is the C12 input, or nil when the generation comparison is not
+// known to be current: never read, the newest read failed, or the newest read
+// is older than escrowFresh. nil is reported as C12b ("not checked"), never as
+// "loaded, no mismatch". A key that is not loaded is C12 whatever the escrows say.
+func (h *HealthProber) masterKeyFacts(now time.Time) *state.MasterKeyFacts {
+	if !h.Master.Loaded() {
+		return &state.MasterKeyFacts{}
 	}
-	return mk
+	if h.escrowReadAt.IsZero() || now.Sub(h.escrowReadAt) > h.escrowFresh() {
+		return nil
+	}
+	return &state.MasterKeyFacts{Loaded: true, KeyID: h.Master.KeyID(), EscrowKeyIDs: append([]string(nil), h.escrowIDs...)}
 }
+
+// escrowFresh is how old the escrow key ids may be: one interval plus half of
+// one for the runner's jitter and the query itself.
+func (h *HealthProber) escrowFresh() time.Duration { return h.interval() + h.interval()/2 }
 
 // mirrorEndpoint copies the agent-endpoint self-probe's status into job_state.
 func (h *HealthProber) mirrorEndpoint(context.Context) result {
@@ -492,10 +566,12 @@ func (h *HealthProber) mirrorEndpoint(context.Context) result {
 // Facts is the probe-derived part of state.ProbeFacts at this instant: Wired,
 // the start time, the interval and the gateway, storage, SMTP, maintain RPC,
 // database and master-key checks. A probe that has not completed yet is its
-// zero value, which the engine never reads as healthy. The job-derived checks
+// zero value, which the engine never reads as healthy; MasterKey is nil (C12b)
+// until a current generation comparison exists. The job-derived checks
 // (alarm-evaluator, maintenance scheduler) and the later-milestone markers are
 // added by internal/console/health, which assembles the World.
 func (h *HealthProber) Facts() state.ProbeFacts {
+	now := h.now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	gw, st, sm, db := h.gw, h.st, h.sm, h.db
@@ -506,7 +582,6 @@ func (h *HealthProber) Facts() state.ProbeFacts {
 	if sm.LastRunAt == 0 && sm.Unconfigured == "" && !h.SMTP.Configured() {
 		sm.Unconfigured = unconfSMTP
 	}
-	mk := h.masterKeyFacts(h.escrowIDs)
 	return state.ProbeFacts{
 		Wired:          true,
 		StartedAt:      ms(h.Started),
@@ -516,7 +591,7 @@ func (h *HealthProber) Facts() state.ProbeFacts {
 		SMTP:           &state.SMTPFacts{Probe: sm},
 		Maintain:       &state.MaintainFacts{RPC: h.rpc},
 		Database:       &db,
-		MasterKey:      &mk,
+		MasterKey:      h.masterKeyFacts(now),
 	}
 }
 

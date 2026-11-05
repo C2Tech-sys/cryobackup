@@ -116,6 +116,14 @@ type Backend interface {
 	Check(ctx context.Context, req CheckRequest) (CheckResult, error)
 }
 
+// ProbeRepoID is the reserved repository name of the storage probe (banner
+// C02, ADR 0017): CatConfig with this DeviceID addresses the probe repository
+// <bucket>/<prefix>/probe instead of a device's, the same location the
+// gateway's reserved probe login requests as /probe/config. Device ids are
+// ULIDs, so it cannot collide with one. Only CatConfig accepts it; every other
+// method answers not_found for it.
+const ProbeRepoID = "probe"
+
 // DeviceRequest identifies the device repository a call addresses and carries the
 // audit id. Every request type embeds it except Ping, which has no request.
 // The RPC never carries a repository password, a gateway password, a storage

@@ -2,6 +2,9 @@ package cli
 
 import (
 	"context"
+	"crypto/hkdf"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/escrow"
@@ -34,6 +37,24 @@ func MaintainKeys(masterKeyPath string, st *store.Store) (maintain.KeyUnwrapper,
 // the custody sentinel, which maintain names itself. MasterKeyLoaded (the
 // optional probe Ping reports) is promoted from the embedded *escrow.Keys.
 type maintainKeys struct{ *escrow.Keys }
+
+// probeRepoInfo is the HKDF info that domain-separates the storage probe
+// repository's password from every other key derived from the master key (ADR 0017).
+const probeRepoInfo = "cryobackup/probe-repo/v1"
+
+// ProbeRepoPassword implements maintain.ProbeRepoKeyer: the probe repository's
+// password, HKDF-SHA256 of the master key, hex. It is never stored; a new
+// master key means a new probe repository (ADR 0017).
+func (m maintainKeys) ProbeRepoPassword() (string, error) {
+	if m.Keys == nil || !m.Keys.Master.Loaded() {
+		return "", errors.New("cli: master key not loaded")
+	}
+	k, err := hkdf.Key(sha256.New, m.Keys.Master.Bytes(), nil, probeRepoInfo, 32)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(k), nil
+}
 
 // Unwrap implements maintain.KeyUnwrapper.
 func (m maintainKeys) Unwrap(ctx context.Context, deviceID string) (string, error) {

@@ -166,6 +166,9 @@ func (w *Worker) catConfig(ctx context.Context, t *target) (restic.Config, execR
 // CatConfig implements adminpath.Backend: escrow verification and the storage
 // probe (architecture §4.6 C02). exit 10 is repo_missing, 12 wrong_password.
 func (w *Worker) CatConfig(ctx context.Context, req adminpath.DeviceRequest) (restic.Config, error) {
+	if req.DeviceID == adminpath.ProbeRepoID {
+		return w.probeStorage(ctx) // the storage probe (probe.go, ADR 0017)
+	}
 	t, err := w.prepare(ctx, req.DeviceID)
 	if err != nil {
 		return restic.Config{}, err
