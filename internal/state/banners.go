@@ -21,6 +21,9 @@ const (
 	GatewayFailuresToAlarm = 3
 	// StorageFailuresToAlarm raises C02.
 	StorageFailuresToAlarm = 2
+	// WorkerStoreFailuresToCritical raises C11 critical: the worker's own database reads failing on this
+	// many storage probes in a row. The same rule as storage, so one transient failure does not page.
+	WorkerStoreFailuresToCritical = StorageFailuresToAlarm
 	// SMTPFailuresToAlarm raises C03 for failed sends or failed probes in a row.
 	SMTPFailuresToAlarm = 3
 	// SMTPPendingWithoutSend raises C03 when alerts are pending and nothing was delivered for this long.
@@ -498,6 +501,17 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 		if sb.VerifyFailed {
 			add(SeverityCritical, "self-backup verify failed")
 		}
+	}
+	since, sinceOK := recorded(d.WorkerStoreFailingSince, c.now)
+	switch n := d.WorkerStoreFailures; {
+	case n >= WorkerStoreFailuresToCritical:
+		cause := "the maintenance worker cannot read or write the console database"
+		if sinceOK {
+			cause += " (since " + c.clock(since) + ")"
+		}
+		add(SeverityCritical, cause)
+	case n < 0, n == 0 && d.WorkerStoreFailingSince != 0, n > 0 && !sinceOK:
+		add(SeverityAlarm, "the maintenance worker's database check is garbled")
 	}
 	if len(causes) == 0 {
 		return nil

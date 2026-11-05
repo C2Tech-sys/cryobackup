@@ -330,6 +330,13 @@ type DatabaseFacts struct {
 	// SelfBackup is the self-backup picture. Nil is "not supplied", a C11 cause; a build without
 	// db-self-backup supplies &SelfBackupFacts{NotInBuild: true}.
 	SelfBackup *SelfBackupFacts
+	// WorkerStoreFailures is the current streak of storage probes on which the maintenance worker could
+	// not read or write its settings row in this database. Probes that never asked the database (the
+	// worker was unreachable, storage failed first) neither extend nor end it; a clean probe ends it.
+	// Negative means garbled.
+	WorkerStoreFailures int
+	// WorkerStoreFailingSince is when that streak began; zero when there is none.
+	WorkerStoreFailingSince Millis
 }
 
 // MasterKeyFacts is the console master key (C12).

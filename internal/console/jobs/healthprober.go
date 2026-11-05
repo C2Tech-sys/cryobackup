@@ -85,7 +85,9 @@ var errProbesCancelled = fmt.Errorf("jobs: the probes were cancelled before they
 
 // ClassWorkerStore is the storage probe row's class when the maintenance
 // worker's own settings store failed during the probe (maintain.ProbeRecordClass
-// on an unavailable answer): not checked, never a storage failure.
+// on an unavailable answer): for storage it is not checked, never a failure. It
+// is a fact about the database instead: two in a row raise C11 critical
+// (state.DatabaseFacts.WorkerStoreFailures).
 const ClassWorkerStore = "worker_store"
 
 // Not-configured reasons, worded for the "not checked" banners (state ProbeRun.Unconfigured).
@@ -804,6 +806,18 @@ func (h *HealthProber) probeStorage(ctx context.Context) result {
 	reached, probed, class := storageVerdict(err)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// The worker's own database reads, apart from storage (C11, operator ruling 2026-11-05): a failure
+	// extends the streak, a clean probe (which read the settings row) ends it, and an answer that never
+	// got as far as the database says nothing about it.
+	switch {
+	case class == ClassWorkerStore:
+		if h.db.WorkerStoreFailures == 0 {
+			h.db.WorkerStoreFailingSince = ms(end)
+		}
+		h.db.WorkerStoreFailures++
+	case err == nil:
+		h.db.WorkerStoreFailures, h.db.WorkerStoreFailingSince = 0, 0
+	}
 	if !probed {
 		// Not a run: the newest real result stays and ages into "not checked" (C02b); C07 names the worker.
 		return result{row: ProbeRowStorage, status: "skipped", class: class, started: start, finished: end}

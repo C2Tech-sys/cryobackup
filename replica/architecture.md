@@ -454,7 +454,7 @@ Health % = `devices with a fresh success (age <= stale_after) and no critical/al
 | C08 | **Empty fleet** | `fleet_ever_enrolled = true` and active devices = 0 (first run with the flag false shows a neutral "enroll your first customer" panel instead) | immediate | "No active devices enrolled." | critical |
 | C09 | **Empty poll / partial data** | the facts loader returns zero rows where the previous load in this process had > 0, or any per-device load fails or times out | immediate | "Partial data: N devices could not be classified" (those devices are UNKNOWN) | critical |
 | C10 | **Stale view** | page rendered from a snapshot older than 2x the refresh interval, or SSE disconnected | 2 intervals | "Live updates disconnected: data as of hh:mm." | warn |
-| C11 | **Database degraded** | `integrity_check` failed (startup / weekly), free disk < 10 %, WAL > 1 GiB, last self-backup older than 26 h or its verify failed | as stated | "Console database needs attention." | warn / critical |
+| C11 | **Database degraded** | `integrity_check` failed (startup / weekly), free disk < 10 %, WAL > 1 GiB, last self-backup older than 26 h or its verify failed, or the maintenance worker could not read or write the console database on 2 storage probes in a row (critical, ADR 0017) | as stated | "Console database needs attention." | warn / critical |
 | C12 | **Master key unavailable** | key not loaded or generation mismatch with `repo_key_escrow.master_key_id` | immediate | "Master key unavailable: enrollment, escrow reveal and server-side retention are disabled." Enrollment returns 503 rather than store an unwrapped key. | critical |
 | C13 | **Clock suspect** | >= 20 % of reporting devices (min 5) report offsets with the same sign beyond 2 min | as stated | "Server clock may be wrong: device offsets agree." | warn |
 | C14 | **Digest not sent** | no `digest` row in `notification_log` by `digest_local_time + 30 min` | 30 min | "Daily digest was not delivered." | critical |
@@ -560,7 +560,7 @@ Layout: `internal/state/classify_test.go` (A, B), `fleet_test.go` (C), `rollup_t
 | C14 | maintenance_worker_down_banner | RPC unreachable | banner C07 |
 | C15 | cert_expiring_warn_and_critical | 20 d and 6 d | warn then critical |
 | C16 | stale_view_freshness_banner | ComputedAt older than 2 intervals | banner C10 |
-| C17 | db_degraded_banner | integrity failed / disk low | banner C11 |
+| C17 | db_degraded_banner | integrity failed / disk low / the worker cannot read or write the database on 2 probes in a row | banner C11 |
 | C18 | master_key_unavailable_banner | key not loaded | banner C12; enrollment refused |
 | C19 | many_deferred_gateway_collapse_to_one_banner | 150 devices deferred(gateway) | one banner C01, rows not individually notified |
 | C20 | customer_wide_silence_collapses | 8 of 10 devices of a customer UNSEEN | one customer row + one notification |
