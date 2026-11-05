@@ -285,6 +285,10 @@ func (tx *Tx) id() string { return tx.s.ids.MustNew() }
 // other writers in this process queue behind fn (waiting respects ctx), and
 // another process (cryo-console maintain) waits at most busy_timeout.
 //
+// The answer is the truth: nil means committed, an error means nothing was. A
+// ctx that ends after fn has returned and the COMMIT has started does not stop
+// the COMMIT, so a Write can answer nil just after its context ended.
+//
 // Calling Write from inside fn, on the same goroutine, returns ErrNestedWrite
 // instead of deadlocking on the one connection. A panic in fn rolls back and
 // is re-raised.
@@ -314,30 +318,65 @@ func (s *Store) Write(ctx context.Context, fn func(tx *Tx) error) (err error) {
 	}
 	defer conn.Close()
 
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return mapErr(err)
-	}
-	done := false
+	// Every way out but a COMMIT that succeeded ends here, a failed BEGIN included:
+	// the driver can answer a context error for a BEGIN that took effect (abandonWrite).
+	committed := false
 	defer func() {
-		if done {
-			return
-		}
-		// fn failed or panicked: roll back on a context that cannot be cancelled. If even that fails the
-		// connection is in an unknown state, so tell database/sql to discard it.
-		if _, rerr := conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK"); rerr != nil {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		if !committed {
+			abandonWrite(ctx, conn)
 		}
 	}()
 
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return mapErr(err)
+	}
 	tx := &Tx{s: s, ctx: ctx, q: conn, write: true}
 	if err := fn(tx); err != nil {
 		return mapErr(err)
 	}
-	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+	// A context that ended before this line refuses the write. After it the COMMIT
+	// cannot be cancelled, because the driver can also answer a context error for a
+	// COMMIT that took effect, and the caller would be told a committed write failed.
+	if err := ctx.Err(); err != nil {
 		return mapErr(err)
 	}
-	done = true
+	if _, err := conn.ExecContext(context.WithoutCancel(ctx), "COMMIT"); err != nil {
+		return mapErr(err)
+	}
+	committed = true
 	return nil
+}
+
+// writeConn is what abandonWrite needs of the write connection (*sql.Conn).
+type writeConn interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	Raw(f func(driverConn any) error) error
+}
+
+// abandonWrite leaves the write connection outside any transaction before it
+// returns to the pool. A connection returned inside one would fail every later
+// Write with "cannot start a transaction within a transaction", because
+// SetMaxOpenConns(1) makes it the only one.
+//
+// modernc.org/sqlite answers ctx.Err() whenever its watcher saw the context end
+// during the call, even if the statement ran: stmt.exec overrides the result.
+// SQLite clears an interrupt delivered before a statement's first step, so a
+// context that ends in that window leaves BEGIN in effect, the interrupt flag
+// clear and the connection valid to database/sql. So a failed BEGIN says nothing
+// about the transaction, and ROLLBACK is what finds out: "no transaction is
+// active" is the answer for a BEGIN that did not take effect, and for an error
+// SQLite already rolled back.
+//
+// ROLLBACK runs on a context that cannot end. If it fails for any other reason
+// the state is unknown, so the connection is discarded. That loses nothing, in
+// OpenMemory too: the database is a file there as well, and the next Write opens
+// a fresh connection with the same pragmas.
+func abandonWrite(ctx context.Context, conn writeConn) {
+	_, err := conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+	if err == nil || strings.Contains(err.Error(), "no transaction is active") {
+		return
+	}
+	_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 }
 
 // Read runs fn in a deferred transaction on the read pool: a consistent
