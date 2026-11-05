@@ -888,7 +888,7 @@ Condition banner
 | C08 | critical | NO ACTIVE DEVICES | "No active devices enrolled. Nothing is being backed up." Also renders the empty-fleet alarm panel in place of the grid. (Before the first enrollment ever, the neutral "Enroll your first customer" panel shows instead.) | Enroll devices |
 | C09 | critical | PARTIAL DATA | "Partial data: {N} devices could not be classified. They show as UNKNOWN and count as unhealthy." Empty-poll variant: "The last load returned 0 devices; the previous load had {N}." | Show UNKNOWN devices |
 | C10 | warn | LIVE UPDATES DISCONNECTED | "Live updates disconnected: data as of {hh:mm}." (rendered client-side too) | Reconnect |
-| C11 | warn or critical | DATABASE NEEDS ATTENTION | "Console database needs attention: {integrity check failed, disk below 10%, WAL over 1 GiB, or self-backup older than 26 h}." | Open System health |
+| C11 | warn or critical | DATABASE NEEDS ATTENTION | "Console database needs attention: {integrity check failed, disk below 10%, WAL over 1 GiB, self-backup older than 26 h, or the maintenance worker cannot read or write the console database}." | Open System health |
 | C12 | critical | MASTER KEY UNAVAILABLE | "Master key unavailable: enrollment, escrow reveal and server-side retention are disabled." | Open System health |
 | C13 | warn | CLOCK SUSPECT | "Server clock may be wrong: device offsets agree." | Open System health |
 | C14 | critical | DIGEST NOT SENT | "Daily digest was not delivered. It was due by {hh:mm}." | Open email settings |

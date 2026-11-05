@@ -122,6 +122,8 @@ type Service struct {
 	// apiGen counts the device changes made through this API (deviceChanged); with
 	// the hub's Generation it is the event stream's change generation (m3_events.go).
 	apiGen atomic.Uint64
+	// gate is what serve's shutdown needs of the manual job runs and POST probes (m3_system.go).
+	gate shutdownGate
 }
 
 func (s *Service) now() time.Time {

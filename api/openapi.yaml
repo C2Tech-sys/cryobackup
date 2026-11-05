@@ -3906,10 +3906,10 @@ components:
         reason: {type: string, description: Why the probe could not run; the checks are then not_checked.}
         job:
           type: object
-          description: This request's probe run. ok when the probes ran and ended within the bound; error with error_class timeout or failed otherwise.
+          description: This request's probe run. ok when the probes ran and ended within the bound; error with error_class timeout, failed, cancelled or nothing_probed otherwise (cancelled means the probes ended without a result because the probe lease was lost or the console is shutting down; nothing_probed means neither the gateway probe nor the storage probe could run).
           properties:
             status: {type: string, enum: [ok, error]}
-            error_class: {type: string, enum: [timeout, failed]}
+            error_class: {type: string, enum: [timeout, failed, cancelled, nothing_probed]}
             duration_ms: {type: integer}
         checks:
           type: array

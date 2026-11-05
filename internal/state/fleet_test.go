@@ -754,6 +754,39 @@ func TestC17DatabaseDegraded(t *testing.T) {
 			want: []string{"C11/critical"}, contains: "Console database needs attention: integrity check failed."},
 		{name: "C17_db_degraded_banner_disk_low", mod: func(p *ProbeFacts, _ *World) { p.Database.FreeBytes = 7 << 30 },
 			want: []string{"C11/alarm"}, contains: "disk below 10% free (7%)"},
+		// Operator ruling 2026-11-05: a worker that cannot read its database is critical, after two probes in a row.
+		{name: "C17_db_worker_store_one_failure_does_not_page", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.WorkerStoreFailures, p.Database.WorkerStoreFailingSince = 1, ago(time.Minute)
+		}},
+		{name: "C17_db_worker_store_two_failures_critical", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.WorkerStoreFailures, p.Database.WorkerStoreFailingSince = 2, ago(time.Minute)
+		}, want: []string{"C11/critical"}, contains: "Console database needs attention: the maintenance worker cannot read or write the console database (since 11:59 AM)."},
+		{name: "C17_db_worker_store_many_failures_critical", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.WorkerStoreFailures, p.Database.WorkerStoreFailingSince = 500, ago(8*time.Hour)
+		}, want: []string{"C11/critical"}, contains: "(since 4:00 AM)"},
+		{name: "C17_db_worker_store_critical_even_with_a_garbled_since", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.WorkerStoreFailures, p.Database.WorkerStoreFailingSince = 2, ahead(time.Hour)
+		}, want: []string{"C11/critical"}, contains: "cannot read or write the console database."},
+		{name: "C17_db_worker_store_critical_with_no_since", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.WorkerStoreFailures, p.Database.WorkerStoreFailingSince = 2, 0
+		}, want: []string{"C11/critical"}, contains: "cannot read or write the console database."},
+		{name: "C17_db_worker_store_joins_other_causes", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.FreeBytes = 7 << 30
+			p.Database.WorkerStoreFailures, p.Database.WorkerStoreFailingSince = 2, ago(time.Minute)
+		}, want: []string{"C11/critical"}, contains: "disk below 10% free (7%); the maintenance worker cannot read"},
+		{name: "C17_db_worker_store_negative_count_is_garbled", mod: func(p *ProbeFacts, _ *World) { p.Database.WorkerStoreFailures = -1 },
+			want: []string{"C11/alarm"}, contains: "database check is garbled"},
+		{name: "C17_db_worker_store_since_without_a_streak_is_garbled", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.WorkerStoreFailingSince = ago(time.Minute)
+		}, want: []string{"C11/alarm"}, contains: "database check is garbled"},
+		{name: "C17_db_worker_store_negative_since_is_garbled", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.WorkerStoreFailures, p.Database.WorkerStoreFailingSince = 1, -5
+		}, want: []string{"C11/alarm"}, contains: "database check is garbled"},
+		{name: "C17_db_worker_store_future_since_is_garbled", mod: func(p *ProbeFacts, _ *World) {
+			p.Database.WorkerStoreFailures, p.Database.WorkerStoreFailingSince = 1, ahead(time.Hour)
+		}, want: []string{"C11/alarm"}, contains: "database check is garbled"},
+		{name: "C17_db_worker_store_failure_with_no_since_is_garbled", mod: func(p *ProbeFacts, _ *World) { p.Database.WorkerStoreFailures = 1 },
+			want: []string{"C11/alarm"}, contains: "database check is garbled"},
 		{name: "C17_db_wal_over_1_gib", mod: func(p *ProbeFacts, _ *World) { p.Database.WALBytes = 2 << 30 },
 			want: []string{"C11/alarm"}, contains: "WAL over 1 GiB"},
 		{name: "C17_db_self_backup_older_than_26h", mod: func(p *ProbeFacts, _ *World) { p.Database.SelfBackup.LastAt = ago(27 * hour) },

@@ -89,26 +89,119 @@ func TestC08RunUnderAShortLivedContextStillRecords(t *testing.T) { // M3-INT2 1,
 	}
 }
 
-// Mutant M22: the renewer actually ticks well inside the lease TTL (not only
-// the helper that computes the period).
-func TestC08RenewerTicksInsideTheTTL(t *testing.T) { // M3-INT2 3
-	for _, iv := range []time.Duration{time.Second, time.Minute, 10 * time.Minute} {
+// Mutants M22 and M22c: the renewer really renews well inside the lease TTL, under
+// the production period, not only the helper that computes it (the helper's table
+// over every interval is in TestC08ProbeLeaseRenewsInsideItsTTL). Renewals are
+// counted from the lease row itself: at least two inside one TTL of real time.
+func TestC08RenewerTicksInsideTheTTL(t *testing.T) { // M3-INT2 3, M3-STORE1 D
+	r := newProberRig(t, false)
+	be := &countingBackend{Backend: r.be, release: make(chan struct{})}
+	defer close(be.release)
+	r.hp.Backend, r.hp.Interval = be, 2*time.Second // long enough to tell renewals apart on a busy machine
+	start := time.Now()
+	if err := r.hp.Run(r.ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitActive(t, be)
+	ttl := r.hp.leaseTTL()
+	if got := countLeaseRenewals(t, r, 2, ttl-time.Since(start)); got < 2 {
+		t.Fatalf("%d renewals in one TTL of %v under a running probe; want at least two", got, ttl)
+	}
+}
+
+// countLeaseRenewals watches the lease row for at most d and returns how many
+// times its expiry moved, stopping once it has seen want. The store's clock moves
+// on every look, so each renewal writes a new expiry.
+func countLeaseRenewals(t *testing.T, r *proberRig, want int, d time.Duration) int {
+	t.Helper()
+	last := *r.row(t, ProbeLease).LeaseUntil
+	seen := 0
+	for end := time.Now().Add(d); seen < want && time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		r.clk.Advance(time.Millisecond)
+		if until := *r.row(t, ProbeLease).LeaseUntil; !until.Equal(last) {
+			last = until
+			seen++
+		}
+	}
+	return seen
+}
+
+// A renewer outlives the context of the call that started it, for a tick and for
+// an on-demand probe alike: the caller going away must not let the lease lapse
+// under a running probe.
+func TestC08RenewerOutlivesTheCallersContext(t *testing.T) { // M3-STORE1 D
+	t.Run("Run", func(t *testing.T) {
 		r := newProberRig(t, false)
 		be := &countingBackend{Backend: r.be, release: make(chan struct{})}
-		r.hp.Backend, r.hp.Interval = be, iv
-		if err := r.hp.Run(r.ctx); err != nil {
+		defer close(be.release)
+		r.hp.Backend, r.hp.renewEvery = be, 5*time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := r.hp.Run(ctx); err != nil {
 			t.Fatal(err)
 		}
+		cancel()
 		waitActive(t, be)
-		r.hp.mu.Lock()
-		tick, renewing := r.hp.renewTick, r.hp.renewing
-		r.hp.mu.Unlock()
-		close(be.release)
-		if !renewing {
-			t.Fatalf("interval %v: no renewer while a probe is in flight", iv)
+		if got := countLeaseRenewals(t, r, 3, 10*time.Second); got < 3 {
+			t.Fatalf("%d renewals after the caller's context ended, want the renewer still running", got)
 		}
-		if ttl := r.hp.leaseTTL(); tick <= 0 || 2*tick >= ttl {
-			t.Errorf("interval %v: the renewer ticks every %v with a TTL of %v; want at least two renewals inside the TTL", iv, tick, ttl)
+	})
+	t.Run("ProbeNow", func(t *testing.T) {
+		r := newProberRig(t, false)
+		be := &countingBackend{Backend: r.be, release: make(chan struct{})}
+		defer close(be.release)
+		r.hp.Backend, r.hp.renewEvery = be, 5*time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { _, err := r.hp.ProbeNow(ctx); done <- err }()
+		waitActive(t, be)
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("ProbeNow after its caller went away = %v", err)
 		}
+		if got := countLeaseRenewals(t, r, 3, 10*time.Second); got < 3 {
+			t.Fatalf("%d renewals after the caller's context ended, want the renewer still running", got)
+		}
+	})
+}
+
+// Losing the lease and taking it again gives the probes a fresh context: the one
+// that was cancelled with the loss must not be reused, or nothing would ever probe
+// on this console again.
+func TestC08ReacquiringAfterALossGetsAFreshContext(t *testing.T) { // M3-STORE1 D
+	r := newProberRig(t, false)
+	r.hp.Holder = "console-a"
+	r.run(t)
+	if ok, err := r.st.AcquireJobLease(r.ctx, ProbeLease, "console-a", time.Nanosecond); err != nil || !ok {
+		t.Fatal(err) // the lease lapses at once, so console-b can take it
+	}
+	r.clk.Advance(time.Minute)
+	if ok, err := r.st.AcquireJobLease(r.ctx, ProbeLease, "console-b", time.Minute); err != nil || !ok {
+		t.Fatalf("console-b takes the lease: %v %v", ok, err)
+	}
+	r.run(t) // loses it: the probes' context is cancelled
+	if err := r.st.ReleaseJobLease(r.ctx, ProbeLease, "console-b"); err != nil {
+		t.Fatal(err)
+	}
+	r.clk.Advance(time.Minute)
+	r.run(t)
+	now := state.Millis(r.clk.Now().UnixMilli())
+	if s := r.hp.Facts().Storage; s.LastOKAt != now {
+		t.Fatalf("storage after taking the lease back: %+v, want a pass now (%d)", s, now)
+	}
+	if g := r.hp.Facts().Gateway; g.LastOKAt != now {
+		t.Fatalf("gateway after taking the lease back: %+v, want a pass now (%d)", g, now)
+	}
+}
+
+// Stop ends the prober's lifetime, and the probes' context derives from it: a
+// probe context made after Stop is already cancelled, so nothing can run under it.
+func TestC08StopEndsTheProbersLifetime(t *testing.T) { // M3-STORE1 D
+	r := newProberRig(t, false)
+	r.hp.Stop()
+	if err := r.hp.lifetime().Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the lifetime after Stop: %v, want cancelled", err)
+	}
+	if err := r.hp.probeContext().Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a probe context after Stop: %v, want cancelled", err)
 	}
 }

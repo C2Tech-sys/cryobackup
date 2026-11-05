@@ -126,10 +126,15 @@ func (r *Runner) Names() []string {
 	return append([]string(nil), r.order...)
 }
 
+// errDidNotRun is what a job's Run answers when it did nothing at all, because
+// it has been stopped. RunOnce then records nothing, so the job's row never says a
+// tick passed that did not happen.
+var errDidNotRun = errors.New("jobs: the job did not run")
+
 // RunOnce runs the named job now under its lease. It returns (false, nil) when
-// another holder has the lease, and (true, err) with the job's error otherwise.
-// The outcome is recorded in job_state; a panic is recovered and recorded as
-// internal_panic.
+// another holder has the lease or the job answers errDidNotRun, and (true, err)
+// with the job's error otherwise. The outcome is recorded in job_state; a panic
+// is recovered and recorded as internal_panic.
 func (r *Runner) RunOnce(ctx context.Context, name string) (ran bool, err error) {
 	r.mu.Lock()
 	j, ok := r.jobs[name]
@@ -151,6 +156,9 @@ func (r *Runner) RunOnce(ctx context.Context, name string) (ran bool, err error)
 	defer func() { _ = r.Store.ReleaseJobLease(context.WithoutCancel(ctx), name, r.Holder) }()
 	started := r.Store.Now()
 	runErr := safeRun(ctx, j.Run)
+	if errors.Is(runErr, errDidNotRun) {
+		return false, nil
+	}
 	finished := r.Store.Now()
 	if finished.Before(started) {
 		finished = started

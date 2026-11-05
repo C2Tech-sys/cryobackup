@@ -35,6 +35,12 @@ earlier decision.
   and C07 names the worker), never a pass. So is a failure of the worker's own settings store during the probe
   (reading or arming the row above): the worker answers `unavailable` with class `internal`
   (`maintain.ProbeRecordClass`), which the prober records as `worker_store`, never as a storage failure (M3-INT).
+  *(Amended 2026-11-05 by operator ruling, from storage "not checked" being the only effect.)* For storage it stays
+  "not checked", because nothing was learned about storage. It is also a fact about the database: a console or worker
+  that cannot read its own database is critical, so two `worker_store` answers in a row raise C11 critical with its
+  own cause, on both paths that reach the row (after a clean list + cat config, and on the exit 10 branch, where the
+  worker cannot tell "never created" from "lost"). A clean probe clears it. An answer that never reached the database
+  (worker down, storage failing first) neither extends nor clears the streak.
 - **Busy is bounded, not a timeout.** Each step of the probe waits at most `maintain.ProbeSlotWait` (3 s) for one of
   the worker's concurrency slots (shared with dump streams, browsing and the scheduler) and otherwise answers
   `busy`. Chosen over reserving a slot for probes because it changes nothing for the other callers and needs no

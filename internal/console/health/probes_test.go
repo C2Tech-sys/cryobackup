@@ -115,6 +115,25 @@ func TestC13EvaluatorErroringEveryRunRaisesC06(t *testing.T) {
 	}
 }
 
+// The worker's database streak reaches the World through the page's assembly,
+// whose self-backup marker copies the Database facts (M3-STORE1 E).
+func TestC17WorkerStoreStreakSurvivesTheFactsAssembly(t *testing.T) {
+	e, c := newEval(t)
+	src := FixtureProbes(c.now)
+	e.Probes = func() state.ProbeFacts {
+		p := src()
+		d := *p.Database
+		d.SelfBackup = nil // as the prober supplies it
+		d.WorkerStoreFailures, d.WorkerStoreFailingSince = 3, state.Millis(c.now().Add(-2*time.Minute).UnixMilli())
+		p.Database = &d
+		return p
+	}
+	p := e.ProbeFacts(nil, nil, false)
+	if p.Database.WorkerStoreFailures != 3 || p.Database.WorkerStoreFailingSince == 0 || p.Database.SelfBackup == nil {
+		t.Fatalf("database facts %+v, want the streak kept beside the self-backup marker", p.Database)
+	}
+}
+
 // The later-milestone checks carry their NotInBuild marker, never nil.
 func TestNotInBuildMarkersApplied(t *testing.T) {
 	e, c := newEval(t)
