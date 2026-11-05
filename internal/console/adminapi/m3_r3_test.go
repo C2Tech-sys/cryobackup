@@ -79,3 +79,50 @@ func TestM3EventStreamOpenStreamsConvergeWithinOneGap(t *testing.T) { // F18, r3
 		}
 	}
 }
+
+// r3 L1: the device-visibility cache does not outlive a narrowed credential. An
+// account whose scope loses a customer stops getting run.progress of that
+// customer's devices after the next credential check, even for a device the
+// stream has already seen.
+func TestM3EventStreamForgetsDeviceVisibilityWhenTheScopeNarrows(t *testing.T) { // F18, r3 L1
+	e := newEnv(t)
+	src := &fakeSource{}
+	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = src, time.Hour, 10*time.Millisecond, time.Nanosecond
+	e.svc.sseRevalidate = 50 * time.Millisecond
+	gone := e.dev                      // its customer leaves the scope
+	kept := e.deviceNamed("OPS-ND-01") // Northwind's, stays
+	nw := e.customerNamed("Northwind Dental")
+	if gone.CustomerID == nw.ID {
+		t.Fatal("fixture: the two devices must belong to different customers")
+	}
+	e.addAdmin("m3-r3-narrow", "read_only", []string{gone.CustomerID, nw.ID})
+	sess := e.login("m3-r3-narrow", pw)
+	st, _ := e.openStream("/api/v1/events?topics=runs", sess)
+
+	progress := func(dev, run string) { src.send(Signal{Kind: SignalProgress, DeviceID: dev, RunID: run}) }
+	progress(gone.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N1")
+	var rp RunProgressJSON
+	if err := json.Unmarshal([]byte(st.next("run.progress", 5*time.Second).Data), &rp); err != nil || rp.DeviceID != gone.ID {
+		t.Fatalf("before the narrowing: %+v %v", rp, err)
+	}
+
+	acct, err := e.st.GetAdminByUsername(context.Background(), "m3-r3-narrow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, _, err := tx.UpdateAdminRoleScope(acct.ID, "read_only", []string{nw.ID})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Two pings: the credential check after the first one ran with the narrowed scope.
+	st.next("ping", 5*time.Second)
+	st.next("ping", 5*time.Second)
+
+	progress(gone.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N2")
+	progress(kept.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N3")
+	if err := json.Unmarshal([]byte(st.next("run.progress", 5*time.Second).Data), &rp); err != nil || rp.DeviceID != kept.ID {
+		t.Fatalf("after the narrowing the first run.progress is %+v (%v); the device that left the scope must not arrive", rp, err)
+	}
+}

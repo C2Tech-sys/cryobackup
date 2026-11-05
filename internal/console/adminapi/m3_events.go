@@ -505,6 +505,11 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 			if !alive {
 				return
 			}
+			// A changed role or scope (a narrowed account) forgets every visibility
+			// answer: a device seen under the old scope is asked about again.
+			if np.Role != p.Role || scopeKey(np.Scope) != scopeKey(p.Scope) {
+				inScope = map[string]bool{}
+			}
 			p = np
 		}
 	}
