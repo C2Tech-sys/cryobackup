@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
@@ -25,6 +26,19 @@ import (
 // 0008) and records that in the settings row SettingProbeRepo. After that a
 // missing repository is a failure (repo_missing), never re-created: an emptied
 // or re-pointed prefix raises C02 instead of being papered over.
+
+// ProbeSlotWait bounds how long each step of the storage probe waits for a
+// concurrency slot (Config.MaxConcurrent, shared with dumps, browsing and the
+// scheduler). A worker whose slots stay taken answers adminpath.CodeBusy, which
+// the console reads as "not checked" (C02b), never as a storage failure.
+const ProbeSlotWait = 3 * time.Second
+
+func (w *Worker) probeSlot() time.Duration {
+	if w.probeSlotWait > 0 {
+		return w.probeSlotWait
+	}
+	return ProbeSlotWait
+}
 
 // SettingProbeRepo is the settings key that records the probe repository's
 // creation: {"created_at": <ms>}.
@@ -94,7 +108,7 @@ func (w *Worker) probeStorage(ctx context.Context) (restic.Config, error) {
 	if err != nil {
 		return restic.Config{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
 	}
-	lres, err := w.exec(ctx, t, list, w.cfg.Timeouts.CatConfig, func(r io.Reader) error {
+	lres, err := w.execSlot(ctx, t, list, w.cfg.Timeouts.CatConfig, w.probeSlot(), func(r io.Reader) error {
 		_, cerr := io.Copy(io.Discard, io.LimitReader(r, 1<<20))
 		return cerr
 	})
@@ -118,14 +132,47 @@ func (w *Worker) probeStorage(ctx context.Context) (restic.Config, error) {
 			return restic.Config{}, err
 		}
 	}
-	cfg, cres, err := w.catConfig(ctx, t)
+	cat, err := restic.CatConfig(w.common())
+	if err != nil {
+		return restic.Config{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
+	}
+	var cfg restic.Config
+	cres, err := w.execSlot(ctx, t, cat, w.cfg.Timeouts.CatConfig, w.probeSlot(), func(r io.Reader) error {
+		var derr error
+		cfg, derr = restic.DecodeConfig(r)
+		return derr
+	})
 	if err != nil {
 		return restic.Config{}, err
 	}
 	if err := readError(ctx, cres); err != nil {
 		return restic.Config{}, err
 	}
+	// Arm the "never re-create" guard on the first clean probe too: a repository
+	// that already existed (a rebuilt database, an init cut short after its config
+	// was written) is recorded now, so a later loss is repo_missing.
+	if err := w.recordProbeRepo(ctx); err != nil {
+		return restic.Config{}, err
+	}
 	return cfg, nil
+}
+
+// recordProbeRepo writes SettingProbeRepo unless it is already there.
+func (w *Worker) recordProbeRepo(ctx context.Context) error {
+	created, err := w.probeRepoCreated(ctx)
+	if err != nil {
+		return w.storeErr(ctx, err)
+	}
+	if created {
+		return nil
+	}
+	val, _ := json.Marshal(map[string]int64{"created_at": w.clock().UnixMilli()})
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+	defer cancel()
+	if err := w.st.PutSetting(rctx, SettingProbeRepo, val, ""); err != nil {
+		return adminpath.NewError(adminpath.CodeInternal, "")
+	}
+	return nil
 }
 
 // initProbeRepo creates the probe repository once and records it.
@@ -134,7 +181,7 @@ func (w *Worker) initProbeRepo(ctx context.Context, t *target) error {
 	if err != nil {
 		return adminpath.NewError(adminpath.CodeInvalidRequest, "")
 	}
-	ires, err := w.exec(ctx, t, cmd, w.cfg.Timeouts.Init, func(r io.Reader) error {
+	ires, err := w.execSlot(ctx, t, cmd, w.cfg.Timeouts.Init, w.probeSlot(), func(r io.Reader) error {
 		_, cerr := io.Copy(io.Discard, io.LimitReader(r, 1<<20))
 		return cerr
 	})
@@ -147,11 +194,8 @@ func (w *Worker) initProbeRepo(ctx context.Context, t *target) error {
 	if ires.Exit != 0 {
 		return readError(ctx, ires)
 	}
-	val, _ := json.Marshal(map[string]int64{"created_at": w.clock().UnixMilli()})
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
-	defer cancel()
-	if err := w.st.PutSetting(rctx, SettingProbeRepo, val, ""); err != nil {
-		return adminpath.NewError(adminpath.CodeInternal, "")
+	if err := w.recordProbeRepo(ctx); err != nil {
+		return err
 	}
 	w.log.Info("storage probe repository created", attrDevice(adminpath.ProbeRepoID))
 	return nil

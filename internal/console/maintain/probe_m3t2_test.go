@@ -1,9 +1,11 @@
 package maintain
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
@@ -110,5 +112,67 @@ func TestC08ProbeRepositoryNeedsItsKey(t *testing.T) {
 	}
 	if _, err := e.st.GetSetting(e.ctx, SettingProbeRepo); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("setting written without a probe: %v", err)
+	}
+}
+
+// M3-T2 delta 2, M-2: with every concurrency slot taken (dumps, a scheduler
+// pass, a browse), the probe waits at most ProbeSlotWait and answers busy,
+// which the console reads as "not checked"; it never runs into the console's
+// deadline as if storage were down.
+func TestC08ProbeOnAFullWorkerIsBusy(t *testing.T) {
+	e := newTenv(t, []fakeRule{{Cmd: "list", Stdout: "inline:x\n"}, {Cmd: "cat", Stdout: "cat_config.json"}}, nil)
+	e.withProbeKey()
+	e.w.probeSlotWait = 100 * time.Millisecond
+	for i := 0; i < cap(e.w.sem); i++ {
+		e.w.sem <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(e.w.sem); i++ {
+			<-e.w.sem
+		}
+	}()
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(e.ctx, 5*time.Second) // stands in for the console's deadline
+	defer cancel()
+	_, err := e.w.CatConfig(ctx, adminpath.DeviceRequest{DeviceID: adminpath.ProbeRepoID})
+	var ae *adminpath.Error
+	if !errors.As(err, &ae) || ae.Code != adminpath.CodeBusy {
+		t.Fatalf("full worker: %v, want busy", err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the probe waited %v for a slot", took)
+	}
+	if ProbeSlotWait <= 0 || ProbeSlotWait > 10*time.Second {
+		t.Fatalf("ProbeSlotWait %v must be a few seconds", ProbeSlotWait)
+	}
+}
+
+// M3-T2 delta 2, L1: a probe repository that already exists without the
+// settings row (a rebuilt database, an init cut short) arms the guard on its
+// first clean probe; when it later disappears the answer is repo_missing,
+// never a silent re-create.
+func TestC08PreExistingProbeRepositoryArmsTheGuard(t *testing.T) {
+	e := newTenv(t, []fakeRule{{Cmd: "list", Stdout: "inline:0123abcd\n"}, {Cmd: "cat", Stdout: "cat_config.json"}}, nil)
+	e.withProbeKey()
+	if _, err := e.st.GetSetting(e.ctx, SettingProbeRepo); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("row before the first probe: %v", err)
+	}
+	if _, err := e.w.CatConfig(e.ctx, adminpath.DeviceRequest{DeviceID: adminpath.ProbeRepoID}); err != nil {
+		t.Fatalf("pre-existing repository: %v", err)
+	}
+	if _, err := e.st.GetSetting(e.ctx, SettingProbeRepo); err != nil {
+		t.Fatalf("the guard was not armed by a clean probe: %v", err)
+	}
+	e.scenario([]fakeRule{{Cmd: "list", Exit: 10, Stderr: "exit10_repo_missing.stderr.jsonl"}, {Cmd: "init", Stdout: "init.json"},
+		{Cmd: "cat", Stdout: "cat_config.json"}})
+	_, err := e.w.CatConfig(e.ctx, adminpath.DeviceRequest{DeviceID: adminpath.ProbeRepoID})
+	var ae *adminpath.Error
+	if !errors.As(err, &ae) || ae.Code != adminpath.CodeRepoMissing {
+		t.Fatalf("removed repository: %v, want repo_missing", err)
+	}
+	for _, c := range e.repoCalls() {
+		if c.Args[0] == "init" {
+			t.Fatal("a removed probe repository was re-created")
+		}
 	}
 }
