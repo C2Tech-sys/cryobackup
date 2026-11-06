@@ -53,6 +53,12 @@ func r5Failed(class string) *state.ProbeRun {
 	return &state.ProbeRun{LastRunAt: r5Ago(10 * time.Second), LastOKAt: r5Ago(70 * time.Second), ConsecutiveFailures: 1, LastErrorClass: class, CertNotAfter: ms(r5Now.Add(365 * 24 * time.Hour))}
 }
 
+// r5SkippedRow is a job's row for a run skipped just now.
+func r5SkippedRow() store.JobState {
+	at := r5Now.Add(-5 * time.Second)
+	return store.JobState{LastStatus: "skipped", LastFinishedAt: &at}
+}
+
 type r5Kind int
 
 const (
@@ -175,9 +181,9 @@ func r5Feeds() map[string]r5Feed {
 			r5FailedNewest: set(func(f *healthFacts) { f.WorkerReachable = false },
 				func(f *healthFacts) { f.WorkerPinged, f.WorkerReachable, f.MaintainReachable = false, false, false },
 				func(f *healthFacts) { f.SchedulerLast.LastStatus = "error" }, func(f *healthFacts) { f.WorkerKeyLoaded = false }),
-			r5SkippedFresh: set(func(f *healthFacts) { f.SchedulerLast.LastStatus = "skipped" }),
+			r5SkippedFresh: set(func(f *healthFacts) { f.SchedulerLast = r5SkippedRow() }),
 			r5SkippedStale: set(func(f *healthFacts) {
-				f.SchedulerLast.LastStatus = "skipped"
+				f.SchedulerLast = r5SkippedRow()
 				f.Probes.Maintain = &state.MaintainFacts{Scheduler: &state.JobFacts{LastFinishedAt: r5Ago(state.MaintenanceSchedulerStale + time.Minute)}}
 			}),
 			r5Stale: set(func(f *healthFacts) {
@@ -211,9 +217,9 @@ func r5Feeds() map[string]r5Feed {
 		"evaluator": {
 			r5None:         set(func(f *healthFacts) { f.Probes.Evaluator = nil }, func(f *healthFacts) { f.Probes.Evaluator = &state.JobFacts{} }),
 			r5FailedNewest: set(func(f *healthFacts) { f.EvaluatorLast.LastStatus = "error" }),
-			r5SkippedFresh: set(func(f *healthFacts) { f.EvaluatorLast.LastStatus = "skipped" }),
+			r5SkippedFresh: set(func(f *healthFacts) { f.EvaluatorLast = r5SkippedRow() }),
 			r5SkippedStale: set(func(f *healthFacts) {
-				f.EvaluatorLast.LastStatus = "skipped"
+				f.EvaluatorLast = r5SkippedRow()
 				f.Probes.Evaluator = &state.JobFacts{LastFinishedAt: r5Ago(4 * time.Minute)}
 			}),
 			r5Stale:       set(func(f *healthFacts) { f.Probes.Evaluator = &state.JobFacts{LastFinishedAt: r5Ago(4 * time.Minute)} }),
@@ -474,6 +480,25 @@ func TestR5TheCertificatesRowAgreesWithC05AtEveryThreshold(t *testing.T) { // r5
 		f.Probes.Gateway = &failing
 		if got := rowsOf(f)["certificates"].Status; got != wantGW {
 			t.Errorf("gateway answering 502, %v left: row %s, C05 says %s", left, got, wantGW)
+		}
+	}
+}
+
+// F2: damage is failed and a check that could not finish is warn, also after a restart, when only the row remembers.
+func TestR5AnIntegrityRowSaysWhichFailureItWas(t *testing.T) { // r5 F2, C11
+	for class, want := range map[string]string{"integrity_failed": statusFailed, "timeout": statusWarn, "integrity_unavailable": statusWarn} {
+		f := r5Passing()
+		r5Row(jobs.ProbeRowIntegrity, "error", class, 5*time.Second)(&f)
+		if got := rowsOf(f)["database"]; got.Status != want {
+			t.Errorf("%s, the facts holding an older pass: %+v, want %s", class, got, want)
+		}
+		f = r5Passing()
+		d := *f.Probes.Database
+		d.IntegrityCheckedAt, d.IntegrityOK = 0, false // a restart: the facts are empty, the row is not
+		f.Probes.Database = &d
+		r5Row(jobs.ProbeRowIntegrity, "error", class, 5*time.Second)(&f)
+		if got := rowsOf(f)["database"]; got.Status != want {
+			t.Errorf("%s, after a restart: %+v, want %s", class, got, want)
 		}
 	}
 }
