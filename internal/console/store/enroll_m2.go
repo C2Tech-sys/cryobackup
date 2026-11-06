@@ -74,6 +74,8 @@ type EnrollTokenRow struct {
 	Devices int
 	// LastUsedAt is the latest enrollment through this token (nil: never used).
 	LastUsedAt *time.Time
+	// DeletedAt is when an admin hid the token from the lists (nil: listed).
+	DeletedAt *time.Time
 }
 
 // EnrollTokenFilter selects and pages the token list.
@@ -94,6 +96,9 @@ type EnrollTokenList struct {
 	// All counts every token inside the caller's scope, before the filter; a
 	// filtered-empty list and a never-used console look different on the page.
 	All int
+	// Counts is how many tokens hold each status under the customer filter, whatever
+	// the status filter says.
+	Counts map[string]int
 }
 
 // ValidTokenStatus reports whether s is a status the list filters on.
@@ -102,7 +107,7 @@ func ValidTokenStatus(s string) bool { return oneOf(s, TokenStatuses) }
 func tokenRowCols() string {
 	return prefixCols(enrollTokenCols, "t.") + `, c.name, a.username, p.name,
 	(SELECT MAX(d.enrolled_at) FROM devices d WHERE d.enrollment_token_id = t.id),
-	(SELECT COUNT(*) FROM devices d WHERE d.enrollment_token_id = t.id)`
+	(SELECT COUNT(*) FROM devices d WHERE d.enrollment_token_id = t.id), t.deleted_at`
 }
 
 func tokenRowFrom() string {
@@ -115,12 +120,12 @@ func tokenRowFrom() string {
 func scanTokenRow(sc scanner) (EnrollTokenRow, error) {
 	var r EnrollTokenRow
 	var label, pol, adopts, fp, by sql.NullString
-	var maxUses, revoked, last sql.NullInt64
+	var maxUses, revoked, last, deleted sql.NullInt64
 	var exp, c, u int64
 	var custName string
 	var creator, policyName sql.NullString
 	err := sc.Scan(&r.ID, &r.CustomerID, &label, &r.TokenHash, &pol, &r.DeviceClassDefault, &adopts, &exp, &maxUses,
-		&r.UsedCount, &fp, &by, &revoked, &c, &u, &custName, &creator, &policyName, &last, &r.Devices)
+		&r.UsedCount, &fp, &by, &revoked, &c, &u, &custName, &creator, &policyName, &last, &r.Devices, &deleted)
 	if err != nil {
 		return EnrollTokenRow{}, err
 	}
@@ -128,6 +133,7 @@ func scanTokenRow(sc scanner) (EnrollTokenRow, error) {
 	r.ExpiresAt, r.MaxUses, r.RevokedAt = timeOf(exp), ptrInt(maxUses), ptrTime(revoked)
 	r.CreatedAt, r.UpdatedAt = timeOf(c), timeOf(u)
 	r.CustomerName, r.CreatedByName, r.PolicyName, r.LastUsedAt = custName, creator.String, policyName.String, ptrTime(last)
+	r.DeletedAt = ptrTime(deleted)
 	return r, nil
 }
 
@@ -146,10 +152,12 @@ func statusClause(status string, now int64) (string, []any) {
 	return `1 = 1`, nil
 }
 
-// ListEnrollmentTokenRows returns one page of the tokens inside scope, newest
-// first, with customer, creator and policy names and the last-use time. A
-// filter naming a customer outside scope returns nothing (not an error: the
-// list only ever holds rows the caller may see).
+// ListEnrollmentTokenRows returns one page of the tokens inside scope, the ones
+// that can still enroll first, then newest first, with customer, creator and
+// policy names and the last-use time. A deleted token is not listed
+// (DeleteEnrollmentTokenAudited). A filter naming a customer outside scope returns
+// nothing (not an error: the list only ever holds rows the caller may see). Counts
+// says how many tokens of each status the customer filter leaves.
 func (s *Store) ListEnrollmentTokenRows(ctx context.Context, scope Scope, f EnrollTokenFilter) (EnrollTokenList, error) {
 	if err := scope.check(); err != nil {
 		return EnrollTokenList{}, err
@@ -158,6 +166,7 @@ func (s *Store) ListEnrollmentTokenRows(ctx context.Context, scope Scope, f Enro
 		return EnrollTokenList{}, validation([]FieldError{fieldf("status", "Use active, used_up, expired or revoked.")})
 	}
 	clause, args := scope.clause("t.customer_id")
+	clause += ` AND t.deleted_at IS NULL`
 	where, wargs := clause, args
 	if f.CustomerID != "" {
 		where, wargs = where+` AND t.customer_id = ?`, append(append([]any(nil), wargs...), f.CustomerID)
@@ -167,7 +176,17 @@ func (s *Store) ListEnrollmentTokenRows(ctx context.Context, scope Scope, f Enro
 		if err := tx.QueryRow(`SELECT count(*) FROM enrollment_tokens t WHERE `+clause, args...).Scan(&out.All); err != nil {
 			return err
 		}
-		sc, sargs := statusClause(f.Status, tx.nowMS())
+		now := tx.nowMS()
+		out.Counts = map[string]int{}
+		for _, st := range TokenStatuses {
+			sc, sargs := statusClause(st, now)
+			var n int
+			if err := tx.QueryRow(`SELECT count(*) FROM enrollment_tokens t WHERE `+where+` AND `+sc, append(append([]any(nil), wargs...), sargs...)...).Scan(&n); err != nil {
+				return err
+			}
+			out.Counts[st] = n
+		}
+		sc, sargs := statusClause(f.Status, now)
 		full, fargs := where+` AND `+sc, append(append([]any(nil), wargs...), sargs...)
 		var total int
 		if err := tx.QueryRow(`SELECT count(*) FROM enrollment_tokens t WHERE `+full, fargs...).Scan(&total); err != nil {
@@ -176,14 +195,18 @@ func (s *Store) ListEnrollmentTokenRows(ctx context.Context, scope Scope, f Enro
 		from, to, info := windowOf(total, f.Page, f.Size, f.Offset, f.Limit)
 		out.Page = info
 		var err error
+		active, aargs := statusClause(TokenActive, now)
+		order := append(append(append([]any(nil), fargs...), aargs...), to-from, from)
 		out.Rows, err = collect(tx, `SELECT `+tokenRowCols()+tokenRowFrom()+` WHERE `+full+
-			` ORDER BY t.created_at DESC, t.id DESC LIMIT ? OFFSET ?`, append(fargs, to-from, from), scanTokenRow)
+			` ORDER BY CASE WHEN `+active+` THEN 0 ELSE 1 END, t.created_at DESC, t.id DESC LIMIT ? OFFSET ?`, order, scanTokenRow)
 		return err
 	})
 	return out, err
 }
 
 // GetEnrollmentTokenRow returns one token inside scope (ErrNotFound outside it).
+// A deleted token is still found, with DeletedAt set: a device's enrolled-via link
+// and an audit row keep somewhere to point.
 func (s *Store) GetEnrollmentTokenRow(ctx context.Context, scope Scope, id string) (EnrollTokenRow, error) {
 	if err := scope.check(); err != nil {
 		return EnrollTokenRow{}, err
@@ -380,6 +403,67 @@ func (s *Store) RevokeEnrollmentTokenAudited(ctx context.Context, scope Scope, i
 			return err
 		}
 		ev, err := actor.event("enrollment_token.revoke", "enrollment_token", id, cust, map[string]any{"used_count": used})
+		if err != nil {
+			return err
+		}
+		if err := audited(tx, ev); err != nil {
+			return err
+		}
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+// ErrTokenLive refuses deleting a token that can still enroll, or that has been
+// used up and has not expired: revoke it first (M3-T6).
+var ErrTokenLive = conflictf("enrollment token is not revoked or expired: revoke it first")
+
+// DeleteEnrollmentTokenAudited hides a revoked or expired token inside scope from
+// the token lists and writes its one audit row (enrollment_token.delete) in the
+// same transaction (ErrAudit when it cannot be written; the token then stays
+// listed). It removes nothing: the row stays, GetEnrollmentTokenRow still finds
+// it, every device keeps its enrollment_token_id, and every earlier audit row
+// stays. A token that is active or used up is ErrTokenLive: only a credential that
+// can no longer enroll may leave the operator's sight (a schema CHECK holds the
+// same rule). It reports whether anything changed: deleting a deleted token is a
+// no-op with no audit row.
+func (s *Store) DeleteEnrollmentTokenAudited(ctx context.Context, scope Scope, id string, actor AuditActor) (bool, error) {
+	if err := scope.check(); err != nil {
+		return false, err
+	}
+	clause, args := scope.clause("customer_id")
+	changed := false
+	err := s.Write(ctx, func(tx *Tx) error {
+		var cust string
+		var revoked, deleted sql.NullInt64
+		var expires int64
+		var used int
+		if err := tx.QueryRow(`SELECT customer_id, revoked_at, expires_at, deleted_at, used_count FROM enrollment_tokens WHERE id = ? AND `+clause, append([]any{id}, args...)...).
+			Scan(&cust, &revoked, &expires, &deleted, &used); err != nil {
+			if err == sql.ErrNoRows {
+				return ErrNotFound
+			}
+			return err
+		}
+		if deleted.Valid {
+			return nil
+		}
+		now := tx.nowMS()
+		if !revoked.Valid && expires > now {
+			return ErrTokenLive
+		}
+		if _, err := tx.Exec(`UPDATE enrollment_tokens SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, now, now, id); err != nil {
+			return err
+		}
+		status := TokenExpired
+		if revoked.Valid {
+			status = TokenRevoked
+		}
+		ev, err := actor.event("enrollment_token.delete", "enrollment_token", id, cust, map[string]any{"status": status, "used_count": used})
 		if err != nil {
 			return err
 		}

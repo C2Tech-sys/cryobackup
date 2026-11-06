@@ -268,6 +268,8 @@ CREATE INDEX idx_customers_expected  ON customers(expected) WHERE expected = 1;
 
 -- -----------------------------------------------------------------------------
 -- 12. enrollment_tokens   (recon: EnrollmentToken)
+--     deleted_at (migration 0006, M3-T6, ADR 0016): the row is hidden from the lists and kept for the
+--     audit trail and each device's enrolled-via link; only a revoked or expired token may be hidden.
 -- -----------------------------------------------------------------------------
 CREATE TABLE enrollment_tokens (
   id                     TEXT    PRIMARY KEY CHECK (length(id) = 26),
@@ -284,7 +286,7 @@ CREATE TABLE enrollment_tokens (
   created_by             TEXT    REFERENCES admin_users(id) ON DELETE SET NULL,
   revoked_at             INTEGER,
   created_at             INTEGER NOT NULL,
-  updated_at             INTEGER NOT NULL,
+  updated_at             INTEGER NOT NULL, deleted_at INTEGER CHECK (deleted_at IS NULL OR revoked_at IS NOT NULL OR deleted_at >= expires_at),
   CHECK (max_uses IS NULL OR used_count <= max_uses),
   CHECK (adopts_device_id IS NULL OR COALESCE(max_uses, 0) = 1)           -- NULL = unlimited must not slip through
 );

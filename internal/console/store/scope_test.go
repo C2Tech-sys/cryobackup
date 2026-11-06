@@ -85,8 +85,9 @@ type target struct {
 	command  string
 	snapshot string
 	// fresh rows made by a case's prep hook, so the call under test has something to act on.
-	freshToken string
-	freshRun   string
+	freshToken  string
+	freshRun    string
+	freshDevice string
 }
 
 type kind int
@@ -351,10 +352,12 @@ func matrix() map[string]matrixCase {
 		}},
 	}
 	addM2Matrix(m)       // the M2 customer, device and run methods (scope_m2_test.go)
+	addM3T6Matrix(m)     // M3-T6: retire and token delete (m3t6_test.go)
 	addEnrollM2Matrix(m) // M2-W2B: token management (enroll_m2_test.go)
 	addW2CMatrix(m)      // M2-W2C: commands and identity conflicts (scope_w2c_test.go)
 	addAuditM2Matrix(m)  // M2-W3A: audit viewer reads and console-wide settings (audit_m2_test.go)
 	addM3T3Matrix(m)     // M3-T3: saved views, pause/resume, run search, heartbeat ring (m3t3_test.go)
+	addM3T6Matrix(m)     // M3-T6: device retire and token delete (m3t6_test.go)
 	return m
 }
 
