@@ -1,0 +1,29 @@
+{{/* B05 - devices not seen (M3-T4): heartbeat silence, collapsed to one row per customer when its devices went silent together (C19/C20 of the engine). Read from the same answer as GET /api/v1/fleet/unseen. */}}
+{{define "title"}}Devices not seen{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Devices not seen</span></nav>
+{{template "fleet_filter" .Filter}}
+{{with .Warn}}{{template "panel_state" .}}{{end}}
+{{if .Empty}}{{template "panel_state" .Empty}}{{end}}
+{{if .Rows}}
+<div class="chipbar" role="status"><span>{{.Summary}}</span></div>
+<div class="table-wrap" role="region" aria-label="Devices not seen" tabindex="0">
+<table class="fleet unseen">
+<caption>Devices not seen: customer-wide silence first, then single devices, longest silent first</caption>
+<thead><tr><th scope="col">Device or customer</th><th scope="col">State</th><th scope="col">Last heard from</th><th scope="col">Likely cause</th></tr></thead>
+<tbody>{{range .Rows}}{{if .Silence}}<tr class="silence-row">
+<td class="dev-cell"><a class="hostname" href="/customers/{{.CustomerID}}">{{.Customer}}</a><small>{{.Affected}} · {{.Unseen}}</small></td>
+<td class="state-cell"><span class="st crit"><i aria-hidden="true"></i>CUSTOMER-WIDE SILENCE</span>{{if .Covered}}<small class="meta-mono">The gateway banner already covers these devices.</small>{{end}}</td>
+<td class="age {{.LastCls}}"><i class="g g-{{.LastGlyph}}" aria-hidden="true"></i>{{.Last}}{{if .LastSub}}<small>oldest: {{.LastSub}}</small>{{end}}</td>
+<td class="wrap">{{.Hint}} <a href="{{.ShowHref}}">Show the devices</a></td>
+</tr>{{else}}<tr id="dev-{{.ID}}" class="dev">
+<td class="dev-cell"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a><small>{{.Customer}}{{if .Meta}} · {{.Meta}}{{end}}</small></td>
+<td class="state-cell">{{template "chip" .State}}{{if .Ack}} <span class="badge neutral"><i aria-hidden="true"></i>ACK</span>{{end}}</td>
+<td class="age {{.LastCls}}"><i class="g g-{{.LastGlyph}}" aria-hidden="true"></i>{{.Last}}{{if .LastSub}}<small>{{.LastSub}}</small>{{end}}</td>
+<td class="wrap">{{.Hint}}</td>
+</tr>{{end}}{{end}}</tbody>
+</table></div>
+{{template "m3_pager" .Pager}}
+<p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). A device is unseen when its heartbeat has been silent past the limit. When most of a customer's devices go silent at once the engine reports the customer, not each machine.</p>
+{{end}}
+{{end}}

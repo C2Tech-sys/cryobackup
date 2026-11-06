@@ -1,0 +1,17 @@
+{{/* m3_fleet.html - the customer filter bar and the plain-link pager of the overdue and unseen pages (M3-T4). */}}
+
+{{define "fleet_filter"}}<form class="filters" method="get" action="{{.Action}}" role="search" aria-label="Filter by customer">
+  <div class="field"><label for="fl-customer">Customer</label><select class="input" id="fl-customer" name="customer">{{range .Customers}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  {{if ne .Size 50}}<input type="hidden" name="size" value="{{.Size}}">{{end}}
+  <button class="btn sm" type="submit">Apply</button>
+  {{if .ListErr}}<span class="meta-mono" role="status"><i class="g g-warn" aria-hidden="true"></i> The customer list could not be loaded in full.</span>{{end}}
+</form>{{end}}
+
+{{define "m3_pager"}}<nav class="pager" aria-label="Pagination"><span class="pg-text" role="status">{{.Text}}</span>
+{{if .Clamp}}<span class="meta-mono">{{.Clamp}}</span>{{end}}
+{{if gt .Pages 1}}<ul>{{range .Links}}<li>{{if .Disabled}}<span class="pg disabled" aria-disabled="true" aria-label="{{.Aria}}">{{.Label}}</span>{{else}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}" aria-label="{{.Aria}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</li>{{end}}</ul>{{end}}
+{{if .Sizes}}<span class="pg-size"><span class="meta-mono">Per page</span>{{range .Sizes}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}" aria-label="{{.Aria}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}</span>{{end}}
+</nav>{{end}}
+
+{{/* act_block: one day block of the activity grid (components 4.2). Every kind has its own shape, so colour is never the only carrier. */}}
+{{define "act_block"}}{{if .Href}}<a class="dayblk k-{{.Kind}}{{if .Today}} today{{end}}" href="{{.Href}}" title="{{.Title}}" aria-label="{{.Aria}}"><i aria-hidden="true"></i>{{if .Label}}<b>{{.Label}}</b>{{end}}</a>{{else}}<span class="dayblk k-{{.Kind}}{{if .Today}} today{{end}}" title="{{.Title}}" role="img" aria-label="{{if .Aria}}{{.Aria}}{{else}}{{.Title}}{{end}}"><i aria-hidden="true"></i>{{if .Label}}<b>{{.Label}}</b>{{end}}</span>{{end}}{{end}}

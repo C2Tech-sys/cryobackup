@@ -805,3 +805,121 @@ tr.dropped td { vertical-align: top; }
   table.fleet tr.missing-row td, table.fleet tr.missing-row td:first-child { background: transparent; box-shadow: none; }
 }
 .nowrap { white-space: nowrap; }
+
+/* ===== M3-T4: runs search and detail, activity grid, overdue, unseen, system health =====
+   Tokens only: no literal colour in this block either. Phone rules sit beside each part. */
+
+/* Runs search (S21, S16): the flat clause builder of components 5.4. */
+.clauses { display: grid; gap: var(--space-3); }
+.clauses fieldset.plain { display: grid; gap: var(--space-2); padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.clauses legend.h-label { margin-bottom: var(--space-2); }
+.clause-help, .clause-none, .clause-zone { margin: 0; }
+.clauselist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.clause { display: grid; grid-template-columns: 76px 88px minmax(0, 1fr) auto; gap: 8px; align-items: start; min-height: 34px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.clause .cl-field { font: 600 12.5px/32px var(--font-sans); }
+.clause .cl-op { font: 500 11px/32px var(--font-mono); color: var(--text-muted); }
+.clause .cl-value { display: grid; gap: 4px; min-width: 0; }
+.clause .cl-value .input { max-width: 340px; width: 100%; }
+.clause .err { color: var(--danger); font: 500 12px/1.4 var(--font-sans); }
+.clause .iconbtn { margin-top: 3px; text-decoration: none; }
+.clause-add { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; padding-top: 4px; }
+.clause-add select.input { flex: 1 1 220px; max-width: 360px; }
+.clause-summary { font: 500 12.5px/1.5 var(--font-sans); color: var(--text-muted); overflow-wrap: anywhere; }
+.clause-summary b { color: var(--text); font-weight: 600; }
+table.fleet.runtable td.when a { color: var(--text); font: 600 12.5px/18px var(--font-sans); text-decoration: none; border-bottom: 1px dotted var(--text-muted); }
+table.fleet.runtable td.when a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+table.fleet.runtable td.took { white-space: nowrap; }
+table.fleet.runtable td.kind-cell small { display: block; color: var(--text-muted); font: 400 11px/1.3 var(--font-mono); }
+table.fleet.runtable td.classes-cell { white-space: normal; min-width: 150px; }
+.cls { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px; border: 1px solid var(--border); border-radius: var(--radius-xs); font: 500 11px/1.5 var(--font-mono); background: var(--bg); }
+.cls b { color: var(--danger); font-weight: 600; }
+
+/* The pager wraps instead of pushing the page sideways on a phone. */
+.pager ul { flex-wrap: wrap; }
+
+/* Run detail (S22). */
+.rundetail .page-head .sub span, .rundetail .page-head .sub a { overflow-wrap: anywhere; min-width: 0; }
+.rundetail .kv { grid-template-columns: 150px minmax(0, 1fr); }
+.rundetail section > .meta-mono, .rundetail .table-wrap + .meta-mono { margin-top: var(--space-2); }
+.errbar { display: block; width: 100%; max-width: 260px; height: 8px; border-radius: var(--radius-pill); background: var(--border); overflow: hidden; }
+.errbar i { display: block; height: 100%; background: var(--danger); border-radius: var(--radius-pill); }
+table.errclasses td.barcell { width: 40%; }
+
+/* Overdue (B04) and not seen (B05): the engine's silence verdict gets its own row tint. */
+table.fleet tr.silence-row td { background: var(--danger-soft); }
+table.fleet tr.silence-row td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+table.fleet.overdue td.state-cell, table.fleet.unseen td.state-cell { white-space: normal; }
+table.fleet.unseen td.state-cell small { display: block; margin-top: 3px; white-space: normal; }
+
+/* Activity grid (S23, components 4.2): 56 x 28 blocks, 4px apart, the device column sticky. */
+.actlegend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; font: 500 11.5px/1 var(--font-mono); color: var(--text-muted); }
+.actlegend li { display: inline-flex; align-items: center; gap: 6px; }
+.actgroup { display: grid; gap: var(--space-2); min-width: 0; }
+.actgroup-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 36px; padding: 4px 10px; background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font: 600 12.5px/1.2 var(--font-sans); }
+.actgroup.missing .actgroup-head { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger); }
+.actgroup-head .cnt { margin-left: auto; }
+table.actgrid { border-collapse: separate; border-spacing: 4px; min-width: 100%; width: max-content; font: 500 12.5px/18px var(--font-sans); }
+table.actgrid caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+table.actgrid th, table.actgrid td { padding: 0; text-align: center; vertical-align: middle; font-weight: 500; }
+table.actgrid th.daycol { font: 500 10.5px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); height: 26px; width: 56px; min-width: 56px; border-bottom: 2px solid transparent; }
+table.actgrid th.daycol.today { color: var(--text); border-bottom-color: var(--accent); }
+table.actgrid th.devcol { position: sticky; left: 0; z-index: 2; background: var(--bg); text-align: left; min-width: 190px; max-width: 240px; padding: 3px 10px 3px 6px; white-space: nowrap; }
+table.actgrid th.devcol .st { margin-left: 8px; }
+table.actgrid th.devcol small { display: block; font-weight: 400; }
+table.actgrid tr.rollup th.devcol { background: var(--surface); }
+.dayblk { display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: 56px; height: 28px; box-sizing: border-box; border: 1px solid transparent; border-radius: var(--radius-xs); color: var(--text); font: 600 11px/1 var(--font-mono); text-decoration: none; vertical-align: middle; }
+.dayblk i { display: inline-block; flex: none; width: 9px; height: 9px; }
+.dayblk.k-success { background: var(--success-soft); }
+.dayblk.k-success i { background: var(--success); border-radius: 50%; }
+.dayblk.k-failed { background: var(--danger-soft); }
+.dayblk.k-failed i { background: var(--danger); border-radius: 2px; transform: rotate(45deg) scale(.85); }
+.dayblk.k-mixed { background: repeating-linear-gradient(135deg, var(--success-soft) 0 6px, var(--danger-soft) 6px 12px); }
+.dayblk.k-mixed i { background: linear-gradient(135deg, var(--success) 50%, var(--danger) 50%); border-radius: 50%; }
+.dayblk.k-missed { background: var(--warning-soft); }
+.dayblk.k-missed i { background: var(--warning); clip-path: polygon(50% 0, 100% 100%, 0 100%); width: 10px; height: 10px; }
+.dayblk.k-none { border: 1.5px solid var(--border-input); background: transparent; }
+.dayblk.k-none i { display: none; }
+.actlegend .dayblk { width: 28px; height: 18px; }
+.dayblk.today { box-shadow: 0 2px 0 0 var(--accent); }
+a.dayblk:hover { border-color: var(--border-input); }
+a.dayblk:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* System health (S36). */
+.sys-overall { display: grid; gap: var(--space-2); }
+.sys-title { font: 600 15px/1.2 var(--font-sans); margin: 0; }
+.sys-sum { font: 500 12.5px/1.4 var(--font-sans); color: var(--text-muted); }
+table.fleet.syscomp td.wrap, table.fleet.jobtable td.wrap { white-space: normal; }
+table.fleet.syscomp td.state-cell { white-space: normal; }
+table.fleet.jobtable td.state-cell small { display: block; margin-top: 3px; color: var(--text-muted); font: 400 11px/1.3 var(--font-mono); }
+table.fleet.jobtable td.act details.rowmenu > .rowmenu-pop { right: 0; left: auto; }
+
+/* Phone (<= 640px): the header row is hidden, so the rows become cards. Grid areas keep the name and the verdict
+   on the first line and push the detail below. Nothing makes the page itself scroll sideways. */
+@media (max-width: 640px) {
+  .clause { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "field remove" "value value"; }
+  .clause .cl-field, .clause .cl-op { grid-area: field; line-height: 32px; }
+  .clause .cl-op { padding-left: 84px; }
+  .clause .cl-value { grid-area: value; }
+  .clause .cl-value .input { max-width: none; }
+  .clause .iconbtn { grid-area: remove; }
+  table.fleet.runtable tr.run, table.fleet.syscomp tr.comp, table.fleet.jobtable tr.job { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.fleet.runtable tr.run td, table.fleet.syscomp tr.comp td, table.fleet.jobtable tr.job td { border: 0; padding: 0; white-space: normal; }
+  table.fleet.runtable tr.run td.when { grid-column: 1; grid-row: 1; }
+  table.fleet.runtable tr.run td.state-cell { grid-column: 2; grid-row: 1; }
+  table.fleet.runtable tr.run td.dev-cell, table.fleet.runtable tr.run td.cust-cell, table.fleet.runtable tr.run td.kind-cell, table.fleet.runtable tr.run td.classes-cell { grid-column: 1 / -1; }
+  table.fleet.runtable tr.run td.took { display: none; }
+  table.fleet.syscomp tr.comp td.wrap { grid-column: 1 / -1; }
+  table.fleet.syscomp tr.comp td.due { display: none; }
+  table.fleet.syscomp tr.comp td.state-cell:nth-of-type(4) { grid-column: 1 / -1; }
+  table.fleet.jobtable tr.job td.age, table.fleet.jobtable tr.job td.due, table.fleet.jobtable tr.job td.act { grid-column: 1 / -1; }
+  table.fleet.jobtable tr.job td.act { text-align: left; width: auto; }
+  table.fleet.jobtable td.act details.rowmenu > .rowmenu-pop { left: 0; right: auto; }
+  table.fleet.unseen tr.silence-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger); }
+  table.fleet.unseen tr.silence-row td { border: 0; padding: 0; white-space: normal; background: transparent; box-shadow: none; }
+  table.fleet.overdue tr.dev { grid-template-columns: minmax(0, 1fr) auto; }
+  table.fleet.unseen td.wrap, table.fleet.unseen td.age, table.fleet.overdue td.age { grid-column: 1 / -1; }
+  table.fleet.overdue td.state-cell:nth-child(2) { grid-column: 1 / -1; order: 3; padding-top: 4px; }
+  table.actgrid th.devcol { min-width: 150px; max-width: 170px; white-space: normal; }
+  .rundetail .kv { grid-template-columns: 110px minmax(0, 1fr); }
+  .actgroup-head .cnt { margin-left: 0; }
+}

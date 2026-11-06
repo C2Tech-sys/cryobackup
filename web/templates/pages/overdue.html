@@ -1,0 +1,27 @@
+{{/* B04 - overdue (M3-T4): the devices the state engine calls overdue, with why. Read from the same answer as GET /api/v1/fleet/overdue. An empty list always carries its evidence (devices checked, and when); a partial or failed read is an alarm, never an empty calm list. */}}
+{{define "title"}}Overdue{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Overdue</span></nav>
+{{template "fleet_filter" .Filter}}
+{{with .Warn}}{{template "panel_state" .}}{{end}}
+{{if .Empty}}{{template "panel_state" .Empty}}{{end}}
+{{if .Groups}}
+<div class="chipbar" role="status"><span>{{.Summary}}</span></div>
+<div class="table-wrap" role="region" aria-label="Overdue devices" tabindex="0">
+<table class="fleet overdue">
+<caption>Overdue devices grouped by customer, oldest success first within the page</caption>
+<thead><tr><th scope="col">Device</th><th scope="col">Why it is overdue</th><th scope="col">State</th><th scope="col">Last success</th></tr></thead>
+{{range .Groups}}<tbody class="grp" id="od-{{.ID}}">
+<tr class="ghead"><th scope="rowgroup" colspan="4"><div class="ghead-in"><span class="chev none" aria-hidden="true"></span><a href="/customers/{{.ID}}">{{.Name}}</a><span class="cnt">{{.Count}}</span></div></th></tr>
+{{range .Rows}}<tr id="dev-{{.ID}}" class="dev">
+<td class="dev-cell"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a>{{if .Meta}}<small>{{.Meta}}</small>{{end}}</td>
+<td class="state-cell">{{range .Reasons}}{{template "chipbtn" .}} {{end}}</td>
+<td class="state-cell">{{template "chip" .State}}{{if .Ack}} <span class="badge neutral"><i aria-hidden="true"></i>ACK</span>{{end}}</td>
+<td class="age {{.AgeCls}}"><i class="g g-{{.Glyph}}" aria-hidden="true"></i>{{.Age}}{{if .AgeSub}}<small>{{.AgeSub}}</small>{{end}}</td>
+</tr>
+{{end}}</tbody>{{end}}
+</table></div>
+{{template "m3_pager" .Pager}}
+<p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Overdue is the engine's verdict: a last success older than the limit, a scheduled run that did not start, or no success since the grace period ended.</p>
+{{end}}
+{{end}}

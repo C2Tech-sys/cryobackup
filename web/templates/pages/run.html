@@ -1,0 +1,32 @@
+{{/* S22 - run detail (M3-T4). Numbers, error classes and ids only: the console never holds a file name or path, so none can be shown. */}}
+{{define "title"}}Run detail{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/runs">Runs</a> / <span>{{.Run.Host}}</span></nav>
+<article class="card rundetail" aria-labelledby="run-h">
+  <header class="page-head">
+    <div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-restore"/></svg><h2 id="run-h">{{.Run.Kind}} run on {{.Run.Host}}</h2>{{template "chip" .Run.Outcome}}</div>
+    <div class="sub"><a href="/devices/{{.Run.DeviceID}}">{{.Run.Host}}</a><a href="/customers/{{.Run.CustomerID}}">{{.Run.Customer}}</a><span class="mono" title="Run id">{{.Run.ID}}</span></div>
+  </header>
+  <div class="mt stack">
+  {{with .Run.Cause}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+  <div class="two">
+    <section aria-labelledby="h-rprops"><h3 class="h-label" id="h-rprops">Properties</h3>
+      <dl class="kv">{{range .Run.Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{if .Chip}}{{template "chip" .Chip}}{{else}}{{.Value}}{{end}}</dd>{{end}}</dl>
+    </section>
+    <section aria-labelledby="h-rstats"><h3 class="h-label" id="h-rstats">Counters</h3>
+      {{if .Run.Stats}}<dl class="kv compact">{{range .Run.Stats}}<dt>{{.Label}}</dt><dd class="mono">{{.Value}}</dd>{{end}}</dl>
+      {{else}}<p class="muted">The agent reported no counters for this run.</p>{{end}}
+    </section>
+  </div>
+  <section aria-labelledby="h-rerr"><h3 class="h-label" id="h-rerr">Error classes{{if .Run.Errors}} <span class="count">{{len .Run.Errors}}</span>{{end}}</h3>
+    {{with .Run.Note}}<div class="banner {{.Class}} dense" role="status"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+    {{if .Run.Errors}}<div class="table-wrap flat"><table class="fleet compact errclasses">
+      <caption>Error classes of this run, most files first</caption>
+      <thead><tr><th scope="col">Class</th><th scope="col">Files affected</th><th scope="col"><span class="sr-only">Share</span></th></tr></thead>
+      <tbody>{{range .Run.Errors}}<tr><td class="mono">{{.Class}}</td><td class="mono">{{.N}}</td><td class="barcell"><span class="errbar" aria-hidden="true"><i style="width: {{.Pct}}%"></i></span></td></tr>{{end}}</tbody></table></div>
+    <p class="meta-mono">{{.Run.ErrTotal}} in total. CryoBackup records error classes and counts, never file names or paths, so there is no line-by-line log: to see which file, look on the device.</p>
+    {{else}}{{if not .Run.Note}}<p class="muted">No error was recorded for this run.</p>{{end}}{{end}}
+  </section>
+  </div>
+</article>
+{{end}}

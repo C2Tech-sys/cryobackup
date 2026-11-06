@@ -15,7 +15,8 @@
   {{if eq .Tab "overview"}}{{template "customer_overview" .Overview}}
   {{else if eq .Tab "devices"}}{{template "devices_view" .Table}}
   {{else if eq .Tab "settings"}}{{template "customer_form" .Form}}
-  {{else if eq .Tab "policy"}}{{template "customer_policy" .Policy}}{{end}}
+  {{else if eq .Tab "policy"}}{{template "customer_policy" .Policy}}
+  {{else if eq .Tab "runs"}}{{template "runs_view" .Runs}}{{end}}
   </div>
 </article>
 {{end}}

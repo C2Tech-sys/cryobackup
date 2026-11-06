@@ -1,0 +1,55 @@
+{{/* m3_runs.html - the run search (components 5.4 flat clause builder, 5.1 table, 5.2 pager). Shared by /runs (S21) and the customer Runs tab (S16). M3-T4.
+     The builder is a plain GET form: every condition is a named control, so the page works without JavaScript and every view is a link. The results region is also the htmx fragment of GET /ui/runs/table (paging only). Nothing here prints a file name or a path: rows carry outcomes, classes and counts. */}}
+
+{{define "runs_view"}}<section class="stack runs-view" aria-label="Runs">
+<form class="clauses" id="runfilters" method="get" action="{{.BaseURL}}" role="search" aria-label="Run conditions">
+  <fieldset class="plain">
+    <legend class="h-label">Conditions <span class="count">{{len .Clauses}}</span></legend>
+    <p class="meta-mono clause-help">Different fields must all match. Repeat a field to match any of its values.</p>
+    {{if .Clauses}}<ol class="clauselist">{{range .Clauses}}<li class="clause">
+      <span class="cl-field">{{.FieldLabel}}</span><span class="cl-op">{{.Op}}</span>
+      <span class="cl-value">{{if .Date}}<input class="input" type="date" name="{{.Param}}" value="{{.Value}}" aria-label="Condition {{.N}}: {{.FieldLabel}} {{.Op}}"{{if .Err}} aria-invalid="true"{{end}}>
+        {{else}}<select class="input" name="{{.Param}}" aria-label="Condition {{.N}}: {{.FieldLabel}} {{.Op}}">{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
+        {{if .Err}}<span class="err" role="alert">{{.Err}}</span>{{end}}</span>
+      <a class="iconbtn sm" href="{{.RemoveHref}}" aria-label="Remove condition {{.N}}: {{.FieldLabel}} {{.Op}}" title="Remove"><svg aria-hidden="true"><use href="#i-x"/></svg></a>
+    </li>{{end}}</ol>
+    {{else}}<p class="meta-mono clause-none">No conditions: every run in this view is listed.</p>{{end}}
+    <div class="clause-add">
+      <label class="sr-only" for="run-add">Add a condition</label>
+      <select class="input" id="run-add" name="add"><option value="">Add a condition...</option>{{range .Add}}<optgroup label="{{.Label}}">{{range .Options}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</optgroup>{{end}}</select>
+      <button class="btn sm primary" type="submit">Apply</button>
+      {{if or .Clauses .TZ}}<a class="btn ghost sm" href="{{.ClearHref}}">Clear conditions</a>{{end}}
+    </div>
+    {{if .TZ}}<input type="hidden" name="tz" value="{{.TZ}}">{{end}}
+    <p class="meta-mono clause-zone">{{.TZNote}}</p>
+  </fieldset>
+  {{if .ListWarn}}<p class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><span class="b-text">{{.ListWarn}}</span></p>{{end}}
+  <p class="clause-summary" role="status" aria-live="polite">{{.Summary}} <b>{{.Count}}</b></p>
+</form>
+<div id="runresults" class="stack loadable" aria-live="polite" data-loading-text="Loading runs">{{template "runs_results" .}}</div>
+</section>{{end}}
+
+{{define "runs_results"}}{{with .Warn}}{{template "inline_banner" .}}{{end}}
+{{if .Empty}}{{template "panel_state" .Empty}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Runs" tabindex="0">
+<table class="fleet runtable">
+<caption>Runs, newest first. {{.Pager.Text}}</caption>
+<thead><tr><th scope="col">Outcome</th><th scope="col">Started</th><th scope="col">Took</th><th scope="col">Device</th>{{if .ShowCust}}<th scope="col">Customer</th>{{end}}<th scope="col">Kind</th><th scope="col">Error classes</th></tr></thead>
+<tbody>
+{{$show := .ShowCust}}{{range .Rows}}<tr id="run-{{.ID}}" class="run">
+<td class="state-cell">{{template "chip" .Outcome}}</td>
+<td class="when"><a href="{{.Href}}" aria-label="{{.Aria}}"><time datetime="{{.StartedISO}}">{{.Started}}</time></a></td>
+<td class="took meta-mono">{{.Duration}}</td>
+<td class="dev-cell"><a class="hostname" href="/devices/{{.DeviceID}}">{{.Host}}</a></td>
+{{if $show}}<td class="cust-cell"><a href="/customers/{{.CustomerID}}">{{.Customer}}</a></td>{{end}}
+<td class="kind-cell">{{.Kind}}<small>{{.Trigger}}{{if .Note}} · {{.Note}}{{end}}</small></td>
+<td class="classes-cell">{{range .Classes}}<span class="cls">{{.Class}}{{if .N}} <b>x{{.N}}</b>{{end}}</span> {{else}}<span class="muted">-</span>{{end}}</td>
+</tr>
+{{end}}</tbody></table></div>
+<nav class="pager" aria-label="Pagination"><span class="pg-text" role="status">{{.Pager.Text}}</span>
+{{if .Pager.Clamp}}<span class="meta-mono">{{.Pager.Clamp}}</span>{{end}}
+{{if gt .Pager.Pages 1}}<ul>{{range .Pager.Links}}<li>{{if .Disabled}}<span class="pg disabled" aria-disabled="true" aria-label="{{.Aria}}">{{.Label}}</span>{{else}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}" hx-get="{{.Partial}}" hx-target="#runresults" hx-swap="innerHTML" hx-indicator="#runresults" aria-label="{{.Aria}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</li>{{end}}</ul>{{end}}
+{{if .Pager.Sizes}}<span class="pg-size"><span class="meta-mono">Per page</span>{{range .Pager.Sizes}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}" hx-get="{{.Partial}}" hx-target="#runresults" hx-swap="innerHTML" hx-indicator="#runresults" aria-label="{{.Aria}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}</span>{{end}}
+</nav>
+<p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Times are shown in the display zone. Runs carry counts and error classes only, never file names or paths.</p>
+{{end}}{{end}}

@@ -1,0 +1,57 @@
+{{/* S36 - system health (M3-T4): one row per component, read from the same answer as GET /api/v1/system/health, and the job table (administrators) with Run now. A row reads NOT CHECKED when the console has no evidence for it; it is never OK on silence. */}}
+{{define "title"}}System health{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>System</span></nav>
+{{with .Flash}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+{{if .Empty}}{{template "panel_state" .Empty}}{{end}}
+{{if .Rows}}
+<section class="card sys-overall" aria-labelledby="sys-h">
+  <div class="row"><h2 id="sys-h" class="sys-title">Overall</h2>{{template "chip" .Overall}}<span class="sys-sum">{{.OverallTxt}}</span></div>
+  <p class="meta-mono">{{.Checked}}</p>
+</section>
+<section aria-labelledby="h-comp"><h3 class="h-label" id="h-comp">Components <span class="count">{{len .Rows}}</span></h3>
+<div class="table-wrap" role="region" aria-label="Components" tabindex="0">
+<table class="fleet syscomp">
+<caption>Console components and their health</caption>
+<thead><tr><th scope="col">Component</th><th scope="col">Status</th><th scope="col">Why</th><th scope="col">Raised</th><th scope="col">Checked</th></tr></thead>
+<tbody>{{range .Rows}}<tr id="comp-{{.ID}}" class="comp">
+<td class="dev-cell"><span class="hostname">{{.Label}}</span></td>
+<td class="state-cell">{{template "chip" .Status}}</td>
+<td class="wrap">{{if .Detail}}{{.Detail}}{{else}}<span class="muted">{{if .Banners}}See the conditions below.{{else}}No condition is raised.{{end}}</span>{{end}}</td>
+<td class="state-cell">{{range .Banners}}<span class="badge neutral" title="{{.Label}}"><i aria-hidden="true"></i>{{.ID}}</span> {{else}}<span class="muted">-</span>{{end}}</td>
+<td class="due">{{if .Checked}}{{.Checked}}{{else}}<span class="muted">-</span>{{end}}</td>
+</tr>
+{{end}}</tbody></table></div>
+</section>
+{{if .Conditions}}<section aria-labelledby="h-cond"><h3 class="h-label" id="h-cond">Conditions raised <span class="count">{{len .Conditions}}</span></h3>
+<ul class="banners">{{range .Conditions}}<li class="banner {{.Class}}"><span class="st {{.Class}}"><i aria-hidden="true"></i>{{.Label}}</span><div class="b-text"><span class="sr-only">{{if eq .Class "crit"}}Critical{{else}}Warning{{end}}: </span>{{.Text}} <span class="meta-mono">{{.ID}}{{if .Row}} · {{.Row}}{{end}}</span></div></li>{{end}}</ul>
+</section>{{end}}
+{{if .Versions}}<section aria-labelledby="h-ver"><h3 class="h-label" id="h-ver">Versions</h3>
+<dl class="kv">{{range .Versions}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl></section>{{end}}
+{{end}}
+<section aria-labelledby="h-jobs" id="jobs"><h3 class="h-label" id="h-jobs">Background jobs{{if .Jobs}}{{if .Jobs.Rows}} <span class="count">{{len .Jobs.Rows}}</span>{{end}}{{end}}</h3>
+{{if .JobsNote}}<p class="muted">{{.JobsNote}}</p>{{end}}
+{{with .Jobs}}{{if .Err}}{{template "panel_state" .Err}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Background jobs" tabindex="0">
+<table class="fleet jobtable">
+<caption>Background jobs, with the last result and the next due time</caption>
+<thead><tr><th scope="col">Job</th><th scope="col">Result</th><th scope="col">Last run</th><th scope="col">Took</th><th scope="col">Next</th><th scope="col">Runs</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+<tbody>{{range .Rows}}<tr id="job-{{.Name}}" class="job">
+<td class="dev-cell"><span class="hostname mono">{{.Name}}</span></td>
+<td class="state-cell">{{template "chip" .Status}}{{if .Overdue}} <span class="badge warn"><i aria-hidden="true"></i>OVERDUE</span>{{end}}{{if .ErrClass}}<small>{{.ErrClass}}</small>{{end}}</td>
+<td class="age">{{.Last}}{{if .LastSub}}<small>{{.LastSub}}</small>{{end}}</td>
+<td class="due">{{if .Duration}}{{.Duration}}{{else}}-{{end}}</td>
+<td class="due{{if .NextCls}} {{.NextCls}}{{end}}">{{if .Next}}{{.Next}}{{else}}-{{end}}</td>
+<td class="due">{{.Runs}}</td>
+<td class="act">{{if .CanRun}}<details class="rowmenu act-confirm"><summary class="btn sm">Run now…</summary>
+  <div class="rowmenu-pop" role="group" aria-label="Run {{.Name}} now">
+    <form method="post" action="{{.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p>Run <b class="mono">{{.Name}}</b> now, outside its schedule? It runs on this console and writes one audit entry. If another run holds the job, nothing starts.</p>
+      <div class="actions"><button class="btn sm primary" type="submit">Run {{.Name}} now</button></div>
+    </form>
+  </div></details>{{else}}<span class="meta-mono">{{.Why}}</span>{{end}}</td>
+</tr>
+{{end}}</tbody></table></div>{{end}}
+{{end}}
+</section>
+{{end}}
