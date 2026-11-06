@@ -351,7 +351,7 @@ func TestR3AHealthyConsoleReadsOverallOK(t *testing.T) { // M3-T4 r3 M1
 	if !ok {
 		t.Fatalf("a healthy console never read overall ok: %s%s", h.Overall, r3Rows(h))
 	}
-	want := map[string]string{"release_manifest": "not_in_build", "storage_quota": "not_in_build", "digest": "not_in_build", "self_backup": "not_in_build", "clock": "not_applicable"}
+	want := map[string]string{"release_manifest": "not_in_build", "storage_quota": "not_in_build", "digest": "not_in_build", "self_backup": "not_in_build", "clock": "not_applicable", "fleet_data": "not_applicable"}
 	for _, c := range h.Components {
 		w, special := want[c.ID]
 		if !special {
@@ -376,7 +376,7 @@ func TestR3AHealthyConsoleReadsOverallOK(t *testing.T) { // M3-T4 r3 M1
 	if !regexp.MustCompile(`id="sys-h" class="sys-title">Overall</h2><span class="st ok"><i aria-hidden="true"></i>OK<`).MatchString(page) {
 		t.Errorf("S36 does not read overall OK: %.400s", page)
 	}
-	for _, s := range []string{"NOT IN THIS BUILD", "NOT APPLICABLE", "Needs at least 5 devices", "5 cannot be checked here"} {
+	for _, s := range []string{"NOT IN THIS BUILD", "NOT APPLICABLE", "Needs at least 5 devices", "6 cannot be checked here", "No devices enrolled yet: nothing is being backed up"} {
 		if !strings.Contains(page, s) {
 			t.Errorf("S36 lacks %q", s)
 		}

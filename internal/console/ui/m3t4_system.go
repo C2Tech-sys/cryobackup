@@ -14,6 +14,8 @@ import (
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
+	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
+	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
 
@@ -138,6 +140,15 @@ func (s *Service) renderSystem(w http.ResponseWriter, r *http.Request, status in
 		pg.Empty = apiFailure("system health", err)
 		pg.Empty.Body += " No component is shown as OK while the console cannot read its own health."
 	} else {
+		// Fixtures mode's lab view (/fixtures?health=ok): a healthy console's rows, from the API's own rules.
+		if s.Fixtures && fixtures.HealthyViewOn() {
+			h.Overall, h.Components = adminapi.LabHealthy(fleet.Computed)
+			h.Banners, h.Complete = nil, true
+			pg.Banners = BannersView{}
+			if pg.Flash == nil {
+				pg.Flash = &CauseView{Class: ClassInfo, Title: "Fixtures view.", Text: "This is how a small healthy console reads, turned on at /fixtures. The fictional fleet's own conditions are hidden on this page, and the job table below still lists its jobs."}
+			}
+		}
 		pg.Overall = sysStatusChip("sys-overall", h.Overall)
 		pg.OverallTxt = map[string]string{
 			"ok": "Every component has evidence and is healthy.", "warn": "At least one component needs attention.",
@@ -148,6 +159,9 @@ func (s *Service) renderSystem(w http.ResponseWriter, r *http.Request, status in
 		}
 		if n := notCheckable(h.Components); n > 0 && h.Overall == "ok" {
 			pg.OverallTxt = fmt.Sprintf("Every component this console can check has evidence and is healthy. %d cannot be checked here: each row says why.", n)
+		}
+		if h.FirstRun { // the engine's all clear on an empty fleet protects nothing: OK does not stand alone here
+			pg.OverallTxt = "No devices enrolled yet: nothing is being backed up. " + pg.OverallTxt
 		}
 		rowOf := map[string]string{}
 		for _, comp := range h.Components {
@@ -239,7 +253,10 @@ func (s *Service) jobsView(r *http.Request, p *auth.Principal, c fmtCtx) *SysJob
 			row.Name, row.Action = withheld, ""
 		}
 		id := "job-" + j.Name
+		leftover := !j.Registered && j.Name != health.SchedulerJob // nothing in this process runs it, or will
 		switch {
+		case leftover:
+			row.Status = Chip{ID: id, Label: "NO LONGER SCHEDULED", Class: ClassNeutral, Dashed: true}
 		case j.Running:
 			row.Status = Chip{ID: id, Label: "RUNNING", Class: ClassInfo, Pulse: true}
 		case j.Status == "ok":
@@ -253,7 +270,7 @@ func (s *Service) jobsView(r *http.Request, p *auth.Principal, c fmtCtx) *SysJob
 		default:
 			row.Status = Chip{ID: id, Label: "UNKNOWN", Class: ClassCrit, Dashed: true}
 		}
-		if j.LastErrorClass != "" {
+		if j.LastErrorClass != "" && !leftover {
 			row.ErrClass = safeJobClass(j.LastErrorClass)
 		}
 		switch {
@@ -267,7 +284,7 @@ func (s *Service) jobsView(r *http.Request, p *auth.Principal, c fmtCtx) *SysJob
 		if j.LastDurationMS != nil {
 			row.Duration = durText(*j.LastDurationMS)
 		}
-		if j.NextDueAt != nil {
+		if j.NextDueAt != nil && !leftover {
 			if d := j.NextDueAt.Sub(now); d > 0 {
 				row.Next = ageFuture(d)
 			} else {
@@ -277,8 +294,10 @@ func (s *Service) jobsView(r *http.Request, p *auth.Principal, c fmtCtx) *SysJob
 		switch {
 		case row.Action == "":
 			row.Why = "not a job this console names"
-		case !j.Registered:
-			row.Why = "not registered in this console"
+		case j.Name == health.SchedulerJob && !j.Registered:
+			row.Why = "runs in the maintenance worker"
+		case leftover:
+			row.Why = "no longer scheduled on this console"
 		case j.Running:
 			row.Why = "already running"
 		default:

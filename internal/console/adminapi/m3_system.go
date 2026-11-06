@@ -169,6 +169,9 @@ type VersionsJSON struct {
 // is ok, not_in_build or not_applicable (overallOf).
 type SystemHealthResponse struct {
 	StampJSON
+	// FirstRun is the engine's "this fleet has never enrolled a device". Overall can be ok then,
+	// which says nothing about backups: the fleet_data row and the page say so plainly.
+	FirstRun   bool                  `json:"first_run,omitempty"`
 	Overall    string                `json:"overall"`
 	Components []SystemComponentJSON `json:"components"`
 	Banners    []BannerJSON          `json:"banners"`
@@ -203,8 +206,9 @@ var healthRowBanners = map[string][]string{
 // probe-driven row can be called ok.
 const bannerNotWired = "C00"
 
-// clockMinReporting is the fewest reporting devices C13 can judge from (§4.6).
-const clockMinReporting = 5
+// noDevicesYet is what the fleet_data row and S36 say on a console that has never
+// enrolled a device: the engine calls that all clear, and nothing is protected.
+const noDevicesYet = "No devices enrolled yet: nothing is being backed up"
 
 // healthRowOrder is the order of the rows on the page.
 var healthRowOrder = []struct{ id, label string }{
@@ -242,11 +246,18 @@ type healthFacts struct {
 	EvaluatorLast, SchedulerLast store.JobState
 	// MasterKeyWired: the master key state is known to the evaluator. MasterKeyLoaded is that state.
 	MasterKeyWired, MasterKeyLoaded bool
-	// ReportingDevices counts devices with a current heartbeat, for C13.
+	// ReportingDevices is how many devices C13 judged from (Fleet.Reporting), in this request's scope.
+	// Scoped says that scope is not the whole fleet, so the clock row says it speaks for this account's view.
 	ReportingDevices int
-	Jobs             []store.JobState
-	// NeverRun names the jobs that have no finished run: registered with no row, or a row with no status.
-	NeverRun []string
+	Scoped           bool
+	// FirstRun: this fleet has never enrolled a device (FleetView.FirstRun).
+	FirstRun bool
+	// Jobs are the rows of the jobs registered in this process: a row left by a job this process
+	// does not run says nothing about this console's health, and the operator cannot clear it.
+	Jobs []store.JobState
+	// NeverRun names the registered jobs with no finished run and no run in progress. FirstRunning
+	// names those whose first run is in progress now.
+	NeverRun, FirstRunning []string
 	// Probes are the probe facts the engine judged (Fleet.ProbeFacts: the health-prober's, the two job
 	// heartbeats and the NotInBuild markers), Endpoint the agent endpoint self-probe (Fleet.Endpoint) and
 	// MaintainReachable the periodic worker probe's answer. They are the evidence a probe-driven row
@@ -341,36 +352,74 @@ func (f healthFacts) agentEndpointEvidence() (status, detail string, at *time.Ti
 	return statusOK, "", ptrTime(st.Last.At)
 }
 
-// certificateEvidence is ok only when an actual expiry was read recently from
-// both listeners: the gateway (by the gateway probe's completed handshake) and
-// the agent endpoint (by its self-probe's).
+// certRefusalClasses are the failure classes of a probe whose handshake got a
+// certificate and refused it (probe.transportClass and verifyClass, and the self-probe's pin).
+var certRefusalClasses = map[string]bool{"expired": true, "chain_expired": true, "untrusted": true, "hostname": true, "invalid": true, "pin_mismatch": true}
+
+// certRefusal words a refused certificate of a listener.
+func certRefusal(who, class string) string {
+	if class == "expired" {
+		return who + " has an expired certificate"
+	}
+	return who + " has a certificate that failed verification (" + class + ")"
+}
+
+// certificateEvidence is ok only when a recent probe of each listener completed a
+// handshake that accepted the certificate, and that certificate has not run out since:
+// the gateway (by the gateway probe) and the agent endpoint (by its self-probe). A
+// certificate the probe refused is failed, because an agent would refuse it too, however
+// fresh the expiry on file is. C04 reports the same self-probe on the agent_api row and
+// returns before C05, so no banner corrects this row: it has to judge the run itself.
 func (f healthFacts) certificateEvidence() (status, detail string, at *time.Time) {
-	var missing []string
+	var refused, missing []string
 	var oldest time.Time
 	note := func(t time.Time) {
 		if oldest.IsZero() || t.Before(oldest) {
 			oldest = t
 		}
 	}
+	refuse := func(reason string, t time.Time) {
+		refused = append(refused, reason)
+		note(t)
+	}
 	g := f.Probes.Gateway
 	switch {
-	case !f.Probes.Wired || g == nil || g.Unconfigured != "" || g.LastRunAt == 0 || g.CertNotAfter == 0:
+	case !f.Probes.Wired || g == nil || g.Unconfigured != "" || g.LastRunAt == 0:
 		missing = append(missing, "the gateway")
-	case f.Now.Sub(millisTime(g.LastRunAt)) > f.probeStale() || g.LastOKAt != g.LastRunAt:
-		missing = append(missing, "the gateway (its latest probe is stale or failed, so it read no certificate)")
+	case f.Now.Sub(millisTime(g.LastRunAt)) > f.probeStale():
+		missing = append(missing, "the gateway (its latest probe is stale, so it is not evidence of now)")
+	case g.LastOKAt != g.LastRunAt && certRefusalClasses[g.LastErrorClass]:
+		refuse(certRefusal("the gateway", g.LastErrorClass), millisTime(g.LastRunAt))
+	case g.LastOKAt != g.LastRunAt:
+		missing = append(missing, "the gateway (its latest probe failed, so it read no certificate)")
+	case g.CertNotAfter == 0:
+		missing = append(missing, "the gateway")
+	case !f.Now.Before(millisTime(g.CertNotAfter)):
+		refuse(certRefusal("the gateway", "expired"), millisTime(g.LastRunAt))
 	default:
 		note(millisTime(g.LastRunAt))
 	}
 	e := f.Endpoint
 	switch {
-	case !f.EndpointWired || !e.Runs || !e.Known || e.Last.NotAfter.IsZero():
+	case !f.EndpointWired || !e.Runs || !e.Known:
 		missing = append(missing, "the agent listener")
 	case f.Now.Sub(e.Last.At) > f.endpointStale():
 		missing = append(missing, "the agent listener (its self-probe is stale)")
+	case !e.Last.OK && e.Last.Stage == probe.StageCertExpired:
+		refuse(certRefusal("the agent listener", "expired"), e.Last.At)
+	case !e.Last.OK && e.Last.Stage == probe.StageTLS && !e.Last.NotAfter.IsZero():
+		refuse(certRefusal("the agent listener", e.Last.Class), e.Last.At)
+	case e.Last.NotAfter.IsZero():
+		missing = append(missing, "the agent listener")
+	case !f.Now.Before(e.Last.NotAfter):
+		refuse(certRefusal("the agent listener", "expired"), e.Last.At)
 	default:
 		note(e.Last.At)
 	}
-	if len(missing) > 0 {
+	switch {
+	case len(refused) > 0:
+		return statusFailed, strings.Join(refused, "; "), ptrTime(oldest)
+	case len(missing) > 0:
 		return statusNotChecked, "no certificate expiry was read recently from " + strings.Join(missing, " or "), nil
 	}
 	return statusOK, "", ptrTime(oldest)
@@ -504,8 +553,16 @@ func (f healthFacts) digestEvidence() (status, detail string, at *time.Time) {
 	case d.LastSentAt == 0:
 		return statusNotChecked, "no daily digest has been sent yet", nil
 	}
-	return statusOK, "", ptrTime(millisTime(d.LastSentAt))
+	last := millisTime(d.LastSentAt)
+	if age := f.Now.Sub(last); age > digestStale {
+		return statusWarn, "no daily digest has been sent for " + strconv.Itoa(int(age/time.Hour)) + " h", ptrTime(last)
+	}
+	return statusOK, "", ptrTime(last)
 }
+
+// digestStale is how old the newest digest may be: two daily sends and an hour. C14 names
+// a missed send sooner, from the configured time; this row holds without it.
+const digestStale = 49 * time.Hour
 
 // selfBackupEvidence judges the database's own backup. Its failures raise C11, on the database row.
 func (f healthFacts) selfBackupEvidence() (status, detail string, at *time.Time) {
@@ -530,10 +587,10 @@ func (f healthFacts) selfBackupEvidence() (status, detail string, at *time.Time)
 	return statusOK, "", ptrTime(last)
 }
 
-// jobsEvidence is ok only when every job has a finished run and none is failing or
-// overdue. A job with no finished run counts against the row: not_checked inside
-// jobsFirstRunGrace of this console's start, a warning after it (or at once when the
-// start is unknown).
+// jobsEvidence is ok only when every job registered in this process has a finished run
+// and none is failing or overdue. A job with no finished run counts against the row: not_checked
+// while its first run is in progress or inside jobsFirstRunGrace of this console's start, a
+// warning after it (or at once when the start is unknown).
 func (f healthFacts) jobsEvidence() (status, detail string) {
 	failing, overdue := 0, 0
 	for _, jb := range f.Jobs {
@@ -549,44 +606,67 @@ func (f healthFacts) jobsEvidence() (status, detail string) {
 	switch {
 	case failing > 0 || overdue > 0:
 		return statusWarn, jobSummary(failing, overdue)
-	case never > 0 && young:
-		return statusNotChecked, strconv.Itoa(never) + " registered job(s) have not finished a first run yet"
-	case never > 0:
+	case never > 0 && !young:
 		return statusWarn, strconv.Itoa(never) + " registered job(s) have never run: " + strings.Join(f.NeverRun, ", ")
+	case never > 0 || len(f.FirstRunning) > 0:
+		return statusNotChecked, strconv.Itoa(never+len(f.FirstRunning)) + " registered job(s) have not finished a first run yet"
 	case len(f.Jobs) == 0:
 		return statusNotChecked, "no job has run yet"
 	}
 	return statusOK, ""
 }
 
-// neverRunJobs names the jobs with no finished run, in the order given: a row with
-// no status (the table's never_run) that is not running now, and a registered job with no row.
-func neverRunJobs(names []string, rows []store.JobState, now time.Time) []string {
-	var out []string
+// unfinishedJobs names the registered jobs with no finished run: never, for a row with no
+// status (the table's never_run) that is not running now and a job with no row; running,
+// for a row with no status whose first run holds the lease now.
+func unfinishedJobs(names []string, rows []store.JobState, now time.Time) (never, running []string) {
 	seen := map[string]bool{}
 	for _, j := range rows {
 		seen[j.Name] = true
-		if j.LastStatus == "" && !jobRunning(j, now) {
-			out = append(out, j.Name)
+		if j.LastStatus == "" {
+			if jobRunning(j, now) {
+				running = append(running, j.Name)
+			} else {
+				never = append(never, j.Name)
+			}
 		}
 	}
 	for _, n := range names {
 		if !seen[n] {
-			out = append(out, n)
+			never = append(never, n)
 		}
 	}
-	return out
+	return never, running
 }
+
+// clockEvidence says what C13 judged from, in the scope of this request: the same World and
+// the same state.ReportingDevices. For a scoped account that is its own customers' devices, so
+// the row says so, and no number from outside them reaches it.
+func (f healthFacts) clockEvidence() (status, detail string) {
+	n, least := strconv.Itoa(f.ReportingDevices), strconv.Itoa(state.ClockSuspectMinDevices)
+	switch enough := f.ReportingDevices >= state.ClockSuspectMinDevices; {
+	case !enough && f.Scoped:
+		return statusNotApplicable, "needs at least " + least + " devices reporting among those this account can see; " + n + " report here"
+	case !enough:
+		return statusNotApplicable, "needs at least " + least + " devices reporting to compare clocks; " + n + " report now"
+	case f.Scoped:
+		return statusOK, "compared with the " + n + " reporting devices this account can see"
+	}
+	return statusOK, "compared with " + n + " reporting devices"
+}
+
+// statusRank orders the statuses from no concern to the worst. A check this build does not
+// run, or that cannot apply here, ranks with ok: neither is a concern.
+var statusRank = map[string]int{statusOK: 0, statusNotInBuild: 0, statusNotApplicable: 0, statusNotChecked: 1, statusWarn: 2, statusFailed: 3}
 
 // overallOf is the worst component: failed, then warn, then not_checked. A check
 // this build does not run (not_in_build), or that cannot apply here
 // (not_applicable), does not count against it; not_checked for anything else does,
 // because a row with no evidence is not being monitored.
 func overallOf(cs []SystemComponentJSON) string {
-	rank := map[string]int{statusOK: 0, statusNotInBuild: 0, statusNotApplicable: 0, statusNotChecked: 1, statusWarn: 2, statusFailed: 3}
 	overall := statusOK
 	for _, c := range cs {
-		if rank[c.Status] > rank[overall] {
+		if statusRank[c.Status] > statusRank[overall] {
 			overall = c.Status
 		}
 	}
@@ -655,6 +735,10 @@ func buildComponents(f healthFacts) []SystemComponentJSON {
 				switch {
 				case sm.ConsecutiveSendFailures > 0:
 					status, detail = statusWarn, "the latest alert e-mail send failed"
+				case sm.LastTestFailed:
+					status, detail = statusWarn, "the latest test e-mail failed"
+				case sm.PendingAlerts > 0 && (sm.LastSendOKAt == 0 || f.Now.Sub(millisTime(sm.LastSendOKAt)) > state.SMTPPendingWithoutSend):
+					status, detail = statusWarn, "alert e-mail is waiting to go out and none has been delivered recently"
 				case status == statusNotChecked && recentSend && sm.Probe.Unconfigured == "":
 					status, detail, c.CheckedAt = statusOK, "", ptrTime(millisTime(sm.LastSendOKAt)) // a recent delivery is evidence
 				}
@@ -676,40 +760,48 @@ func buildComponents(f healthFacts) []SystemComponentJSON {
 		case "maintenance_worker":
 			status, detail, c.CheckedAt = f.workerEvidence()
 		case "database":
-			if f.SchemaErr != nil {
+			switch d := f.Probes.Database; {
+			case f.SchemaErr != nil:
 				status, detail = statusFailed, "the database did not answer"
-			} else {
+			case d != nil && d.IntegrityCheckedAt != 0 && !d.IntegrityOK:
+				status, detail = statusFailed, "the latest integrity check failed"
+			case d != nil && d.WorkerStoreFailures != 0:
+				status, detail = statusWarn, "the maintenance worker could not read or write this database on its latest storage probes"
+			default:
 				status, detail = statusOK, ""
 			}
 		case "evaluator":
 			status, detail, c.CheckedAt = f.evaluatorEvidence()
 		case "master_key":
-			switch {
+			switch m := f.Probes.MasterKey; {
 			case !f.MasterKeyWired:
 				status, detail = statusNotChecked, "the master key state is not reported"
-			case !f.MasterKeyLoaded:
+			case !f.MasterKeyLoaded || (m != nil && !m.Loaded):
 				status, detail = statusFailed, "the master key is not loaded"
+			case m != nil && slices.ContainsFunc(m.EscrowKeyIDs, func(id string) bool { return id != m.KeyID }):
+				status, detail = statusFailed, "an escrowed repository key is wrapped under another master key"
 			default:
 				status, detail = statusOK, ""
 			}
 		case "clock":
-			if f.ReportingDevices < clockMinReporting {
-				status, detail = statusNotApplicable, "needs at least 5 devices reporting to compare clocks; "+strconv.Itoa(f.ReportingDevices)+" report now"
-			} else {
-				status, detail = statusOK, ""
-			}
+			status, detail = f.clockEvidence()
 		case "fleet_data":
-			if !f.Complete {
+			switch {
+			case !f.Complete:
 				status, detail = statusWarn, "the facts load was incomplete"
-			} else {
+			case f.FirstRun:
+				status, detail = statusNotApplicable, noDevicesYet
+			default:
 				status, detail = statusOK, ""
 			}
 		case "jobs":
 			status, detail = f.jobsEvidence()
 		}
 		switch {
-		case worst != "":
+		case worst != "" && statusRank[worst] >= statusRank[status]:
 			status, detail = worst, ""
+		case worst != "":
+			// A weaker banner beside a worse fact: "not checked" does not soften a refused certificate.
 		case status == statusOK && notWired:
 			status, detail = statusNotChecked, "console self-checks are not wired (C00): this is not being monitored"
 		}
@@ -728,18 +820,21 @@ func (s *Service) systemHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	facts := healthFacts{Banners: f.View.Banners, Now: f.Computed, Complete: f.View.Complete, EndpointWired: s.Fleet.Endpoint != nil,
-		MasterKeyWired: s.Fleet.MasterLoaded != nil, Probes: s.Fleet.ProbeFacts(f.Jobs, nil, true)}
+		MasterKeyWired: s.Fleet.MasterLoaded != nil, Probes: s.Fleet.ProbeFacts(f.Jobs, nil, true),
+		ReportingDevices: f.Reporting, Scoped: !p.Scope.All, FirstRun: f.View.FirstRun}
 	facts.MasterKeyLoaded = facts.MasterKeyWired && s.Fleet.MasterLoaded()
+	var names []string
+	if s.Jobs != nil {
+		names = s.Jobs.Names()
+	}
 	for _, j := range f.Jobs {
-		if isJob(j.Name) { // the prober's rows and the evaluator's marker are not jobs (the table lists the same set)
+		// Only what this process runs. The prober's rows and the evaluator's marker are not jobs; a row
+		// left by a job no longer registered, and the maintenance scheduler (the worker's row judges it), say nothing here.
+		if isJob(j.Name) && slices.Contains(names, j.Name) {
 			facts.Jobs = append(facts.Jobs, j)
 		}
 	}
-	if s.Jobs != nil {
-		facts.NeverRun = neverRunJobs(s.Jobs.Names(), facts.Jobs, f.Computed)
-	} else {
-		facts.NeverRun = neverRunJobs(nil, facts.Jobs, f.Computed)
-	}
+	facts.NeverRun, facts.FirstRunning = unfinishedJobs(names, facts.Jobs, f.Computed)
 	var worker *Worker
 	if s.Backend != nil {
 		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -764,17 +859,34 @@ func (s *Service) systemHealth(w http.ResponseWriter, r *http.Request) {
 	facts.SchemaErr = serr
 	facts.EvaluatorLast, _ = f.JobStatus(health.EvaluatorJob)
 	facts.SchedulerLast, _ = f.JobStatus(health.SchedulerJob)
-	for _, d := range f.View.Devices {
-		// Unseen as a flag too: a device that is primarily STALE or FAILED can be silent as well, and its offset is old.
-		if d.Primary != state.StateRetired && d.Primary != state.StatePaused && !slices.Contains(d.Flags, state.StateUnseen) && !d.Detail.LastSeen.IsZero() {
-			facts.ReportingDevices++
-		}
-	}
 	out := SystemHealthResponse{StampJSON: StampJSON{ComputedAt: f.Computed, LoadedAt: f.View.LoadedAt, Complete: f.View.Complete}, Banners: bannersJSON(f.View.Banners),
-		Components: buildComponents(facts)}
+		Components: buildComponents(facts), FirstRun: f.View.FirstRun}
 	out.Overall = overallOf(out.Components)
 	out.Versions = VersionsJSON{Console: buildinfo.Version, Commit: buildinfo.Commit, BuildDate: buildinfo.Date, Schema: schema, Maintain: worker}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// LabHealthy is overall and the rows of a small healthy console, from the same rules as a real
+// answer: every check in this build passing, three devices reporting. Only fixtures mode's
+// lab view shows it (/fixtures?health=ok): the fictional fleet raises real conditions and
+// has more than five devices, so these states can be seen no other way.
+func LabHealthy(now time.Time) (overall string, rows []SystemComponentJSON) {
+	at := func(d time.Duration) state.Millis { return state.Millis(now.Add(-d).UnixMilli()) }
+	ok := func() state.ProbeRun {
+		return state.ProbeRun{LastRunAt: at(20 * time.Second), LastOKAt: at(20 * time.Second)}
+	}
+	gw, st := ok(), ok()
+	gw.CertNotAfter = state.Millis(now.Add(365 * 24 * time.Hour).UnixMilli())
+	good := &state.JobFacts{LastFinishedAt: at(time.Minute)}
+	rows = buildComponents(healthFacts{Now: now, Complete: true, EndpointWired: true, WorkerPinged: true, WorkerReachable: true, MaintainKnown: true, MaintainReachable: true,
+		EvaluatorLast: store.JobState{LastStatus: "ok"}, SchedulerLast: store.JobState{LastStatus: "ok"}, MasterKeyWired: true, MasterKeyLoaded: true, ReportingDevices: 3,
+		Jobs: []store.JobState{{Name: "lab", LastStatus: "ok"}},
+		Probes: state.ProbeFacts{Wired: true, Gateway: &gw, Storage: &st, SMTP: &state.SMTPFacts{Probe: ok()}, Evaluator: good,
+			Maintain: &state.MaintainFacts{RPC: ok(), Scheduler: good}, Database: &state.DatabaseFacts{SelfBackup: &state.SelfBackupFacts{NotInBuild: true}},
+			Digest: &state.DigestFacts{NotInBuild: true}, Quota: &state.QuotaFacts{NotInBuild: true}, Release: &state.ReleaseFacts{NotInBuild: true}},
+		Endpoint: probe.Status{Runs: true, Known: true, Interval: time.Minute, Last: probe.Result{At: now.Add(-20 * time.Second), OK: true, NotAfter: now.Add(365 * 24 * time.Hour)}},
+	})
+	return overallOf(rows), rows
 }
 
 func jobSummary(failing, overdue int) string {
@@ -815,10 +927,22 @@ func jobRunning(j store.JobState, now time.Time) bool {
 	return j.LeaseHolder != "" && j.LeaseUntil != nil && j.LeaseUntil.After(now)
 }
 
-// jobOverdue: a job whose next run was due more than a minute ago and which is
-// not running now.
+// overdueMargin is what a job may run late beyond the runner's jitter: the timer firing
+// under load and the wait for the store.
+const overdueMargin = time.Minute
+
+// jobOverdue: a job whose next run is later than the runner can make it and which is not
+// running now. The row holds the job's real schedule: RunOnce records the next due time as the
+// finish plus the period, and the runner then fires up to jobs.MaxJitter of that period after it.
 func jobOverdue(j store.JobState, now time.Time) bool {
-	return j.NextDueAt != nil && now.Sub(*j.NextDueAt) > time.Minute && !jobRunning(j, now)
+	if j.NextDueAt == nil || jobRunning(j, now) {
+		return false
+	}
+	var every time.Duration
+	if j.LastFinishedAt != nil {
+		every = j.NextDueAt.Sub(*j.LastFinishedAt)
+	}
+	return now.Sub(*j.NextDueAt) > jobs.MaxJitter(every)+overdueMargin
 }
 
 func (s *Service) systemJobs(w http.ResponseWriter, r *http.Request) {
@@ -842,7 +966,8 @@ func (s *Service) systemJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[j.Name] = true
 		row := JobJSON{Name: j.Name, Registered: registered[j.Name], Status: j.LastStatus, LastStartedAt: j.LastStartedAt, LastFinishedAt: j.LastFinishedAt,
-			LastDurationMS: j.LastDurationMS, LastErrorClass: j.LastErrorClass, RunCount: j.RunCount, NextDueAt: j.NextDueAt, Running: jobRunning(j, now), Overdue: jobOverdue(j, now)}
+			LastDurationMS: j.LastDurationMS, LastErrorClass: j.LastErrorClass, RunCount: j.RunCount, NextDueAt: j.NextDueAt, Running: jobRunning(j, now),
+			Overdue: (registered[j.Name] || j.Name == health.SchedulerJob) && jobOverdue(j, now)} // nothing will run a job no longer scheduled, so it is not late
 		if row.Status == "" {
 			row.Status = "never_run"
 		}

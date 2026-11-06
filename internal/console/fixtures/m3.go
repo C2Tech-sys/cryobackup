@@ -59,6 +59,19 @@ func AllBanners(now time.Time) []state.Banner {
 	return out
 }
 
+// ---- the healthy console, on request ----
+
+var healthyView atomic.Bool
+
+// SetHealthyView turns the "show a healthy console" view of the System page on or off. Like
+// SetAllBanners it is a process-wide switch of fixtures mode, exposed at /fixtures. The fictional
+// fleet raises real conditions and has more than five devices, so overall OK and a not_applicable
+// row can be seen no other way. ui reads it only in fixtures mode.
+func SetHealthyView(on bool) { healthyView.Store(on) }
+
+// HealthyViewOn reports whether the switch is on.
+func HealthyViewOn() bool { return healthyView.Load() }
+
 // ---- jobs ----
 
 // JobNames are the fictional background jobs of fixtures mode. The pages' job runner for them is

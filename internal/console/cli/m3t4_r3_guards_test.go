@@ -62,7 +62,12 @@ func TestR3ARealConsoleHasNoFixturesRouteAndNoBannerSwitch(t *testing.T) { // M3
 			t.Errorf("the fixtures banner %s shows on a real console: %s", b.ID, b.Text)
 		}
 	}
+	fixtures.SetHealthyView(true)
+	t.Cleanup(func() { fixtures.SetHealthyView(false) })
 	page := func() string { _, b := c.do("GET", "/system", nil); return b }()
+	if strings.Contains(page, "Fixtures view") {
+		t.Error("the fixtures healthy view shows on a real console's system page")
+	}
 	if strings.Contains(page, "SELF-CHECKS NOT WIRED") || strings.Contains(page, "RELEASE MANIFEST REJECTED") {
 		t.Error("the fixtures banners show on a real console's system page")
 	}

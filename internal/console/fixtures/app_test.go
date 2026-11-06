@@ -99,7 +99,7 @@ func (c *client) login(pw string) {
 }
 
 func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
-	t.Cleanup(func() { fixtures.SetAllBanners(false) })
+	t.Cleanup(func() { fixtures.SetAllBanners(false); fixtures.SetHealthyView(false) })
 	ctx := context.Background()
 	cfg := config.Default()
 	cfg.Resolve()
@@ -199,6 +199,26 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 	// every banner, on request, on every page
 	if strings.Contains(sys, "RELEASE MANIFEST NOT CHECKED") && !fixtures.AllBannersOn() {
 		t.Log("a not-checked banner is raised by the fixtures fleet itself")
+	}
+	// the healthy console, on request: overall OK and a row that cannot apply
+	if strings.Contains(sys, "NOT APPLICABLE") {
+		t.Error("the fictional fleet has enough devices: not_applicable shows only through the switch")
+	}
+	c.page("/fixtures?health=ok")
+	calm := c.page("/system")
+	if !regexp.MustCompile(`id="sys-h" class="sys-title">Overall</h2><span class="st ok"><i aria-hidden="true"></i>OK<`).MatchString(calm) {
+		t.Error("the fixtures switch does not show overall OK")
+	}
+	for _, s := range []string{"NOT APPLICABLE", "NOT IN THIS BUILD", "Fixtures view"} {
+		if !strings.Contains(calm, s) {
+			t.Errorf("the healthy view lacks %q", s)
+		}
+	}
+	if strings.Contains(calm, "ALARM") || strings.Contains(calm, "EXPIRING") {
+		t.Error("the banner strip contradicts the healthy view")
+	}
+	if strings.Contains(c.page("/fixtures?health=real"), "HEALTHY VIEW ON") || strings.Contains(c.page("/system"), "Fixtures view") {
+		t.Error("the healthy view does not turn off")
 	}
 	c.page("/fixtures?banners=all")
 	all := c.page("/system")

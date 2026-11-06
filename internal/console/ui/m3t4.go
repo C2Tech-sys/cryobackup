@@ -508,12 +508,20 @@ func fixturesM3Patterns() []string { return []string{patFixtures} }
 // page and in the system health rows, so each one can be looked at. The fleet is
 // fictional, so the banners claim nothing about a real console. ?banners=all turns
 // it on, ?banners=off turns it off; it changes nothing but what the pages show.
+// ?health=ok and ?health=real do the same for the System page's healthy view, the
+// one way to see overall OK and a not_applicable row on this fleet (adminapi.LabHealthy).
 func (s *Service) fixturesPage(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Query().Get("banners") {
 	case "all":
 		fixtures.SetAllBanners(true)
 	case "off":
 		fixtures.SetAllBanners(false)
+	}
+	switch r.URL.Query().Get("health") {
+	case "ok":
+		fixtures.SetHealthyView(true)
+	case "real":
+		fixtures.SetHealthyView(false)
 	}
 	p := principal(r)
 	fleet, ok := s.fleetFor(w, r, p, "Fixtures")
@@ -522,8 +530,8 @@ func (s *Service) fixturesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	pg := struct {
 		Page
-		On bool
-	}{s.page(r.Context(), p, fleet, "Fixtures mode", "fixtures", ""), fixtures.AllBannersOn()}
+		On, Healthy bool
+	}{s.page(r.Context(), p, fleet, "Fixtures mode", "fixtures", ""), fixtures.AllBannersOn(), fixtures.HealthyViewOn()}
 	s.render(w, r, http.StatusOK, "fixtures", "base", pg)
 }
 

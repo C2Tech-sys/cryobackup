@@ -1931,7 +1931,7 @@ paths:
       operationId: getSystemHealth
       tags: [system]
       summary: Probe results and versions
-      description: Gateway, storage, storage quota, alert e-mail, daily digest, certificates, agent API, maintenance worker, database, database self-backup, alarm evaluator, master key, jobs, fleet data, clock and release manifest. Every banner the engine can raise, its "not checked" (b) variants included, maps to a row. A component is `ok` only when none of its banners is raised and there is evidence that it passed, not merely that it ran; while C00 (self-checks not wired) is raised no row is `ok`. `not_in_build` is a check this build does not run (release manifest, storage quota, daily digest, database self-backup, until the job that produces each one exists) and `not_applicable` one that cannot apply to this console as it stands (the clock needs at least 5 reporting devices; no storage target has a quota; the digest is turned off). Each says why in `detail`. `overall` is the worst component, in the order failed, warn, not_checked; `not_in_build` and `not_applicable` do not count against it, so `overall` can be `ok` beside them. `not_checked` for anything else always blocks `ok`. A registered job with no finished run counts against the jobs row, `not_checked` for 5 minutes after the console starts and `warn` after that.
+      description: Gateway, storage, storage quota, alert e-mail, daily digest, certificates, agent API, maintenance worker, database, database self-backup, alarm evaluator, master key, jobs, fleet data, clock and release manifest. Every banner the engine can raise, its "not checked" (b) variants included, maps to a row. A component is `ok` only when none of its banners is raised and there is evidence that it passed, not merely that it ran; while C00 (self-checks not wired) is raised no row is `ok`. `not_in_build` is a check this build does not run (release manifest, storage quota, daily digest, database self-backup, until the job that produces each one exists) and `not_applicable` one that cannot apply to this console as it stands (the clock needs at least 5 reporting devices; no storage target has a quota; the digest is turned off). Each says why in `detail`. `overall` is the worst component, in the order failed, warn, not_checked; `not_in_build` and `not_applicable` do not count against it, so `overall` can be `ok` beside them. `not_checked` for anything else always blocks `ok`. The certificates row is `failed`, with the reason, for a certificate a probe refused (expired, untrusted, wrong host, wrong pin) or one that has run out since. The clock row counts the reporting devices the engine judged C13 from, in the caller's scope, and says so. The jobs row judges only jobs registered in this process: a registered job with no finished run counts against it, `not_checked` while its first run is in progress or for 5 minutes after the console starts and `warn` after that, and a job is overdue only past the runner's jitter (10 % of its period) and a minute. `first_run` is true on a console that has never enrolled a device; `fleet_data` is then `not_applicable` and says nothing is being backed up.
       x-min-role: RO
       responses:
         '200':
@@ -1945,7 +1945,7 @@ paths:
       operationId: listJobs
       tags: [system]
       summary: Job table
-      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`. The health-prober's probe lease and per-probe result rows (`health-prober.*`) are not jobs and are not listed; the probe results are the system health rows.
+      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`. A row with `registered` false is a job this process does not run, usually one no longer scheduled, which is never `overdue` and never counts against system health; the exception is `maintenance-scheduler`, which runs in the maintenance worker and is judged by the maintenance_worker row. The health-prober's probe lease and per-probe result rows (`health-prober.*`) are not jobs and are not listed; the probe results are the system health rows.
       x-min-role: AD
       responses:
         '200':
@@ -3831,6 +3831,7 @@ components:
         - type: object
           required: [overall, components, banners, versions]
           properties:
+            first_run: {type: boolean}
             overall: {type: string, enum: [ok, not_checked, warn, failed]}
             components:
               type: array
