@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,8 +18,10 @@ import (
 func ms(t time.Time) state.Millis { return state.Millis(t.UnixMilli()) }
 
 // fullEvidence is a console with every piece of evidence and no banner: every
-// probe ran 20 s ago and passed, both listeners' certificates were read, the
-// release check ran, the worker answered, the evaluator and a job ran.
+// probe ran 20 s ago and passed, both listeners' certificates were read, the worker
+// answered and its scheduler passed, the evaluator's newest evaluation passed and a
+// job ran. It holds only what this build can produce: the four checks whose producer
+// is a later milestone carry their NotInBuild marker, as health.ProbeFacts supplies them.
 func fullEvidence(now time.Time, ran, next *time.Time) healthFacts {
 	ok := func() state.ProbeRun {
 		return state.ProbeRun{LastRunAt: ms(now.Add(-20 * time.Second)), LastOKAt: ms(now.Add(-20 * time.Second))}
@@ -26,13 +29,19 @@ func fullEvidence(now time.Time, ran, next *time.Time) healthFacts {
 	gw, st := ok(), ok()
 	gw.CertNotAfter = ms(now.Add(90 * 24 * time.Hour))
 	return healthFacts{Now: now, Complete: true, EndpointWired: true, WorkerPinged: true, WorkerReachable: true, MaintainKnown: true, MaintainReachable: true,
-		EvaluatorRanAt: ran, MasterKeyWired: true, ReportingDevices: 9,
+		EvaluatorLast: store.JobState{LastStatus: "ok"}, SchedulerLast: store.JobState{LastStatus: "ok"}, MasterKeyWired: true, MasterKeyLoaded: true, ReportingDevices: 9,
 		Jobs: []store.JobState{{Name: "j", LastStatus: "ok", NextDueAt: next}},
 		Probes: state.ProbeFacts{Wired: true, Gateway: &gw, Storage: &st, SMTP: &state.SMTPFacts{Probe: ok()},
-			Release: &state.ReleaseFacts{CheckedAt: ms(now.Add(-time.Minute))}},
+			Evaluator: &state.JobFacts{LastFinishedAt: ms(*ran)},
+			Maintain:  &state.MaintainFacts{RPC: ok(), Scheduler: &state.JobFacts{LastFinishedAt: ms(*ran)}},
+			Database:  &state.DatabaseFacts{SelfBackup: &state.SelfBackupFacts{NotInBuild: true}},
+			Digest:    &state.DigestFacts{NotInBuild: true}, Quota: &state.QuotaFacts{NotInBuild: true}, Release: &state.ReleaseFacts{NotInBuild: true}},
 		Endpoint: probe.Status{Runs: true, Known: true, Interval: time.Minute, Last: probe.Result{At: now.Add(-20 * time.Second), OK: true, NotAfter: now.Add(60 * 24 * time.Hour)}},
 	}
 }
+
+// fullEvidenceNotInBuild are the rows fullEvidence leaves not_in_build.
+var fullEvidenceNotInBuild = []string{"release_manifest", "storage_quota", "digest", "self_backup"}
 
 func rowsOf(f healthFacts) map[string]SystemComponentJSON {
 	out := map[string]SystemComponentJSON{}
@@ -70,10 +79,18 @@ func TestSystemHealthNeverSaysOKWithoutFacts(t *testing.T) {
 func TestSystemHealthEachRowNeedsItsOwnEvidence(t *testing.T) {
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	ran, next := now.Add(-time.Minute), now.Add(time.Hour)
-	for id, c := range rowsOf(fullEvidence(now, &ran, &next)) {
-		if c.Status != statusOK {
-			t.Fatalf("control: with every piece of evidence %s = %+v", id, c)
+	full := fullEvidence(now, &ran, &next)
+	for id, c := range rowsOf(full) {
+		want := statusOK
+		if slices.Contains(fullEvidenceNotInBuild, id) {
+			want = statusNotInBuild
 		}
+		if c.Status != want {
+			t.Fatalf("control: with every piece of evidence this build can produce, %s = %+v, want %s", id, c, want)
+		}
+	}
+	if got := overallOf(buildComponents(full)); got != statusOK {
+		t.Fatalf("control: overall = %s", got)
 	}
 	long := func(d time.Duration) state.Millis { return ms(now.Add(-d)) }
 	type mut = func(*healthFacts)
@@ -129,12 +146,38 @@ func TestSystemHealthEachRowNeedsItsOwnEvidence(t *testing.T) {
 			f.Endpoint.Failures = 1
 		}},
 		// release manifest
-		{"release_manifest", statusNotChecked, "release-check is not in the build", func(f *healthFacts) { f.Probes.Release = &state.ReleaseFacts{NotInBuild: true} }},
-		{"release_manifest", statusNotChecked, "not in the build, whatever CheckedAt says", func(f *healthFacts) {
+		{"release_manifest", statusNotInBuild, "not in the build, whatever CheckedAt says", func(f *healthFacts) {
 			f.Probes.Release = &state.ReleaseFacts{NotInBuild: true, CheckedAt: ms(now.Add(-time.Minute))}
 		}},
 		{"release_manifest", statusNotChecked, "no release facts", func(f *healthFacts) { f.Probes.Release = nil }},
 		{"release_manifest", statusNotChecked, "release-check never ran", func(f *healthFacts) { f.Probes.Release = &state.ReleaseFacts{} }},
+		{"release_manifest", statusNotChecked, "release-check stopped running", func(f *healthFacts) {
+			f.Probes.Release = &state.ReleaseFacts{CheckedAt: ms(now.Add(-state.ReleaseCheckMaxAge - time.Minute))}
+		}},
+		{"release_manifest", statusWarn, "ran, and rejected a manifest", func(f *healthFacts) {
+			f.Probes.Release = &state.ReleaseFacts{CheckedAt: ms(now.Add(-time.Minute)), Rejected: true}
+		}},
+		// the other checks a later milestone produces
+		{"storage_quota", statusNotChecked, "no usage facts", func(f *healthFacts) { f.Probes.Quota = nil }},
+		{"storage_quota", statusNotApplicable, "in the build, and no target has a quota", func(f *healthFacts) { f.Probes.Quota = &state.QuotaFacts{} }},
+		{"storage_quota", statusNotChecked, "in the build, a target never measured", func(f *healthFacts) {
+			f.Probes.Quota = &state.QuotaFacts{WithQuota: 1, Targets: []state.TargetUsage{{SoftQuotaBytes: 10}}}
+		}},
+		{"storage_quota", statusNotChecked, "in the build, a target's usage row is missing", func(f *healthFacts) { f.Probes.Quota = &state.QuotaFacts{WithQuota: 1} }},
+		{"storage_quota", statusNotChecked, "in the build, measured too long ago", func(f *healthFacts) {
+			f.Probes.Quota = &state.QuotaFacts{WithQuota: 1, Targets: []state.TargetUsage{{SoftQuotaBytes: 10, MeasuredAt: ms(now.Add(-state.QuotaMeasureMaxAge - time.Hour))}}}
+		}},
+		{"digest", statusNotChecked, "no digest facts", func(f *healthFacts) { f.Probes.Digest = nil }},
+		{"digest", statusNotApplicable, "in the build, and turned off", func(f *healthFacts) { f.Probes.Digest = &state.DigestFacts{Disabled: true} }},
+		{"digest", statusNotChecked, "in the build, none sent yet", func(f *healthFacts) { f.Probes.Digest = &state.DigestFacts{} }},
+		{"self_backup", statusNotChecked, "no database facts", func(f *healthFacts) { f.Probes.Database = nil }},
+		{"self_backup", statusNotChecked, "in the build, none written", func(f *healthFacts) { f.Probes.Database = &state.DatabaseFacts{SelfBackup: &state.SelfBackupFacts{}} }},
+		{"self_backup", statusFailed, "in the build, its tested restore failed", func(f *healthFacts) {
+			f.Probes.Database = &state.DatabaseFacts{SelfBackup: &state.SelfBackupFacts{LastAt: ms(now.Add(-time.Hour)), VerifyFailed: true}}
+		}},
+		{"self_backup", statusWarn, "in the build, too old", func(f *healthFacts) {
+			f.Probes.Database = &state.DatabaseFacts{SelfBackup: &state.SelfBackupFacts{LastAt: ms(now.Add(-state.DBSelfBackupMaxAge - time.Hour))}}
+		}},
 		// worker
 		{"maintenance_worker", statusNotChecked, "never probed", func(f *healthFacts) {
 			f.WorkerPinged, f.WorkerReachable, f.MaintainKnown, f.MaintainReachable = false, false, false, false
@@ -143,11 +186,28 @@ func TestSystemHealthEachRowNeedsItsOwnEvidence(t *testing.T) {
 			f.WorkerPinged, f.WorkerReachable, f.MaintainReachable = false, false, false
 		}},
 		{"maintenance_worker", statusFailed, "the ping failed", func(f *healthFacts) { f.WorkerReachable = false }},
+		{"maintenance_worker", statusWarn, "answers, and the scheduler's last pass failed", func(f *healthFacts) { f.SchedulerLast.LastStatus = "error" }},
+		{"maintenance_worker", statusNotChecked, "answers, and the scheduler never finished", func(f *healthFacts) { f.Probes.Maintain = &state.MaintainFacts{} }},
+		{"maintenance_worker", statusNotChecked, "answers, and the scheduler stopped", func(f *healthFacts) {
+			f.Probes.Maintain = &state.MaintainFacts{Scheduler: &state.JobFacts{LastFinishedAt: long(state.MaintenanceSchedulerStale + time.Minute)}}
+		}},
+		// the evaluator: the newest run, then the newest good run
+		{"evaluator", statusNotChecked, "no evaluator facts", func(f *healthFacts) { f.Probes.Evaluator = nil }},
+		{"evaluator", statusNotChecked, "never a good evaluation", func(f *healthFacts) { f.Probes.Evaluator = &state.JobFacts{} }},
+		{"evaluator", statusNotChecked, "no good evaluation for 4 min", func(f *healthFacts) { f.Probes.Evaluator = &state.JobFacts{LastFinishedAt: long(4 * time.Minute)} }},
+		{"evaluator", statusWarn, "the newest run failed, the last good one is fresh", func(f *healthFacts) { f.EvaluatorLast.LastStatus = "error" }},
 		// the rest
-		{"evaluator", statusNotChecked, "never ran", func(f *healthFacts) { f.EvaluatorRanAt = nil }},
 		{"master_key", statusNotChecked, "not reported", func(f *healthFacts) { f.MasterKeyWired = false }},
-		{"clock", statusNotChecked, "too few devices", func(f *healthFacts) { f.ReportingDevices = 4 }},
+		{"master_key", statusFailed, "wired and not loaded", func(f *healthFacts) { f.MasterKeyLoaded = false }},
+		{"clock", statusNotApplicable, "too few devices", func(f *healthFacts) { f.ReportingDevices = 4 }},
 		{"jobs", statusNotChecked, "no job ran", func(f *healthFacts) { f.Jobs = nil }},
+		{"jobs", statusWarn, "a job has never run, past the grace or with no known start", func(f *healthFacts) { f.NeverRun = []string{"x"} }},
+		{"jobs", statusNotChecked, "a job has not run yet, inside the grace", func(f *healthFacts) {
+			f.NeverRun, f.Probes.StartedAt = []string{"x"}, long(jobsFirstRunGrace-time.Second)
+		}},
+		{"jobs", statusWarn, "a job has never run, just past the grace", func(f *healthFacts) {
+			f.NeverRun, f.Probes.StartedAt = []string{"x"}, long(jobsFirstRunGrace+time.Second)
+		}},
 		{"database", statusFailed, "no answer", func(f *healthFacts) { f.SchemaErr = context.DeadlineExceeded }},
 		{"fleet_data", statusWarn, "incomplete load", func(f *healthFacts) { f.Complete = false }},
 	} {
@@ -173,11 +233,10 @@ func TestSystemHealthWithTheGatewayAndAgentHostDownAfterTwelveMinutes(t *testing
 	ran, next := now.Add(-time.Minute), now.Add(time.Hour)
 	f := fullEvidence(now, &ran, &next)
 	f.Probes.Gateway = &state.ProbeRun{LastRunAt: ms(now.Add(-10 * time.Second)), ConsecutiveFailures: 12, LastErrorClass: "nxdomain"}
-	f.Probes.Release = &state.ReleaseFacts{NotInBuild: true}
 	f.Endpoint = probe.Status{Runs: true, Known: true, Interval: time.Minute, Failures: 12, FailingSince: now.Add(-12 * time.Minute),
 		Last: probe.Result{At: now.Add(-10 * time.Second), OK: false, Class: "nxdomain"}}
 	rows := rowsOf(f)
-	for id, want := range map[string]string{"gateway": statusWarn, "agent_api": statusWarn, "certificates": statusNotChecked, "release_manifest": statusNotChecked} {
+	for id, want := range map[string]string{"gateway": statusWarn, "agent_api": statusWarn, "certificates": statusNotChecked, "release_manifest": statusNotInBuild} {
 		if rows[id].Status != want {
 			t.Errorf("%s = %+v, want %s", id, rows[id], want)
 		}

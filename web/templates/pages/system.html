@@ -1,4 +1,4 @@
-{{/* S36 - system health (M3-T4): one row per component, read from the same answer as GET /api/v1/system/health, and the job table (administrators) with Run now. A row reads NOT CHECKED when the console has no evidence for it; it is never OK on silence. */}}
+{{/* S36 - system health (M3-T4): one row per component, read from the same answer as GET /api/v1/system/health, and the job table (administrators) with Run now. A row reads NOT CHECKED when the console has no evidence for it; it is never OK on silence. NOT IN THIS BUILD and NOT APPLICABLE are the API's own statuses for a check that cannot run here, and each row says why. */}}
 {{define "title"}}System health{{end}}
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>System</span></nav>

@@ -24,7 +24,9 @@ import (
 // A component row says "not checked" when the console has no evidence, and
 // never "ok" in that case: the API decides (a banner raised for the row, C00
 // when the console's self-checks are not wired, a probe that has not run) and
-// this page only shows its verdict. "Run now" goes through the same handler
+// this page only shows its verdict. A check this build does not run says "not in
+// this build", and one that cannot apply here "not applicable": neither is health,
+// each row says why, and neither stops overall reading OK. "Run now" goes through the same handler
 // as POST /api/v1/system/jobs/{name}/run, so it writes exactly one audit row,
 // and a run whose audit row cannot be written starts nothing.
 
@@ -96,6 +98,8 @@ type SystemPage struct {
 
 // sysStatusChip maps an API component status to a chip. not_checked is never
 // calm: it is an amber, dashed NOT CHECKED, because no evidence is no health.
+// not_in_build and not_applicable are neutral and dashed: nothing is wrong, and
+// nothing was measured either, so they are not the green of OK.
 func sysStatusChip(id, status string) Chip {
 	switch status {
 	case "ok":
@@ -106,6 +110,10 @@ func sysStatusChip(id, status string) Chip {
 		return Chip{ID: id, Label: "FAILED", Class: ClassCrit}
 	case "not_checked":
 		return Chip{ID: id, Label: "NOT CHECKED", Class: ClassWarn, Dashed: true}
+	case "not_in_build":
+		return Chip{ID: id, Label: "NOT IN THIS BUILD", Class: ClassNeutral, Dashed: true}
+	case "not_applicable":
+		return Chip{ID: id, Label: "NOT APPLICABLE", Class: ClassNeutral, Dashed: true}
 	}
 	return Chip{ID: id, Label: "UNKNOWN", Class: ClassCrit, Dashed: true}
 }
@@ -138,6 +146,9 @@ func (s *Service) renderSystem(w http.ResponseWriter, r *http.Request, status in
 		if pg.OverallTxt == "" {
 			pg.OverallTxt = "The overall state is not recognised: treat it as not checked."
 		}
+		if n := notCheckable(h.Components); n > 0 && h.Overall == "ok" {
+			pg.OverallTxt = fmt.Sprintf("Every component this console can check has evidence and is healthy. %d cannot be checked here: each row says why.", n)
+		}
 		rowOf := map[string]string{}
 		for _, comp := range h.Components {
 			row := SysRow{ID: comp.ID, Label: comp.Label, Status: sysStatusChip("sys-"+comp.ID, comp.Status), Detail: capFirst(comp.Detail)}
@@ -169,6 +180,17 @@ func (s *Service) renderSystem(w http.ResponseWriter, r *http.Request, status in
 		pg.JobsNote = "The job table and Run now are for administrators."
 	}
 	s.render(w, r, status, "system", "base", pg)
+}
+
+// notCheckable counts the rows an overall OK says nothing about.
+func notCheckable(cs []adminapi.SystemComponentJSON) int {
+	n := 0
+	for _, c := range cs {
+		if c.Status == "not_in_build" || c.Status == "not_applicable" {
+			n++
+		}
+	}
+	return n
 }
 
 func versionFacts(v adminapi.VersionsJSON, c fmtCtx) []Fact {

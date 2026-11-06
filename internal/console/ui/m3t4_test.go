@@ -368,7 +368,7 @@ type compRow struct{ id, label string }
 
 var compRowRE = regexp.MustCompile(`(?s)<tr id="comp-([a-z_]+)" class="comp">\s*<td class="dev-cell"><span class="hostname">([^<]+)</span></td>\s*<td class="state-cell"><span class="st [a-z]+(?: dashed)?"><i aria-hidden="true"></i>([A-Z ]+)</span>`)
 
-var sysChipWord = map[string]string{"ok": "OK", "warn": "WARNING", "failed": "FAILED", "not_checked": "NOT CHECKED"}
+var sysChipWord = map[string]string{"ok": "OK", "warn": "WARNING", "failed": "FAILED", "not_checked": "NOT CHECKED", "not_in_build": "NOT IN THIS BUILD", "not_applicable": "NOT APPLICABLE"}
 
 func sysRows(body string) (ids, words []string) {
 	for _, m := range compRowRE.FindAllStringSubmatch(body, -1) {
