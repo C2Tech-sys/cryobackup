@@ -30,6 +30,7 @@
 </section>{{end}}
 
 {{define "runs_results"}}{{with .Warn}}{{template "inline_banner" .}}{{end}}
+{{range .Alarms}}{{template "panel_state" .}}{{end}}
 {{if .Empty}}{{template "panel_state" .Empty}}{{end}}
 {{if .Rows}}<div class="table-wrap" role="region" aria-label="Runs" tabindex="0">
 <table class="fleet runtable">

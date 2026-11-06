@@ -70,9 +70,11 @@ var JobNames = []string{"alarm-evaluator", "command-expiry", "heartbeat-ring-tri
 // SeedM3 adds the M3 monitoring data to a database LoadFixtures filled: one run
 // of every outcome (cancelled, skipped, interrupted and abandoned are the ones
 // LoadFixtures has none of), a retried run, job results, and the silence of
-// Harbor Family Practice (all six devices have not been heard from for ten
-// days, so the engine collapses them into one customer-wide row). Call it once,
-// right after LoadFixtures; a second call fails on the run ids.
+// Harbor Family Practice: all six of its devices have not been heard from for ten
+// days, and the engine collapses five of them into one customer-wide row. The sixth,
+// NEW-EXAM-6, is PENDING_FIRST: inside its first-backup grace the engine suppresses
+// UNSEEN, so it is not in that set. Call it once, right after LoadFixtures; a second
+// call fails on the run ids.
 func SeedM3(ctx context.Context, st *store.Store, now time.Time) error {
 	now = now.UTC()
 	devs := map[string]string{}

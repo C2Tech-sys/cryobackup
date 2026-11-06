@@ -238,6 +238,9 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	a.Runner = jobs.NewRunner(a.Store, holderID(), a.log)
 	a.Admin.Jobs = a.Runner // run-now (M3-T3); the runner exists only after the server
 	a.UI.Jobs = a.Runner    // the System page's Run now (M3-T4)
+	if fix {
+		a.Admin.Jobs = a.UI.PageJobs() // the fictional jobs the page offers, so the API and the page agree (the App's runner has none)
+	}
 	if a.Prober != nil {
 		a.Admin.Prober = a.Prober // the storage probe runs the probes now and waits for them (M3-INT); never a typed nil
 	}

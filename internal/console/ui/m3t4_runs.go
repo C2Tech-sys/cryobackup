@@ -15,6 +15,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // Runs search (S21), the customer Runs tab (S16) and run detail (S22), M3-T4.
@@ -278,9 +279,10 @@ type RunListView struct {
 	PinID      string // the customer of the S16 tab: no customer condition
 	Clauses    []ClauseView
 	Add        []AddGroup
-	Summary    string // the conditions as a sentence
-	Count      string // "Matches 7 of 212 runs."
-	Problem    string // the conditions cannot match; no query was made
+	Summary    string       // the conditions as a sentence
+	Count      string       // "Matches 7 of 212 runs."
+	Problem    string       // the conditions cannot match; no query was made
+	Alarms     []*EmptyView // a customer the conditions name that the engine calls MISSING
 	TZNote     string
 	TZ         string
 	Rows       []RunListRow
@@ -439,6 +441,20 @@ func (s *Service) buildRunsView(r *http.Request, p *auth.Principal, fleet health
 		}
 	}
 	v.Summary = s.runSentence(q, custLabel, hostOf, spec, c)
+	// A customer the conditions name that the engine calls MISSING is an alarm here too, as on the activity
+	// grid: "no run matches" would read as calm about a customer with no device to run one.
+	if spec.Pin == "" {
+		for _, cl := range q.Clauses {
+			if cl.Field != "customer" {
+				continue
+			}
+			for _, cs := range fleet.View.Customers {
+				if cs.ID == cl.Value && cs.Status == state.CustomerMissing {
+					v.Alarms = append(v.Alarms, &EmptyView{Kind: "alarm", Title: "MISSING: no devices", Body: cs.Name + " is expected but has no active devices, so no run can come from it and every machine there is unmonitored."})
+				}
+			}
+		}
+	}
 	if v.Problem != "" {
 		v.Empty = &EmptyView{Kind: "partial", Title: "These conditions cannot match any run", Body: v.Problem + " Fix the dates above, or clear them.", Link: &Link{Href: v.ClearHref, Label: "Clear conditions"}}
 		v.Count = "No query was made."
@@ -505,7 +521,7 @@ func (s *Service) buildRunsView(r *http.Request, p *auth.Principal, fleet health
 	if !resp.Truncated && resp.Total != len(v.Rows) && info.Pages == 1 {
 		v.Warn = &CauseView{Class: ClassWarn, Title: "Partial answer.", Text: "The console returned fewer runs than it counted."}
 	}
-	if len(v.Rows) == 0 {
+	if len(v.Rows) == 0 && len(v.Alarms) == 0 {
 		v.Empty = s.runsEmpty(q, resp, fleet, spec, v.ClearHref, c)
 	}
 	return v

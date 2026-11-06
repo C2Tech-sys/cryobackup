@@ -636,6 +636,7 @@ type actPick struct {
 	of       int                         // the customer's devices
 	from, to int                         // 1-based first and last device of the window, 0 for none
 	missing  []string                    // devices of the window the answer had no strip for
+	retired  int                         // the customer's retired devices, which "of" does not count
 }
 
 // winPart is the part of one customer a page shows: units [a, b) of its units.
@@ -743,7 +744,7 @@ func (s *Service) activityPage(w http.ResponseWriter, r *http.Request) {
 				fail(&apiError{Status: 0, Code: "empty_answer"})
 				return
 			}
-			pk := actPick{cu: resp.Customers[0], of: n}
+			pk := actPick{cu: resp.Customers[0], of: n, retired: cs.Retired}
 			byID := map[string]adminapi.TenDayDeviceJSON{}
 			for _, d := range pk.cu.Devices {
 				byID[d.ID] = d
@@ -832,6 +833,8 @@ func (s *Service) activityPage(w http.ResponseWriter, r *http.Request) {
 		case pk.of == 0 && cu.Status == string(state.CustomerMissing):
 			g.Variant = "missing"
 			g.Note = &EmptyView{Kind: "alarm", Title: "MISSING: no devices", Body: cu.Name + " is expected but has no active devices, so there is no activity to show and every machine there is unmonitored."}
+		case pk.of == 0 && pk.retired > 0:
+			g.Note = &EmptyView{Kind: "neutral", Title: "All devices retired", Body: "Every device of " + cu.Name + " is retired, so nothing is being backed up here and there is no activity to show."}
 		case pk.of == 0:
 			g.Note = &EmptyView{Kind: "neutral", Title: "No devices", Body: cu.Name + " has no devices yet."}
 		}

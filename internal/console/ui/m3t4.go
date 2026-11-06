@@ -120,6 +120,11 @@ func (s *Service) initM3() {
 // pageAPI returns the private admin API.
 func (s *Service) pageAPI() http.Handler { return s.m3.mux }
 
+// PageJobs is the job runner the pages use, for the admin API that serve mounts
+// beside them. It matters in fixtures mode, where the App's own runner has no job:
+// with it, GET /api/v1/system/jobs lists as registered the jobs the page offers to run.
+func (s *Service) PageJobs() adminapi.JobRunner { return jobProxy{s} }
+
 // BeginShutdown refuses new manual job runs started from the System page and
 // cancels the ones in flight. serve calls it with the admin API's own
 // BeginShutdown, before it stops the job runner.

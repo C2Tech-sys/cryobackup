@@ -3,6 +3,7 @@ package fixtures_test
 import (
 	"context"
 	"encoding/base32"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -124,8 +125,8 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 	// a customer whose devices went silent together: one row, and its link lists exactly the devices it counts
 	un := c.page("/fleet/unseen")
 	count := regexp.MustCompile(`Show the (\d+) devices`).FindStringSubmatch(un)
-	if !strings.Contains(un, "CUSTOMER-WIDE SILENCE") || !strings.Contains(un, "Harbor Family Practice") || count == nil || count[1] < "5" {
-		t.Fatalf("no silent customer on the not-seen page")
+	if !strings.Contains(un, "CUSTOMER-WIDE SILENCE") || !strings.Contains(un, "Harbor Family Practice") || count == nil || count[1] != "5" {
+		t.Fatalf("no silent customer of five devices on the not-seen page (SeedM3 says why five of its six): %v", count)
 	}
 	href := regexp.MustCompile(`href="(/fleet/unseen\?show=[^"#]+)#silence-`).FindStringSubmatch(un)
 	if href == nil {
@@ -149,6 +150,26 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 	if !strings.Contains(sys, "NEVER RUN") || !strings.Contains(sys, ">ERROR<") || strings.Contains(sys, "the job runner is not running") {
 		t.Error("the job table does not show a failed job, a job that never ran, and a running runner")
 	}
+	// The API and the page agree about the jobs the page offers to run.
+	apiRes, apiBody := c.do("GET", "/api/v1/system/jobs", nil)
+	var jl struct {
+		Jobs []struct {
+			Name       string `json:"name"`
+			Registered bool   `json:"registered"`
+		} `json:"jobs"`
+	}
+	if apiRes.StatusCode != 200 || json.Unmarshal([]byte(apiBody), &jl) != nil {
+		t.Fatalf("GET /api/v1/system/jobs: %d %.200s", apiRes.StatusCode, apiBody)
+	}
+	registered := map[string]bool{}
+	for _, j := range jl.Jobs {
+		registered[j.Name] = j.Registered
+	}
+	for _, name := range fixtures.JobNames {
+		if !registered[name] {
+			t.Errorf("the API says job %s is not registered while the page offers Run now", name)
+		}
+	}
 	form := regexp.MustCompile(`action="(/ui/system/jobs/alarm-evaluator/run)" class="stack"><input type="hidden" name="csrf_token" value="([^"]+)"`).FindStringSubmatch(sys)
 	if form == nil {
 		t.Fatal("Run now is not offered in fixtures mode")
@@ -168,6 +189,11 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 	for _, id := range []string{"release_manifest", "certificates"} {
 		if got := row(sys, id); got == "OK" {
 			t.Errorf("fixtures mode reads %s OK with no evidence", id)
+		}
+	}
+	for _, id := range []string{"release_manifest", "storage_quota", "digest", "self_backup"} {
+		if got := row(sys, id); got != "NOT IN THIS BUILD" {
+			t.Errorf("fixtures mode reads %s %q, want NOT IN THIS BUILD", id, got)
 		}
 	}
 	// every banner, on request, on every page
