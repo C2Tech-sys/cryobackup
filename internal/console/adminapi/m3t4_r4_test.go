@@ -315,6 +315,11 @@ func TestR4ClockRowCountsPausedDevicesAsTheEngineDoes(t *testing.T) { // r4 M3
 	e := newR3Env(t)
 	ids := e.r4Reporting(5, 0)
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		// Only these five exist: an aged device inside its first-backup grace would otherwise round the old count back up to 5.
+		if _, err := tx.Exec(`UPDATE devices SET retired_at = ?, retired_reason = 'replaced' WHERE id NOT IN (?,?,?,?,?)`,
+			e.clk.Now().Add(-time.Hour).UnixMilli(), ids[0], ids[1], ids[2], ids[3], ids[4]); err != nil {
+			return err
+		}
 		for _, id := range ids[:2] {
 			if _, err := tx.Exec(`UPDATE devices SET paused_at = ?, pause_reason = 'r' WHERE id = ?`, e.clk.Now().Add(-time.Hour).UnixMilli(), id); err != nil {
 				return err
@@ -324,7 +329,7 @@ func TestR4ClockRowCountsPausedDevicesAsTheEngineDoes(t *testing.T) { // r4 M3
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if c := e.row("clock"); c.Status != statusOK {
+	if c := e.row("clock"); c.Status != statusOK || !strings.Contains(c.Detail, "compared with 5 reporting devices") {
 		t.Errorf("5 reporting, 2 of them paused: %+v", c)
 	}
 }
