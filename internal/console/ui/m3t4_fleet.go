@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,7 @@ func (s *Service) clearOrAlarm(what, nothing string, ev listEvidence, complete b
 // fleetListQuery is the query of B04 and B05: an optional customer and the pager.
 type fleetListQuery struct {
 	Customer string
+	Show     string // B05: the customer whose silence row is expanded into its devices
 	Page     int
 	Size     int
 }
@@ -106,6 +108,9 @@ func parseFleetListQuery(v url.Values) (fleetListQuery, []store.FieldError) {
 		bad = append(bad, store.FieldError{Field: "customer", Message: "Choose one of the listed customers."})
 		q.Customer = ""
 	}
+	if q.Show = strings.TrimSpace(v.Get("show")); q.Show != "" && !idParam(q.Show) {
+		q.Show = ""
+	}
 	return q, bad
 }
 
@@ -113,6 +118,9 @@ func (q fleetListQuery) values() url.Values {
 	out := url.Values{}
 	if q.Customer != "" {
 		out.Set("customer", q.Customer)
+	}
+	if q.Show != "" {
+		out.Set("show", q.Show)
 	}
 	if q.Page > 1 {
 		out.Set("page", strconv.Itoa(q.Page))
@@ -180,6 +188,7 @@ type OverduePage struct {
 	Warn    *EmptyView
 	AsOf    string
 	Zone    string
+	Live    string // this page's own URL, polled to refresh the live region
 }
 
 func overdueReasonChips(id string, r adminapi.OverdueRowJSON, c fmtCtx) []Chip {
@@ -215,7 +224,7 @@ func (s *Service) overduePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := s.fcAt(r.Context(), fleet.Computed)
-	pg := OverduePage{Page: s.page(r.Context(), p, fleet, "Overdue", "overdue", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone}
+	pg := OverduePage{Page: s.page(r.Context(), p, fleet, "Overdue", "overdue", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI()}
 	pg.Filter = s.fleetFilter(r, p, "/fleet/overdue", q)
 	var resp adminapi.FleetOverdueResponse
 	page, clamped := q.Page, false
@@ -254,7 +263,7 @@ func (s *Service) overduePage(w http.ResponseWriter, r *http.Request) {
 			groups[d.CustomerID] = g
 			order = append(order, d.CustomerID)
 		}
-		row := OverdueRow{ID: d.ID, Host: d.Hostname, Meta: strings.TrimSpace(strings.Join(nonEmpty(d.DeviceClass, d.OSVersion), " · ")),
+		row := OverdueRow{ID: d.ID, Host: d.Hostname, Meta: m3DeviceMeta(d.DeviceClass, d.OSVersion),
 			Reasons: overdueReasonChips(d.ID, d, c), State: chipForState("ds-"+d.ID, d.State), Ack: d.Acknowledged}
 		switch {
 		case d.LastSuccessAgeS == nil:
@@ -288,23 +297,16 @@ func (s *Service) overduePage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "overdue", "base", pg)
 }
 
-func nonEmpty(in ...string) []string {
+// m3DeviceMeta is "desktop · 10.0.22631": the device class and OS as the allow-lists pass them.
+func m3DeviceMeta(class, os string) string {
 	var out []string
-	for _, s := range in {
-		if s != "" {
-			out = append(out, safeWordLoose(s))
-		}
+	if class != "" {
+		out = append(out, enumOrWithheld(class, "laptop", "desktop", "unknown"))
 	}
-	return out
-}
-
-// safeWordLoose is safeWord for a descriptive field that may hold spaces (an OS
-// name like "Windows 11 Pro"): still no slash, colon, backslash or quote.
-func safeWordLoose(s string) string {
-	if len(s) > 60 || strings.ContainsAny(s, "/\\:\"'<>\r\n\x00") {
-		return withheld
+	if os != "" {
+		out = append(out, safeOS(os))
 	}
-	return s
+	return strings.Join(out, " · ")
 }
 
 func (s *Service) fleetFilter(r *http.Request, p *auth.Principal, action string, q fleetListQuery) FleetFilter {
@@ -338,9 +340,22 @@ type UnseenRow struct {
 	Affected   string // "7 of 9 devices silent"
 	Unseen     string
 	Covered    bool
-	ShowHref   string
 	Hint       string
 	Ack        bool
+	// Silence rows: how many devices the row speaks for, and the link that lists exactly those.
+	N        int
+	Expanded bool
+	ShowHref string
+	HideHref string
+	Devices  []UnseenDev
+}
+
+// UnseenDev is one device of an expanded silence row.
+type UnseenDev struct {
+	ID    string
+	Host  string
+	State Chip
+	Last  string
 }
 
 // UnseenPage is B05.
@@ -356,6 +371,7 @@ type UnseenPage struct {
 	Warn    *EmptyView
 	AsOf    string
 	Zone    string
+	Live    string // this page's own URL, polled to refresh the live region
 }
 
 const (
@@ -375,7 +391,7 @@ func (s *Service) unseenPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := s.fcAt(r.Context(), fleet.Computed)
-	pg := UnseenPage{Page: s.page(r.Context(), p, fleet, "Devices not seen", "unseen", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone}
+	pg := UnseenPage{Page: s.page(r.Context(), p, fleet, "Devices not seen", "unseen", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI()}
 	pg.Filter = s.fleetFilter(r, p, "/fleet/unseen", q)
 	var resp adminapi.FleetUnseenResponse
 	page, clamped := q.Page, false
@@ -405,8 +421,39 @@ func (s *Service) unseenPage(w http.ResponseWriter, r *http.Request) {
 		m.Page, m.Size = pg2, sz
 		return listURL("/fleet/unseen", m.values())
 	}, nil)
+	byID := map[string]state.DeviceState{}
+	for _, d := range fleet.View.Devices {
+		byID[d.ID] = d
+	}
 	for _, rw := range resp.Rows {
-		pg.Rows = append(pg.Rows, unseenRow(rw, c))
+		row := unseenRow(rw, c)
+		if row.Silence {
+			// "Show the devices" lists exactly the devices the row counts: the engine's collapse set (DeviceIDs),
+			// not a state filter, which matches primary states only and would list fewer.
+			sq := q
+			sq.Show = rw.CustomerID
+			row.ShowHref = listURL("/fleet/unseen", sq.values()) + "#silence-" + rw.CustomerID
+			hq := q
+			hq.Show = ""
+			row.HideHref = listURL("/fleet/unseen", hq.values()) + "#silence-" + rw.CustomerID
+			row.N = len(rw.DeviceIDs)
+			if q.Show == rw.CustomerID {
+				row.Expanded = true
+				for _, id := range rw.DeviceIDs {
+					d, ok := byID[id]
+					ud := UnseenDev{ID: id, Host: "(device not in this view)", State: Chip{ID: "ds-" + id, Label: "UNKNOWN", Class: ClassCrit, Dashed: true, Small: true}, Last: "never"}
+					if ok {
+						ud.Host, ud.State = d.Hostname, chipForState("ds-"+id, string(d.Primary))
+						if !d.Detail.LastSeen.IsZero() {
+							ud.Last = ageLong(c.Now.Sub(d.Detail.LastSeen))
+						}
+					}
+					row.Devices = append(row.Devices, ud)
+				}
+				sort.Slice(row.Devices, func(i, j int) bool { return row.Devices[i].Host < row.Devices[j].Host })
+			}
+		}
+		pg.Rows = append(pg.Rows, row)
 	}
 	pg.Summary = fmt.Sprintf("%s in %s. %s", plural(resp.Devices, "device", "devices"), plural(resp.Total, "row", "rows"), pg.Pager.Text)
 	if !resp.Complete && resp.Total > 0 {
@@ -435,14 +482,13 @@ func unseenRow(rw adminapi.UnseenRowJSON, c fmtCtx) UnseenRow {
 		row.Unseen = fmt.Sprintf("%d unseen", rw.Unseen)
 		row.Covered = rw.Covered
 		row.Hint = unseenSilenceHint
-		row.ShowHref = "/devices?customer=" + url.QueryEscape(rw.CustomerID) + "&state=UNSEEN"
 		last(rw.LastSeenAt)
 		return row
 	}
 	if rw.Device != nil {
 		d := rw.Device
 		row.ID, row.Host = d.ID, d.Hostname
-		row.Meta = strings.Join(nonEmpty(d.DeviceClass, d.OSVersion), " · ")
+		row.Meta = m3DeviceMeta(d.DeviceClass, d.OSVersion)
 		row.State = chipForState("ds-"+d.ID, d.State)
 		row.Ack = d.Acknowledged
 	}
@@ -472,10 +518,11 @@ type DayHead struct {
 
 // ActRow is one device row of the grid.
 type ActRow struct {
-	ID    string
-	Host  string
-	State Chip
-	Cells []ActCell
+	ID      string
+	Host    string
+	State   Chip
+	Cells   []ActCell
+	Missing bool // the answer had no strip for this device
 }
 
 // ActGroup is one customer: its header, an all-devices rollup row and its device rows.
@@ -491,6 +538,7 @@ type ActGroup struct {
 	Rows       []ActRow
 	Note       *EmptyView
 	Count      string
+	Range      string // "devices 51-100 of 3000" when the page shows a window of a big customer
 }
 
 // ActFilter is the filter bar of S23.
@@ -514,6 +562,7 @@ type ActivityPage struct {
 	Legend  []LegendItem
 	AsOf    string
 	Zone    string
+	Live    string // this page's own URL, polled to refresh the live region
 }
 
 // LegendItem explains a block kind; every kind has its own shape.
@@ -579,6 +628,36 @@ func runsLink(field, id, date, zone, displayZone string) string {
 	return listURL("/runs", v)
 }
 
+// actPick is what one customer contributes to a page of the grid: its all-devices
+// row, a window of its devices and where that window sits among all of them.
+type actPick struct {
+	cu       adminapi.TenDayCustomerJSON
+	devs     []adminapi.TenDayDeviceJSON // the window
+	of       int                         // the customer's devices
+	from, to int                         // 1-based first and last device of the window, 0 for none
+	missing  []string                    // devices of the window the answer had no strip for
+}
+
+// winPart is the part of one customer a page shows: units [a, b) of its units.
+type winPart struct{ idx, a, b int }
+
+// unitWindow cuts the rows [lo, hi) out of customers laid end to end, units[i]
+// rows for customer i (a customer with no device counts as one row, its alarm
+// or note). It returns, for every customer with a row in the window, which of its
+// rows: the window may start or end inside a customer, so a customer with
+// thousands of devices is paged by device.
+func unitWindow(units []int, lo, hi int) []winPart {
+	var out []winPart
+	off := 0
+	for i, n := range units {
+		if a, b := max(lo-off, 0), min(hi-off, n); a < b {
+			out = append(out, winPart{i, a, b})
+		}
+		off += n
+	}
+	return out
+}
+
 func (s *Service) activityPage(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	fleet, ok := s.fleetFor(w, r, p, "Activity")
@@ -591,106 +670,188 @@ func (s *Service) activityPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := s.fcAt(r.Context(), fleet.Computed)
-	pg := ActivityPage{Page: s.page(r.Context(), p, fleet, "Activity", "activity", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone}
+	pg := ActivityPage{Page: s.page(r.Context(), p, fleet, "Activity", "activity", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI()}
 	opts, lok := s.filterCustomers(r.Context(), p, nonEmpty1(q.Customer), "All customers")
 	pg.Filter = ActFilter{Customers: opts, Customer: q.Customer, ListErr: !lok, Problems: q.Problems, Size: q.Size}
 	pg.Legend = []LegendItem{{"success", "All succeeded"}, {"failed", "Any failed"}, {"mixed", "Succeeded and failed"}, {"missed", "Expected, none ran"}, {"none", "No runs"}}
-	v := url.Values{"devices": {"true"}}
-	if q.Customer != "" {
-		v.Set("customer", q.Customer)
-	}
-	var resp adminapi.FleetTenDayResponse
-	if err := s.apiGet(r, "/api/v1/fleet/ten-day?"+v.Encode(), &resp); err != nil {
-		if apiStatus(err) == http.StatusNotFound {
-			s.notFound(w, r, p, "This customer")
-			return
+
+	// The customers of the grid are the engine's, in its exceptions-first order, from the one evaluation
+	// of this request. The strips come from the ten-day answer, one customer at a time.
+	var custs []state.CustomerState
+	devices := 0 // active devices in the view the filter leaves
+	for _, cs := range fleet.View.Customers {
+		if q.Customer != "" && cs.ID != q.Customer {
+			continue
 		}
+		custs = append(custs, cs)
+		for _, d := range cs.Devices {
+			if d.Primary != state.StateRetired {
+				devices++
+			}
+		}
+	}
+	if q.Customer != "" && len(custs) == 0 {
+		s.notFound(w, r, p, "This customer")
+		return
+	}
+	live := func(cs state.CustomerState) []state.DeviceState {
+		var out []state.DeviceState
+		for _, d := range cs.Devices {
+			if d.Primary != state.StateRetired {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	fetch := func(customer string) (adminapi.FleetTenDayResponse, error) {
+		v := url.Values{"devices": {"true"}}
+		if customer != "" {
+			v.Set("customer", customer)
+		}
+		var resp adminapi.FleetTenDayResponse
+		return resp, s.apiGet(r, "/api/v1/fleet/ten-day?"+v.Encode(), &resp)
+	}
+	fail := func(err error) {
 		s.log().Error("ui: activity failed", logx.Class("render"), logx.Err(err))
 		pg.Empty = apiFailure("the activity grid", err)
 		s.render(w, r, http.StatusOK, "activity", "base", pg)
-		return
 	}
-	devices, shown := 0, 0
-	var groups []ActGroup
-	for _, cu := range resp.Customers {
-		g := ActGroup{ID: "act-" + cu.ID, CustomerID: cu.ID, Name: cu.Name, Status: customerStatusChip("as-"+cu.ID, cu.Status), Days: dayHeads(cu.Days)}
-		if cu.Zone != "" && cu.Zone != c.Zone {
-			g.ZoneNote = "days follow " + cu.Zone
+
+	var picks []actPick
+	var rows int // device rows (a customer with none counts as one) over every page
+	size := q.Size
+	lo, hi := (q.Page-1)*size, q.Page*size
+	complete := fleet.View.Complete
+	if !q.Problems {
+		// Page by device, across customers. Only the customers whose devices are on this page are read.
+		units := make([]int, len(custs))
+		for i, cs := range custs {
+			units[i] = max(len(live(cs)), 1)
+			rows += units[i]
 		}
-		for _, dc := range cu.Days {
-			g.Rollup = append(g.Rollup, rollupCell(cu, dc, len(g.Rollup) == len(cu.Days)-1, c.Zone))
-		}
-		for _, d := range cu.Devices {
-			devices++
-			row := ActRow{ID: d.ID, Host: d.Hostname, State: chipForState("ds-"+d.ID, d.State)}
-			problem := false
-			for i, day := range d.Days {
-				cell := deviceCell(d, day, i == len(d.Days)-1, cu.Zone, c.Zone)
-				if day.Kind == "failed" || day.Kind == "mixed" || day.Kind == "missed" {
-					problem = true
-				}
-				row.Cells = append(row.Cells, cell)
+		for _, part := range unitWindow(units, lo, hi) {
+			cs := custs[part.idx]
+			ds := live(cs)
+			n := len(ds)
+			resp, err := fetch(cs.ID)
+			if err != nil {
+				fail(err)
+				return
 			}
-			if q.Problems && !problem {
+			complete = complete && resp.Complete
+			if len(resp.Customers) == 0 {
+				fail(&apiError{Status: 0, Code: "empty_answer"})
+				return
+			}
+			pk := actPick{cu: resp.Customers[0], of: n}
+			byID := map[string]adminapi.TenDayDeviceJSON{}
+			for _, d := range pk.cu.Devices {
+				byID[d.ID] = d
+			}
+			if n > 0 {
+				pk.from, pk.to = part.a+1, part.b
+				for _, d := range ds[part.a:part.b] {
+					if td, ok := byID[d.ID]; ok {
+						pk.devs = append(pk.devs, td)
+					} else {
+						pk.missing = append(pk.missing, d.Hostname)
+					}
+				}
+			}
+			picks = append(picks, pk)
+		}
+	} else {
+		// Only devices with a failed, mixed or missed day: that needs every strip, so every customer is read once.
+		resp, err := fetch(q.Customer)
+		if err != nil {
+			fail(err)
+			return
+		}
+		complete = complete && resp.Complete
+		for _, cu := range resp.Customers {
+			var hit []adminapi.TenDayDeviceJSON
+			for _, d := range cu.Devices {
+				for _, day := range d.Days {
+					if day.Kind == "failed" || day.Kind == "mixed" || day.Kind == "missed" {
+						hit = append(hit, d)
+						break
+					}
+				}
+			}
+			if len(hit) == 0 {
 				continue
 			}
-			g.Rows = append(g.Rows, row)
-			shown++
+			a, b := max(lo-rows, 0), min(hi-rows, len(hit))
+			if a < b {
+				picks = append(picks, actPick{cu: cu, devs: hit[a:b], of: len(hit), from: a + 1, to: b})
+			}
+			rows += len(hit)
 		}
-		g.Count = plural(len(g.Rows), "device", "devices")
-		switch {
-		case len(cu.Devices) == 0 && cu.Status == string(state.CustomerMissing):
-			g.Variant = "missing"
-			g.Note = &EmptyView{Kind: "alarm", Title: "MISSING: no devices", Body: cu.Name + " is expected but has no active devices, so there is no activity to show and every machine there is unmonitored."}
-		case len(cu.Devices) == 0:
-			g.Note = &EmptyView{Kind: "neutral", Title: "No devices", Body: cu.Name + " has no devices yet."}
-		case len(g.Rows) == 0 && q.Problems:
-			continue // the filter removed every row of a healthy customer
-		case len(g.Rows) == 0:
-			g.Note = &EmptyView{Kind: "neutral", Title: "Only retired devices", Body: "Every device here is retired. Tick \"Show retired\" to see them."}
-		}
-		groups = append(groups, g)
 	}
-	// Customers per page; every page shows complete groups.
-	info := m3PageInfo(len(groups), q.Page, q.Size)
-	from, to := 0, 0
-	if len(groups) > 0 {
-		from, to = info.From-1, info.To
-	}
-	pg.Groups = groups[from:to]
-	qq := q
-	pg.Pager = buildPager(info, "customers", func(pg2, sz int) string {
-		m := qq
+	info := m3PageInfo(rows, q.Page, size)
+	pg.Pager = buildPager(info, "devices", func(pg2, sz int) string {
+		m := q
 		m.Page, m.Size = pg2, sz
 		return listURL("/activity", m.values())
 	}, nil)
-	if len(groups) > 0 {
-		pg.Pager.Text = fmt.Sprintf("Customers %d-%d of %d · %s", info.From, info.To, len(groups), plural(shown, "device", "devices"))
-	}
 	pg.Summary = pg.Pager.Text
-	if !resp.Complete {
+	if rows > 0 {
+		pg.Summary += " · " + plural(len(picks), "customer", "customers") + " on this page"
+	}
+	if info.Clamped && rows > 0 { // a page past the end shows the last one: re-run the window
+		q.Page = info.Page
+		http.Redirect(w, r, listURL("/activity", q.values()), http.StatusSeeOther)
+		return
+	}
+	for _, pk := range picks {
+		cu := pk.cu
+		g := ActGroup{ID: "act-" + cu.ID, CustomerID: cu.ID, Name: cu.Name, Status: customerStatusChip("as-"+cu.ID, cu.Status), Days: dayHeads(cu.Days), Count: plural(pk.of, "device", "devices")}
+		if cu.Zone != "" && cu.Zone != c.Zone {
+			g.ZoneNote = "days follow " + cu.Zone
+		}
+		if pk.of > len(pk.devs)+len(pk.missing) {
+			g.Range = fmt.Sprintf("devices %d-%d of %d", pk.from, pk.to, pk.of)
+		}
+		if q.Problems {
+			g.Count = plural(pk.of, "device with a failed or missed day", "devices with a failed or missed day")
+		}
+		for i, day := range cu.Days {
+			g.Rollup = append(g.Rollup, rollupCell(cu, day, i == len(cu.Days)-1, c.Zone))
+		}
+		for _, d := range pk.devs {
+			row := ActRow{ID: d.ID, Host: d.Hostname, State: chipForState("ds-"+d.ID, d.State)}
+			for i, day := range d.Days {
+				row.Cells = append(row.Cells, deviceCell(d, day, i == len(d.Days)-1, cu.Zone, c.Zone))
+			}
+			g.Rows = append(g.Rows, row)
+		}
+		for _, host := range pk.missing {
+			g.Rows = append(g.Rows, ActRow{Host: host, Missing: true})
+		}
+		switch {
+		case pk.of == 0 && cu.Status == string(state.CustomerMissing):
+			g.Variant = "missing"
+			g.Note = &EmptyView{Kind: "alarm", Title: "MISSING: no devices", Body: cu.Name + " is expected but has no active devices, so there is no activity to show and every machine there is unmonitored."}
+		case pk.of == 0:
+			g.Note = &EmptyView{Kind: "neutral", Title: "No devices", Body: cu.Name + " has no devices yet."}
+		}
+		pg.Groups = append(pg.Groups, g)
+	}
+	if !complete {
 		pg.Warn = &EmptyView{Kind: "partial", Title: "Partial data", Body: "Some devices could not be read, so their rows may be missing or blank. A blank block here is not a clean day."}
 	}
-	if len(resp.Customers) == 0 || (devices == 0 && !hasMissingOrOnboarding(resp)) {
-		ev := s.evidence(r, q.Customer)
-		switch {
-		case ev.Err == nil && ev.Sum.FirstRun && q.Customer == "":
-			pg.Empty = &EmptyView{Kind: "neutral", Title: "No customers yet", Body: "Add your first customer and enroll its devices: their last ten days appear here."}
-		default:
-			pg.Empty = &EmptyView{Kind: "alarm", Title: "No devices to show",
-				Body: "The grid is empty because there are no enrolled devices in this view. That is an alarm, not a quiet fleet: nothing is being backed up."}
-		}
+	switch {
+	case devices == 0 && fleet.View.FirstRun:
+		pg.Empty = &EmptyView{Kind: "neutral", Title: "No customers yet", Body: "Add your first customer and enroll its devices: their last ten days appear here."}
+	case devices == 0:
+		// Enrolled before, and nothing active now (all retired, or none in this account's scope): not a quiet fleet.
+		pg.Empty = &EmptyView{Kind: "alarm", Title: "No devices to show",
+			Body: "There are no active devices in this view. That is an alarm, not a quiet fleet: nothing is being backed up here."}
+	case q.Problems && rows == 0:
+		pg.Empty = &EmptyView{Kind: "neutral", Title: "No device has a failed, mixed or missed day",
+			Body: fmt.Sprintf("%s checked at %s (%s): none had a failed, mixed or missed day in the last ten days. Untick the filter to see them all.", plural(devices, "device", "devices"), c.clock(fleet.Computed), c.Zone)}
 	}
 	s.render(w, r, http.StatusOK, "activity", "base", pg)
-}
-
-func hasMissingOrOnboarding(resp adminapi.FleetTenDayResponse) bool {
-	for _, cu := range resp.Customers {
-		if cu.Status == string(state.CustomerMissing) || cu.Status == string(state.CustomerOnboarding) || cu.Status == string(state.CustomerEmpty) {
-			return true
-		}
-	}
-	return false
 }
 
 func jobsText(success, failed int) string {

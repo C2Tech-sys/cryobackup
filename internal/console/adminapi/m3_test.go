@@ -1007,9 +1007,7 @@ func TestSystemHealthMapsEveryBannerTheEngineCanRaise(t *testing.T) { // H2: a n
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	ran := now.Add(-time.Minute)
 	next := now.Add(time.Hour)
-	full := healthFacts{Now: now, Complete: true, EndpointWired: true, WorkerPinged: true, WorkerReachable: true, MaintainKnown: true,
-		EvaluatorRanAt: &ran, MasterKeyWired: true, ReportingDevices: 9,
-		Jobs: []store.JobState{{Name: "j", LastStatus: "ok", NextDueAt: &next}}}
+	full := fullEvidence(now, &ran, &next)
 	for _, c := range buildComponents(full) {
 		if c.Status != statusOK {
 			t.Fatalf("with every piece of evidence and no banner, %s = %+v; the control must be all ok", c.ID, c)

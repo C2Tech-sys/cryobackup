@@ -434,12 +434,10 @@ func TestM3T4S36UnreadableHealthIsAnAlarm(t *testing.T) {
 	e, _ := newM3Env(t)
 	e.login()
 	// A private API that refuses the health read.
-	e.svc.m3.once.Do(func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/v1/system/health", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) })
-		mux.HandleFunc("/api/v1/system/jobs", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) })
-		e.svc.m3.mux = mux
-	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/system/health", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) })
+	mux.HandleFunc("/api/v1/system/jobs", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) })
+	e.svc.m3.mux = mux
 	body := e.page("/system", 200)
 	mustContain(t, "alarm", body, `panel-state alarm`, "Could not load system health", "No component is shown as OK", "Could not load the job table")
 	if ids, _ := sysRows(body); len(ids) != 0 {
@@ -451,11 +449,9 @@ func TestM3T4S36UnreadableHealthIsAnAlarm(t *testing.T) {
 func TestM3T4S21UnreadableRunListIsAnAlarm(t *testing.T) {
 	e, _ := newM3Env(t)
 	e.login()
-	e.svc.m3.once.Do(func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) })
-		e.svc.m3.mux = mux
-	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) })
+	e.svc.m3.mux = mux
 	for name, path := range map[string]string{"runs": "/runs", "tab": "/customers/" + e.customerID("Summit Eye Care") + "/runs", "overdue": "/fleet/overdue", "unseen": "/fleet/unseen", "activity": "/activity"} {
 		body := e.page(path, 200)
 		if !strings.Contains(body, "panel-state alarm") || !strings.Contains(body, "This is an alarm, not an empty list") {
@@ -479,8 +475,9 @@ func TestM3T4RunNowAuditsOnceAndARefusedAuditStartsNothing(t *testing.T) {
 	// Accepted: one audit row, the runner asked once, a redirect that says so.
 	before := e.auditTotal()
 	res, _ := e.post("/ui/system/jobs/alarm-evaluator/run", url.Values{}, false)
-	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/system?ran=alarm-evaluator&result=accepted#jobs" {
-		t.Fatalf("run now: %d %q", res.StatusCode, res.Header.Get("Location"))
+	loc := res.Header.Get("Location")
+	if res.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, "/system?flash=alarm-evaluator~") || !strings.HasSuffix(loc, "#jobs") {
+		t.Fatalf("run now: %d %q", res.StatusCode, loc)
 	}
 	if n := jobs.waitRun(t); n != "alarm-evaluator" {
 		t.Fatalf("the runner ran %q", n)
@@ -489,7 +486,7 @@ func TestM3T4RunNowAuditsOnceAndARefusedAuditStartsNothing(t *testing.T) {
 	if len(rows) != 1 || e.auditTotal()-before != 1 || rows[0].Result != "ok" || rows[0].ObjectType != "job" {
 		t.Fatalf("audit rows: %+v (total moved %d)", rows, e.auditTotal()-before)
 	}
-	mustContain(t, "flash", e.page("/system?ran=alarm-evaluator&result=accepted", 200), "Run accepted.", "One audit entry was written")
+	mustContain(t, "flash", e.page(strings.TrimSuffix(loc, "#jobs"), 200), "Run accepted.", "One audit entry was written")
 
 	// A refused audit row: the page says so with an error status and nothing starts.
 	e.mutRefuseAudits(true)
@@ -526,10 +523,9 @@ func TestM3T4RunNowAuditsOnceAndARefusedAuditStartsNothing(t *testing.T) {
 
 // Without a job runner "Run now" is not offered and says why; a forged POST is refused.
 func TestM3T4RunNowWithoutARunnerIsRefusedAndSaysSo(t *testing.T) {
-	e := newEnv(t) // no Jobs on the UI service
+	e := newEnv(t) // no Jobs on the UI service, and not fixtures mode (fixtures mode brings its own fictional jobs)
+	e.svc.Fixtures = false
 	e.login()
-	mux := http.NewServeMux()
-	_ = mux
 	body := e.page("/system", 200)
 	if strings.Contains(body, "Run now") {
 		t.Error("Run now is offered with no job runner")
@@ -659,7 +655,7 @@ func TestM3T4UnseenCollapsesACustomersSilenceToOneRow(t *testing.T) {
 	if got := strings.Count(body, `class="silence-row"`); got != 1 {
 		t.Fatalf("%d silence rows, want one", got)
 	}
-	mustContain(t, "silence", body, "CUSTOMER-WIDE SILENCE", "Summit Eye Care", "devices silent", unseenSilenceHint, `href="/devices?customer=`)
+	mustContain(t, "silence", body, "CUSTOMER-WIDE SILENCE", "Summit Eye Care", "devices silent", unseenSilenceHint, `Show the 10 devices`)
 	if got := len(devRowRE.FindAllString(body, -1)); got != api.Total-1 {
 		t.Errorf("%d device rows beside the silence row, API has %d other rows", got, api.Total-1)
 	}
@@ -742,14 +738,14 @@ func TestM3T4ActivityGridMatchesTheAPI(t *testing.T) {
 		t.Error("a device with nothing wrong is in the problems view")
 	}
 	// Customer page of the grid: stated totals, complete groups.
-	mustContain(t, "pager", body, "Customers 1-6 of 6")
+	mustContain(t, "pager", body, "Showing 1-27 of 27 · 6 customers on this page")
 }
 
 // ---- layout, on the rendered page ----
 
 var (
 	tableRE   = regexp.MustCompile(`<table\b`)
-	wrapRE    = regexp.MustCompile(`<div class="table-wrap[^"]*" role="region" aria-label="[^"]+" tabindex="0">`)
+	wrapRE    = regexp.MustCompile(`<div class="table-wrap[^"]*" role="region" aria-label="[^"]+" tabindex="0"[^>]*>`)
 	ctlRE     = regexp.MustCompile(`<(select|input)\b([^>]*)>`)
 	headRowRE = regexp.MustCompile(`(?s)<thead>\s*<tr><th scope="col" class="devcol">Device</th>(.*?)</tr></thead>`)
 )
@@ -862,18 +858,51 @@ func TestM3T4ParseRunQuery(t *testing.T) {
 	}
 }
 
-func TestM3T4SafeWordWithholdsAnythingPathLike(t *testing.T) {
-	for _, ok := range []string{"permission", "vss", "1.4.2", "v1.5.0-rc1", "io_error"} {
-		if safeWord(ok) != ok {
-			t.Errorf("%q withheld", ok)
+// What an agent supplies is allow-listed, not merely scrubbed: a bare file name is
+// "(withheld)" wherever a known set or a version shape applies.
+func TestM3T4AgentTextIsAllowListed(t *testing.T) {
+	names := []string{"secret-payroll.xlsx", "Patient_Chart.docx", "John Smith MRI.pdf", "payroll", `C:\x`, "/etc/x", `\\srv\x`, "", "file.docx\x00", "x/y"}
+	for _, bad := range names {
+		for fn, f := range map[string]func(string) string{"class": safeClass, "deferred": safeDeferred, "kind": safeKind, "trigger": safeTrigger, "origin": safeOrigin, "os": safeOS, "commit": safeCommit, "date": safeBuildDate} {
+			if got := f(bad); got != withheld {
+				t.Errorf("%s(%q) = %q", fn, bad, got)
+			}
 		}
 	}
-	for _, bad := range []string{`C:\x`, "/etc/x", `\\srv\x`, "a b", "", "file.docx\x00", "x/y", `"quoted"`, strings.Repeat("a", 41)} {
-		if safeWord(bad) != withheld {
-			t.Errorf("%q passed", bad)
+	for _, bad := range []string{"secret-payroll.xlsx", "Patient_Chart.docx", "John Smith MRI.pdf", `C:\x`, "/etc/x", "a b", ""} {
+		if got := safeVersion(bad); got != withheld {
+			t.Errorf("safeVersion(%q) = %q", bad, got)
 		}
 	}
-	if got := classCounts(map[string]int{"permission": 2, `C:\u\f.txt`: 5, "vss": 5}); len(got) != 3 || got[0].Class != "vss" || got[2].Class != withheld || got[2].N != 5 {
+	for _, ok := range []string{"permission", "vss", "locked", "repo_missing", "guard_refused"} {
+		if safeClass(ok) != ok {
+			t.Errorf("class %q withheld", ok)
+		}
+	}
+	for _, bad := range []string{"io", "io_error", "payroll"} { // a name that is not in the restic vocabulary
+		if safeClass(bad) != withheld {
+			t.Errorf("class %q passed", bad)
+		}
+	}
+	for _, ok := range []string{"battery", "gateway", "lock", "metered", "window", "conditions", "fleet_cap"} {
+		if safeDeferred(ok) != ok {
+			t.Errorf("deferred %q withheld", ok)
+		}
+	}
+	for _, ok := range []string{"1.4.2", "dev", "v1.2.0-3-gabc1234-dirty", "0.19.1", "unknown"} {
+		if safeVersion(ok) != ok {
+			t.Errorf("version %q withheld", ok)
+		}
+	}
+	for _, ok := range []string{"Windows 11 Pro", "Windows Server 2022", "Windows Server 2012 R2 Standard", "10.0.22631", "windows", "linux"} {
+		if safeOS(ok) != ok {
+			t.Errorf("os %q withheld", ok)
+		}
+	}
+	if safeCommit("abc1234") != "abc1234" || safeBuildDate("2026-11-05T10:20:30Z") != "2026-11-05T10:20:30Z" || safeCommit("unknown") != "unknown" || safeBuildDate("unknown") != "unknown" {
+		t.Error("the build stamp is withheld")
+	}
+	if got := classCounts(map[string]int{"permission": 2, `C:\u\f.txt`: 5, "secret-payroll.xlsx": 3, "vss": 5}); len(got) != 3 || got[0].Class != "vss" || got[2].Class != withheld || got[2].N != 8 {
 		t.Errorf("class counts: %+v", got)
 	}
 }

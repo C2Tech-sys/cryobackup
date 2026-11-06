@@ -26,7 +26,7 @@ import (
 // customer, device, from, to, page, size), so every view is a link.
 //
 // Run pages are path-free by construction: rows and details carry counts,
-// classes and ids, and every free-text-looking field passes safeWord.
+// classes and ids, and every field an agent supplies is allow-listed (safe* in m3t4.go): a value outside its known set is shown as "(withheld)".
 
 // runQuery is the parsed state of a run search.
 type runQuery struct {
@@ -292,6 +292,7 @@ type RunListView struct {
 	AsOf       string
 	Zone       string
 	ListWarn   string // the select lists could not be loaded in full
+	RefreshS   int    // the live region polls its fragment at this interval
 }
 
 // runsSpec says where a run list lives: /runs (S21), or one customer's tab (S16).
@@ -344,7 +345,7 @@ func (s *Service) buildRunsView(r *http.Request, p *auth.Principal, fleet health
 	ctx := r.Context()
 	c := s.fcAt(ctx, fleet.Computed)
 	loc := s.loc(ctx)
-	v := RunListView{BaseURL: spec.Base, PartialURL: spec.partialFor(q), PinID: spec.Pin, ShowCust: spec.Pin == "", AsOf: c.clock(fleet.Computed), Zone: c.Zone}
+	v := RunListView{BaseURL: spec.Base, PartialURL: spec.partialFor(q), PinID: spec.Pin, ShowCust: spec.Pin == "", AsOf: c.clock(fleet.Computed), Zone: c.Zone, RefreshS: s.displayOf(ctx).RefreshS}
 	v.ClearHref = spec.hrefFor(runQuery{Size: q.Size, TZ: q.TZ})
 	zl := q.zoneOf(loc)
 	zoneName := zl.String()
@@ -594,7 +595,7 @@ func (s *Service) runSentence(q runQuery, custLabel, hostOf map[string]string, s
 func runListRow(rr adminapi.RunRowJSON, c fmtCtx, zoneName string) RunListRow {
 	row := RunListRow{ID: rr.ID, Href: "/runs/" + rr.ID, Outcome: OutcomeChip("o-"+rr.ID, rr.Outcome, false), Started: c.dayClock(rr.StartedAt),
 		StartedISO: rr.StartedAt.UTC().Format(time.RFC3339), Host: rr.Hostname, DeviceID: rr.DeviceID, Customer: rr.Customer, CustomerID: rr.CustomerID,
-		Kind: safeWord(rr.Kind), Trigger: safeWord(rr.Trigger)}
+		Kind: safeKind(rr.Kind), Trigger: safeTrigger(rr.Trigger)}
 	if rr.DurationMS != nil {
 		row.Duration = durText(*rr.DurationMS)
 	} else if rr.Outcome == "" {
@@ -602,14 +603,14 @@ func runListRow(rr adminapi.RunRowJSON, c fmtCtx, zoneName string) RunListRow {
 	}
 	row.Classes = classCounts(rr.ErrorCounts)
 	if len(row.Classes) == 0 && rr.ErrorClass != "" {
-		row.Classes = []ClassCount{{Class: safeWord(rr.ErrorClass)}}
+		row.Classes = []ClassCount{{Class: safeClass(rr.ErrorClass)}}
 	}
 	var notes []string
 	if rr.Attempt > 1 {
 		notes = append(notes, fmt.Sprintf("attempt %d", rr.Attempt))
 	}
 	if rr.DeferredReason != "" {
-		notes = append(notes, "deferred: "+safeWord(rr.DeferredReason))
+		notes = append(notes, "deferred: "+safeDeferred(rr.DeferredReason))
 	}
 	row.Note = strings.Join(notes, " · ")
 	row.Aria = fmt.Sprintf("%s, %s, %s, %s on %s", c.dayClock(rr.StartedAt), strings.ToLower(row.Outcome.Label), row.Kind, rr.Hostname, rr.Customer)
@@ -617,12 +618,12 @@ func runListRow(rr adminapi.RunRowJSON, c fmtCtx, zoneName string) RunListRow {
 }
 
 // classCounts is the error classes of a run, biggest first, each name passed
-// through safeWord.
+// through safeClass.
 func classCounts(m map[string]int) []ClassCount {
 	var out []ClassCount
 	other := 0
 	for k, n := range m {
-		if w := safeWord(k); w != withheld {
+		if w := safeClass(k); w != withheld {
 			out = append(out, ClassCount{Class: w, N: n})
 		} else {
 			other += n
@@ -860,7 +861,7 @@ func commas(n uint64) string {
 }
 
 func runDetailView(d adminapi.RunDetailResponse, c fmtCtx) RunDetailView {
-	v := RunDetailView{ID: d.ID, Outcome: OutcomeChip("o-"+d.ID, d.Outcome, false), Kind: safeWord(d.Kind), Host: d.Hostname, DeviceID: d.DeviceID, Customer: d.Customer, CustomerID: d.CustomerID}
+	v := RunDetailView{ID: d.ID, Outcome: OutcomeChip("o-"+d.ID, d.Outcome, false), Kind: safeKind(d.Kind), Host: d.Hostname, DeviceID: d.DeviceID, Customer: d.Customer, CustomerID: d.CustomerID}
 	add := func(k, val string, mono bool) { v.Facts = append(v.Facts, Fact{Key: k, Value: val, Mono: mono}) }
 	oc := d.Outcome
 	if oc == "" {
@@ -868,7 +869,7 @@ func runDetailView(d adminapi.RunDetailResponse, c fmtCtx) RunDetailView {
 	}
 	chip := v.Outcome
 	v.Facts = append(v.Facts, Fact{Key: "Outcome", Chip: &chip})
-	add("Kind", v.Kind+" · "+safeWord(d.Trigger)+" · "+safeWord(d.Origin), false)
+	add("Kind", v.Kind+" · "+safeTrigger(d.Trigger)+" · "+safeOrigin(d.Origin), false)
 	add("Started", c.dateClock(d.StartedAt)+" ("+c.Zone+")", false)
 	switch {
 	case d.FinishedAt != nil:
@@ -905,10 +906,10 @@ func runDetailView(d adminapi.RunDetailResponse, c fmtCtx) RunDetailView {
 		add("Policy version", strconv.Itoa(*d.PolicyVersion), true)
 	}
 	if d.AgentVersion != "" {
-		add("Agent version", safeWord(d.AgentVersion), true)
+		add("Agent version", safeVersion(d.AgentVersion), true)
 	}
 	if d.DeferredReason != "" {
-		add("Deferred because", safeWord(d.DeferredReason), false)
+		add("Deferred because", safeDeferred(d.DeferredReason), false)
 	}
 	keys := make([]string, 0, len(d.Stats))
 	for k := range d.Stats {
@@ -922,7 +923,7 @@ func runDetailView(d adminapi.RunDetailResponse, c fmtCtx) RunDetailView {
 	var other int
 	rows := map[string]int{}
 	for _, ec := range d.ErrorClasses {
-		w := safeWord(ec.Class)
+		w := safeClass(ec.Class)
 		if w == withheld {
 			other += ec.Count
 			continue
@@ -954,7 +955,7 @@ func runDetailView(d adminapi.RunDetailResponse, c fmtCtx) RunDetailView {
 	case "failed", "abandoned":
 		text := "The run did not finish its backup."
 		if d.ErrorClass != "" {
-			text += " Error class " + safeWord(d.ErrorClass) + "."
+			text += " Error class " + safeClass(d.ErrorClass) + "."
 		}
 		v.Cause = &CauseView{Class: ClassCrit, Title: strings.ToUpper(oc[:1]) + oc[1:] + ".", Text: text}
 	case "partial":

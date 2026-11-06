@@ -26,7 +26,7 @@
   {{if .ListWarn}}<p class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><span class="b-text">{{.ListWarn}}</span></p>{{end}}
   <p class="clause-summary" role="status" aria-live="polite">{{.Summary}} <b>{{.Count}}</b></p>
 </form>
-<div id="runresults" class="stack loadable" aria-live="polite" data-loading-text="Loading runs">{{template "runs_results" .}}</div>
+<div id="runresults" class="stack loadable" aria-live="polite" data-loading-text="Loading runs" data-live data-poll hx-get="{{.PartialURL}}" hx-trigger="cryo:poll, every {{.RefreshS}}s" hx-swap="innerHTML">{{template "runs_results" .}}</div>
 </section>{{end}}
 
 {{define "runs_results"}}{{with .Warn}}{{template "inline_banner" .}}{{end}}
@@ -52,4 +52,4 @@
 {{if .Pager.Sizes}}<span class="pg-size"><span class="meta-mono">Per page</span>{{range .Pager.Sizes}}<a class="pg{{if .Current}} current{{end}}" href="{{.Href}}" hx-get="{{.Partial}}" hx-target="#runresults" hx-swap="innerHTML" hx-indicator="#runresults" aria-label="{{.Aria}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}</span>{{end}}
 </nav>
 <p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Times are shown in the display zone. Runs carry counts and error classes only, never file names or paths.</p>
-{{end}}{{end}}
+{{end}}<span class="asof"></span>{{end}}

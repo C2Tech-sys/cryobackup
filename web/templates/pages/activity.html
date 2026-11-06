@@ -1,5 +1,6 @@
-{{/* S23 - the ten-day activity grid (M3-T4, components 4.2). One block per device per calendar day, oldest left, today right; a block opens that day's runs. Read from the same answer as GET /api/v1/fleet/ten-day. */}}
+{{/* S23 - the ten-day activity grid (M3-T4, components 4.2). One block per device per calendar day, oldest left, today right; a block opens that day's runs. Read from the same answer as GET /api/v1/fleet/ten-day, one evaluation per request. The grid is paged by device. */}}
 {{define "title"}}Activity{{end}}
+{{define "head"}}<script src="{{asset "js/m3t4.js"}}" defer></script>{{end}}
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Activity</span></nav>
 <form class="filters" method="get" action="/activity" role="search" aria-label="Filter the activity grid">
@@ -9,26 +10,28 @@
   <button class="btn sm" type="submit">Apply</button>
   {{if .Filter.ListErr}}<span class="meta-mono" role="status"><i class="g g-warn" aria-hidden="true"></i> The customer list could not be loaded in full.</span>{{end}}
 </form>
+<div id="m3live" class="stack" data-live data-poll hx-get="{{.Live}}" hx-trigger="cryo:poll, every {{.Refresh}}s" hx-select="#m3live" hx-select-oob="#banners,#freshness" hx-swap="outerHTML">
 {{with .Warn}}{{template "panel_state" .}}{{end}}
 {{if .Empty}}{{template "panel_state" .Empty}}{{end}}
 {{if .Groups}}
 <div class="chipbar" role="status"><span>{{.Summary}}</span></div>
 <ul class="actlegend" aria-label="Block key">{{range .Legend}}<li><span class="dayblk k-{{.Kind}}" role="presentation"><i aria-hidden="true"></i></span>{{.Label}}</li>{{end}}</ul>
 {{range .Groups}}<section class="actgroup{{if .Variant}} {{.Variant}}{{end}}" id="{{.ID}}" aria-label="{{.Name}}">
-  <header class="actgroup-head"><a class="hostname" href="/customers/{{.CustomerID}}">{{.Name}}</a>{{template "chip" .Status}}<span class="cnt meta-mono">{{.Count}}</span>{{if .ZoneNote}}<span class="meta-mono">{{.ZoneNote}}</span>{{end}}</header>
+  <header class="actgroup-head"><a class="hostname" href="/customers/{{.CustomerID}}">{{.Name}}</a>{{template "chip" .Status}}<span class="cnt meta-mono">{{.Count}}{{if .Range}} · {{.Range}}{{end}}</span>{{if .ZoneNote}}<span class="meta-mono">{{.ZoneNote}}</span>{{end}}</header>
   {{with .Note}}{{template "panel_state" .}}{{end}}
-  {{if .Rows}}<div class="table-wrap" role="region" aria-label="{{.Name}}: ten-day activity" tabindex="0">
+  {{if .Rows}}<div class="table-wrap actscroll" role="region" aria-label="{{.Name}}: ten-day activity" tabindex="0" data-scroll-end>
   <table class="actgrid" role="grid">
     <caption>{{.Name}}: last ten days, oldest first, today last</caption>
     <thead><tr><th scope="col" class="devcol">Device</th>{{range .Days}}<th scope="col" class="daycol{{if .Today}} today{{end}}" title="{{.Full}}">{{.Label}}</th>{{end}}</tr></thead>
     <tbody>
     <tr class="rollup"><th scope="row" class="devcol"><span class="hostname">All devices</span><small class="meta-mono">worst day of each device</small></th>{{range .Rollup}}<td>{{template "act_block" .}}</td>{{end}}</tr>
-    {{range .Rows}}<tr id="act-dev-{{.ID}}"><th scope="row" class="devcol"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a>{{template "chip" .State}}</th>{{range .Cells}}<td>{{template "act_block" .}}</td>{{end}}</tr>
-    {{end}}</tbody>
+    {{range .Rows}}{{if .Missing}}<tr><th scope="row" class="devcol"><span class="hostname">{{.Host}}</span></th><td colspan="10" class="actmissing"><i class="g g-crit" aria-hidden="true"></i> The console returned no history for this device. This is not a clean ten days.</td></tr>{{else}}<tr id="act-dev-{{.ID}}"><th scope="row" class="devcol"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a>{{template "chip" .State}}</th>{{range .Cells}}<td>{{template "act_block" .}}</td>{{end}}</tr>
+    {{end}}{{end}}</tbody>
   </table></div>{{end}}
 </section>
 {{end}}
 {{template "m3_pager" .Pager}}
-<p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Retired devices are not part of the grid. Each day is a calendar day in the customer's own zone. A block's number is the jobs that ran; a block with a number opens those runs.</p>
+<p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Retired devices are not part of the grid. Each day is a calendar day in the customer's own zone. In a device row a block's number is the jobs that ran that day; in the "All devices" row it is how many devices had the worst kind of day shown. A block with a number opens those runs.</p>
 {{end}}
+<span class="asof"></span></div>
 {{end}}

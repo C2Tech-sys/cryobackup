@@ -89,25 +89,9 @@ func (e *env) apiGet(path string, out any) {
 	}
 }
 
-// allBanners is every condition the console can raise, for the pages that must
-// show them all: C01 to C16 of the fixtures, C00, every "b" not-checked
-// warning and C11 at its critical severity.
-func allBanners(now time.Time) []state.Banner {
-	out := fixtures.Banners(now)
-	for i := range out {
-		if out[i].ID == "C11" {
-			out[i].Severity = state.SeverityCritical
-			out[i].Text = "Console database needs attention: the maintenance worker cannot read its database."
-		}
-	}
-	warn := state.SeverityAlarm
-	out = append(out, state.Banner{ID: "C00", Severity: warn, Text: "Console self-checks are not wired: the rows below cannot be called OK."})
-	for _, b := range []struct{ id, what string }{{"C01b", "Gateway"}, {"C02b", "Storage"}, {"C03b", "Alert e-mail"}, {"C04b", "Agent API"}, {"C05b", "Certificate"},
-		{"C06b", "Alerting"}, {"C07b", "Maintenance worker"}, {"C12b", "Master key"}, {"C14b", "Digest"}, {"C15b", "Storage quota"}, {"C16b", "Release manifest"}} {
-		out = append(out, state.Banner{ID: b.id, Severity: warn, Text: b.what + " has not been checked."})
-	}
-	return out
-}
+// allBanners is every condition the console can raise (fixtures.AllBanners): C01 to
+// C16, C00, every "b" not-checked warning and C11 at its critical severity.
+func allBanners(now time.Time) []state.Banner { return fixtures.AllBanners(now) }
 
 // ingest adds runs to a device through the agent ingest path.
 func (e *env) ingest(host string, runs ...store.RunInput) {

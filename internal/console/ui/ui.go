@@ -129,6 +129,7 @@ func New(s *Service) (*Service, error) {
 		s.Hub.freshness = s.freshnessPayload
 		s.Hub.RefreshNow = func() time.Duration { return time.Duration(s.display().RefreshS) * time.Second } // M2-W3A: a changed interval reaches the stream
 	}
+	s.initM3() // M3-T4: the pages' private admin API, built now (m3t4.go)
 	return s, nil
 }
 
@@ -229,6 +230,7 @@ func Patterns(fixtures bool) []string {
 	p = append(p, settingsUIPatterns()...)
 	if fixtures {
 		p = append(p, "GET /design", "GET /design/{component}")
+		p = append(p, fixturesM3Patterns()...) // M3-T4
 	}
 	return p
 }

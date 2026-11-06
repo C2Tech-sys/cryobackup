@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,9 +18,12 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/api"
 	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
+	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
+	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
+	"github.com/c2tech-sys/cryobackup/internal/restic"
 )
 
 // M3-T4: the seven M3 pages. Runs search (S21), run detail (S22), the customer
@@ -42,18 +46,23 @@ import (
 // store query of its own except the select lists of the filter forms.
 
 // jobRunner is the console's job runner as the System page needs it
-// (jobs.Runner satisfies it, and so adminapi.JobRunner). cli sets
-// Service.Jobs; nil leaves the job table unregistered and "Run now" disabled.
+// (jobs.Runner satisfies it, and so adminapi.JobRunner). cli sets Service.Jobs.
+// In fixtures mode, where cli registers no job, the page uses the fictional jobs
+// of fixtures.NewJobRunner, so "Run now" can be pressed with no real runner.
 type jobRunner interface {
 	Names() []string
 	RunOnce(ctx context.Context, name string) (ran bool, err error)
 }
 
-// m3State is the lazily built private admin API of the M3-T4 pages.
+// m3State is the private admin API of the M3-T4 pages, built when the service is.
 type m3State struct {
-	once sync.Once
-	api  *adminapi.Service
-	mux  *http.ServeMux
+	api *adminapi.Service
+	mux http.Handler
+	// fixJobs is the fixtures-mode runner (jobsOf), built on first use.
+	fixOnce sync.Once
+	fixJobs jobRunner
+	// flashKey signs the "Run now" answer carried in the redirect (flash.go); random per process.
+	flashKey [32]byte
 }
 
 // muxRegistrar adapts a ServeMux to httpx.Registrar.
@@ -61,40 +70,64 @@ type muxRegistrar struct{ m *http.ServeMux }
 
 func (r muxRegistrar) Handle(pattern string, h http.Handler) { r.m.Handle(pattern, h) }
 
-// pageAPI returns the private admin API. It is built on first use, so Service.Jobs
-// must be set before the first request (cli sets it right after the runner exists).
-func (s *Service) pageAPI() http.Handler {
-	s.m3.once.Do(func() {
-		var jobs adminapi.JobRunner
-		if s.Jobs != nil {
-			jobs = s.Jobs
-		}
-		a := &adminapi.Service{Auth: s.Auth, Store: s.Store, Fleet: s.Fleet, Restores: s.Restores, Backend: s.Backend, Clock: s.Clock, Log: s.Log,
-			Loc: s.Loc, Display: s.Display, Jobs: jobs}
-		mux := http.NewServeMux()
-		a.Register(muxRegistrar{mux})
-		s.m3.api, s.m3.mux = a, mux
-	})
-	return s.m3.mux
+// jobsOf is the runner the System page uses now: the one cli set, or, in
+// fixtures mode when that one has no job, the fictional one; nil when there is none.
+func (s *Service) jobsOf() jobRunner {
+	if s.Jobs != nil && (!s.Fixtures || len(s.Jobs.Names()) > 0) {
+		return s.Jobs
+	}
+	if !s.Fixtures || s.Store == nil {
+		return nil
+	}
+	s.m3.fixOnce.Do(func() { s.m3.fixJobs = newFixtureJobs(s.Store, s.Log) })
+	return s.m3.fixJobs
 }
+
+// jobProxy is the admin API's JobRunner: it asks the service for its runner at
+// each call, so the runner cli sets after the service is built is the one used.
+type jobProxy struct{ s *Service }
+
+func (p jobProxy) Names() []string {
+	if j := p.s.jobsOf(); j != nil {
+		return j.Names()
+	}
+	return nil
+}
+
+func (p jobProxy) RunOnce(ctx context.Context, name string) (bool, error) {
+	if j := p.s.jobsOf(); j != nil {
+		return j.RunOnce(ctx, name)
+	}
+	return false, errors.New("ui: no job runner")
+}
+
+// initM3 builds the private admin API (once, from New: nothing is built on a
+// request, so BeginShutdown works from the first moment and no field is read
+// racily) and, in fixtures mode, wires the "show every banner" switch into the
+// evaluator unless something already supplies extra banners.
+func (s *Service) initM3() {
+	a := &adminapi.Service{Auth: s.Auth, Store: s.Store, Fleet: s.Fleet, Restores: s.Restores, Backend: s.Backend, Clock: s.Clock, Log: s.Log,
+		Loc: s.Loc, Display: s.Display, Jobs: jobProxy{s}}
+	mux := http.NewServeMux()
+	a.Register(muxRegistrar{mux})
+	s.m3.api, s.m3.mux = a, mux
+	_, _ = rand.Read(s.m3.flashKey[:])
+	if s.Fixtures && s.Fleet != nil && s.Fleet.Extra == nil {
+		s.Fleet.Extra = fixtures.ExtraBanners
+	}
+}
+
+// pageAPI returns the private admin API.
+func (s *Service) pageAPI() http.Handler { return s.m3.mux }
 
 // BeginShutdown refuses new manual job runs started from the System page and
 // cancels the ones in flight. serve calls it with the admin API's own
 // BeginShutdown, before it stops the job runner.
-func (s *Service) BeginShutdown() {
-	if s.m3.api != nil {
-		s.m3.api.BeginShutdown()
-	}
-}
+func (s *Service) BeginShutdown() { s.m3.api.BeginShutdown() }
 
 // WaitBackground waits at most d for manual job runs started from the System
 // page and reports whether they all ended (see adminapi.Service.WaitBackground).
-func (s *Service) WaitBackground(d time.Duration) bool {
-	if s.m3.api == nil {
-		return true
-	}
-	return s.m3.api.WaitBackground(d)
-}
+func (s *Service) WaitBackground(d time.Duration) bool { return s.m3.api.WaitBackground(d) }
 
 // memResponse is the in-memory ResponseWriter of an in-process API call.
 type memResponse struct {
@@ -216,18 +249,102 @@ func problemCode(body []byte) string {
 
 // ---- shared view helpers ----
 
-// safeWord passes a short identifier (an error class, a trigger, a version) and
-// withholds anything else: a value with a slash, a colon, a backslash, a quote
-// or a space-padded sentence could be a path or a message, and these pages
-// carry classes and counts only. The agent API already validates what it
-// stores; this is the page's own guard, so a run row that got in by another
-// route still cannot put a file name on screen.
-var safeWordRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.+-]{0,39}$`)
+// What the run and system pages print about a run or a device comes from the
+// agent and is allow-listed here, whatever the intake accepted: a value that is
+// not in its known set or shape is shown as "(withheld)", never as it came.
+//
+//   - error classes: the restic class list (restic.AllClasses), nothing else;
+//   - deferral reasons, kinds, triggers and origins: their fixed sets;
+//   - agent and engine versions: api.VersionShape (a dotted number, a "dev"
+//     stamp or a git describe), so a file name never passes;
+//   - the OS: "Windows ..." as the fixtures write it, or the dotted build
+//     number the agent sends.
+//
+// A bare word that is none of these (a name without an extension, say) is also
+// withheld wherever a set applies; only version text allows an arbitrary word,
+// because the build stamp can be one ("dev", a commit hash).
 
 const withheld = "(withheld)"
 
-func safeWord(s string) string {
-	if safeWordRE.MatchString(s) {
+func inSet(s string, set ...string) bool {
+	for _, x := range set {
+		if s == x {
+			return true
+		}
+	}
+	return false
+}
+
+func enumOrWithheld(s string, set ...string) string {
+	if inSet(s, set...) {
+		return s
+	}
+	return withheld
+}
+
+// safeClass is an error class of a run: only the restic vocabulary.
+func safeClass(s string) string {
+	if restic.ErrorClass(s).Valid() {
+		return s
+	}
+	return withheld
+}
+
+// safeDeferred is a deferral reason: only the intake's set.
+func safeDeferred(s string) string {
+	return enumOrWithheld(s, string(restic.DeferredLock), string(restic.DeferredGateway), string(restic.DeferredBattery), string(restic.DeferredMetered),
+		string(restic.DeferredWindow), string(restic.DeferredConditions), string(restic.DeferredFleetCap))
+}
+
+func safeKind(s string) string { return enumOrWithheld(s, store.RunKinds...) }
+func safeTrigger(s string) string {
+	return enumOrWithheld(s, "schedule", "catchup", "wake", "boot", "manual", "retry")
+}
+func safeOrigin(s string) string { return enumOrWithheld(s, "agent", "console") }
+
+// safeVersion is a build or engine version (api.VersionShape).
+func safeVersion(s string) string {
+	if api.VersionShape(s) {
+		return s
+	}
+	return withheld
+}
+
+var (
+	osWordRE   = regexp.MustCompile(`^(?:Windows(?: Server)?(?: [0-9]{1,4})?(?: R2)?(?: (?:Home|Pro|Enterprise|Education|Standard|Datacenter|Essentials|LTSC))?|windows|linux|darwin|[0-9]{1,3}(?:\.[0-9]{1,6}){1,3})$`)
+	buildDate  = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`)
+	commitHash = regexp.MustCompile(`^[0-9a-f]{4,40}$`)
+	jobClassRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+)
+
+// safeOS is the OS text of a device.
+func safeOS(s string) string {
+	if osWordRE.MatchString(s) {
+		return s
+	}
+	return withheld
+}
+
+// safeCommit and safeBuildDate are the build stamp (internal/buildinfo): a hex
+// commit and an RFC 3339 UTC date, or "unknown".
+func safeCommit(s string) string {
+	if s == "unknown" || commitHash.MatchString(s) {
+		return s
+	}
+	return withheld
+}
+
+func safeBuildDate(s string) string {
+	if s == "unknown" || buildDate.MatchString(s) {
+		return s
+	}
+	return withheld
+}
+
+// safeJobClass is the error class of a console job, which the console itself
+// names (lower-case words), not an agent.
+func safeJobClass(s string) string {
+	if jobClassRE.MatchString(s) {
 		return s
 	}
 	return withheld
@@ -343,8 +460,18 @@ func m3t4Patterns() []string {
 // registerM3T4 adds the M3-T4 routes: reads need read_only; "Run now" admin
 // (CSRF-checked by Require, then audited by the admin API's own handler).
 func (s *Service) registerM3T4(r httpx.Registrar) {
-	ro := func(h http.HandlerFunc) http.Handler { return s.Auth.Require(auth.RoleReadOnly, auth.ModeUI, h) }
-	ad := func(h http.HandlerFunc) http.Handler { return s.Auth.Require(auth.RoleAdmin, auth.ModeUI, h) }
+	// One request reads one evaluation of the fleet: the page's own read and every read of the admin
+	// API it makes share the Memo of the request's context (health/memo.go).
+	once := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if m3Memo {
+				r = r.WithContext(health.WithMemo(r.Context()))
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
+	ro := func(h http.HandlerFunc) http.Handler { return once(s.Auth.Require(auth.RoleReadOnly, auth.ModeUI, h)) }
+	ad := func(h http.HandlerFunc) http.Handler { return once(s.Auth.Require(auth.RoleAdmin, auth.ModeUI, h)) }
 	r.Handle(patRuns, ro(s.runsPage))
 	r.Handle(patRunsTable, ro(s.runsTablePartial))
 	r.Handle(patRun, ro(s.runDetailPage))
@@ -354,6 +481,43 @@ func (s *Service) registerM3T4(r httpx.Registrar) {
 	r.Handle(patUnseen, ro(s.unseenPage))
 	r.Handle(patSystem, ro(s.systemPage))
 	r.Handle(patSystemRun, ad(s.systemJobRun))
+	if s.Fixtures {
+		r.Handle(patFixtures, ro(s.fixturesPage))
+	}
+}
+
+// m3Memo switches the per-request evaluation memo. It is on; the scale measurement in the
+// tests turns it off once to show the cost without it.
+var m3Memo = true
+
+// patFixtures is the fixtures-mode page that switches "show every console banner" on and off.
+const patFixtures = "GET /fixtures"
+
+// FixturesPatterns lists the pattern Register adds in fixtures mode for this ticket.
+func fixturesM3Patterns() []string { return []string{patFixtures} }
+
+// fixturesPage is GET /fixtures (fixtures mode only): a lab switch that makes
+// every console banner (C00 to C16, every "b" warning, C11 critical) show on every
+// page and in the system health rows, so each one can be looked at. The fleet is
+// fictional, so the banners claim nothing about a real console. ?banners=all turns
+// it on, ?banners=off turns it off; it changes nothing but what the pages show.
+func (s *Service) fixturesPage(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Query().Get("banners") {
+	case "all":
+		fixtures.SetAllBanners(true)
+	case "off":
+		fixtures.SetAllBanners(false)
+	}
+	p := principal(r)
+	fleet, ok := s.fleetFor(w, r, p, "Fixtures")
+	if !ok {
+		return
+	}
+	pg := struct {
+		Page
+		On bool
+	}{s.page(r.Context(), p, fleet, "Fixtures mode", "fixtures", ""), fixtures.AllBannersOn()}
+	s.render(w, r, http.StatusOK, "fixtures", "base", pg)
 }
 
 // queryValues copies the values of the named keys.

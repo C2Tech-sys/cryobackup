@@ -1,6 +1,7 @@
 package api
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/restic"
@@ -154,6 +155,9 @@ func (r RunRecord) Validate() error {
 	}
 	c.notNegative("policy_version", int64(r.PolicyVersion))
 	c.text("agent_version", r.AgentVersion, maxText, false)
+	if r.AgentVersion != "" && len(r.AgentVersion) <= maxText && !hasControl(r.AgentVersion) && !VersionShape(r.AgentVersion) {
+		c.add("agent_version", "must be a version such as 1.4.2 or v1.4.2-3-gabc1234, with no spaces, slashes or file extensions")
+	}
 	return c.err()
 }
 
@@ -224,3 +228,18 @@ type RunsResponse struct {
 	Results    []RunResult `json:"results"`
 	ServerTime time.Time   `json:"server_time"`
 }
+
+// versionShapeRE is what the agent's build stamp can look like (internal/buildinfo,
+// set by the Makefile from CRYO_MSI_VERSION or `git describe --tags --always
+// --dirty`, or "dev"): one word, then dotted numbers, then up to three
+// "-word" or "+word" parts, each optionally followed by ".digits". Whatever sits
+// after a dot must be a number, so a name with an extension ("payroll.xlsx",
+// "Chart.docx") and anything with a space, slash or colon is not a version. A bare
+// word ("test", a commit hash) is: this check keeps file names and sentences out,
+// it cannot tell a word from a version.
+var versionShapeRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,31}(?:\.[0-9]{1,5}){0,3}(?:[-+][A-Za-z0-9]{1,16}(?:\.[0-9]{1,5})?){0,3}$`)
+
+// VersionShape reports whether s looks like a build version (see versionShapeRE).
+// It is how the run intake refuses a free-text agent_version, and how the console
+// decides a version string is safe to show.
+func VersionShape(s string) bool { return len(s) <= 64 && versionShapeRE.MatchString(s) }

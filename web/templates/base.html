@@ -23,7 +23,7 @@
 <noscript><meta http-equiv="refresh" content="{{.Refresh}}"></noscript>
 </head>
 <body data-refresh="{{.Refresh}}"{{if .Events}} data-events="{{.Events}}"{{end}} data-drawer="closed">
-{{template "icons"}}
+{{template "icons"}}{{template "m3icons"}}
 <a class="skip" href="#main">Skip to content</a>
 <div class="app">
   <aside class="sidebar" id="sidebar">
@@ -34,11 +34,11 @@
       <li><a class="navlink" href="/devices"{{if eq .Nav "devices"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-pc"/></svg><span class="lbl">Devices</span></a></li>
       <li><a class="navlink" href="/policies"{{if eq .Nav "policies"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-file"/></svg><span class="lbl">Policies</span></a></li>
       {{/* M3-T4: monitoring pages (every role; the System page shows its job table to admins only) */}}
-      <li><a class="navlink" href="/activity"{{if eq .Nav "activity"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-grid"/></svg><span class="lbl">Activity</span></a></li>
-      <li><a class="navlink" href="/runs"{{if eq .Nav "runs"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-list"/></svg><span class="lbl">Runs</span></a></li>
-      <li><a class="navlink" href="/fleet/overdue"{{if eq .Nav "overdue"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-restore"/></svg><span class="lbl">Overdue</span></a></li>
-      <li><a class="navlink" href="/fleet/unseen"{{if eq .Nav "unseen"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-pc"/></svg><span class="lbl">Not seen</span></a></li>
-      <li><a class="navlink" href="/system"{{if eq .Nav "system"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-sliders"/></svg><span class="lbl">System</span></a></li>
+      <li><a class="navlink" href="/activity"{{if eq .Nav "activity"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-pulse"/></svg><span class="lbl">Activity</span></a></li>
+      <li><a class="navlink" href="/runs"{{if eq .Nav "runs"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-runs"/></svg><span class="lbl">Runs</span></a></li>
+      <li><a class="navlink" href="/fleet/overdue"{{if eq .Nav "overdue"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-clock"/></svg><span class="lbl">Overdue</span></a></li>
+      <li><a class="navlink" href="/fleet/unseen"{{if eq .Nav "unseen"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-eyeoff"/></svg><span class="lbl">Not seen</span></a></li>
+      <li><a class="navlink" href="/system"{{if eq .Nav "system"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-server"/></svg><span class="lbl">System</span></a></li>
       {{if and .User (or (eq .User.Role "admin") (eq .User.Role "owner"))}}{{/* M2-W2B: enrollment and downloads are admin pages (architecture 5.3) */}}
       <li><a class="navlink" href="/enroll"{{if eq .Nav "enroll"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-file"/></svg><span class="lbl">Enroll</span></a></li>
       <li><a class="navlink" href="/downloads"{{if eq .Nav "downloads"}} aria-current="page"{{end}}><svg aria-hidden="true"><use href="#i-download"/></svg><span class="lbl">Downloads</span></a></li>

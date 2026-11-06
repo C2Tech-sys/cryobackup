@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
+	"github.com/c2tech-sys/cryobackup/internal/console/probe"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -218,6 +220,132 @@ type healthFacts struct {
 	// ReportingDevices counts devices with a current heartbeat, for C13.
 	ReportingDevices int
 	Jobs             []store.JobState
+	// Probes are the health-prober's facts (Fleet.Probes), Endpoint the agent endpoint self-probe
+	// (Fleet.Endpoint) and MaintainReachable the periodic worker probe's answer. They are the
+	// evidence a probe-driven row needs: a row reaches ok only on its own evidence (rowEvidence).
+	Probes            state.ProbeFacts
+	Endpoint          probe.Status
+	MaintainReachable bool
+}
+
+// ---- row evidence ----
+//
+// Every row starts at not_checked and reaches ok only on evidence that is
+// specific to that row (M3-T4 delta, item 1). A probe-driven row that has no
+// recent passing probe is not ok: no probe yet, an unconfigured probe or a stale
+// one is not_checked, and a probe whose latest run is failing is warn (before the
+// streak and the grace raise C01, C02, C03 or C04, the row already says so).
+
+// probeStale is how old a probe's newest run may be and still be evidence.
+func (f healthFacts) probeStale() time.Duration {
+	iv := f.Probes.ProberInterval
+	if iv <= 0 {
+		iv = state.DefaultProberInterval
+	}
+	return time.Duration(state.ProbeStaleIntervals) * iv
+}
+
+func millisTime(m state.Millis) time.Time { return time.UnixMilli(int64(m)).UTC() }
+
+// probeEvidence judges one prober run: ok only for a fresh, passing run. It
+// returns the time of that run as the row's checked-at.
+func (f healthFacts) probeEvidence(r *state.ProbeRun, what string) (status, detail string, at *time.Time) {
+	switch {
+	case !f.Probes.Wired:
+		return statusNotChecked, "the console's probe facts are not wired", nil
+	case r == nil:
+		return statusNotChecked, "no " + what + " probe is supplied", nil
+	case r.Unconfigured != "":
+		return statusNotChecked, "not checked: " + r.Unconfigured, nil
+	case r.LastRunAt == 0:
+		return statusNotChecked, "the " + what + " probe has never completed a run", nil
+	}
+	last := millisTime(r.LastRunAt)
+	if age := f.Now.Sub(last); age > f.probeStale() {
+		return statusNotChecked, "the " + what + " probe has not completed for " + strconv.Itoa(int(age/time.Minute)) + " min, so its last result is not evidence of now", nil
+	}
+	if r.ConsecutiveFailures > 0 || r.LastOKAt != r.LastRunAt {
+		d := "the latest " + what + " probe failed"
+		if r.LastErrorClass != "" {
+			d += " (" + r.LastErrorClass + ")"
+		}
+		return statusWarn, d, ptrTime(last)
+	}
+	return statusOK, "", ptrTime(last)
+}
+
+// agentEndpointEvidence judges the agent endpoint self-probe the same way.
+func (f healthFacts) agentEndpointEvidence() (status, detail string, at *time.Time) {
+	st := f.Endpoint
+	switch {
+	case !f.EndpointWired:
+		return statusNotChecked, "the agent endpoint self-probe is not wired", nil
+	case !st.Runs:
+		d := "the agent endpoint self-probe cannot run"
+		if st.Limit != "" {
+			d += " (" + st.Limit + ")"
+		}
+		return statusNotChecked, d, nil
+	case !st.Known:
+		return statusNotChecked, "the agent endpoint self-probe has not completed a run yet", nil
+	}
+	stale := time.Duration(state.ProbeStaleIntervals) * st.Interval
+	if st.Interval <= 0 {
+		stale = time.Duration(state.ProbeStaleIntervals) * state.DefaultProberInterval
+	}
+	if age := f.Now.Sub(st.Last.At); age > stale+probe.TotalTimeout {
+		return statusNotChecked, "the agent endpoint self-probe has not completed for " + strconv.Itoa(int(age/time.Minute)) + " min, so its last result is not evidence of now", nil
+	}
+	if !st.Last.OK {
+		d := "the latest agent endpoint self-probe failed"
+		if st.Last.Class != "" {
+			d += " (" + st.Last.Class + ")"
+		}
+		return statusWarn, d, ptrTime(st.Last.At)
+	}
+	return statusOK, "", ptrTime(st.Last.At)
+}
+
+// certificateEvidence is ok only when an actual expiry was read recently from
+// both listeners: the gateway (by the gateway probe's completed handshake) and
+// the agent endpoint (by its self-probe's).
+func (f healthFacts) certificateEvidence() (status, detail string, at *time.Time) {
+	var missing []string
+	var oldest time.Time
+	note := func(t time.Time) {
+		if oldest.IsZero() || t.Before(oldest) {
+			oldest = t
+		}
+	}
+	g := f.Probes.Gateway
+	switch {
+	case !f.Probes.Wired || g == nil || g.Unconfigured != "" || g.LastRunAt == 0 || g.CertNotAfter == 0:
+		missing = append(missing, "the gateway")
+	case f.Now.Sub(millisTime(g.LastRunAt)) > f.probeStale() || g.LastOKAt != g.LastRunAt:
+		missing = append(missing, "the gateway (its latest probe is stale or failed, so it read no certificate)")
+	default:
+		note(millisTime(g.LastRunAt))
+	}
+	e := f.Endpoint
+	switch {
+	case !f.EndpointWired || !e.Runs || !e.Known || e.Last.NotAfter.IsZero():
+		missing = append(missing, "the agent listener")
+	case f.Now.Sub(e.Last.At) > f.probeStale()+probe.TotalTimeout:
+		missing = append(missing, "the agent listener (its self-probe is stale)")
+	default:
+		note(e.Last.At)
+	}
+	if len(missing) > 0 {
+		return statusNotChecked, "no certificate expiry was read recently from " + strings.Join(missing, " or "), nil
+	}
+	return statusOK, "", ptrTime(oldest)
+}
+
+// isJob reports whether a job_state row is a job: not the health-prober's lease
+// and per-probe rows (store.IsJobRow) and not the alarm evaluator's marker row,
+// which carries its last good run for the health rows.
+func isJob(name string) bool {
+	return store.IsJobRow(name) && name != health.EvaluatorOKJob
 }
 
 // worstOf folds a row's raised banners into a status: failed (a critical
@@ -261,42 +389,84 @@ func buildComponents(f healthFacts) []SystemComponentJSON {
 			}
 		}
 		// Local evidence: what this console can see for itself, beyond the engine's banners.
-		status, detail := statusOK, ""
+		// A row starts at not_checked and reaches ok only on its own evidence.
+		status, detail := statusNotChecked, "no evidence for this row"
 		switch row.id {
+		case "gateway":
+			status, detail, c.CheckedAt = f.probeEvidence(f.Probes.Gateway, "gateway")
+		case "storage":
+			status, detail, c.CheckedAt = f.probeEvidence(f.Probes.Storage, "storage")
+		case "smtp":
+			if sm := f.Probes.SMTP; sm != nil {
+				status, detail, c.CheckedAt = f.probeEvidence(&sm.Probe, "alert e-mail")
+				recentSend := sm.LastSendOKAt != 0 && f.Now.Sub(millisTime(sm.LastSendOKAt)) <= 24*time.Hour
+				switch {
+				case sm.ConsecutiveSendFailures > 0:
+					status, detail = statusWarn, "the latest alert e-mail send failed"
+				case status == statusNotChecked && recentSend && sm.Probe.Unconfigured == "":
+					status, detail, c.CheckedAt = statusOK, "", ptrTime(millisTime(sm.LastSendOKAt)) // a recent delivery is evidence
+				}
+			} else {
+				status, detail = statusNotChecked, "no alert e-mail probe is supplied"
+			}
+		case "certificates":
+			status, detail, c.CheckedAt = f.certificateEvidence()
 		case "agent_api":
-			if !f.EndpointWired {
-				status, detail = statusNotChecked, "the agent endpoint self-probe is not wired"
+			status, detail, c.CheckedAt = f.agentEndpointEvidence()
+		case "release_manifest":
+			switch r := f.Probes.Release; {
+			case r == nil || r.NotInBuild:
+				status, detail = statusNotChecked, "release-check is not in this build, so no manifest is ever checked"
+			case r.CheckedAt == 0:
+				status, detail = statusNotChecked, "release-check has never run"
+			default:
+				status, detail, c.CheckedAt = statusOK, "", ptrTime(millisTime(r.CheckedAt))
 			}
 		case "maintenance_worker":
 			switch {
 			case f.WorkerPinged && !f.WorkerReachable:
 				status, detail = statusFailed, "the worker did not answer a ping"
-			case !f.WorkerReachable && !f.MaintainKnown:
+			case f.WorkerReachable:
+				status, detail = statusOK, ""
+			case f.MaintainKnown && f.MaintainReachable:
+				status, detail = statusOK, ""
+			case f.MaintainKnown:
+				status, detail = statusWarn, "the latest worker probe did not reach it"
+			default:
 				status, detail = statusNotChecked, "the worker has not been probed"
 			}
 		case "database":
 			if f.SchemaErr != nil {
 				status, detail = statusFailed, "the database did not answer"
+			} else {
+				status, detail = statusOK, ""
 			}
 		case "evaluator":
 			if f.EvaluatorRanAt == nil {
 				status, detail = statusNotChecked, "the alarm-evaluator job has not run"
 			} else {
-				c.CheckedAt = ptrTime(*f.EvaluatorRanAt)
+				status, detail, c.CheckedAt = statusOK, "", ptrTime(*f.EvaluatorRanAt)
 			}
 		case "master_key":
 			if !f.MasterKeyWired {
 				status, detail = statusNotChecked, "the master key state is not reported"
+			} else {
+				status, detail = statusOK, ""
 			}
 		case "clock":
 			if f.ReportingDevices < clockMinReporting {
 				status, detail = statusNotChecked, "fewer than 5 devices are reporting, so offsets cannot be compared"
+			} else {
+				status, detail = statusOK, ""
 			}
 		case "fleet_data":
 			if !f.Complete {
 				status, detail = statusWarn, "the facts load was incomplete"
+			} else {
+				status, detail = statusOK, ""
 			}
 		case "jobs":
+			status, detail = statusOK, ""
 			failing, overdue := 0, 0
 			for _, jb := range f.Jobs {
 				if jb.LastStatus == "error" {
@@ -334,7 +504,12 @@ func (s *Service) systemHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	facts := healthFacts{Banners: f.View.Banners, Now: f.Computed, Complete: f.View.Complete, EndpointWired: s.Fleet.Endpoint != nil,
-		MasterKeyWired: s.Fleet.MasterLoaded != nil, Jobs: f.Jobs}
+		MasterKeyWired: s.Fleet.MasterLoaded != nil}
+	for _, j := range f.Jobs {
+		if isJob(j.Name) { // the prober's rows and the evaluator's marker are not jobs (the table lists the same set)
+			facts.Jobs = append(facts.Jobs, j)
+		}
+	}
 	var worker *Worker
 	if s.Backend != nil {
 		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -349,7 +524,14 @@ func (s *Service) systemHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.Fleet.Maintain != nil {
-		facts.MaintainKnown = s.Fleet.Maintain().Known
+		m := s.Fleet.Maintain()
+		facts.MaintainKnown, facts.MaintainReachable = m.Known, m.Reachable
+	}
+	if s.Fleet.Probes != nil {
+		facts.Probes = s.Fleet.Probes()
+	}
+	if s.Fleet.Endpoint != nil {
+		facts.Endpoint = s.Fleet.Endpoint()
 	}
 	schema, serr := s.Store.SchemaVersion(ctx)
 	facts.SchemaErr = serr
@@ -433,8 +615,8 @@ func (s *Service) systemJobs(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	out := JobListResponse{ComputedAt: now, Jobs: []JobJSON{}}
 	for _, j := range rows {
-		if !store.IsJobRow(j.Name) {
-			continue // the health-prober's lease and per-probe rows are not jobs
+		if !isJob(j.Name) {
+			continue // the health-prober's lease and per-probe rows and the evaluator's marker row are not jobs
 		}
 		seen[j.Name] = true
 		row := JobJSON{Name: j.Name, Registered: registered[j.Name], Status: j.LastStatus, LastStartedAt: j.LastStartedAt, LastFinishedAt: j.LastFinishedAt,

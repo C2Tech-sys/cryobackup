@@ -4,6 +4,7 @@
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>System</span></nav>
 {{with .Flash}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
 {{if .Empty}}{{template "panel_state" .Empty}}{{end}}
+<div id="m3live" class="stack" data-live data-poll hx-get="{{.Live}}" hx-trigger="cryo:poll, every {{.Refresh}}s" hx-select="#m3live" hx-select-oob="#banners,#freshness" hx-swap="outerHTML">
 {{if .Rows}}
 <section class="card sys-overall" aria-labelledby="sys-h">
   <div class="row"><h2 id="sys-h" class="sys-title">Overall</h2>{{template "chip" .Overall}}<span class="sys-sum">{{.OverallTxt}}</span></div>
@@ -17,9 +18,9 @@
 <tbody>{{range .Rows}}<tr id="comp-{{.ID}}" class="comp">
 <td class="dev-cell"><span class="hostname">{{.Label}}</span></td>
 <td class="state-cell">{{template "chip" .Status}}</td>
-<td class="wrap">{{if .Detail}}{{.Detail}}{{else}}<span class="muted">{{if .Banners}}See the conditions below.{{else}}No condition is raised.{{end}}</span>{{end}}</td>
-<td class="state-cell">{{range .Banners}}<span class="badge neutral" title="{{.Label}}"><i aria-hidden="true"></i>{{.ID}}</span> {{else}}<span class="muted">-</span>{{end}}</td>
-<td class="due">{{if .Checked}}{{.Checked}}{{else}}<span class="muted">-</span>{{end}}</td>
+<td class="wrap" data-label="Why">{{if .Detail}}{{.Detail}}{{else}}<span class="muted">{{if .Banners}}See the conditions below.{{else}}No condition is raised.{{end}}</span>{{end}}</td>
+<td class="state-cell{{if not .Banners}} empty{{end}}" data-label="Raised">{{range .Banners}}<span class="badge neutral" title="{{.Label}}"><i aria-hidden="true"></i>{{.ID}}</span> {{else}}<span class="muted">none</span>{{end}}</td>
+<td class="due{{if not .Checked}} empty{{end}}" data-label="Checked">{{if .Checked}}{{.Checked}}{{else}}<span class="muted">not recorded</span>{{end}}</td>
 </tr>
 {{end}}</tbody></table></div>
 </section>
@@ -29,6 +30,7 @@
 {{if .Versions}}<section aria-labelledby="h-ver"><h3 class="h-label" id="h-ver">Versions</h3>
 <dl class="kv">{{range .Versions}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl></section>{{end}}
 {{end}}
+<span class="asof"></span></div>
 <section aria-labelledby="h-jobs" id="jobs"><h3 class="h-label" id="h-jobs">Background jobs{{if .Jobs}}{{if .Jobs.Rows}} <span class="count">{{len .Jobs.Rows}}</span>{{end}}{{end}}</h3>
 {{if .JobsNote}}<p class="muted">{{.JobsNote}}</p>{{end}}
 {{with .Jobs}}{{if .Err}}{{template "panel_state" .Err}}{{end}}
@@ -39,10 +41,10 @@
 <tbody>{{range .Rows}}<tr id="job-{{.Name}}" class="job">
 <td class="dev-cell"><span class="hostname mono">{{.Name}}</span></td>
 <td class="state-cell">{{template "chip" .Status}}{{if .Overdue}} <span class="badge warn"><i aria-hidden="true"></i>OVERDUE</span>{{end}}{{if .ErrClass}}<small>{{.ErrClass}}</small>{{end}}</td>
-<td class="age">{{.Last}}{{if .LastSub}}<small>{{.LastSub}}</small>{{end}}</td>
-<td class="due">{{if .Duration}}{{.Duration}}{{else}}-{{end}}</td>
-<td class="due{{if .NextCls}} {{.NextCls}}{{end}}">{{if .Next}}{{.Next}}{{else}}-{{end}}</td>
-<td class="due">{{.Runs}}</td>
+<td class="age" data-label="Last run">{{.Last}}{{if .LastSub}}<small>{{.LastSub}}</small>{{end}}</td>
+<td class="due" data-label="Took">{{if .Duration}}{{.Duration}}{{else}}<span class="muted">none yet</span>{{end}}</td>
+<td class="due{{if .NextCls}} {{.NextCls}}{{end}}" data-label="Next">{{if .Next}}{{.Next}}{{else}}<span class="muted">not scheduled</span>{{end}}</td>
+<td class="due" data-label="Runs so far">{{.Runs}}</td>
 <td class="act">{{if .CanRun}}<details class="rowmenu act-confirm"><summary class="btn sm">Run now…</summary>
   <div class="rowmenu-pop" role="group" aria-label="Run {{.Name}} now">
     <form method="post" action="{{.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.CSRF}}">

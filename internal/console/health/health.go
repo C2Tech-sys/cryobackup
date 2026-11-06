@@ -79,7 +79,7 @@ type Fleet struct {
 // response: the view facts (C10) are always set on this path, so no handler can
 // forget them.
 func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error) {
-	return e.fleet(ctx, scope, true)
+	return e.memoized(ctx, scope, func() (Fleet, error) { return e.fleet(ctx, scope, true) }) // one evaluation per request under WithMemo (memo.go)
 }
 
 // Alarms evaluates the whole fleet for a caller without a page (the

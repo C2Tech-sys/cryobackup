@@ -3,6 +3,7 @@
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Overdue</span></nav>
 {{template "fleet_filter" .Filter}}
+<div id="m3live" class="stack" data-live data-poll hx-get="{{.Live}}" hx-trigger="cryo:poll, every {{.Refresh}}s" hx-select="#m3live" hx-select-oob="#banners,#freshness" hx-swap="outerHTML">
 {{with .Warn}}{{template "panel_state" .}}{{end}}
 {{if .Empty}}{{template "panel_state" .Empty}}{{end}}
 {{if .Groups}}
@@ -24,4 +25,5 @@
 {{template "m3_pager" .Pager}}
 <p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Overdue is the engine's verdict: a last success older than the limit, a scheduled run that did not start, or no success since the grace period ended.</p>
 {{end}}
+<span class="asof"></span></div>
 {{end}}

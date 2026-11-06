@@ -923,3 +923,15 @@ table.fleet.jobtable td.act details.rowmenu > .rowmenu-pop { right: 0; left: aut
   .rundetail .kv { grid-template-columns: 110px minmax(0, 1fr); }
   .actgroup-head .cnt { margin-left: 0; }
 }
+
+/* M3-T4 delta: labelled values on a phone, the silence row's devices, today in view. */
+table.fleet tr.silence-dev td:first-child { padding-left: 28px; }
+table.fleet tr.silence-dev td { background: color-mix(in srgb, var(--danger-soft) 45%, transparent); }
+table.actgrid td.actmissing { text-align: left; padding: 6px 10px; color: var(--danger); font: 500 12px/1.4 var(--font-sans); white-space: normal; }
+@media (max-width: 640px) {
+  table.fleet td[data-label]::before { content: attr(data-label) ": "; color: var(--text-muted); font: 500 10.5px/1.3 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+  table.fleet td.empty { display: none; }
+  table.fleet.unseen tr.silence-dev { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.fleet.unseen tr.silence-dev td { border: 0; padding: 0; white-space: normal; background: transparent; }
+  table.fleet.unseen tr.silence-dev td.wrap { display: none; }
+}

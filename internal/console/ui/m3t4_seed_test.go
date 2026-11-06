@@ -13,7 +13,7 @@ import (
 var hostileRunID = ulid(900)
 
 // Strings the hostile run carries; none may reach a page.
-var hostileTexts = []string{`secret-payroll.xlsx`, `C:\Users\someone`, `\\fileserver\share`, `/home/someone`}
+var hostileTexts = []string{`secret-payroll.xlsx`, `C:\Users\someone`, `\\fileserver\share`, `/home/someone`, `Patient_Chart.docx`, `John Smith MRI.pdf`}
 
 // m3Seed adds runs of every outcome, a retried run, an open run and the hostile
 // run (a path in an error class, a stats text and an agent version) to the
@@ -50,12 +50,12 @@ func (e *env) m3Seed() {
 	mk(9, "DR-OFFICE-PC", "", "backup", 20*time.Minute, 0, nil)
 	mk(10, "PRINT-SRV-01", "success", "prune", 12*h, 20*time.Minute, nil)
 	mk(11, "FRONTDESK-01", "failed", "backup", 2*h, 90*time.Second, func(r *store.RunInput) {
-		r.ErrorClass, r.ErrorCounts = "vss", map[string]int{"vss": 3, "io": 1}
+		r.ErrorClass, r.ErrorCounts = "vss", map[string]int{"vss": 3, "disk": 1}
 	})
 	mk(900, "HYGIENE-PC-2", "failed", "backup", 3*h, 4*time.Minute, func(r *store.RunInput) {
 		r.ErrorClass = "permission"
-		r.ErrorCounts = map[string]int{"permission": 7, hostileTexts[1] + `\` + hostileTexts[0]: 2, hostileTexts[2]: 1}
-		r.AgentVersion = "1.4.2"
+		r.ErrorCounts = map[string]int{"permission": 7, hostileTexts[1] + `\` + hostileTexts[0]: 2, hostileTexts[2]: 1, hostileTexts[0]: 3, hostileTexts[4]: 1}
+		r.AgentVersion = hostileTexts[4]
 		r.Stats = json.RawMessage(`{"total_files_processed":900,"failed_files":9,"note":"C:\\Users\\someone\\secret-payroll.xlsx","path":"/home/someone/secret-payroll.xlsx","nested":{"a":1}}`)
 	})
 }

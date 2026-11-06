@@ -3,6 +3,7 @@
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Devices not seen</span></nav>
 {{template "fleet_filter" .Filter}}
+<div id="m3live" class="stack" data-live data-poll hx-get="{{.Live}}" hx-trigger="cryo:poll, every {{.Refresh}}s" hx-select="#m3live" hx-select-oob="#banners,#freshness" hx-swap="outerHTML">
 {{with .Warn}}{{template "panel_state" .}}{{end}}
 {{if .Empty}}{{template "panel_state" .Empty}}{{end}}
 {{if .Rows}}
@@ -11,12 +12,17 @@
 <table class="fleet unseen">
 <caption>Devices not seen: customer-wide silence first, then single devices, longest silent first</caption>
 <thead><tr><th scope="col">Device or customer</th><th scope="col">State</th><th scope="col">Last heard from</th><th scope="col">Likely cause</th></tr></thead>
-<tbody>{{range .Rows}}{{if .Silence}}<tr class="silence-row">
+<tbody>{{range .Rows}}{{if .Silence}}<tr class="silence-row" id="silence-{{.CustomerID}}">
 <td class="dev-cell"><a class="hostname" href="/customers/{{.CustomerID}}">{{.Customer}}</a><small>{{.Affected}} · {{.Unseen}}</small></td>
 <td class="state-cell"><span class="st crit"><i aria-hidden="true"></i>CUSTOMER-WIDE SILENCE</span>{{if .Covered}}<small class="meta-mono">The gateway banner already covers these devices.</small>{{end}}</td>
 <td class="age {{.LastCls}}"><i class="g g-{{.LastGlyph}}" aria-hidden="true"></i>{{.Last}}{{if .LastSub}}<small>oldest: {{.LastSub}}</small>{{end}}</td>
-<td class="wrap">{{.Hint}} <a href="{{.ShowHref}}">Show the devices</a></td>
-</tr>{{else}}<tr id="dev-{{.ID}}" class="dev">
+<td class="wrap">{{.Hint}} {{if .Expanded}}<a href="{{.HideHref}}">Hide the {{.N}} devices</a>{{else}}<a href="{{.ShowHref}}">Show the {{.N}} devices</a>{{end}}</td>
+</tr>{{range .Devices}}<tr class="dev silence-dev" id="dev-{{.ID}}">
+<td class="dev-cell"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a></td>
+<td class="state-cell">{{template "chip" .State}}</td>
+<td class="age bad" data-label="Last heard from">{{.Last}}</td>
+<td class="wrap"><span class="muted">part of the silence above</span></td>
+</tr>{{end}}{{else}}<tr id="dev-{{.ID}}" class="dev">
 <td class="dev-cell"><a class="hostname" href="/devices/{{.ID}}">{{.Host}}</a><small>{{.Customer}}{{if .Meta}} · {{.Meta}}{{end}}</small></td>
 <td class="state-cell">{{template "chip" .State}}{{if .Ack}} <span class="badge neutral"><i aria-hidden="true"></i>ACK</span>{{end}}</td>
 <td class="age {{.LastCls}}"><i class="g g-{{.LastGlyph}}" aria-hidden="true"></i>{{.Last}}{{if .LastSub}}<small>{{.LastSub}}</small>{{end}}</td>
@@ -26,4 +32,5 @@
 {{template "m3_pager" .Pager}}
 <p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). A device is unseen when its heartbeat has been silent past the limit. When most of a customer's devices go silent at once the engine reports the customer, not each machine.</p>
 {{end}}
+<span class="asof"></span></div>
 {{end}}
