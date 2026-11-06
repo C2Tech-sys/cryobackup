@@ -1,0 +1,49 @@
+{{/* B16 - the new-enrollment wizard, on its own page (M3-T6). Step 1 is this form; step 2 is the one-time result the POST answers with (pages/enroll.html, "enroll_created"). */}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <a href="/enroll">Enroll devices</a> / <span>New enrollment</span></nav>
+<div class="page-head">
+  <div class="t"><h2>New enrollment</h2></div>
+  <div class="sub"><span>Create a token, then paste the generated deployment into your RMM. Installers that carry the token enroll themselves; nobody approves each machine.</span></div>
+</div>
+<ol class="wiz-steps" aria-label="Steps"><li aria-current="step"><span>1</span>Token settings</li><li><span>2</span>Deployment</li></ol>
+{{range .Notes}}{{template "inline_banner" .}}{{end}}
+
+<form class="formcard enrollform" method="post" action="/ui/enroll/token" aria-label="New enrollment token">
+  <input type="hidden" name="csrf_token" value="{{.Form.CSRF}}">
+  {{if .Form.Summary}}<div class="banner crit dense" role="alert" tabindex="-1" id="form-errors"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>The token was not created.</b> Fix {{len .Form.Summary}} {{if eq (len .Form.Summary) 1}}field{{else}}fields{{end}}:<ul class="errlist">{{range .Form.Summary}}<li>{{.Message}}</li>{{end}}</ul></div></div>{{end}}
+  <fieldset class="plain stack">
+    <div class="frow">
+      <div class="field"><label for="e-cust">Customer</label>
+        <select class="input" id="e-cust" name="customer_id"{{if .Form.HasErr "customer_id"}} aria-invalid="true" aria-describedby="e-cust-err"{{end}}>{{range .Form.Customers}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        {{with .Form.Err "customer_id"}}<span class="err" id="e-cust-err">{{.}}</span>{{end}}</div>
+      {{if .Form.CanCreateCustomer}}<div class="field"><label for="e-new">Or a new customer <span class="muted">(optional)</span></label>
+        <input class="input" id="e-new" name="new_customer" type="text" maxlength="200" value="{{.Form.NewCustomer}}" autocomplete="off" aria-describedby="e-new-help{{if .Form.HasErr "new_customer"}} e-new-err{{end}}"{{if .Form.HasErr "new_customer"}} aria-invalid="true"{{end}}>
+        <span class="help" id="e-new-help">Name it here to create it with the token. It is expected to have devices and shows ONBOARDING until the token expires.</span>{{with .Form.Err "new_customer"}}<span class="err" id="e-new-err">{{.}}</span>{{end}}</div>{{end}}
+    </div>
+    <div class="frow">
+      <div class="field"><label for="e-label">Label <span class="muted">(optional)</span></label>
+        <input class="input" id="e-label" name="label" type="text" maxlength="100" value="{{.Form.Label}}" placeholder="Front office, November rollout" autocomplete="off" aria-describedby="e-label-help{{if .Form.HasErr "label"}} e-label-err{{end}}"{{if .Form.HasErr "label"}} aria-invalid="true"{{end}}>
+        <span class="help" id="e-label-help">Shown in the token list. Not secret.</span>{{with .Form.Err "label"}}<span class="err" id="e-label-err">{{.}}</span>{{end}}</div>
+      <div class="field"><label for="e-pol">Policy</label>
+        <select class="input" id="e-pol" name="policy_id" aria-describedby="e-pol-help{{if .Form.HasErr "policy_id"}} e-pol-err{{end}}"{{if .Form.HasErr "policy_id"}} aria-invalid="true"{{end}}>{{range .Form.Policies}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        <span class="help" id="e-pol-help">Applied to each device that enrolls with this token, on top of the customer's policy: the settings this policy changes replace the customer's for that device. It is copied at enrollment, so later edits to the policy do not move devices already enrolled. Left as the customer's policy, devices follow the customer.</span>{{with .Form.Err "policy_id"}}<span class="err" id="e-pol-err">{{.}}</span>{{end}}</div>
+    </div>
+    <div class="frow">
+      <div class="field"><label for="e-exp">Expires after</label>
+        <select class="input" id="e-exp" name="expires" aria-describedby="e-exp-help{{if .Form.HasErr "expires"}} e-exp-err{{end}}"{{if .Form.HasErr "expires"}} aria-invalid="true"{{end}}>{{range .Form.Expiries}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        <span class="help" id="e-exp-help">Shorter is safer: the token is a credential for adding devices.</span>{{with .Form.Err "expires"}}<span class="err" id="e-exp-err">{{.}}</span>{{end}}</div>
+      <div class="field"><label for="e-uses">Enrollments allowed</label>
+        <select class="input" id="e-uses" name="max_uses" aria-describedby="e-uses-help{{if .Form.HasErr "max_uses"}} e-uses-err{{end}}"{{if .Form.HasErr "max_uses"}} aria-invalid="true"{{end}}>{{range .Form.UseOpts}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        <span class="help" id="e-uses-help">The token stops working after this many devices.</span>{{with .Form.Err "max_uses"}}<span class="err" id="e-uses-err">{{.}}</span>{{end}}</div>
+    </div>
+    <div class="frow">
+      <div class="field"><label for="e-class">Device class</label>
+        <select class="input" id="e-class" name="device_class" aria-describedby="e-class-help{{if .Form.HasErr "device_class"}} e-class-err{{end}}"{{if .Form.HasErr "device_class"}} aria-invalid="true"{{end}}>{{range .Form.Classes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        <span class="help" id="e-class-help">Used when an agent does not say whether it is a laptop or a desktop.</span>{{with .Form.Err "device_class"}}<span class="err" id="e-class-err">{{.}}</span>{{end}}</div>
+      <div class="field"><span class="lbl">Key custody</span>
+        <p class="help">Set on the customer, not the token. Escrowed customers enroll without a prompt; the repository key is kept encrypted under the console's master key.</p></div>
+    </div>
+  </fieldset>
+  <div class="row end"><a class="btn ghost" href="/enroll">Cancel</a><button class="btn primary" type="submit"><svg width="12" height="12" aria-hidden="true"><use href="#i-file"/></svg>Create token and show the deployment</button></div>
+</form>
+{{end}}

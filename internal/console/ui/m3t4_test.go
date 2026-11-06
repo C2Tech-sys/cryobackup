@@ -728,7 +728,7 @@ func TestM3T4ActivityGridMatchesTheAPI(t *testing.T) {
 	list := e.page(strings.ReplaceAll(link, "&amp;", "&"), 200)
 	mustContain(t, "day link", list, "Matches "+strconv.Itoa(today.Success+today.Failed)+" of ")
 	// Retired devices are not part of the grid (the ten-day API does not carry them).
-	if strings.Contains(body, "OLD-RECEPTION-PC") || strings.Contains(body, `name="retired"`) {
+	if strings.Contains(body, `id="act-dev-`+e.dev["OLD-RECEPTION-PC"]+`"`) || strings.Contains(body, `name="retired"`) {
 		t.Error("a retired device or a control for them is in the grid")
 	}
 	// The problems filter keeps the devices with a failed, mixed or missed day.

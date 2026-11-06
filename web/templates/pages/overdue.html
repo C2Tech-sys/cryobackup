@@ -25,5 +25,6 @@
 {{template "m3_pager" .Pager}}
 <p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Overdue is the engine's verdict: a last success older than the limit, a scheduled run that did not start, or no success since the grace period ended.</p>
 {{end}}
+{{template "retired_fold" .Retired}}
 <span class="asof"></span></div>
 {{end}}

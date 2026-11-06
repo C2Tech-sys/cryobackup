@@ -1,0 +1,34 @@
+{{/* retire.html - M3-T6: the device retire dialog (B07, ADR 0016) and the "Retired (n)" fold of the device lists (architecture §4.2 row 1).
+     Plain forms and details elements: no script needed. Path-free: names, reasons and times only. */}}
+
+{{define "retire_dialog"}}<span class="tipwrap"><details class="rowmenu act-confirm act-retire"{{if .Retire.Open}} open{{end}}><summary class="btn sm danger"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</summary>
+    <div class="rowmenu-pop retirepop" role="group" aria-label="Retire {{.Retire.Host}}">
+      <form method="post" action="{{.Retire.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.Retire.CSRF}}">{{if .Retire.Return}}<input type="hidden" name="return" value="{{.Retire.Return}}">{{end}}
+        <p class="retire-lede"><b>Retire {{.Retire.Host}} for good?</b></p>
+        <ul class="retire-does">
+          <li>Revokes its gateway login and device token now. The machine cannot back up or reach the console again.</li>
+          <li>Stops its backups and maintenance, and it leaves every alarm and health count. If it is an expected customer's last device, that customer reads MISSING.</li>
+          <li>Deletes nothing: the repository and its snapshots stay in storage. Restoring from a retired device is not available in the console yet.</li>
+          <li>Cannot be undone. A machine that comes back enrolls as a new device.</li>
+        </ul>
+        <div class="field"><label for="retire-reason">Reason <span class="muted">(required, kept in the audit log)</span></label>
+          <input class="input" id="retire-reason" name="reason" type="text" maxlength="500" required autocomplete="off" aria-describedby="retire-reason-help"><span class="help" id="retire-reason-help">One line. No file paths.</span></div>
+        {{if .Retire.ReplacementsErr}}<p class="help" role="status">The customer's other devices could not be read, so a replacement cannot be named. You can still retire this device.</p>
+        {{else if gt (len .Retire.Replacements) 1}}<div class="field"><label for="retire-repl">Replaced by <span class="muted">(optional)</span></label>
+          <select class="input" id="retire-repl" name="replaced_by">{{range .Retire.Replacements}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>{{end}}
+        <div class="field"><label class="check"><input type="checkbox" name="final_backup" value="1"{{if .Retire.Parked}} disabled{{end}} aria-describedby="retire-fb-help"> Run a final backup first, and retire later</label>
+          {{if .Retire.Parked}}<span class="help" id="retire-fb-help">Not available while the device is parked: a parked device takes no backups.</span>{{else}}<span class="help" id="retire-fb-help">This queues the backup and does not retire yet. A backup needs the credentials a retire takes away, so come back and retire once it has finished.</span>{{end}}</div>
+        <div class="field"><label for="retire-confirm">To confirm, type <b class="mono">{{.Retire.Host}}</b></label>
+          <input class="input" id="retire-confirm" name="confirm" type="text" required autocomplete="off" spellcheck="false"></div>
+        <div class="actions"><button class="btn sm danger-solid" type="submit">Retire device</button></div>
+      </form>
+    </div>
+  </details>{{if .Hint}}<span class="tip" role="tooltip" id="{{.ID}}-hint">{{.Hint}}</span>{{end}}</span>{{end}}
+
+{{/* retired_fold: "Retired (n)", collapsed. The devices it holds raise no alarm and count in no denominator. */}}
+{{define "retired_fold"}}{{with .}}<details class="retired-fold"><summary><svg aria-hidden="true"><use href="#i-chev"/></svg>Retired ({{.N}})</summary>
+  <ul class="retired-list">{{$chip := .Chip}}{{range .Rows}}<li id="retired-{{.ID}}"><a href="/devices/{{.ID}}" class="hostname">{{.Host}}</a>{{template "chip" $chip}}{{if .Customer}}<a class="rl-cust" href="/customers/{{.CustomerID}}">{{.Customer}}</a>{{end}}{{if .When}}<time class="meta-mono" datetime="{{.ISO}}">{{.When}}</time>{{end}}</li>{{end}}</ul>
+</details>{{end}}{{end}}
+
+{{/* m3_notice: the result of an action that came back to a list page. */}}
+{{define "m3_notice"}}{{with .}}<div class="banner {{.Class}} dense" role="status"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}{{end}}

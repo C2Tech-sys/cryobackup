@@ -10,7 +10,7 @@
 {{define "group"}}<tbody id="{{.ID}}" class="grp{{if .Variant}} {{.Variant}}{{end}}" data-default-collapsed="{{.Collapsed}}" data-collapsed="false">
 <tr class="ghead"><th scope="rowgroup" colspan="5"><div class="ghead-in">
 {{if .Rows}}<button type="button" class="chev" aria-expanded="true" aria-controls="{{.ID}}" aria-label="{{.Aria}}"><svg aria-hidden="true"><use href="#i-chev"/></svg></button>{{else}}<span class="chev none" aria-hidden="true"></span><span class="sr-only">{{.Aria}}</span>{{end}}
-{{with .Status}}{{template "chip" .}}{{end}}<span>{{.Name}}</span><span class="cnt">{{.CountText}}</span>{{if .Note}}<span class="st crit"><i aria-hidden="true"></i>{{.Note}}</span>{{end}}
+{{with .Status}}{{template "chip" .}}{{end}}<span>{{.Name}}</span><span class="cnt">{{.CountText}}{{with .Retired}} · {{.N}} retired{{end}}</span>{{if .Note}}<span class="st crit"><i aria-hidden="true"></i>{{.Note}}</span>{{end}}
 {{template "gauge" .Gauge}}{{template "roll" .Roll}}
 </div></th></tr>
 {{range .Rows}}<tr id="dev-{{.ID}}" class="dev">
@@ -20,4 +20,4 @@
 <td class="strip-cell">{{template "strip" .Strip}}</td>
 <td class="agent-cell mono">{{.Agent}}</td>
 </tr>
-{{end}}</tbody>{{end}}
+{{end}}{{with .Retired}}<tr class="dev retired-row"><td colspan="5">{{template "retired_fold" .}}</td></tr>{{end}}</tbody>{{end}}

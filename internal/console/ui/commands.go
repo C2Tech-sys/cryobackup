@@ -149,6 +149,8 @@ type ActionItem struct {
 	Undo       string // POST target that cancels the in-flight command ("" = cannot be undone)
 	// Pause, when set, is the Park dialog (m3t5_pause.go): the item opens a form instead of posting at once.
 	Pause *PauseForm
+	// Retire, when set, is the Retire dialog (m3t6_retire.go), the same way.
+	Retire *RetireForm
 }
 
 // IdentityPanel is the banner and the resolve form of an identity conflict.
@@ -338,7 +340,8 @@ func (s *Service) actionBar(r *http.Request, p *auth.Principal, f health.Fleet, 
 		bar.Items = append(bar.Items, it)
 	}
 	bar.Items = append(bar.Items, mk("refresh_policy", store.CommandRefreshPolicy, "Refresh policy", "refresh-policy"))
-	bar.Items = append(bar.Items, s.parkItems(p, dev, c, retired, parked)) // M3-T5 (B15): Park or Resume
+	bar.Items = append(bar.Items, s.parkItems(p, dev, c, retired, parked))  // M3-T5 (B15): Park or Resume
+	bar.Items = append(bar.Items, s.retireItem(r, p, dev, retired, parked)) // M3-T6 (B07): Retire
 	bar.More = append(bar.More, mk("check_in", store.CommandCheckIn, "Check in now", "check-in"))
 
 	if dev.IdentityConflictAt != nil && !retired {
@@ -606,6 +609,8 @@ func commandAuditDetails(ev store.AuditEvent) string {
 		return commandLabel(d.Type)
 	case "device.identity_resolve":
 		return "Resolution: " + d.Resolution + " · " + d.Reason
+	case "device.retire":
+		return d.Reason
 	}
 	return ""
 }

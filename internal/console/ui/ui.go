@@ -199,6 +199,7 @@ func (s *Service) Register(reg httpx.Registrar) {
 	r.Handle("GET /devices/{id}", ro(s.devicePanel))
 	s.registerM2(r)
 	s.registerM3T5(r)       // M3-T5: explain tooltip, saved views, park and resume (m3t5_board.go)
+	s.registerM3T6(r)       // M3-T6: device retire (m3t6_retire.go)
 	s.registerM3T4(r)       // M3-T4: runs, activity, overdue, unseen, system (m3t4.go)
 	s.registerPolicies(r)   // M2-W2A: policies, customer Policy tab, device overrides (policy_routes.go)
 	s.registerCommandsUI(r) // M2-W2C (commands.go)
@@ -224,6 +225,7 @@ func Patterns(fixtures bool) []string {
 		"GET /ui/partials/run-progress/{run_id}", "GET /ui/partials/restore/{id}", "GET /static/{path...}"}
 	p = append(p, m2Patterns()...)
 	p = append(p, m3t5Patterns()...)      // M3-T5
+	p = append(p, m3t6Patterns()...)      // M3-T6
 	p = append(p, m3t4Patterns()...)      // M3-T4
 	p = append(p, policyUIPatterns()...)  // M2-W2A
 	p = append(p, commandPatterns()...)   // M2-W2C

@@ -33,5 +33,6 @@
 {{template "m3_pager" .Pager}}
 <p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). Retired devices are not part of the grid. Each day is a calendar day in the customer's own zone. In a device row a block's number is the jobs that ran that day; in the "All devices" row it is how many devices had the worst kind of day shown. A block with a number opens those runs.</p>
 {{end}}
+{{template "retired_fold" .Retired}}
 <span class="asof"></span></div>
 {{end}}

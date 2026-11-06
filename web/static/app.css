@@ -1071,3 +1071,67 @@ a.runlink:hover { color: var(--accent); border-bottom-color: var(--accent); }
   .actionbar details.act-pause[open] > .pausepop { left: 0; right: 0; width: auto; max-width: none; }
 }
 .hist a.runlink { white-space: nowrap; }
+
+/* ===== M3-T6: enrollment token table, wizard steps, retire dialog, "Retired (n)" =====
+   Tokens only: no literal colour in this block. Phone rules sit beside each part. */
+.page-head-act { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tokenbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; }
+.tokensegs { display: flex; flex-wrap: wrap; gap: 4px; }
+.tokenseg { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font: 500 12px/1 var(--font-sans); background: var(--surface); }
+.tokenseg:hover { background: var(--accent-soft); color: var(--text); }
+.tokenseg[aria-current="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.tokenseg[aria-current="true"] .count { color: inherit; }
+.tokenfilter { margin: 0; }
+table.fleet.tokens td.act { display: table-cell; }
+table.fleet.tokens td.act .inline-form { display: inline-flex; margin-left: 6px; }
+.wiz-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font: 500 12.5px/1.2 var(--font-sans); color: var(--text-muted); }
+.wiz-steps li { display: flex; align-items: center; gap: 8px; }
+.wiz-steps li span { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--border-input); display: grid; place-items: center; font: 600 11px/1 var(--font-mono); box-sizing: border-box; }
+.wiz-steps li[aria-current="step"] { color: var(--text); font-weight: 600; }
+.wiz-steps li[aria-current="step"] span { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.enrollform .row.end { gap: 8px; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .tokenbar, .tokenfilter { width: 100%; }
+  table.fleet.tokens thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  table.fleet.tokens, table.fleet.tokens tbody { display: block; width: 100%; }
+  table.fleet.tokens tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  table.fleet.tokens td { display: block; border: 0; padding: 0; height: auto; min-width: 0; white-space: normal; }
+  table.fleet.tokens td[data-label], table.fleet.tokens td.act { grid-column: 1 / -1; }
+  table.fleet.tokens td small { display: inline; margin-left: 6px; }
+  table.fleet.tokens td.dev-cell small { display: block; margin-left: 0; }
+  table.fleet.tokens td.act { width: auto; text-align: left; white-space: normal; display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
+  table.fleet.tokens td.act .inline-form { margin-left: 0; }
+  table.fleet.tokens tr.off td { opacity: 1; }
+}
+
+/* The retire dialog: the park dialog's popover, wider, and the full width of a phone. */
+.retirepop { width: 420px; gap: 10px; }
+.retire-lede { margin: 0; font: 400 13px/1.4 var(--font-sans); }
+.retire-does { margin: 0; padding-left: 18px; display: grid; gap: 4px; font: 400 12.5px/1.4 var(--font-sans); color: var(--text-muted); }
+.actionbar details.act-retire[open] { z-index: 26; }
+@media (max-width: 639px) {
+  .actionbar details.act-retire, .actionbar .act-item .tipwrap:has(details.act-retire) { position: static; }
+  .actionbar details.act-retire[open] > .retirepop { left: 0; right: 0; width: auto; max-width: none; }
+}
+@media (max-width: 1000px) and (min-width: 640px) {
+  .actionbar details.act-retire[open] > .retirepop { left: auto; right: 0; }
+}
+
+/* "Retired (n)": collapsed, quiet, the same everywhere. The device page's statement about a retired device is as quiet. */
+.banner.neutral { background: var(--surface); border-color: var(--border); }
+.retired-fold > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; font: 500 12px/1 var(--font-sans); color: var(--text-muted); }
+.retired-fold > summary::-webkit-details-marker { display: none; }
+.retired-fold > summary:hover { color: var(--text); }
+.retired-fold > summary svg { width: 12px; height: 12px; transition: transform var(--motion-fast) var(--motion-ease); }
+.retired-fold[open] > summary svg { transform: rotate(90deg); }
+.retired-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.retired-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 26px; font: 400 12.5px/1.3 var(--font-sans); }
+.retired-list .rl-cust { color: var(--text-muted); }
+table.fleet tr.retired-row td { padding: 4px 12px; white-space: normal; }
+table.fleet tbody[data-collapsed="true"] tr.retired-row { display: none; }
+table.fleet.unseen td.act .btn { white-space: nowrap; }
+@media (max-width: 640px) {
+  table.fleet tr.retired-row { display: block; }
+  table.fleet tr.retired-row td { display: block; width: auto; border: 0; }
+  table.fleet.unseen td.act { grid-column: 1 / -1; width: auto; text-align: left; white-space: normal; }
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -105,6 +106,9 @@ const (
 // call fails on the run ids.
 func SeedM3(ctx context.Context, st *store.Store, now time.Time) error {
 	now = now.UTC()
+	if err := seedM3T6Tokens(ctx, st, now); err != nil {
+		return err
+	}
 	devs := map[string]string{}
 	l, err := st.ListDevices(ctx, store.ScopeAll(), store.ListDevicesOptions{IncludeRetired: true, Page: store.Page{Limit: 500}})
 	if err != nil {
@@ -210,4 +214,33 @@ func runID(n int) string {
 		n /= 32
 	}
 	return string(b)
+}
+
+// seedM3T6Tokens adds a used-up, an expired and a revoked enrollment token, so the
+// token table (M3-T6) has every status and something the operator can delete.
+func seedM3T6Tokens(ctx context.Context, st *store.Store, now time.Time) error {
+	return st.Write(ctx, func(tx *store.Tx) error {
+		var cust string
+		if err := tx.QueryRow(`SELECT id FROM customers WHERE name = 'Harbor Family Practice'`).Scan(&cust); err != nil {
+			return err
+		}
+		at := now.UnixMilli()
+		day := int64(24 * time.Hour / time.Millisecond)
+		for _, t := range []struct {
+			id, label, hash  string
+			expires, maxUses int64
+			used             int64
+			revoked          any
+		}{
+			{"01JM3T6TOKEN00000000USEDUP", "harbor-exam-rooms", strings.Repeat("1", 64), at + 20*day, 3, 3, nil},
+			{"01JM3T6TOKEN00000000EXPIRE", "harbor-spring-rollout", strings.Repeat("2", 64), at - 30*day, 25, 12, nil},
+			{"01JM3T6TOKEN00000000REVOKE", "harbor-leaked-in-a-ticket", strings.Repeat("3", 64), at + 40*day, 10, 1, at - 2*day},
+		} {
+			if _, err := tx.Exec(`INSERT INTO enrollment_tokens (id, customer_id, label, token_hash, device_class_default, expires_at, max_uses, used_count, revoked_at, created_at, updated_at)
+				VALUES (?,?,?,?, 'unknown', ?, ?, ?, ?, ?, ?)`, t.id, cust, t.label, t.hash, t.expires, t.maxUses, t.used, t.revoked, at-60*day, at-60*day); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

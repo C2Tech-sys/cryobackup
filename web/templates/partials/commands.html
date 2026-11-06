@@ -6,7 +6,8 @@
      M3-T5 (ruling 1): the hint, reason and state note of an item are a tooltip on its button (hover or keyboard focus), not a line under it; the button still names it with aria-describedby. */}}
 {{define "dev_action"}}<span class="act-item" id="{{.ID}}">
 {{- if .Enabled}}
-  {{- if .Pause}}
+  {{- if .Retire}}{{template "retire_dialog" .}}
+  {{- else if .Pause}}
   <span class="tipwrap"><details class="rowmenu act-confirm act-pause"><summary class="btn sm"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</summary>
     <div class="rowmenu-pop pausepop" role="group" aria-label="Park this device">
       <form method="post" action="{{.Pause.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.Pause.CSRF}}">

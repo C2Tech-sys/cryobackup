@@ -186,6 +186,8 @@ type CauseView struct {
 
 // DeviceView is the device panel summary (B07).
 type DeviceView struct {
+	// Retired: no ten-day strip (the engine computes none) and no presence line (M3-T6).
+	Retired    bool
 	ID         string
 	Host       string
 	Customer   string
@@ -281,10 +283,16 @@ func (s *Service) deviceView(ctx context.Context, p *auth.Principal, f health.Fl
 		}
 		seen = online + " · seen " + ageLong(c.Now.Sub(ds.Detail.LastSeen))
 	}
-	v.Sub = append(v.Sub, seen)
+	if ds.Primary != state.StateRetired { // the engine loads no presence for a retired device: "never seen" would be false
+		v.Sub = append(v.Sub, seen)
+	}
 
 	if ds.Primary != state.StateOK && ds.Primary != state.StateRetired {
 		v.Cause = &CauseView{Class: ClassOf(ds.Primary), Title: v.Chips[0].Title, Text: reasonLine(*ds, c)}
+	}
+	if ds.Primary == state.StateRetired {
+		v.Retired = true
+		v.Cause = s.retiredCause(ctx, p, dev, c) // M3-T6: when, why, what it means
 	}
 	pr, perr := s.Store.GetPresence(ctx, p.Scope, id)
 	if ri.Open && perr == nil {

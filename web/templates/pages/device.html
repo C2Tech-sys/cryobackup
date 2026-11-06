@@ -8,7 +8,7 @@
   {{else}}<span class="btn sm" role="link" aria-disabled="true" aria-describedby="restore-why"><svg width="12" height="12" aria-hidden="true"><use href="#i-restore"/></svg>Restore files…</span><span class="meta-mono" id="restore-why">{{.RestoreNote}}</span>{{end}}
 </div>
 {{with .Progress}}{{template "run_progress" .}}{{end}}
-<section aria-labelledby="h-strip"><h3 class="h-label" id="h-strip">Last 10 days</h3>{{template "strip" .Strip}}</section>
+{{if not .Retired}}<section aria-labelledby="h-strip"><h3 class="h-label" id="h-strip">Last 10 days</h3>{{template "strip" .Strip}}</section>{{end}}
 <section aria-labelledby="h-runs"><h3 class="h-label" id="h-runs">Last ten runs <span class="count">{{len .Runs}}</span></h3>
 {{if .Runs}}<ol class="hist">{{range .Runs}}<li><a class="runlink d" href="/runs/{{.ID}}" aria-label="Run of {{.Date}}, details"><time datetime="{{.DateISO}}">{{.Date}}</time></a><span class="sum">{{template "chip" .Chip}} {{.Summary}}</span><span class="s">{{.Exit}}</span><span class="s">{{.Duration}}</span></li>{{end}}</ol>
 <p><a href="/devices/{{.ID}}/history">All runs, with filters</a></p>

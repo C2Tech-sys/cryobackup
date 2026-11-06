@@ -352,6 +352,8 @@ type Group struct {
 	Collapsed bool
 	Rows      []DeviceRow
 	Note      string
+	// Retired is this customer's "Retired (n)" (M3-T6): never in Rows or any count.
+	Retired *RetiredFold
 }
 
 // FilterView is the active board filter.
