@@ -180,7 +180,7 @@ func (s *Service) designData(ctx context.Context, only string) DesignData {
 	d := DesignData{Only: only, Sections: designSections}
 	d.Title = "Design check"
 	d.Nav, d.Refresh, d.Fixtures, d.Zone = "design", 3600, true, s.zone(ctx)
-	d.Sys = s.sysItems()
+	d.Sys = s.sysItems(health.Fleet{})
 	d.Stamp = Stamp{State: "fresh", At: c.clock(now), ISO: now.Format(time.RFC3339), N: 26, M: 26, Zone: s.zone(ctx), Tooltip: "Fixtures clock, frozen"}
 	d.Checks = []Check{TokenCoverage(), OrbitronAudit()}
 	rows, cc := ContrastReport()
@@ -269,7 +269,7 @@ func (s *Service) designData(ctx context.Context, only string) DesignData {
 
 	// The board and the customer groups, from the fixtures fleet and from synthetic variants.
 	p := &auth.Principal{Scope: store.ScopeAll(), Role: auth.RoleReadOnly}
-	d.Board = s.boardData(ctx, p, live, "", "", false)
+	d.Board = s.boardData(ctx, p, live, boardQuery{}, "", false)
 	silent := []state.DeviceState{}
 	for i := 0; i < 6; i++ {
 		st := state.StateUnseen

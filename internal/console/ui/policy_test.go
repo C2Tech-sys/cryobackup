@@ -385,7 +385,7 @@ func TestW2ACustomerPolicyTabAssignsWithTheBlastRadiusFirst(t *testing.T) {
 	if rows := e.auditRows("customer.update", north); len(rows) != 1 || e.auditTotal() != before+1 {
 		t.Fatalf("assign must write exactly one audit row: %d, total %d -> %d", len(rows), before, e.auditTotal())
 	}
-	mustContain(t, "after", e.page("/customers/"+north+"/policy?saved=assigned", 200), "Policy assigned.", "Strict", "Template · version 1")
+	mustContain(t, "after", e.page("/customers/"+north+"/policy?saved=assigned", 200), "Policy assigned.", "Strict", "VERSION 1", "Template")
 	// another customer's own policy cannot be assigned, and says so plainly
 	_, summit := e.policyIDs()
 	res, body := e.post("/ui/customers/"+north+"/policy/impact", url.Values{"policy_id": {summit.ID}}, false)

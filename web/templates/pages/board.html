@@ -4,7 +4,7 @@
 {{if .Empty}}{{template "panel_state" .Empty}}{{end}}
 {{template "kpis" .KPIs}}
 <div class="rings">{{range .Rings}}{{template "ring" .}}{{end}}</div>
-{{if .Filter.Active}}<div class="chipbar" role="status"><span>Showing {{.Filter.Shown}} of {{.Filter.Total}}</span><span class="fchip">State: {{.Filter.Label}}<a href="/" aria-label="Remove filter: State {{.Filter.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span><a class="btn ghost sm" href="/">Clear all</a></div>{{end}}
+{{if .Filter.Active}}<div class="chipbar" role="status"><span>Showing {{.Filter.Shown}} of {{.Filter.Total}}</span>{{range .Filter.Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}<a class="btn ghost sm" href="/">Clear all</a></div>{{end}}
 {{if .Groups}}<div class="table-wrap" role="region" aria-label="Devices" tabindex="0">
 <table class="fleet board">
 <caption>Devices, grouped by customer, exceptions first</caption>
@@ -18,4 +18,5 @@
 {{define "board_partial"}}{{template "banners" .Banners}}{{template "stamp" .Stamp}}{{template "board" .}}{{end}}
 
 {{define "title"}}Fleet health{{end}}
-{{define "content"}}{{template "board" .}}{{end}}
+{{define "content"}}{{with .ViewWarn}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+{{template "views_control" .Views}}{{template "board" .}}{{end}}

@@ -34,6 +34,9 @@ type Chip struct {
 	Pulse  bool
 	Dashed bool
 	Small  bool
+	// Explain, when set, is the fragment URL of the state-explain tooltip (M3-T5): hovering or focusing
+	// the chip loads GET /api/v1/devices/{id}/state in words into the tip.
+	Explain string
 }
 
 // Text is the label with its qualifier, as shown.
@@ -240,7 +243,7 @@ func qualifier(ds state.DeviceState, c fmtCtx, runPct float64) (qual, joiner str
 		}
 	case state.StateOutdated:
 		if d.AgentVersion != "" && d.ExpectedVersion != "" {
-			return d.AgentVersion + " to " + d.ExpectedVersion, " · "
+			return safeVersion(d.AgentVersion) + " to " + d.ExpectedVersion, " · "
 		}
 	}
 	return "", ""
@@ -334,7 +337,7 @@ func reasonLine(ds state.DeviceState, c fmtCtx) string {
 		}
 		return s + ". Digest lists devices deferred over 24 h."
 	case state.StateOutdated:
-		return "Agent " + d.AgentVersion + " is older than the expected " + d.ExpectedVersion + "."
+		return "Agent " + safeVersion(d.AgentVersion) + " is older than the expected " + d.ExpectedVersion + "."
 	case state.StateOK:
 		if !d.LastSuccess.IsZero() {
 			return "Last success " + ageLong(c.Now.Sub(d.LastSuccess)) + ". All checks passed."
@@ -368,7 +371,7 @@ func ChipsFor(ds state.DeviceState, c fmtCtx, run RunInfo) []Chip {
 		title += " since " + c.dayTime(ds.Since)
 	}
 	primary := Chip{ID: "t-" + ds.ID, State: ds.Primary, Label: spec.Label, Class: spec.Class, Qual: q, Joiner: j, Title: title,
-		Reason: reasonLine(ds, c), Dashed: ds.Primary == state.StateUnknown || !ok, Pulse: ds.Primary == state.StatePendingFirst && run.Open && pct >= 0}
+		Reason: reasonLine(ds, c), Explain: "/ui/devices/" + ds.ID + "/explain", Dashed: ds.Primary == state.StateUnknown || !ok, Pulse: ds.Primary == state.StatePendingFirst && run.Open && pct >= 0}
 	if !run.Open {
 		return []Chip{primary}
 	}
