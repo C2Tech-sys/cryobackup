@@ -122,6 +122,15 @@ func TestR6ARowWithNoAttemptHasNoCheckedAt(t *testing.T) { // r6 L4
 	if c := rows["maintenance_worker"]; c.Status != statusNotChecked || c.CheckedAt != nil {
 		t.Errorf("maintenance_worker with no attempt: %+v", c)
 	}
+	// A row with nothing to judge has nothing checked either, though its facts were read just now.
+	f = r5Passing()
+	f.ReportingDevices, f.FirstRun = 3, true
+	rows = rowsOf(f)
+	for _, id := range []string{"clock", "fleet_data"} {
+		if c := rows[id]; c.Status != statusNotApplicable || c.CheckedAt != nil {
+			t.Errorf("%s, not applicable: %+v", id, c)
+		}
+	}
 }
 
 // L7: the contract says how POST differs from S36, and does not call it one difference.
