@@ -256,13 +256,15 @@ func problemCode(body []byte) string {
 //   - error classes: the restic class list (restic.AllClasses), nothing else;
 //   - deferral reasons, kinds, triggers and origins: their fixed sets;
 //   - agent and engine versions: api.VersionShape (a dotted number, a "dev"
-//     stamp or a git describe), so a file name never passes;
+//     stamp or a git describe), so a name with an extension or a sentence never
+//     passes, though a bare word like "payroll" still can;
 //   - the OS: "Windows ..." as the fixtures write it, or the dotted build
 //     number the agent sends.
 //
 // A bare word that is none of these (a name without an extension, say) is also
 // withheld wherever a set applies; only version text allows an arbitrary word,
-// because the build stamp can be one ("dev", a commit hash).
+// because the build stamp can be one ("dev", a commit hash), so that rule is the
+// one place a file name without its extension can still be shown.
 
 const withheld = "(withheld)"
 

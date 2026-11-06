@@ -3169,7 +3169,7 @@ components:
         attempt: {type: integer, minimum: 1}
         deferred_reason: {type: string}
         policy_version: {type: integer}
-        agent_version: {type: string}
+        agent_version: {type: string, description: "A display label, never a reason to refuse the run. The console keeps it only when it looks like a build version; anything else is stored as `unknown`, and the value is neither stored, shown nor logged. Like every string in the body it must still pass the path-free check."}
         initial: {type: boolean}
     RunsRequest:
       type: object
