@@ -109,10 +109,6 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Close)
-	// What serve --fixtures does after loading the fictional fleet (one call in cli.Build).
-	if err := fixtures.SeedM3(ctx, app.Store, fixtures.Now()); err != nil {
-		t.Fatal(err)
-	}
 	srv := httptest.NewServer(app.Server.AdminRouter)
 	t.Cleanup(srv.Close)
 	c := &client{t: t, base: srv.URL}

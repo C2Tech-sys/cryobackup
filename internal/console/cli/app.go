@@ -160,6 +160,9 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		if err := store.LoadFixtures(ctx, a.Store, a.clock(), store.WithAdminPasswordHash(h)); err != nil {
 			return nil, errors.New("cli: cannot load the fixtures")
 		}
+		if err := fixtures.SeedM3(ctx, a.Store, a.clock()); err != nil {
+			return nil, errors.New("cli: cannot load the fixtures")
+		}
 	}
 
 	// M2-W3A, ADR 0012: the display zone and the refresh interval are settings an
