@@ -16,6 +16,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/escrow"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
+	"github.com/c2tech-sys/cryobackup/internal/console/probe"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/restic"
 )
@@ -101,6 +102,12 @@ func (e *env) realProber(be adminpath.Backend, holder string) (*jobs.HealthProbe
 	hook.set(hp)
 	e.svc.Prober = hook
 	e.svc.Fleet.Probes = hp.Facts
+	if e.svc.Fleet.Endpoint == nil { // the certificates check reads both listeners, like the row
+		e.svc.Fleet.Endpoint = func() probe.Status {
+			now := e.clk.Now()
+			return probe.Status{Runs: true, Known: true, Interval: time.Minute, Started: now, LastOK: now, Last: probe.Result{At: now, OK: true, NotAfter: now.Add(365 * 24 * time.Hour)}}
+		}
+	}
 	return hp, hook
 }
 
@@ -292,12 +299,12 @@ func TestM3INTStorageProbeReadsOnlyFactsFromThisRequest(t *testing.T) { // F19, 
 	if c := checkOf(t, pr, "gateway"); c.Status != statusOK {
 		t.Errorf("gateway = %+v, probed during the request, want ok", c)
 	}
-	// A storage probe that fails now is failed at once, before its streak raises C02.
+	// A storage probe that fails now is a warning at once, as on the health page, before its streak raises C02.
 	be.busy.Store(false)
 	be.Errors = map[string]error{adminpath.MethodCatConfig: adminpath.NewError(adminpath.CodeStorageUnreachable, "")}
 	e.clk.Advance(time.Minute)
 	pr = decode[ProbeResponse](t, e.mustReq("POST", "/api/v1/storage-targets/"+target+"/probe", owner, nil, 200))
-	if c := checkOf(t, pr, "storage"); c.Status != statusFailed {
-		t.Errorf("storage = %+v after a failed probe just now, want failed", c)
+	if c := checkOf(t, pr, "storage"); c.Status != statusWarn {
+		t.Errorf("storage = %+v after a failed probe just now, want warn", c)
 	}
 }

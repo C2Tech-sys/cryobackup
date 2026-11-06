@@ -78,6 +78,15 @@ func HealthyViewOn() bool { return healthyView.Load() }
 // ui's (fixtures cannot import jobs: jobs' own tests import fixtures).
 var JobNames = []string{"alarm-evaluator", "command-expiry", "heartbeat-ring-trim", "htpasswd-sync", "restore-purge", "session-expire"}
 
+// The jobs SeedM3 puts in each of the job table's other states. JobLeftover is not in JobNames: it is a
+// row a job left behind when it stopped being registered.
+const (
+	JobLeftover = "abandoned-nightly-export"
+	JobSkipped  = "heartbeat-ring-trim"
+	JobRunning  = "command-expiry"
+	JobOverdue  = "htpasswd-sync"
+)
+
 // ---- data ----
 
 // SeedM3 adds the M3 monitoring data to a database LoadFixtures filled: one run
@@ -151,12 +160,28 @@ func SeedM3(ctx context.Context, st *store.Store, now time.Time) error {
 		fin := now.Add(-time.Duration(2+i) * time.Minute)
 		next := fin.Add(15 * time.Minute)
 		rec := store.JobRun{Status: "ok", StartedAt: fin.Add(-800 * time.Millisecond), FinishedAt: fin, NextDueAt: &next}
-		if name == "restore-purge" {
+		switch name {
+		case "restore-purge":
 			rec.Status, rec.ErrorClass = "error", "storage"
+		case JobSkipped:
+			rec.Status = "skipped"
+		case JobOverdue:
+			long := now.Add(-2 * h)
+			due := long.Add(15 * time.Minute)
+			rec.StartedAt, rec.FinishedAt, rec.NextDueAt = long.Add(-800*time.Millisecond), long, &due
 		}
 		if err := st.RecordJobRun(ctx, name, rec); err != nil {
 			return err
 		}
+	}
+	// A run in progress: the lease is held, for longer than this fictional console will ever run.
+	if _, err := st.AcquireJobLease(ctx, JobRunning, "fixtures-lab", 10*365*24*h); err != nil {
+		return err
+	}
+	// A row left behind by a job that is no longer registered.
+	gone, goneDue := now.Add(-30*24*h), now.Add(-30*24*h+24*h)
+	if err := st.RecordJobRun(ctx, JobLeftover, store.JobRun{Status: "ok", StartedAt: gone.Add(-time.Second), FinishedAt: gone, NextDueAt: &goneDue}); err != nil {
+		return err
 	}
 	// Harbor Family Practice: silent together
 	old := now.Add(-10 * 24 * h).UnixMilli()

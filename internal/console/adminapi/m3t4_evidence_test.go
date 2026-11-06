@@ -28,13 +28,14 @@ func fullEvidence(now time.Time, ran, next *time.Time) healthFacts {
 	}
 	gw, st := ok(), ok()
 	gw.CertNotAfter = ms(now.Add(90 * 24 * time.Hour))
-	return healthFacts{Now: now, Complete: true, EndpointWired: true, WorkerPinged: true, WorkerReachable: true, MaintainKnown: true, MaintainReachable: true,
+	return healthFacts{Now: now, Complete: true, EndpointWired: true, WorkerPinged: true, WorkerReachable: true, WorkerKeyLoaded: true, MaintainKnown: true, MaintainReachable: true,
 		EvaluatorLast: store.JobState{LastStatus: "ok"}, SchedulerLast: store.JobState{LastStatus: "ok"}, MasterKeyWired: true, MasterKeyLoaded: true, ReportingDevices: 9,
-		Jobs: []store.JobState{{Name: "j", LastStatus: "ok", NextDueAt: next}},
+		Jobs: []store.JobState{{Name: "j", LastStatus: "ok", LastFinishedAt: ran, NextDueAt: next}},
 		Probes: state.ProbeFacts{Wired: true, Gateway: &gw, Storage: &st, SMTP: &state.SMTPFacts{Probe: ok()},
 			Evaluator: &state.JobFacts{LastFinishedAt: ms(*ran)},
 			Maintain:  &state.MaintainFacts{RPC: ok(), Scheduler: &state.JobFacts{LastFinishedAt: ms(*ran)}},
-			Database:  &state.DatabaseFacts{SelfBackup: &state.SelfBackupFacts{NotInBuild: true}},
+			MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "k"},
+			Database:  &state.DatabaseFacts{IntegrityCheckedAt: ms(now.Add(-time.Hour)), IntegrityOK: true, MeasuredAt: ms(now.Add(-20 * time.Second)), SelfBackup: &state.SelfBackupFacts{NotInBuild: true}},
 			Digest:    &state.DigestFacts{NotInBuild: true}, Quota: &state.QuotaFacts{NotInBuild: true}, Release: &state.ReleaseFacts{NotInBuild: true}},
 		Endpoint: probe.Status{Runs: true, Known: true, Interval: time.Minute, Last: probe.Result{At: now.Add(-20 * time.Second), OK: true, NotAfter: now.Add(60 * 24 * time.Hour)}},
 	}
@@ -175,7 +176,7 @@ func TestSystemHealthEachRowNeedsItsOwnEvidence(t *testing.T) {
 		{"self_backup", statusFailed, "in the build, its tested restore failed", func(f *healthFacts) {
 			f.Probes.Database = &state.DatabaseFacts{SelfBackup: &state.SelfBackupFacts{LastAt: ms(now.Add(-time.Hour)), VerifyFailed: true}}
 		}},
-		{"self_backup", statusWarn, "in the build, too old", func(f *healthFacts) {
+		{"self_backup", statusNotChecked, "in the build, too old", func(f *healthFacts) {
 			f.Probes.Database = &state.DatabaseFacts{SelfBackup: &state.SelfBackupFacts{LastAt: ms(now.Add(-state.DBSelfBackupMaxAge - time.Hour))}}
 		}},
 		// worker

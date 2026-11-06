@@ -150,6 +150,16 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 	if !strings.Contains(sys, "NEVER RUN") || !strings.Contains(sys, ">ERROR<") || strings.Contains(sys, "the job runner is not running") {
 		t.Error("the job table does not show a failed job, a job that never ran, and a running runner")
 	}
+	for label, job := range map[string]string{"NO LONGER SCHEDULED": fixtures.JobLeftover, "SKIPPED": fixtures.JobSkipped, "RUNNING": fixtures.JobRunning, "OVERDUE": fixtures.JobOverdue} {
+		i := strings.Index(sys, `id="job-`+job+`"`)
+		if i < 0 {
+			t.Errorf("job %s (%s) is not in the table", job, label)
+			continue
+		}
+		if row := sys[i : i+strings.Index(sys[i:], "</tr>")]; !strings.Contains(row, label) {
+			t.Errorf("job %s does not read %s: %s", job, label, row)
+		}
+	}
 	// The API and the page agree about the jobs the page offers to run.
 	apiRes, apiBody := c.do("GET", "/api/v1/system/jobs", nil)
 	var jl struct {

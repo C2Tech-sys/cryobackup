@@ -66,6 +66,13 @@ func (e *r3Env) jobRun(name, status, class string, ago time.Duration) {
 	}
 }
 
+func (e *r3Env) recordSchedulerWithDue(last, next time.Time) {
+	e.t.Helper()
+	if err := e.st.RecordJobRun(context.Background(), maintain.SchedulerJob, store.JobRun{Status: "ok", StartedAt: last, FinishedAt: last, NextDueAt: &next}); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 func (e *r3Env) health() SystemHealthResponse {
 	e.t.Helper()
 	return decode[SystemHealthResponse](e.t, mustGet(e.env, "/api/v1/system/health", e.sess))
