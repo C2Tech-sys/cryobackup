@@ -48,6 +48,9 @@ func TestServeWiresTheAdminAPIEventStreamsJobsAndProber(t *testing.T) { // M3-IN
 	if r, ok := app.Admin.Jobs.(*jobs.Runner); !ok || r == nil || r != app.Runner {
 		t.Errorf("Admin.Jobs = %T, want the App's runner", app.Admin.Jobs)
 	}
+	if r, ok := app.UI.Jobs.(*jobs.Runner); !ok || r == nil || r != app.Runner {
+		t.Errorf("UI.Jobs = %T, want the App's runner: the System page's Run now needs it", app.UI.Jobs)
+	}
 	if p, ok := app.Admin.Prober.(*jobs.HealthProber); !ok || p == nil || p != app.Prober {
 		t.Errorf("Admin.Prober = %T, want the App's health-prober", app.Admin.Prober)
 	}

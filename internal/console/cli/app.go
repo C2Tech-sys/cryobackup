@@ -234,6 +234,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 
 	a.Runner = jobs.NewRunner(a.Store, holderID(), a.log)
 	a.Admin.Jobs = a.Runner // run-now (M3-T3); the runner exists only after the server
+	a.UI.Jobs = a.Runner    // the System page's Run now (M3-T4)
 	if a.Prober != nil {
 		a.Admin.Prober = a.Prober // the storage probe runs the probes now and waits for them (M3-INT); never a typed nil
 	}
@@ -288,11 +289,13 @@ func (a *App) Run(parent context.Context) (err error) {
 	cancel()
 	a.Runner.Stop()
 	a.Admin.BeginShutdown() // no new run-now or POST probe; the manual job runs in flight are cancelled
+	a.UI.BeginShutdown()    // the same for the pages' private admin API (M3-T4)
 	if a.Prober != nil {
 		a.Prober.Stop() // its probes run under its own lifetime, not the runner's ctx: Stop cancels them (bounded) and frees the probe lease
 	}
 	// Before Close (deferred above): a POST probe that outlived the server's grace writes its audit row now.
 	a.Admin.WaitBackground(backgroundShutdownWait)
+	a.UI.WaitBackground(backgroundShutdownWait)
 	wg.Wait()
 	return err
 }
@@ -311,7 +314,8 @@ const shutdownWorstCase = server.ShutdownGrace + // the HTTP server drains
 	jobs.RunnerStopWait + // the scheduled jobs stop
 	jobs.StopWait + jobs.StopReleaseTimeout + // the prober stops and frees its lease
 	backgroundShutdownWait + // manual job runs and POST probes end
-	store.CloseWait // the database closes (55 s in all)
+	backgroundShutdownWait + // the same for the pages' private admin API
+	store.CloseWait // the database closes (65 s in all)
 
 // Close releases everything Build opened. It is safe to call twice.
 func (a *App) Close() {
