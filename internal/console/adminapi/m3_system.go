@@ -307,7 +307,7 @@ type attempt struct {
 //   - no attempt: not_checked
 //   - newest attempt failed: warn or failed, never ok, however fresh an older pass is
 //   - newest attempt skipped: the last pass stands until MaxAge, then not_checked
-//   - stale: not_checked
+//   - stale, or dated in the future (the engine calls that garbled): not_checked
 //   - ok only when the newest attempt passed and is fresh
 func (a attempt) judge(now time.Time) (status, detail string) {
 	pass := a.LastPass
@@ -330,6 +330,8 @@ func (a attempt) judge(now time.Time) (status, detail string) {
 		return statusNotChecked, a.Why
 	case pass.Before(a.NotBefore):
 		return statusNotChecked, noResult
+	case pass.After(now.Add(state.FutureSkewAllowed)):
+		return statusNotChecked, a.What + " is dated in the future, so it is not evidence of now"
 	case a.MaxAge > 0 && now.Sub(pass) > a.MaxAge:
 		return statusNotChecked, a.What + " has not passed for " + strconv.Itoa(int(now.Sub(pass)/time.Minute)) + " min, so its last result is not evidence of now"
 	}
@@ -349,7 +351,7 @@ func judgeRow(now time.Time, attempts []attempt, worstBanner string, notWired bo
 		case statusRank[st] == statusRank[status] && d != "" && d != detail:
 			detail = strings.TrimPrefix(detail+"; "+d, "; ")
 		}
-		if !a.At.IsZero() && (at == nil || a.At.Before(*at)) {
+		if a.Result != noAttempt && a.Outside == "" && !a.At.IsZero() && (at == nil || a.At.Before(*at)) {
 			at = ptrTime(a.At)
 		}
 	}
@@ -422,9 +424,15 @@ func (f healthFacts) withRow(a attempt, name string) attempt {
 	case "ok":
 		a.Result, a.LastPass = passed, a.At
 	case "skipped":
+		if a.Result == failed { // a skip is no result: the failure before it stands
+			a.Why += "; it could not run since" + jobClassOf(j)
+			break
+		}
 		a.Result, a.Why = skipped, a.What+" could not run"+jobClassOf(j)
 	case "error":
 		a.Result, a.Severe, a.Why = failed, false, "the latest attempt of "+a.What+" failed"+jobClassOf(j)
+	default: // "running", or a status added later: not an outcome
+		a.Result, a.Why = noAttempt, a.What+" has no outcome for its latest attempt"
 	}
 	return a
 }
@@ -694,11 +702,14 @@ func (f healthFacts) selfBackupAttempts() []attempt {
 
 func (f healthFacts) masterKeyAttempts() []attempt {
 	a := attempt{What: "the master key", At: f.Now, Why: "the master key's generation has not been compared with the escrows recently"}
+	read := f.ProbeRows[jobs.ProbeRowMasterKey]
 	switch m := f.Probes.MasterKey; {
 	case !f.MasterKeyWired:
 		a.Why = "the master key state is not reported"
 	case !f.MasterKeyLoaded || (m != nil && !m.Loaded):
 		a.Result, a.Severe, a.Why = failed, true, "the master key is not loaded"
+	case m == nil && read.LastStatus == "error": // the prober forgets the comparison when the escrow read fails: its row says so
+		a.Result, a.Why = failed, "the latest read of the escrowed keys failed"+jobClassOf(read)
 	case m == nil:
 	case slices.ContainsFunc(m.EscrowKeyIDs, func(id string) bool { return id != m.KeyID }):
 		a.Result, a.Severe, a.Why = failed, true, "an escrowed repository key is wrapped under another master key"
@@ -708,25 +719,30 @@ func (f healthFacts) masterKeyAttempts() []attempt {
 	return []attempt{a}
 }
 
-// jobsAttempts is one attempt per job registered in this process. A job with no finished run has
-// no attempt while its first run is in progress or inside jobsFirstRunGrace of this
+// jobsAttempts is one attempt per job registered in this process. A job past its schedule is a
+// failed attempt: it ran, then stopped, so it is known late rather than unknown. A job with no
+// finished run has no attempt while its first run is in progress or inside jobsFirstRunGrace of this
 // console's start; past that (or at once when the start is unknown), never having run is a failure.
+// The ping's skip while no evaluation has finished is by design, and its own row: it counts as
+// nothing until the job is overdue, and the ping fails on its next run if the evaluator never runs.
 func (f healthFacts) jobsAttempts() []attempt {
 	var out []attempt
 	for _, j := range f.Jobs {
 		if j.LastStatus == "" {
 			continue // NeverRun and FirstRunning below
 		}
-		a := attempt{What: "job " + j.Name, MaxAge: jobMaxAge(j, f.Now), Why: "the status of job " + j.Name + " is not one this console knows"}
+		a := attempt{What: "job " + j.Name, Why: "the status of job " + j.Name + " is not one this console knows"}
 		if j.LastFinishedAt != nil {
 			a.At = *j.LastFinishedAt
 		}
-		switch j.LastStatus {
-		case "ok":
-			a.Result = passed
-		case "error":
+		switch {
+		case j.LastStatus == "error":
 			a.Result, a.Why = failed, "the latest run of job "+j.Name+" failed"+jobClassOf(j)
-		case "skipped":
+		case jobOverdue(j, f.Now):
+			a.Result, a.Why = failed, "job "+j.Name+" is overdue: it last finished "+strconv.Itoa(int(f.Now.Sub(*j.LastFinishedAt)/time.Minute))+" min ago"
+		case j.LastStatus == "ok", j.LastStatus == "skipped" && j.LastErrorClass == jobs.ClassAwaitingFirstEvaluation:
+			a.Result = passed
+		case j.LastStatus == "skipped":
 			a.Result, a.Why = skipped, "job "+j.Name+" skipped its latest run and has no pass on record"
 		}
 		out = append(out, a)

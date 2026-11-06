@@ -73,7 +73,7 @@ func TestARunThatSkipsIsRecordedAsSkipped(t *testing.T) {
 		t.Fatalf("ran %v err %v", ran, err)
 	}
 	row, err := st.GetJobState(context.Background(), "j")
-	if err != nil || row.LastStatus != "skipped" || row.LastErrorClass != "" || row.NextDueAt == nil {
+	if err != nil || row.LastStatus != "skipped" || row.LastErrorClass != "awaiting_first_evaluation" || row.NextDueAt == nil {
 		t.Fatalf("row %+v err %v", row, err)
 	}
 }

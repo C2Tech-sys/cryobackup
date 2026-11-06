@@ -133,9 +133,14 @@ func (r *Runner) Names() []string {
 // tick passed that did not happen.
 var errDidNotRun = errors.New("jobs: the job did not run")
 
+// ClassAwaitingFirstEvaluation is why a run was skipped: no evaluation has finished on this
+// console yet, so healthcheck-ping has nothing to report. System health does not count this
+// skip against the jobs row.
+const ClassAwaitingFirstEvaluation = "awaiting_first_evaluation"
+
 // errSkipped is what a job's Run answers when it looked and had nothing it could do
-// yet. RunOnce records the run as "skipped": it happened, and it did not fail.
-var errSkipped = errors.New("jobs: the job skipped this run")
+// yet. RunOnce records the run as "skipped", with this class: it happened, and it did not fail.
+var errSkipped = &ClassError{Class: ClassAwaitingFirstEvaluation}
 
 // RunOnce runs the named job now under its lease. It returns (false, nil) when
 // another holder has the lease or the job answers errDidNotRun, and (true, err)
@@ -173,7 +178,7 @@ func (r *Runner) RunOnce(ctx context.Context, name string) (ran bool, err error)
 	rec := store.JobRun{Status: "ok", StartedAt: started, FinishedAt: finished, NextDueAt: &next}
 	switch {
 	case errors.Is(runErr, errSkipped):
-		rec.Status, runErr = "skipped", nil
+		rec.Status, rec.ErrorClass, runErr = "skipped", classOf(runErr), nil
 	case runErr != nil:
 		rec.Status, rec.ErrorClass = "error", classOf(runErr)
 		r.Log.Warn("job failed", logx.Str("job", name), logx.Class(rec.ErrorClass))

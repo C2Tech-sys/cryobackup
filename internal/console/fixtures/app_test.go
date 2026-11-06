@@ -150,6 +150,13 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 	if !strings.Contains(sys, "NEVER RUN") || !strings.Contains(sys, ">ERROR<") || strings.Contains(sys, "the job runner is not running") {
 		t.Error("the job table does not show a failed job, a job that never ran, and a running runner")
 	}
+	jobsRow := sys[strings.Index(sys, `id="comp-jobs"`):]
+	jobsRow = jobsRow[:strings.Index(jobsRow, "</tr>")]
+	for _, job := range []string{"restore-purge", fixtures.JobOverdue, "session-expire"} { // ERROR, OVERDUE, NEVER RUN
+		if !strings.Contains(jobsRow, job) {
+			t.Errorf("the table flags %s and the jobs row does not name it: %s", job, jobsRow)
+		}
+	}
 	for label, job := range map[string]string{"NO LONGER SCHEDULED": fixtures.JobLeftover, "SKIPPED": fixtures.JobSkipped, "RUNNING": fixtures.JobRunning, "OVERDUE": fixtures.JobOverdue} {
 		i := strings.Index(sys, `id="job-`+job+`"`)
 		if i < 0 {

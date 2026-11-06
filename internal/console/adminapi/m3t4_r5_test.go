@@ -66,12 +66,13 @@ const (
 	r5FailedNewest
 	r5SkippedFresh
 	r5SkippedStale
+	r5FailedThenSkipped
 	r5Stale
 	r5PassedFresh
 )
 
 var r5Kinds = map[r5Kind]string{r5None: "no attempt", r5FailedNewest: "failed newest, fresh older pass", r5SkippedFresh: "skipped, fresh pass",
-	r5SkippedStale: "skipped, stale pass", r5Stale: "stale", r5PassedFresh: "passed fresh"}
+	r5SkippedStale: "skipped, stale pass", r5FailedThenSkipped: "failed, then skipped", r5Stale: "stale", r5PassedFresh: "passed fresh"}
 
 type r5Feed map[r5Kind][]func(*healthFacts)
 
@@ -80,12 +81,13 @@ func set(m ...func(*healthFacts)) []func(*healthFacts) { return m }
 func r5ProbeFeed(run func(*healthFacts, *state.ProbeRun), row string) r5Feed {
 	on := func(r *state.ProbeRun) func(*healthFacts) { return func(f *healthFacts) { run(f, r) } }
 	return r5Feed{
-		r5None:         set(on(&state.ProbeRun{}), on(&state.ProbeRun{Unconfigured: "not configured"}), on(nil)),
-		r5FailedNewest: set(on(r5Failed("status_502"))),
-		r5SkippedFresh: set(func(f *healthFacts) { run(f, r5Run(2*time.Minute)); r5Row(row, "skipped", "busy", 5*time.Second)(f) }),
-		r5SkippedStale: set(func(f *healthFacts) { run(f, r5Run(10*time.Minute)); r5Row(row, "skipped", "busy", 5*time.Second)(f) }),
-		r5Stale:        set(on(r5Run(time.Hour))),
-		r5PassedFresh:  set(on(r5Run(10 * time.Second))),
+		r5None:              set(on(&state.ProbeRun{}), on(&state.ProbeRun{Unconfigured: "not configured"}), on(nil)),
+		r5FailedNewest:      set(on(r5Failed("status_502"))),
+		r5SkippedFresh:      set(func(f *healthFacts) { run(f, r5Run(2*time.Minute)); r5Row(row, "skipped", "busy", 5*time.Second)(f) }),
+		r5SkippedStale:      set(func(f *healthFacts) { run(f, r5Run(10*time.Minute)); r5Row(row, "skipped", "busy", 5*time.Second)(f) }),
+		r5FailedThenSkipped: set(func(f *healthFacts) { run(f, r5Failed("status_502")); r5Row(row, "skipped", "busy", 5*time.Second)(f) }),
+		r5Stale:             set(on(r5Run(time.Hour))),
+		r5PassedFresh:       set(on(r5Run(10 * time.Second))),
 	}
 }
 
@@ -164,6 +166,10 @@ func r5Feeds() map[string]r5Feed {
 				f.Probes.Gateway = r5Run(10 * time.Minute)
 				r5Row(jobs.ProbeRowGateway, "skipped", "busy", 5*time.Second)(f)
 			}),
+			r5FailedThenSkipped: set(func(f *healthFacts) {
+				f.Probes.Gateway = r5Failed("untrusted")
+				r5Row(jobs.ProbeRowGateway, "skipped", "busy", 5*time.Second)(f)
+			}),
 			r5Stale:       set(func(f *healthFacts) { f.Probes.Gateway = r5Run(time.Hour) }, func(f *healthFacts) { f.Endpoint.Last.At = r5Now.Add(-time.Hour) }),
 			r5PassedFresh: set(func(*healthFacts) {}, failedWith(probe.StageResponder, "status_502", year)), // the certificate was read and accepted: the 502 is agent_api's
 		},
@@ -196,6 +202,10 @@ func r5Feeds() map[string]r5Feed {
 			r5FailedNewest: set(func(f *healthFacts) { f.SchemaErr = context.DeadlineExceeded }, withDB(func(d *state.DatabaseFacts) { d.IntegrityOK = false }),
 				r5Row(jobs.ProbeRowIntegrity, "error", "timeout", 5*time.Second), r5Row(jobs.ProbeRowIntegrity, "error", "integrity_failed", 5*time.Second),
 				r5Row(jobs.ProbeRowDatabase, "error", "disk_unmeasured", 5*time.Second), withDB(func(d *state.DatabaseFacts) { d.WorkerStoreFailures = 1 })),
+			r5FailedThenSkipped: set(func(f *healthFacts) {
+				withDB(func(d *state.DatabaseFacts) { d.IntegrityOK = false })(f)
+				r5Row(jobs.ProbeRowIntegrity, "skipped", "x", 5*time.Second)(f)
+			}),
 			r5SkippedFresh: set(r5Row(jobs.ProbeRowIntegrity, "skipped", "x", 5*time.Second)),
 			r5SkippedStale: set(func(f *healthFacts) {
 				withDB(func(d *state.DatabaseFacts) { d.IntegrityCheckedAt = r5Ago(state.IntegrityMaxAge + time.Hour) })(f)
@@ -240,15 +250,15 @@ func r5Feeds() map[string]r5Feed {
 					f.NeverRun, f.Probes.StartedAt = []string{"x"}, r5Ago(jobsFirstRunGrace-time.Second)
 				}),
 			r5FailedNewest: set(func(f *healthFacts) { f.Jobs[0].LastStatus = "error" },
+				func(f *healthFacts) {
+					fin, due := r5Now.Add(-time.Hour), r5Now.Add(-time.Hour+5*time.Minute)
+					f.Jobs = []store.JobState{{Name: "j", LastStatus: "ok", LastFinishedAt: &fin, NextDueAt: &due}}
+				},
 				func(f *healthFacts) { f.NeverRun = []string{"x"} }, func(f *healthFacts) {
 					f.NeverRun, f.Probes.StartedAt = []string{"x"}, r5Ago(jobsFirstRunGrace+time.Second)
 				}),
 			r5SkippedStale: set(func(f *healthFacts) { f.Jobs[0].LastStatus = "skipped" }),
-			r5Stale: set(func(f *healthFacts) {
-				fin, due := r5Now.Add(-time.Hour), r5Now.Add(-time.Hour+5*time.Minute)
-				f.Jobs = []store.JobState{{Name: "j", LastStatus: "ok", LastFinishedAt: &fin, NextDueAt: &due}}
-			}),
-			r5PassedFresh: set(func(*healthFacts) {}),
+			r5PassedFresh:  set(func(*healthFacts) {}),
 		},
 		"fleet_data": {
 			r5FailedNewest: set(func(f *healthFacts) { f.Complete = false }),
@@ -274,23 +284,30 @@ func r5Feeds() map[string]r5Feed {
 // r5NoFact says why a row cannot be driven into a state. The facts it reads cannot express it, and
 // the rule is proved for such a state on every row by TestR5TheRuleHoldsForEveryRow. Each entry is
 // a statement about the code: the test fails on a state with neither a feed nor a reason here.
+const (
+	noSkips   = "this row takes no skipped attempt"
+	oneStatus = "job_state holds one status per job, and a skip overwrites a failure; only the ping's run records skipped"
+)
+
 var r5NoFact = map[string]map[r5Kind]string{
-	"storage_quota":    {r5FailedNewest: "QuotaFacts records measurements, not attempts: a listing that fails ages into stale", r5SkippedFresh: "same", r5SkippedStale: "same"},
-	"digest":           {r5FailedNewest: "DigestFacts records sends, not attempts: C14 names a missed send", r5SkippedFresh: "same", r5SkippedStale: "same"},
-	"agent_api":        {r5SkippedFresh: "a self-probe run cut short is not recorded, and it has no other non-result", r5SkippedStale: "same"},
-	"self_backup":      {r5SkippedFresh: "SelfBackupFacts records backups, not attempts", r5SkippedStale: "same"},
-	"master_key":       {r5SkippedFresh: "the comparison either happened or the prober reports nil", r5SkippedStale: "same"},
-	"jobs":             {r5SkippedFresh: "job_state holds one status per job, so a skipped run has no earlier pass on record: it reads not_checked"},
-	"fleet_data":       {r5None: "the load is this request's own", r5SkippedFresh: "same", r5SkippedStale: "same", r5Stale: "same, and C10 names a stale view"},
-	"clock":            {r5None: "too few reporting devices is not_applicable: TestR4ClockRowAtTheEnginesBoundary", r5SkippedFresh: "the engine judges this request's load", r5SkippedStale: "same", r5Stale: "same"},
-	"release_manifest": {r5SkippedFresh: "ReleaseFacts records checks, not attempts", r5SkippedStale: "same"},
+	"storage_quota":      {r5FailedThenSkipped: noSkips, r5FailedNewest: "QuotaFacts records measurements, not attempts: a listing that fails ages into stale", r5SkippedFresh: "same", r5SkippedStale: "same"},
+	"digest":             {r5FailedThenSkipped: noSkips, r5FailedNewest: "DigestFacts records sends, not attempts: C14 names a missed send", r5SkippedFresh: "same", r5SkippedStale: "same"},
+	"agent_api":          {r5FailedThenSkipped: noSkips, r5SkippedFresh: "a self-probe run cut short is not recorded, and it has no other non-result", r5SkippedStale: "same"},
+	"self_backup":        {r5FailedThenSkipped: noSkips, r5SkippedFresh: "SelfBackupFacts records backups, not attempts", r5SkippedStale: "same"},
+	"master_key":         {r5FailedThenSkipped: noSkips, r5SkippedFresh: "the comparison either happened or the prober reports nil", r5SkippedStale: "same"},
+	"jobs":               {r5SkippedFresh: "job_state holds one status per job, so a skipped run has no earlier pass on record: it reads not_checked", r5Stale: "a job past its schedule is known late, so it is a failed attempt: TestR6AnOverdueJobWarnsAndTheRowNamesEveryFlaggedJob", r5FailedThenSkipped: oneStatus},
+	"maintenance_worker": {r5FailedThenSkipped: oneStatus},
+	"evaluator":          {r5FailedThenSkipped: oneStatus},
+	"fleet_data":         {r5FailedThenSkipped: noSkips, r5None: "the load is this request's own", r5SkippedFresh: "same", r5SkippedStale: "same", r5Stale: "same, and C10 names a stale view"},
+	"clock":              {r5FailedThenSkipped: noSkips, r5None: "too few reporting devices is not_applicable: TestR4ClockRowAtTheEnginesBoundary", r5SkippedFresh: "the engine judges this request's load", r5SkippedStale: "same", r5Stale: "same"},
+	"release_manifest":   {r5FailedThenSkipped: noSkips, r5SkippedFresh: "ReleaseFacts records checks, not attempts", r5SkippedStale: "same"},
 }
 
 func r5Want(k r5Kind, status string) bool {
 	switch k {
 	case r5None, r5SkippedStale, r5Stale:
 		return status == statusNotChecked
-	case r5FailedNewest:
+	case r5FailedNewest, r5FailedThenSkipped:
 		return status == statusWarn || status == statusFailed
 	}
 	return status == statusOK
@@ -328,6 +345,9 @@ func TestR5EveryRowObeysTheOneRule(t *testing.T) {
 				got := rowsOf(f)[row.id]
 				if !r5Want(k, got.Status) {
 					t.Errorf("%s, %s, case %d: %s %q", row.id, name, i, got.Status, got.Detail)
+				}
+				if k == r5None && got.CheckedAt != nil && !slices.ContainsFunc(rowAttempts[row.id](f), func(a attempt) bool { return a.Result != noAttempt }) {
+					t.Errorf("%s, %s, case %d: no attempt, and a checked_at", row.id, name, i)
 				}
 				if got.Status != statusOK && got.Detail == "" && len(got.Banners) == 0 {
 					t.Errorf("%s, %s, case %d: %s with no reason", row.id, name, i, got.Status)

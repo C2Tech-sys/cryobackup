@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
+	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
+	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
 
@@ -269,5 +271,42 @@ func TestR5PostProbeOnAnExpiredGatewayCertificateSaysFailed(t *testing.T) { // r
 	}
 	if h := r3Health(t, r.base, r.token); r4Row(h, "certificates").Status != "failed" {
 		t.Errorf("S36 certificates = %+v", r4Row(h, "certificates"))
+	}
+}
+
+// M1 on a real prober: pass, fail, then the worker is busy. One failure is below C02's streak, so no banner speaks.
+func TestR6ARealProbersFailureSurvivesASkip(t *testing.T) { // r6 M1, C02
+	start := time.Now().UTC()
+	r := newR5Rig(t, r5Options{})
+	be := r.app.Backend.(*fixtures.Backend)
+	h := r.tick(start, 0)
+	if c := r4Row(h, "storage"); c.Status != "ok" {
+		t.Fatalf("pass: %+v", c)
+	}
+	be.Errors = map[string]error{adminpath.MethodCatConfig: adminpath.NewError(adminpath.CodeStorageUnreachable, "")}
+	h = r.tick(start, time.Minute)
+	if c := r4Row(h, "storage"); c.Status != "warn" {
+		t.Fatalf("fail: %+v", c)
+	}
+	be.Errors = map[string]error{adminpath.MethodCatConfig: adminpath.NewError(adminpath.CodeBusy, "")}
+	h = r.tick(start, 2*time.Minute)
+	c := r4Row(h, "storage")
+	if c.Status != "warn" {
+		t.Errorf("fail, then the worker is busy: storage = %s %v %q, want warn", c.Status, c.Banners, c.Detail)
+	}
+	if len(c.Banners) != 0 {
+		t.Errorf("the control is below C02's streak: %+v", c)
+	}
+}
+
+// L3 on a real prober: the escrow read fails, and its row says error store.
+func TestR6AFailedEscrowReadWarnsOnTheMasterKeyRow(t *testing.T) { // r6 L3, C12
+	start := time.Now().UTC()
+	r := newR5Rig(t, r5Options{})
+	r.app.Prober.EscrowKeyIDs = func(context.Context) ([]string, error) { return nil, store.ErrBusy }
+	h := r.tick(start, 0)
+	c := r4Row(h, "master_key")
+	if c.Status != "warn" || !strings.Contains(c.Detail, "store") {
+		t.Errorf("a failed escrow read: master_key = %s %v %q, want warn saying store", c.Status, c.Banners, c.Detail)
 	}
 }

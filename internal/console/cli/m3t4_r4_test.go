@@ -280,7 +280,7 @@ func TestR4AFreshConsolesPingSkipsUntilAnEvaluationHasFinished(t *testing.T) { /
 		t.Fatalf("the first ping on a fresh console: ran %v err %v", ran, err)
 	}
 	row, err := app.Store.GetJobState(ctx, jobs.NameHealthcheckPing)
-	if err != nil || row.LastStatus != "skipped" || row.LastErrorClass != "" || hits.Load() != 0 {
+	if err != nil || row.LastStatus != "skipped" || row.LastErrorClass != "awaiting_first_evaluation" || hits.Load() != 0 {
 		t.Fatalf("row %+v err %v hits %d", row, err, hits.Load())
 	}
 	// Once an evaluation has finished, it pings.

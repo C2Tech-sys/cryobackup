@@ -76,13 +76,13 @@ func HealthyViewOn() bool { return healthyView.Load() }
 
 // JobNames are the fictional background jobs of fixtures mode. The pages' job runner for them is
 // ui's (fixtures cannot import jobs: jobs' own tests import fixtures).
-var JobNames = []string{"alarm-evaluator", "command-expiry", "heartbeat-ring-trim", "htpasswd-sync", "restore-purge", "session-expire"}
+var JobNames = []string{"alarm-evaluator", "command-expiry", "healthcheck-ping", "heartbeat-ring-trim", "htpasswd-sync", "restore-purge", "session-expire"}
 
 // The jobs SeedM3 puts in each of the job table's other states. JobLeftover is not in JobNames: it is a
 // row a job left behind when it stopped being registered.
 const (
 	JobLeftover = "abandoned-nightly-export"
-	JobSkipped  = "heartbeat-ring-trim"
+	JobSkipped  = "healthcheck-ping"
 	JobRunning  = "command-expiry"
 	JobOverdue  = "htpasswd-sync"
 )
@@ -164,7 +164,7 @@ func SeedM3(ctx context.Context, st *store.Store, now time.Time) error {
 		case "restore-purge":
 			rec.Status, rec.ErrorClass = "error", "storage"
 		case JobSkipped:
-			rec.Status = "skipped"
+			rec.Status, rec.ErrorClass = "skipped", "awaiting_first_evaluation" // jobs.ClassAwaitingFirstEvaluation: fixtures cannot import jobs
 		case JobOverdue:
 			long := now.Add(-2 * h)
 			due := long.Add(15 * time.Minute)
