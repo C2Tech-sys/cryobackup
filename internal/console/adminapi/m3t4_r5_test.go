@@ -286,7 +286,7 @@ func r5Feeds() map[string]r5Feed {
 // a statement about the code: the test fails on a state with neither a feed nor a reason here.
 const (
 	noSkips   = "this row takes no skipped attempt"
-	oneStatus = "job_state holds one status per job, and a skip overwrites a failure; only the ping's run records skipped"
+	oneStatus = "job_state holds one status per job, and a skip keeps a failure; only the ping's run records skipped"
 )
 
 var r5NoFact = map[string]map[r5Kind]string{

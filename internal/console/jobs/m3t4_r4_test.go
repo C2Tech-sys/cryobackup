@@ -64,6 +64,32 @@ func TestHealthcheckPingSkipsOnlyWhileAwaitingTheFirstEvaluation(t *testing.T) {
 }
 
 // A skipped run is recorded as skipped, with its next due time, and is not an error.
+func TestASkipDoesNotWipeOutAFailure(t *testing.T) {
+	st, _, _, _, _ := pingRig(t)
+	r := NewRunner(st, "t", nil)
+	outcome := error(&ClassError{Class: "status_500"})
+	r.Add(Job{Name: "j", Every: time.Minute, Run: func(context.Context) error { return outcome }})
+	ctx := context.Background()
+	if _, err := r.RunOnce(ctx, "j"); err == nil {
+		t.Fatal("the first run should fail")
+	}
+	outcome = errSkipped
+	if ran, err := r.RunOnce(ctx, "j"); !ran || err != nil {
+		t.Fatalf("skip: ran %v err %v", ran, err)
+	}
+	row, err := st.GetJobState(ctx, "j")
+	if err != nil || row.LastStatus != "error" || row.LastErrorClass != "status_500" {
+		t.Fatalf("a skip after a failure: row %+v err %v", row, err)
+	}
+	outcome = nil
+	if _, err := r.RunOnce(ctx, "j"); err != nil {
+		t.Fatal(err)
+	}
+	if row, err = st.GetJobState(ctx, "j"); err != nil || row.LastStatus != "ok" {
+		t.Fatalf("a pass clears it: row %+v err %v", row, err)
+	}
+}
+
 func TestARunThatSkipsIsRecordedAsSkipped(t *testing.T) {
 	st, _, _, _, _ := pingRig(t)
 	r := NewRunner(st, "t", nil)

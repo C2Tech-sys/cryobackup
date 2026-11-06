@@ -179,6 +179,11 @@ func (r *Runner) RunOnce(ctx context.Context, name string) (ran bool, err error)
 	switch {
 	case errors.Is(runErr, errSkipped):
 		rec.Status, rec.ErrorClass, runErr = "skipped", classOf(runErr), nil
+		// A skip says nothing about the job, so it must not wipe out a failure:
+		// the error stands until a run actually passes.
+		if prev, perr := r.Store.GetJobState(context.WithoutCancel(ctx), name); perr == nil && prev.LastStatus == "error" {
+			rec.Status, rec.ErrorClass = prev.LastStatus, prev.LastErrorClass
+		}
 	case runErr != nil:
 		rec.Status, rec.ErrorClass = "error", classOf(runErr)
 		r.Log.Warn("job failed", logx.Str("job", name), logx.Class(rec.ErrorClass))
