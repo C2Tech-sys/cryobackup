@@ -35,6 +35,33 @@ func isReporting(d *DeviceFacts, now time.Time) bool {
 	return ok && now.Sub(seen) <= normalize(d.Thresholds).UnseenAfter
 }
 
+// ReportingDevices are the devices C13 judges from: isReporting over the devices of
+// the customers this World loaded, leaving out archived customers' (D08) and treating
+// a device whose customer was not loaded as incomplete. Evaluate uses it, and so does
+// the system health page, so "how many report" has one answer.
+func ReportingDevices(w World, now time.Time) []*DeviceFacts {
+	now = now.UTC()
+	known := make(map[string]bool, len(w.Customers))
+	archived := make(map[string]bool)
+	for _, c := range w.Customers {
+		known[c.ID] = true
+		if c.State == customerArchived {
+			archived[c.ID] = true
+		}
+	}
+	var out []*DeviceFacts
+	for _, df := range w.Devices {
+		d := df
+		if !known[d.CustomerID] || archived[d.CustomerID] {
+			continue
+		}
+		if isReporting(&d, now) {
+			out = append(out, &d)
+		}
+	}
+	return out
+}
+
 // clockSuspectBanner is C13: the devices agree that the server clock is off.
 // One device with a bad clock is only its own clock_skew attribute; agreement
 // of many is evidence against the server.
