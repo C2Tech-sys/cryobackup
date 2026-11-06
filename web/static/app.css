@@ -996,7 +996,15 @@ details.vmanage > summary::-webkit-details-marker { display: none; }
 .vsave { border-top: 1px solid var(--border); padding-top: 10px; }
 .vaud { display: grid; gap: 4px; padding-left: 22px; }
 .vcust { list-style: none; margin: 0; padding: 0 0 0 22px; display: grid; gap: 2px; max-height: 140px; overflow: auto; }
-@media (max-width: 639px) { .viewpop { position: fixed; left: 16px; right: 16px; top: auto; width: auto; max-width: none; } }
+.viewpop .vhead { display: none; }
+/* M3-T5 delta M3: phone views popover */
+@media (max-width: 639px) {
+  /* A sheet pinned to the bottom of the screen with its own scroll: the whole popover and its Save button are always
+     inside the viewport, whatever banners are above the control or how far the page is scrolled. */
+  .viewpop { position: fixed; left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-width: none; max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; z-index: 70; }
+  .viewpop .vhead { display: flex; align-items: center; justify-content: space-between; position: sticky; top: -12px; z-index: 1; margin: -12px -12px 0; padding: 8px 12px; background: var(--surface-raised); border-bottom: 1px solid var(--border); }
+  .viewpop .vhead .h-label { margin: 0; }
+}
 
 /* A: the state-explain tip (components 3.1) and the device action tooltips (ruling 1). */
 .tip .xl { display: block; margin-top: 6px; }

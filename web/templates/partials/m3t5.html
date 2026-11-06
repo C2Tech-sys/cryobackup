@@ -31,9 +31,10 @@
 </li>{{end}}
 
 {{define "views_control"}}{{with .}}<div class="viewctl" id="views-{{.Entity}}">
-{{with .Flash}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+{{with .Flash}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}{{with .Link}} <a href="{{.Href}}">{{.Label}}</a>{{end}}</div></div>{{end}}
 <details class="viewmenu"><summary class="btn sm" aria-label="Saved views: {{.Label}}"><span class="vlbl">{{.Label}}</span>{{if .Modified}}<i class="vdot" title="Unsaved changes" aria-hidden="true"></i>{{end}}<svg width="12" height="12" aria-hidden="true" class="vcaret"><use href="#i-chev"/></svg></summary>
   <div class="viewpop" role="group" aria-label="Saved views">
+    <div class="vhead"><span class="h-label">Saved views</span><button type="button" class="btn ghost sm" data-close aria-label="Close saved views">Close</button></div>
     {{if .Err}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text">{{.Err}}</div></div>{{end}}
     <h4 class="h-label">Built-in</h4>
     <ul class="vlist">{{range .Builtins}}{{template "view_row" (viewrow . $)}}{{end}}</ul>

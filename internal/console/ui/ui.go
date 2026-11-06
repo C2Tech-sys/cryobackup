@@ -129,8 +129,7 @@ func New(s *Service) (*Service, error) {
 		s.Hub.freshness = s.freshnessPayload
 		s.Hub.RefreshNow = func() time.Duration { return time.Duration(s.display().RefreshS) * time.Second } // M2-W3A: a changed interval reaches the stream
 	}
-	s.initM3T5() // M3-T5: banner times in the display zone (m3t5.go); before initM3, which would set the fixtures banners in UTC
-	s.initM3()   // M3-T4: the pages' private admin API, built now (m3t4.go)
+	s.initM3() // M3-T4: the pages' private admin API, built now (m3t4.go)
 	return s, nil
 }
 
@@ -319,7 +318,7 @@ func (s *Service) stamp(ctx context.Context, f health.Fleet) Stamp {
 func (s *Service) page(ctx context.Context, p *auth.Principal, f health.Fleet, title, nav, events string) Page {
 	d := s.displayOf(ctx)
 	return Page{Title: title, Nav: nav, User: &UserView{Username: p.Admin.Username, Role: p.Role.String()}, CSRF: p.CSRF,
-		Banners: buildBanners(f, false).forRole(p.Role), Stamp: s.stamp(ctx, f), Refresh: d.RefreshS, Events: events, Fixtures: s.Fixtures, Sys: s.sysItems(f), Zone: d.Zone}
+		Banners: buildBannersIn(f, false, d.Loc).forRole(p.Role), Stamp: s.stamp(ctx, f), Refresh: d.RefreshS, Events: events, Fixtures: s.Fixtures, Sys: s.sysItems(f), Zone: d.Zone}
 }
 
 func (s *Service) errorPage(w http.ResponseWriter, r *http.Request, p *auth.Principal, status int, title, body string) {
@@ -591,7 +590,7 @@ func (s *Service) renderEvents(ctx context.Context, sub *Sub) ([]Event, error) {
 		return nil, err
 	}
 	var evs []Event
-	ban, err := s.renderString("board", "banners", buildBanners(f, false).forRole(sub.Role))
+	ban, err := s.renderString("board", "banners", buildBannersIn(f, false, s.loc(ctx)).forRole(sub.Role))
 	if err != nil {
 		return nil, err
 	}

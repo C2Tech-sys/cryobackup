@@ -152,8 +152,11 @@ func BannerLabel(id string) string {
 
 // bannerView maps an engine banner to its view. Only banners whose destination
 // exists in this milestone carry an action.
-func bannerView(b state.Banner) BannerView {
-	v := BannerView{ID: b.ID, Label: BannerLabel(b.ID), Class: ClassWarn, Text: b.Text}
+func bannerView(b state.Banner) BannerView { return bannerViewIn(b, time.Time{}, nil) }
+
+// bannerViewIn is bannerView with the banner's clock time worded in loc (retime); nil leaves the engine's text.
+func bannerViewIn(b state.Banner, now time.Time, loc *time.Location) BannerView {
+	v := BannerView{ID: b.ID, Label: BannerLabel(b.ID), Class: ClassWarn, Text: retime(b.Text, b.At, now, loc)}
 	if b.Severity >= state.SeverityCritical {
 		v.Class = ClassCrit
 	}
@@ -206,10 +209,13 @@ func (v BannersView) forRole(role auth.Role) BannersView {
 }
 
 // buildBanners merges the console banners with the entity banners.
-func buildBanners(f health.Fleet, oob bool) BannersView {
+func buildBanners(f health.Fleet, oob bool) BannersView { return buildBannersIn(f, oob, nil) }
+
+// buildBannersIn is buildBanners with every clock time in a banner worded in loc, the reader's display zone.
+func buildBannersIn(f health.Fleet, oob bool, loc *time.Location) BannersView {
 	var crit, warn []BannerView
 	for _, b := range f.View.Banners {
-		v := bannerView(b)
+		v := bannerViewIn(b, f.Computed, loc)
 		if v.Class == ClassCrit {
 			crit = append(crit, v)
 		} else {
@@ -354,6 +360,9 @@ type FilterView struct {
 	Chips  []FilterChip // each active filter, removable
 	Shown  int
 	Total  int
+	// CustText is how many customers are on screen ("3 customers"): the customer ring counts customers, and a
+	// customer with no devices has no rows to show for it.
+	CustText string
 }
 
 // EmptyView is an empty-state panel (components §9.5).
@@ -609,7 +618,7 @@ func deviceRow(ds state.DeviceState, meta deviceMeta, strips map[string][health.
 	row := DeviceRow{ID: ds.ID, Host: ds.Hostname, Chips: ChipsFor(ds, c, run), Badges: BadgesFor(ds, c), Agent: agentLabel(ds.Detail.AgentVersion)}
 	var bits []string
 	if meta.OS != "" {
-		bits = append(bits, meta.OS)
+		bits = append(bits, osLabel(meta.OS))
 	}
 	if meta.Class != "" && meta.Class != "unknown" {
 		bits = append(bits, meta.Class)

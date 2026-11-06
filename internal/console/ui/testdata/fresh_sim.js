@@ -343,6 +343,45 @@ run('a flapping stream backs off: few polls, few reconnects', (s) => {
   s.expect(s.streams() === n + 1, 'a stable stream did not reset the reconnect delay');
 });
 
+// M3-T5 delta (L1): backing off the polling and the flapping must not slow recovery. A console that was down for
+// minutes came back and the page took up to a minute to notice (the retry delay had grown to its cap).
+run('a dead stream is retried every 3 s, reaches NO DATA at about 30 s, and recovers on the first retry after the console is back', (s) => {
+  open(s);
+  s.advance(20000); s.es().emit('ping');
+  drop(s);
+  const seen = new Set([s.es()]);
+  let attempts = 0, t = 0, at25, at35;
+  while (t < 240000) { // four minutes with nothing listening: every reconnect attempt fails at once
+    s.advance(100); t += 100;
+    const cur = s.es();
+    if (!seen.has(cur)) { seen.add(cur); attempts++; cur.readyState = 0; cur.emit('error'); }
+    if (t === 25000) at25 = s.stale();
+    if (t === 35000) at35 = s.stale();
+  }
+  s.expect(at25 === false, 'NO DATA before the 30 s grace');
+  s.expect(at35 === true, 'no NO DATA at 35 s of a dead stream');
+  s.expect(attempts >= 70, 'only ' + attempts + ' reconnect attempts in four minutes of a dead console (a retry every 3 s makes about 80): the delay grew');
+  // the console is back: the next attempt comes within one 3 s retry, and the warning clears with it
+  const before = s.streams();
+  let waited = 0;
+  while (s.streams() === before) { s.advance(100); waited += 100; }
+  s.expect(waited <= 3100, 'the next attempt came after ' + waited + ' ms');
+  open(s);
+  s.expect(!s.stale() && s.state() === 'fresh', 'still warning after the console came back: ' + s.state());
+});
+
+run('a blip after a good run recovers within one 3 s retry and shows nothing', (s) => {
+  open(s);
+  s.advance(40000); s.es().emit('ping');
+  const n = s.streams();
+  drop(s);
+  s.advance(3100);
+  s.expect(s.streams() === n + 1, 'the first reconnect did not come after 3 s');
+  open(s);
+  s.advance(1000);
+  s.expect(!s.stale() && s.state() === 'fresh', 'a blip showed a warning: ' + s.state());
+});
+
 // M3-T5: the device-count tooltip (class "right" on the .tip, hidden until :hover applies) was placed from a 0-wide
 // box and from the chip's left edge, so it sat too far right. It is measured as shown and right-aligned to its chip.
 run('a right-aligned .tip is measured as shown and ends at its chip', (s) => {

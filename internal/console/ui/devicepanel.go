@@ -379,7 +379,7 @@ func (s *Service) settingsForm(p *auth.Principal, dev store.Device, c fmtCtx) De
 	f.fillOptions()
 	f.Facts = []Fact{{Key: "Hostname", Value: dev.Hostname, Mono: true}}
 	if dev.OSVersion != "" {
-		f.Facts = append(f.Facts, Fact{Key: "Operating system", Value: dev.OSVersion})
+		f.Facts = append(f.Facts, Fact{Key: "Operating system", Value: osLabel(dev.OSVersion)})
 	}
 	if dev.Arch != "" {
 		f.Facts = append(f.Facts, Fact{Key: "Architecture", Value: dev.Arch, Mono: true})
@@ -388,7 +388,7 @@ func (s *Service) settingsForm(p *auth.Principal, dev store.Device, c fmtCtx) De
 		f.Facts = append(f.Facts, Fact{Key: "Agent", Value: safeVersion(dev.AgentVersion), Mono: true})
 	}
 	if dev.ResticVersion != "" {
-		f.Facts = append(f.Facts, Fact{Key: "Restic", Value: dev.ResticVersion, Mono: true})
+		f.Facts = append(f.Facts, Fact{Key: "Restic", Value: resticLabel(dev.ResticVersion), Mono: true})
 	}
 	f.Facts = append(f.Facts, Fact{Key: "Enrolled", Value: c.dateClock(dev.EnrolledAt) + " · via " + orDefault(dev.EnrolledVia, "token"), Mono: true})
 	return f

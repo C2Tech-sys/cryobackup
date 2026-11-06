@@ -4,7 +4,7 @@
 {{define "chip"}}<span class="st {{.Class}}{{if .Small}} sm{{end}}{{if .Pulse}} pulse{{end}}{{if .Dashed}} dashed{{end}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}
 
 {{/* chipbtn: the chip inside a table State column is a button so keyboard users reach the reason popover. */}}
-{{define "chipbtn"}}<span class="tipwrap"><button type="button" class="st {{.Class}}{{if .Small}} sm{{end}}{{if .Pulse}} pulse{{end}}{{if .Dashed}} dashed{{end}}" aria-describedby="tip-{{.ID}}"{{if .Explain}} hx-get="{{.Explain}}" hx-trigger="mouseenter once, focus once" hx-target="#tip-{{.ID}}" hx-swap="innerHTML"{{end}}><i aria-hidden="true"></i>{{.Text}}</button>{{if or .Reason .Explain}}<span class="tip" role="tooltip" id="tip-{{.ID}}"><b>{{.Title}}</b>{{.Reason}}</span>{{end}}</span>{{end}}
+{{define "chipbtn"}}<span class="tipwrap"><button type="button" class="st {{.Class}}{{if .Small}} sm{{end}}{{if .Pulse}} pulse{{end}}{{if .Dashed}} dashed{{end}}" aria-describedby="tip-{{.ID}}"{{if .Explain}} hx-get="{{.Explain}}" hx-trigger="mouseenter once delay:200ms, focus once delay:200ms" hx-target="#tip-{{.ID}}" hx-swap="innerHTML"{{end}}><i aria-hidden="true"></i>{{.Text}}</button>{{if or .Reason .Explain}}<span class="tip" role="tooltip" id="tip-{{.ID}}"><b>{{.Title}}</b>{{.Reason}}</span>{{end}}</span>{{end}}
 
 {{define "badges"}}{{if or .Shown .More}}<span class="badges">{{range .Shown}}<span class="badge {{.Class}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}{{if .More}}<details class="more"><summary aria-label="{{len .More}} more attributes">+{{len .More}}</summary><div class="more-pop">{{range .More}}<span class="badge {{.Class}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}</div></details>{{end}}</span>{{end}}{{end}}
 

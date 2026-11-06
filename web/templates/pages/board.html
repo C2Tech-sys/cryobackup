@@ -1,10 +1,10 @@
 {{/* B01 - the fleet health board. Everything inside #board is live: the SSE hub re-renders it (fleet.state), the 30 s poll refetches it, and fresh.js marks it "as of" when updates stop. */}}
-{{define "board"}}<div id="board" class="stack" data-live data-poll hx-get="/ui/partials/board{{.QS}}" hx-trigger="cryo:poll" hx-swap="outerHTML">
+{{define "board"}}<div id="board" class="stack"{{if .Filter.Active}} data-filtered="true"{{end}} data-live data-poll hx-get="/ui/partials/board{{.QS}}" hx-trigger="cryo:poll" hx-swap="outerHTML">
 <span class="asof" aria-live="polite"></span>
 {{if .Empty}}{{template "panel_state" .Empty}}{{end}}
 {{template "kpis" .KPIs}}
 <div class="rings">{{range .Rings}}{{template "ring" .}}{{end}}</div>
-{{if .Filter.Active}}<div class="chipbar" role="status"><span>Showing {{.Filter.Shown}} of {{.Filter.Total}}</span>{{range .Filter.Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}<a class="btn ghost sm" href="/">Clear all</a></div>{{end}}
+{{if .Filter.Active}}<div class="chipbar" role="status"><span>Showing {{.Filter.Shown}} of {{.Filter.Total}}{{with .Filter.CustText}} · {{.}}{{end}}</span>{{range .Filter.Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}<a class="btn ghost sm" href="/">Clear all</a></div>{{end}}
 {{if .Groups}}<div class="table-wrap" role="region" aria-label="Devices" tabindex="0">
 <table class="fleet board">
 <caption>Devices, grouped by customer, exceptions first</caption>
@@ -18,5 +18,5 @@
 {{define "board_partial"}}{{template "banners" .Banners}}{{template "stamp" .Stamp}}{{template "board" .}}{{end}}
 
 {{define "title"}}Fleet health{{end}}
-{{define "content"}}{{with .ViewWarn}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+{{define "content"}}{{with .ViewWarn}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}{{with .Link}} <a href="{{.Href}}">{{.Label}}</a>{{end}}</div></div>{{end}}
 {{template "views_control" .Views}}{{template "board" .}}{{end}}

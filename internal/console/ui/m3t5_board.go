@@ -75,14 +75,19 @@ func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fle
 	}
 	metas := s.deviceMetas(ctx, p)
 	pg := s.page(ctx, p, f, "Fleet health", "fleet", events)
-	pg.Banners = buildBanners(f, oob).forRole(p.Role)
+	pg.Banners = buildBannersIn(f, oob, c.Loc).forRole(p.Role)
 	pg.Stamp.OOB = oob
 	b := BoardData{Page: pg, Columns: 5, AsOf: c.clock(f.Computed), QS: bq.QS()}
 	stale := state.DefaultThresholds().StaleAfter
 
 	var viewRaw []byte
 	if bq.View != "" {
-		if v, err := s.Store.GetSavedView(ctx, p.Scope, p.Admin.ID, bq.View); err == nil {
+		if v, err := s.Store.GetSavedView(ctx, p.Scope, p.Admin.ID, bq.View); err == nil && v.Entity != "devices" {
+			// A view of another table: its clauses name runs or customers, not devices. Applying them here would
+			// match nothing and read as "0 of 25" with no word of why.
+			b.ViewWarn = &CauseView{Class: ClassWarn, Title: "This view belongs to the " + viewPageName(v.Entity) + " page.",
+				Text: "It filters " + v.Entity + ", not devices, so every device is shown here.", Link: &Link{Href: viewPageHref(v.Entity, v.ID), Label: "Open it on the " + viewPageName(v.Entity) + " page"}}
+		} else if err == nil {
 			b.viewLoaded, viewRaw = &v, v.Filter
 		} else {
 			b.ViewWarn = &CauseView{Class: ClassWarn, Title: "View not found.", Text: "The view in this link was deleted, or it is not shared with you. Every device is shown."}
@@ -109,6 +114,7 @@ func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fle
 	}
 	b.Filter.Active = len(b.Filter.Chips) > 0
 
+	deviceFilter := tree != nil // a state, an age segment or a view's clauses: customers with no device cannot match them
 	running, total, shown := 0, 0, 0
 	rowsByCustomer := map[string][]DeviceRow{}
 	for _, cs := range f.View.Customers {
@@ -135,10 +141,22 @@ func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fle
 	b.Filter.Shown, b.Filter.Total = shown, total
 	for _, cs := range f.View.Customers {
 		rows := rowsByCustomer[cs.ID]
-		if b.Filter.Active && len(rows) == 0 {
+		// The customer ring counts customers, devices or none: a customer of the chosen segment is shown with
+		// its rows, or with none (MISSING, onboarding, empty). Only a filter on devices drops a customer with no match.
+		if bq.Cust != "" && customerSeg(cs.Status) != bq.Cust {
 			continue
 		}
-		b.Groups = append(b.Groups, groupView(cs, rows, c))
+		if deviceFilter && len(rows) == 0 {
+			continue
+		}
+		g := groupView(cs, rows, c)
+		if b.Filter.Active {
+			g.Collapsed = false // every matching group is open, so the rows on screen are the count (fresh.js keeps it so)
+		}
+		b.Groups = append(b.Groups, g)
+	}
+	if b.Filter.Active {
+		b.Filter.CustText = plural(len(b.Groups), "customer", "customers")
 	}
 	b.KPIs = kpis(f, c, running)
 	b.Rings = []Ring{ageRing(f, c), customerRing(f)}
@@ -151,7 +169,7 @@ func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fle
 	case total == 0:
 		b.Empty = &EmptyView{Kind: "alarm", Title: "No devices are enrolled",
 			Body: "Nothing is being backed up. Enroll a customer or check the agent listener."}
-	case b.Filter.Active && shown == 0:
+	case b.Filter.Active && len(b.Groups) == 0:
 		b.Empty = &EmptyView{Kind: "neutral", Title: "No devices match these filters",
 			Body: fmt.Sprintf("0 of %d shown.", total), Link: &Link{Href: "/", Label: "Clear filters"}}
 	}
@@ -199,7 +217,7 @@ func (s *Service) explainFragment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.log().Error("ui: state explain failed", logx.Class("render"), logx.Err(err))
-		s.renderFragment(w, r, ExplainView{Err: "The live explanation could not be read. The reason shown before is from when the page loaded."})
+		s.renderFragment(w, r, ExplainView{Err: "The live explanation could not be read. Reload the page to try again."})
 		return
 	}
 	s.renderFragment(w, r, s.explainOf(r.Context(), st))
@@ -301,4 +319,25 @@ func (s *Service) registerM3T5(r httpx.Registrar) {
 	r.Handle(patViewDelete, ro(s.viewDelete))
 	r.Handle(patM3T5Pause, op(s.devicePausePost))
 	r.Handle(patM3T5Resume, op(s.deviceResumePost))
+}
+
+// viewPageName and viewPageHref say where a saved view of another table lives.
+func viewPageName(entity string) string {
+	switch entity {
+	case "runs":
+		return "runs"
+	case "customers":
+		return "customers"
+	}
+	return "board"
+}
+
+func viewPageHref(entity, id string) string {
+	switch entity {
+	case "runs":
+		return "/runs?view=" + id
+	case "customers":
+		return "/customers"
+	}
+	return "/?view=" + id
 }

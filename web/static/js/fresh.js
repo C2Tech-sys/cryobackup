@@ -125,8 +125,8 @@
   }
   /* pollSoon: a poll asked for by a stream event (drop, reopen). At most one per POLL_MIN, so a flapping stream cannot
      turn into a request storm; the refresh timer and recovery after a real outage still poll as before. */
-  var RETRY_MIN = 3000, RETRY_MAX = 60000, STABLE_UP = 30000, POLL_MIN = 15000;
-  var retryMs = RETRY_MIN, upSince = 0, lastPollTry = -POLL_MIN;
+  var RETRY_MIN = 3000, FLAP_MAX = 30000, STABLE_UP = 30000, POLL_MIN = 15000;
+  var flaps = 0, upSince = 0, lastPollTry = -POLL_MIN;
   function pollSoon() {
     var n = Date.now();
     if (n - lastPollTry < POLL_MIN) return;
@@ -201,13 +201,13 @@
       if (unloading) return; /* the browser errors every open stream when the page is left */
       var now = Date.now();
       live = false; if (!downSince) { downSince = now; pollSoon(); } /* ask once now: a poll that works means the console is up and only the stream broke */
-      /* A flapping stream (it opens, drops, opens, drops) used to reconnect by the browser's own 3 s retry and, because each
-         open cleared the down clock, ask for a poll on every drop: about 20 requests a minute. The page now owns the
-         reconnect and backs off 3 s, 6 s, 12 s ... 60 s; the delay resets only after the stream stayed up for STABLE_UP.
-         Polls on a drop are at most one per POLL_MIN. */
-      if (upSince && now - upSince >= STABLE_UP) retryMs = RETRY_MIN;
+      /* The page owns the reconnect. A stream that never opens (the console is down) or that dropped once after a good run is retried
+         after RETRY_MIN, as the browser itself did, so a blip or a restart recovers in about that time and NO DATA clears at once.
+         Only a FLAPPING stream (it opened and dropped again inside STABLE_UP, over and over) is backed off, 3 s, 6 s, 12 s up to
+         FLAP_MAX, and a poll asked for by a drop is limited to one per POLL_MIN: that was about 20 requests a minute. */
+      if (upSince && now - upSince < STABLE_UP) flaps++; else flaps = 0;
       upSince = 0;
-      if (es && !dropped) { es.close(); clearTimeout(retry); retry = setTimeout(connect, retryMs); retryMs = Math.min(retryMs * 2, RETRY_MAX); }
+      if (es && !dropped) { es.close(); clearTimeout(retry); retry = setTimeout(connect, flaps > 1 ? Math.min(RETRY_MIN * Math.pow(2, flaps - 1), FLAP_MAX) : RETRY_MIN); }
     });
   }
   window.cryoFresh = {
@@ -231,10 +231,14 @@
   /* ---- collapsible customer groups ---- */
   var groupState = {};
   try { groupState = JSON.parse(sessionStorage.getItem('cryo.groups') || '{}'); } catch (e) { groupState = {}; }
+  /* While a board filter is active (#board[data-filtered]) every matching group is open, on load and after each live update,
+     whatever was collapsed before: the rows on screen are then the rows the "Showing N of M" line counts (M3-T5, M2). */
+  function filtered() { var b = document.getElementById('board'); return !!(b && b.getAttribute('data-filtered') === 'true'); }
   function applyGroups() {
+    var flt = filtered();
     $$('tbody.grp').forEach(function (tb) {
       var id = tb.id;
-      var want = Object.prototype.hasOwnProperty.call(groupState, id) ? groupState[id] : tb.getAttribute('data-default-collapsed') === 'true';
+      var want = flt ? false : (Object.prototype.hasOwnProperty.call(groupState, id) ? groupState[id] : tb.getAttribute('data-default-collapsed') === 'true');
       tb.setAttribute('data-collapsed', want ? 'true' : 'false');
       var b = $('.chev', tb); if (b) b.setAttribute('aria-expanded', want ? 'false' : 'true');
     });
@@ -253,10 +257,15 @@
     if (chev) {
       var tb = chev.closest('tbody.grp'); if (!tb) return;
       var collapsed = tb.getAttribute('data-collapsed') !== 'true';
-      groupState[tb.id] = collapsed; tb.setAttribute('data-collapsed', collapsed ? 'true' : 'false'); chev.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      try { sessionStorage.setItem('cryo.groups', JSON.stringify(groupState)); } catch (err) { /* ignore */ }
+      tb.setAttribute('data-collapsed', collapsed ? 'true' : 'false'); chev.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      if (!filtered()) { /* a collapse under a filter lasts until the next update and is not remembered for the unfiltered board */
+        groupState[tb.id] = collapsed;
+        try { sessionStorage.setItem('cryo.groups', JSON.stringify(groupState)); } catch (err) { /* ignore */ }
+      }
       return;
     }
+    var cl = t.closest && t.closest('[data-close]'); /* a "Close" button inside a <details> popover (the phone saved-views sheet) */
+    if (cl) { var dt = cl.closest('details'); if (dt) { dt.removeAttribute('open'); var sm = dt.querySelector('summary'); if (sm) sm.focus(); } return; }
     var th = t.closest && t.closest('[data-theme-set]');
     if (th) { window.cryoTheme.set(th.getAttribute('data-theme-set')); syncTheme(); return; }
     if (t.closest && t.closest('.menu-btn')) {
@@ -269,6 +278,8 @@
   });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
+    var ov = document.querySelector && document.querySelector('details.viewmenu[open]');
+    if (ov) { ov.removeAttribute('open'); var os = ov.querySelector('summary'); if (os) os.focus(); return; }
     if (body.getAttribute('data-drawer') === 'open') { setDrawer(false); var mb = $('.menu-btn'); if (mb) mb.focus(); return; }
     var tw = document.activeElement && document.activeElement.closest && document.activeElement.closest('.tipwrap');
     if (tw) { tw.setAttribute('data-tip-off', ''); if (tipOpen === tw) tipOpen = null; }

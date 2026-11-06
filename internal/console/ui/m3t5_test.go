@@ -415,11 +415,8 @@ func TestM3T5A_B01_TheStateExplainTooltip(t *testing.T) {
 	}
 	// the chip loads it on hover or focus
 	board := e.page("/", 200)
-	mustContain(t, "chip", board, `hx-get="/ui/devices/`+id+`/explain"`, `hx-trigger="mouseenter once, focus once"`, `hx-target="#tip-t-`+id+`"`)
-	// a device outside the account's scope is a 404, not an explanation
-	if res, _ := e.do("GET", "/ui/devices/01NOSUCHDEVICE00000000000/explain", nil); res.StatusCode != http.StatusNotFound {
-		t.Errorf("unknown device: %d", res.StatusCode)
-	}
+	mustContain(t, "chip", board, `hx-get="/ui/devices/`+id+`/explain"`, `hx-trigger="mouseenter once delay:200ms, focus once delay:200ms"`, `hx-target="#tip-t-`+id+`"`)
+	// (a device outside the account's scope is refused: TestM3T5_TheExplainFragmentRefusesAForeignDevice)
 	// an agent-supplied version label is withheld in the explanation of an OUTDATED device
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE devices SET agent_version = ? WHERE id = ?`, hostileTexts[4], e.dev["DR-LAPTOP-03"])
@@ -534,33 +531,6 @@ func TestM3T5G_GatewayLineFollowsTheEvidence(t *testing.T) {
 }
 
 // ---- C: banner times are 12-hour and in the display zone ----
-
-func TestM3T5C_BannerTimesAreTwelveHourInTheDisplayZone(t *testing.T) {
-	e := newEnv(t) // display zone America/Chicago; the clock is 6:42 PM UTC = 1:42 PM there
-	if e.svc.Fleet.Zone == nil || e.svc.Fleet.Zone(context.Background()).String() != "America/Chicago" {
-		t.Fatal("the evaluator is not given the display zone")
-	}
-	now := fixtures.Now()
-	at := func(d time.Duration) state.Millis { return state.Millis(now.Add(-d).UnixMilli()) }
-	old := e.svc.Fleet.Probes
-	defer func() { e.svc.Fleet.Probes = old }()
-	e.svc.Fleet.Probes = func() state.ProbeFacts {
-		return state.ProbeFacts{Wired: true, ProberInterval: time.Minute, Gateway: &state.ProbeRun{LastRunAt: at(10 * time.Second), LastOKAt: at(9 * time.Minute), ConsecutiveFailures: 4}}
-	}
-	f, err := e.svc.Fleet.Fleet(e.svc.withDisplay(context.Background()), store.ScopeAll())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, b := range f.View.Banners {
-		if b.ID == "C01" {
-			if !strings.Contains(b.Text, "Last OK 1:33 PM") {
-				t.Fatalf("C01 says %q, want the last OK time as 1:33 PM (display zone, 12-hour)", b.Text)
-			}
-			return
-		}
-	}
-	t.Fatal("no C01 banner")
-}
 
 // ---- B: the operator's rulings ----
 

@@ -558,6 +558,9 @@ func (s *Service) boardViewState(q boardQuery, loaded *store.SavedView) viewStat
 	if q.Age != "" {
 		vs.Fields = append(vs.Fields, SaveField{"age", q.Age})
 	}
+	if q.Cust != "" { // not part of a saved view, but a failed Manage action must come back to the same board
+		vs.Fields = append(vs.Fields, SaveField{"cust", q.Cust})
+	}
 	if q.View != "" {
 		vs.Fields = append(vs.Fields, SaveField{"view", q.View})
 	}

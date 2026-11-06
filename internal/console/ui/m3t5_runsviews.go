@@ -50,8 +50,12 @@ func (s *Service) runsViewRedirect(w http.ResponseWriter, r *http.Request, p *au
 		return false, &CauseView{Class: ClassWarn, Title: "View not found.", Text: "The link names no saved view. Every run is listed."}
 	}
 	v, err := s.Store.GetSavedView(r.Context(), p.Scope, p.Admin.ID, id)
-	if err != nil || v.Entity != "runs" {
+	if err != nil {
 		return false, &CauseView{Class: ClassWarn, Title: "View not found.", Text: "The view in this link was deleted, or it is not shared with you. Every run is listed."}
+	}
+	if v.Entity != "runs" {
+		return false, &CauseView{Class: ClassWarn, Title: "This view belongs to the " + viewPageName(v.Entity) + " page.",
+			Text: "It filters " + v.Entity + ", not runs, so every run is listed here.", Link: &Link{Href: viewPageHref(v.Entity, v.ID), Label: "Open it on the " + viewPageName(v.Entity) + " page"}}
 	}
 	vals, ok := runsQueryOf(v.Filter)
 	if !ok {

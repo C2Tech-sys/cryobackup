@@ -1,33 +1,17 @@
 package ui
 
 import (
-	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
-	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // M3-T5: the sidebar's gateway line and the fixtures session cookies. The board,
 // saved views, the pause dialog and the other T5 parts live in m3t5_*.go.
-
-// initM3T5 makes every banner time a 12-hour clock in the operator's display zone: the evaluator words
-// the engine's banners in s.Fleet.Zone, and in fixtures mode the lab banners (fixtures.ExtraBannersIn)
-// in the same zone. A zone set by the caller is kept.
-func (s *Service) initM3T5() {
-	if s.Fleet == nil {
-		return
-	}
-	if s.Fleet.Zone == nil {
-		s.Fleet.Zone = func(ctx context.Context) *time.Location { return s.loc(ctx) }
-	}
-	if s.Fixtures && s.Fleet.Extra == nil {
-		s.Fleet.Extra = func(now time.Time) []state.Banner { return fixtures.ExtraBannersIn(now, s.display().Loc) }
-	}
-}
 
 // gatewayItem is the sidebar's Gateway line (G). It is read from the same
 // evaluation as the page it sits on, never a constant: the fleet's banners and
@@ -117,6 +101,55 @@ func (w headerOnly) WriteHeader(int)             {}
 // agentLabel is the agent version a page prints: empty stays empty (nothing reported yet), anything else
 // goes through safeVersion, so a file name or a sentence sent as a label shows as "(withheld)" (F).
 func agentLabel(v string) string {
+	if v == "" {
+		return ""
+	}
+	return safeVersion(v)
+}
+
+// retime rewords the clock time the engine printed in a banner for the instant at (it words it in UTC on a
+// 12-hour clock: "3:04 PM", or "Mon 2 Jan 3:04 PM" on another day) in loc. The API shares the engine's text and
+// keeps it as it is; each page words the time for its own reader from the banner's At (state.Banner.At exists
+// for this). A banner without an instant, or text that does not carry the UTC wording, is returned unchanged.
+func retime(text string, at, now time.Time, loc *time.Location) string {
+	if at.IsZero() || loc == nil {
+		return text
+	}
+	utc := bannerClock(at, now, time.UTC)
+	if !strings.Contains(text, utc) {
+		return text
+	}
+	return strings.Replace(text, utc, bannerClock(at, now, loc), 1)
+}
+
+// bannerClock words t as the state engine does for banner text: "3:04 PM" on the current date in loc, else
+// "Mon 2 Jan 3:04 PM".
+func bannerClock(t, now time.Time, loc *time.Location) string {
+	lt, ln := t.In(loc), now.In(loc)
+	if ly, lm, ld := lt.Date(); ly == ln.Year() && lm == ln.Month() && ld == ln.Day() {
+		return lt.Format("3:04 PM")
+	}
+	return lt.Format("Mon 2 Jan 3:04 PM")
+}
+
+// atOrZero is *t, or the zero time.
+func atOrZero(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
+}
+
+// osLabel and resticLabel are the OS and the restic version a page prints: empty stays empty, anything else goes
+// through safeOS / safeVersion, the functions the M3-T4 pages use (L6).
+func osLabel(v string) string {
+	if v == "" {
+		return ""
+	}
+	return safeOS(v)
+}
+
+func resticLabel(v string) string {
 	if v == "" {
 		return ""
 	}
