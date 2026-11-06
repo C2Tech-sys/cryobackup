@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -136,8 +137,8 @@ func TestServeShutdownIsBoundedBehindAStuckWrite(t *testing.T) { // M3-STORE2 1
 	bound := shutdownWorstCase + 20*time.Second // the worst case, and room for a loaded machine
 	select {
 	case err := <-returned:
-		if err != nil {
-			t.Fatalf("App.Run = %v", err)
+		if !errors.Is(err, store.ErrCloseAbandoned) { // M3-STORE3 5: serve then exits non-zero
+			t.Fatalf("App.Run = %v, want store.ErrCloseAbandoned", err)
 		}
 	case <-time.After(bound):
 		t.Fatalf("App.Run still blocked after %v behind a stuck Write", bound)

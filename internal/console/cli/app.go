@@ -68,9 +68,10 @@ type App struct {
 	// FixturesPassword is the password of the fixtures admin ("admin").
 	FixturesPassword string
 
-	log     *logx.Logger
-	clock   func() time.Time
-	cleanup []func()
+	log      *logx.Logger
+	clock    func() time.Time
+	cleanup  []func()
+	closeErr error // what closing the database answered; Run returns it
 }
 
 // Build wires the console from cfg. In fixtures mode (cfg.Fixtures) it opens a
@@ -103,9 +104,10 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		return nil, fmt.Errorf("cli: cannot open the database: %w", sanitize(err2))
 	}
 	a.cleanup = append(a.cleanup, func() {
-		if err := a.Store.Close(); errors.Is(err, store.ErrCloseAbandoned) {
+		a.closeErr = a.Store.Close()
+		if errors.Is(a.closeErr, store.ErrCloseAbandoned) {
 			a.log.Error("database not closed cleanly: work still in flight; exiting, the next start recovers it", logx.Class("store_close_abandoned"))
-		} else if err != nil {
+		} else if a.closeErr != nil {
 			a.log.Error("database not closed cleanly", logx.Class(jobs.ClassStore))
 		}
 	})
@@ -256,18 +258,34 @@ func holderID() string {
 // Run serves until ctx is cancelled: it starts the SSE hub, the job runner
 // (the health-prober among its jobs) and the agent-endpoint self-probe, binds
 // both listeners and serves. Close is called on return.
-func (a *App) Run(ctx context.Context) error {
-	defer a.Close()
+//
+// It returns non-nil, so serve exits non-zero and its supervisor restarts it, when
+// a listener fails (logged by class: it must not stay up serving nothing and running
+// no jobs) or when the database could not be closed cleanly.
+func (a *App) Run(parent context.Context) (err error) {
+	defer func() {
+		a.Close()
+		err = errors.Join(err, a.closeErr)
+	}()
 	if err := a.Server.Listen(); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithCancel(parent) // ends with parent, or when the servers end on their own
+	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); a.Hub.Run(ctx) }()
 	go func() { defer wg.Done(); a.Endpoint.Run(ctx) }() // after Listen: the first probe meets a bound listener
 	a.Runner.Start(ctx)
-	// Every step below is bounded: shutdownWorstCase is the sum.
-	err := a.Server.Serve(ctx)
+	// Every step below is bounded: shutdownWorstCase is the sum. Serve returns when ctx
+	// ends or when a listener fails, which it reports as its error. Either way ctx ends
+	// here, so the Hub and the self-probe below stop too.
+	err = a.Server.Serve(ctx)
+	if err != nil {
+		a.log.Error("a listener failed; the console is shutting down", logx.Class("listener_failed"))
+		err = fmt.Errorf("cli: a listener failed: %w", err)
+	}
+	cancel()
 	a.Runner.Stop()
 	a.Admin.BeginShutdown() // no new run-now or POST probe; the manual job runs in flight are cancelled
 	if a.Prober != nil {
@@ -286,9 +304,9 @@ func (a *App) Run(ctx context.Context) error {
 // exits with that transaction unfinished. Either way it cannot hold the shutdown.
 const backgroundShutdownWait = 10 * time.Second
 
-// shutdownWorstCase is the longest Run takes to return once its context ends, with
-// every step using its whole bound, each one after the last. The Hub and the
-// endpoint self-probe take the context and are not counted.
+// shutdownWorstCase is the longest Run takes to return once its context ends or a
+// listener fails, with every step using its whole bound, each one after the last.
+// The Hub and the endpoint self-probe take the context and are not counted.
 const shutdownWorstCase = server.ShutdownGrace + // the HTTP server drains
 	jobs.RunnerStopWait + // the scheduled jobs stop
 	jobs.StopWait + jobs.StopReleaseTimeout + // the prober stops and frees its lease

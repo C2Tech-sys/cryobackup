@@ -570,7 +570,8 @@ func (s *Service) systemJobRun(w http.ResponseWriter, r *http.Request) {
 // error when the wait ran out). Probes that ended without a result (the lease
 // was lost mid-wait, or the console is shutting down) are ran false and an
 // error that is context.Canceled. Both probes skipped (neither could run) are
-// ran false and jobs.ErrNothingProbed.
+// ran false and jobs.ErrNothingProbed. A probe that panicked is ran false and
+// jobs.ErrProbePanicked.
 type HealthProbe interface {
 	ProbeNow(ctx context.Context) (ran bool, err error)
 }
@@ -693,8 +694,8 @@ func (s *Service) storageTargetProbe(w http.ResponseWriter, r *http.Request) {
 	// it: the row is written then, with the outcome (ok; error "conflict" when
 	// another console holds the lease, answered 409; error "timeout" or "failed"
 	// for probes that did not finish; error "cancelled" for probes that ended
-	// without a result; error "nothing_probed" when neither probe could run). It is
-	// written even when the client has gone
+	// without a result; error "nothing_probed" when neither probe could run; error
+	// "internal_panic" when a probe panicked). It is written even when the client has gone
 	// (auditOutcome). A refused audit then answers 500; the probe itself only
 	// refreshes health facts.
 	const auditAction = "storage_target.probe"

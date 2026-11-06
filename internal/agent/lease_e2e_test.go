@@ -409,8 +409,12 @@ func TestFleetCapEndToEnd(t *testing.T) {
 // is up to the machine. Nothing here depends on that: the measured windows never
 // overlap either way. The runner's StartedAt is logged beside them, which is what
 // an overlap in StartedAt alone turns out to be.
+//
+// The fake backup must be slow enough to be caught. With backup_ok the first process
+// has exited before the second starts even with the cap off, so nothing could overlap.
 func TestFleetCapBothDueAtOnce(t *testing.T) {
 	r := newCapRig(t)
+	fakerestic.Use(t, "slow") // about half a second per backup
 	r.openGate()
 	r.startAgent(0)
 	r.startAgent(1)
