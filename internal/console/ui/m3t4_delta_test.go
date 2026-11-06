@@ -420,7 +420,8 @@ func TestM3T4TheAcceptedFlashCannotBeFakedByAURL(t *testing.T) {
 	if !strings.Contains(e.page(loc, 200), "Run accepted.") {
 		t.Fatal("the real token is not honoured")
 	}
-	// The same token for another job name, or in another session, or later, shows nothing.
+	// The same token for another job name, or in another session, shows nothing. Its expiry is
+	// TestR3TheFlashTokenExpiresInTheSameSession: only the same session can tell the expiry from the binding.
 	if strings.Contains(e.page(strings.Replace(loc, "alarm-evaluator~", "session-expire~", 1), 200), "Run accepted.") {
 		t.Error("a token for one job accepted for another")
 	}
@@ -428,8 +429,21 @@ func TestM3T4TheAcceptedFlashCannotBeFakedByAURL(t *testing.T) {
 	if strings.Contains(e.page(loc, 200), "Run accepted.") {
 		t.Error("a token made in one session shows in another")
 	}
+}
+
+// N22: the flash token's expiry, in the same session, so the session binding cannot be what refuses it.
+func TestR3TheFlashTokenExpiresInTheSameSession(t *testing.T) { // M3 N22
+	e, jobs := newM3Env(t)
 	e.login()
-	e.now = e.now.Add(flashTTL + time.Second)
+	res, _ := e.post("/ui/system/jobs/alarm-evaluator/run", url.Values{}, false)
+	loc := strings.TrimSuffix(res.Header.Get("Location"), "#jobs")
+	jobs.waitRun(t)
+	start := e.now
+	e.now = start.Add(flashTTL - time.Second)
+	if !strings.Contains(e.page(loc, 200), "Run accepted.") {
+		t.Fatal("control: the token is refused inside its lifetime")
+	}
+	e.now = start.Add(flashTTL + 2*time.Second)
 	if strings.Contains(e.page(loc, 200), "Run accepted.") {
 		t.Error("an expired token is honoured")
 	}
