@@ -28,8 +28,11 @@ type Event struct {
 // Sub is one SSE subscriber: who it is (scope and role), what the page shows
 // (a board filter or one device) and its outbox.
 type Sub struct {
-	Scope    store.Scope
-	Role     auth.Role
+	Scope store.Scope
+	Role  auth.Role
+	// Viewer is the account the stream is for: a saved view on the board is resolved as it.
+	Viewer string
+	// Filter is the board's filter as a query string (boardQuery.Encode).
 	Filter   string
 	DeviceID string
 
@@ -44,7 +47,11 @@ func (s *Sub) key() string {
 		sort.Strings(ids)
 		scope = strings.Join(ids, ",")
 	}
-	return scope + "|" + s.Filter + "|" + s.DeviceID
+	viewerKey := "" // only a saved view differs by account
+	if strings.Contains(s.Filter, "view=") {
+		viewerKey = s.Viewer
+	}
+	return scope + "|" + viewerKey + "|" + s.Filter + "|" + s.DeviceID
 }
 
 // Ticker makes a channel that fires every d and a function that stops it. The

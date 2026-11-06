@@ -123,6 +123,15 @@
     if (!window.htmx) return;
     $$('[data-poll]').forEach(function (el) { window.htmx.trigger(el, 'cryo:poll'); });
   }
+  /* pollSoon: a poll asked for by a stream event (drop, reopen). At most one per POLL_MIN, so a flapping stream cannot
+     turn into a request storm; the refresh timer and recovery after a real outage still poll as before. */
+  var RETRY_MIN = 3000, FLAP_MAX = 30000, STABLE_UP = 30000, POLL_MIN = 15000;
+  var flaps = 0, upSince = 0, lastPollTry = -POLL_MIN;
+  function pollSoon() {
+    var n = Date.now();
+    if (n - lastPollTry < POLL_MIN) return;
+    lastPollTry = n; poll();
+  }
   /* Polling state: the stream is down but successful polls keep the data current. The pill must not claim
      "Live" (it says "Polling" with the time of the last data) and no NO DATA stamp or banner is raised. */
   function setPolling(on) {
@@ -158,7 +167,7 @@
     var el = e.detail && e.detail.elt;
     if (el && el.hasAttribute && el.hasAttribute('data-poll') && e.detail.successful) markPoll();
   });
-  document.addEventListener('htmx:afterSwap', function () { syncStamp(); applyGroups(); renderC10(); markLive(); });
+  document.addEventListener('htmx:afterSwap', function () { syncStamp(); applyGroups(); renderC10(); markLive(); if (tipOpen && tipOpen.isConnected) placeTip(tipOpen); /* the explain tip changed size */ });
 
   /* ---- SSE ---- */
   function swap(html) {
@@ -184,14 +193,21 @@
     if (!eventsURL || !window.EventSource || dropped) return;
     if (es) { es.close(); }
     es = new EventSource(eventsURL);
-    es.addEventListener('open', function () { live = true; last = Date.now(); downSince = 0; setPolling(false); if (stale && !forced) { poll(); setStale(false); } });
+    es.addEventListener('open', function () { live = true; upSince = last = Date.now(); downSince = 0; setPolling(false); if (stale && !forced) { pollSoon(); setStale(false); } });
     ['fleet.state', 'run.progress', 'banner.update'].forEach(function (n) { es.addEventListener(n, function (e) { mark(); swap(e.data); }); });
     es.addEventListener('freshness', function (e) { mark(); onFresh(e.data); });
     es.addEventListener('ping', function () { mark(); });
     es.addEventListener('error', function () {
       if (unloading) return; /* the browser errors every open stream when the page is left */
-      live = false; if (!downSince) { downSince = Date.now(); poll(); } /* ask once now: a poll that works means the console is up and only the stream broke */
-      if (es && es.readyState === 2 && !dropped) { clearTimeout(retry); retry = setTimeout(connect, 3000); }
+      var now = Date.now();
+      live = false; if (!downSince) { downSince = now; pollSoon(); } /* ask once now: a poll that works means the console is up and only the stream broke */
+      /* The page owns the reconnect. A stream that never opens (the console is down) or that dropped once after a good run is retried
+         after RETRY_MIN, as the browser itself did, so a blip or a restart recovers in about that time and NO DATA clears at once.
+         Only a FLAPPING stream (it opened and dropped again inside STABLE_UP, over and over) is backed off, 3 s, 6 s, 12 s up to
+         FLAP_MAX, and a poll asked for by a drop is limited to one per POLL_MIN: that was about 20 requests a minute. */
+      if (upSince && now - upSince < STABLE_UP) flaps++; else flaps = 0;
+      upSince = 0;
+      if (es && !dropped) { es.close(); clearTimeout(retry); retry = setTimeout(connect, flaps > 1 ? Math.min(RETRY_MIN * Math.pow(2, flaps - 1), FLAP_MAX) : RETRY_MIN); }
     });
   }
   window.cryoFresh = {
@@ -215,10 +231,14 @@
   /* ---- collapsible customer groups ---- */
   var groupState = {};
   try { groupState = JSON.parse(sessionStorage.getItem('cryo.groups') || '{}'); } catch (e) { groupState = {}; }
+  /* While a board filter is active (#board[data-filtered]) every matching group is open, on load and after each live update,
+     whatever was collapsed before: the rows on screen are then the rows the "Showing N of M" line counts (M3-T5, M2). */
+  function filtered() { var b = document.getElementById('board'); return !!(b && b.getAttribute('data-filtered') === 'true'); }
   function applyGroups() {
+    var flt = filtered();
     $$('tbody.grp').forEach(function (tb) {
       var id = tb.id;
-      var want = Object.prototype.hasOwnProperty.call(groupState, id) ? groupState[id] : tb.getAttribute('data-default-collapsed') === 'true';
+      var want = flt ? false : (Object.prototype.hasOwnProperty.call(groupState, id) ? groupState[id] : tb.getAttribute('data-default-collapsed') === 'true');
       tb.setAttribute('data-collapsed', want ? 'true' : 'false');
       var b = $('.chev', tb); if (b) b.setAttribute('aria-expanded', want ? 'false' : 'true');
     });
@@ -237,10 +257,15 @@
     if (chev) {
       var tb = chev.closest('tbody.grp'); if (!tb) return;
       var collapsed = tb.getAttribute('data-collapsed') !== 'true';
-      groupState[tb.id] = collapsed; tb.setAttribute('data-collapsed', collapsed ? 'true' : 'false'); chev.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      try { sessionStorage.setItem('cryo.groups', JSON.stringify(groupState)); } catch (err) { /* ignore */ }
+      tb.setAttribute('data-collapsed', collapsed ? 'true' : 'false'); chev.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      if (!filtered()) { /* a collapse under a filter lasts until the next update and is not remembered for the unfiltered board */
+        groupState[tb.id] = collapsed;
+        try { sessionStorage.setItem('cryo.groups', JSON.stringify(groupState)); } catch (err) { /* ignore */ }
+      }
       return;
     }
+    var cl = t.closest && t.closest('[data-close]'); /* a "Close" button inside a <details> popover (the phone saved-views sheet) */
+    if (cl) { var dt = cl.closest('details'); if (dt) { dt.removeAttribute('open'); var sm = dt.querySelector('summary'); if (sm) sm.focus(); } return; }
     var th = t.closest && t.closest('[data-theme-set]');
     if (th) { window.cryoTheme.set(th.getAttribute('data-theme-set')); syncTheme(); return; }
     if (t.closest && t.closest('.menu-btn')) {
@@ -253,6 +278,8 @@
   });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
+    var ov = document.querySelector && document.querySelector('details.viewmenu[open]');
+    if (ov) { ov.removeAttribute('open'); var os = ov.querySelector('summary'); if (os) os.focus(); return; }
     if (body.getAttribute('data-drawer') === 'open') { setDrawer(false); var mb = $('.menu-btn'); if (mb) mb.focus(); return; }
     var tw = document.activeElement && document.activeElement.closest && document.activeElement.closest('.tipwrap');
     if (tw) { tw.setAttribute('data-tip-off', ''); if (tipOpen === tw) tipOpen = null; }
@@ -276,8 +303,14 @@
   }
   function placeTip(tw) {
     var tip = tw && tw.querySelector ? tw.querySelector('.tip') : null; if (!tip) return;
+    /* M3-T5: measure the tip as it will be shown. On mouseover it is still display:none (the :hover rule has not applied yet), so
+       its width read as 0 and a right-aligned tip was placed from the chip's right edge and ran off to the right. The class
+       "right" is on the .tip itself (shared.html "roll"), not on the wrapper. */
+    var was = tip.style.display; tip.style.display = 'block';
     var a = tw.getBoundingClientRect(), r = tip.getBoundingClientRect();
-    var p = tipPlace(a, r.width, r.height, document.documentElement.clientWidth, document.documentElement.clientHeight, tw.classList.contains('right'));
+    tip.style.display = was;
+    var right = tw.classList.contains('right') || !!(tip.classList && tip.classList.contains('right'));
+    var p = tipPlace(a, r.width, r.height, document.documentElement.clientWidth, document.documentElement.clientHeight, right);
     tip.style.position = 'fixed'; tip.style.right = 'auto'; tip.style.left = p.left + 'px'; tip.style.top = p.top + 'px';
     tipOpen = tw;
   }

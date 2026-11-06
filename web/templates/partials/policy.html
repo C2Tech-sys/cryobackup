@@ -124,7 +124,7 @@
 {{else}}
   {{if .Broken}}<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>The assigned policy does not compose with the default policy.</b> This customer's devices cannot be served a valid policy. Open the policy and fix it, or assign another one below; either change is allowed and reviewed as usual.</div></div>{{end}}
   <section aria-labelledby="h-assigned"><h3 class="h-label" id="h-assigned">Assigned policy</h3>
-    <div class="polcard"><div><b class="polname">{{.Assigned}}</b> <span class="st neutral sm"><i aria-hidden="true"></i>{{if .IsDefault}}DEFAULT{{else}}ASSIGNED{{end}}</span><br><span class="meta-mono">{{.AssignedMeta}} · {{.Devices}}</span>{{with .Overridden}}<br><span class="meta-mono">{{.}}. {{$.OverrideNote}}</span>{{end}}</div>
+    <div class="polcard"><div class="pol2"><span class="pl1"><b class="polname">{{.Assigned}}</b> <span class="st neutral sm"><i aria-hidden="true"></i>{{if .IsDefault}}DEFAULT{{else}}ASSIGNED{{end}}</span></span><span class="pl2"><span class="st neutral sm vtag"><i aria-hidden="true"></i>VERSION {{.AssignedVersion}}</span><span class="meta-mono">{{.AssignedScope}} · {{.Devices}}</span></span>{{with .Overridden}}<span class="pl3 meta-mono">{{.}}. {{$.OverrideNote}}</span>{{end}}</div>
     <a class="btn sm" href="{{.AssignedHref}}">Open in the editor</a></div></section>
   <section aria-labelledby="h-change"><h3 class="h-label" id="h-change">Change the assignment</h3>
     <form class="formcard" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
@@ -140,7 +140,7 @@
 
 {{/* device_policy: the Policy tab of the device panel (B07/B12). */}}
 {{define "device_policy"}}<div class="stack" id="device-policy">
-<p class="polmeta">Following <a href="{{.PolicyHref}}">{{.PolicyText}}</a> <span class="meta-mono">{{.PolicyMeta}} · fingerprint {{.ETag}}</span></p>
+<p class="polmeta pol2"><span class="pl1">Following <a href="{{.PolicyHref}}">{{.PolicyText}}</a></span><span class="pl2"><span class="st neutral sm vtag"><i aria-hidden="true"></i>VERSION {{.PolicyVersion}}</span><span class="meta-mono">{{.PolicyScope}} · fingerprint {{.ETag}}</span></span></p>
 {{with .Override}}<div class="banner {{if .Expired}}warn{{else}}info{{end}} dense" role="status"><i class="g g-{{if .Expired}}warn{{else}}info{{end}}" aria-hidden="true"></i><div class="b-text"><b>{{if .Expired}}This override has expired and no longer applies.{{else}}This device has an override.{{end}}</b>
   “{{.Reason}}” set by {{.By}} on <time datetime="{{.ISO}}">{{.When}}</time>{{with .Expires}}, {{if $.Override.Expired}}expired{{else}}expires{{end}} {{.}}{{end}}. Overridden: {{range $i, $f := .Fields}}{{if $i}}, {{end}}{{$f}}{{end}}.</div></div>
 {{if $.CanEdit}}<form class="row end" method="post" action="{{$.ClearAction}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="btn danger sm" type="submit">Clear override</button></form>{{end}}

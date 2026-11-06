@@ -746,6 +746,70 @@ func uiMutationCases() map[string]uiMutation {
 				}
 			},
 		},
+		// ---- M3-T5: saved views and parking go through the admin API's handlers (one row each) ----
+		"POST /ui/views": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				return func() (*http.Response, string) {
+					return e.post("/ui/views", vals("entity", "devices", "name", "Audit view", "state", "FAILED"), false)
+				}
+			},
+		},
+		"POST /ui/views/{id}/rename": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.t5View("Audit view", false)
+				return func() (*http.Response, string) {
+					return e.post("/ui/views/"+id+"/rename", vals("entity", "devices", "name", "Renamed view"), false)
+				}
+			},
+		},
+		"POST /ui/views/{id}/update": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.t5View("Audit view", false)
+				return func() (*http.Response, string) {
+					return e.post("/ui/views/"+id+"/update", vals("entity", "devices", "state", "UNSEEN"), false)
+				}
+			},
+		},
+		"POST /ui/views/{id}/private": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.t5View("Shared audit view", true)
+				return func() (*http.Response, string) {
+					return e.post("/ui/views/"+id+"/private", vals("entity", "devices"), false)
+				}
+			},
+		},
+		"POST /ui/views/{id}/delete": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.t5View("Audit view", false)
+				return func() (*http.Response, string) {
+					return e.post("/ui/views/"+id+"/delete", vals("entity", "devices"), false)
+				}
+			},
+		},
+		"POST /ui/devices/{id}/pause": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.dev["FRONTDESK-01"]
+				return func() (*http.Response, string) {
+					return e.post("/ui/devices/"+id+"/pause", vals("when", "4", "reason", "audit check"), false)
+				}
+			},
+		},
+		"POST /ui/devices/{id}/resume": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.dev["FRONTDESK-01"]
+				e.t5Park(id)
+				return func() (*http.Response, string) {
+					return e.post("/ui/devices/"+id+"/resume", vals(), false)
+				}
+			},
+		},
 		// ---- M3-T4: the System page's "Run now" (written by the admin API's own handler, one row) ----
 		"POST /ui/system/jobs/{name}/run": {
 			build: func(e *env) func() (*http.Response, string) {

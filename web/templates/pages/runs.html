@@ -2,5 +2,6 @@
 {{define "title"}}Runs{{end}}
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Runs</span></nav>
+{{template "views_control" .Views}}
 {{template "runs_view" .Runs}}
 {{end}}

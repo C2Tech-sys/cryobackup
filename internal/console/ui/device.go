@@ -180,6 +180,8 @@ type CauseView struct {
 	Class string
 	Title string
 	Text  string
+	// Link, when set, is where the message sends the reader (a view that belongs to another page).
+	Link *Link
 }
 
 // DeviceView is the device panel summary (B07).
@@ -263,13 +265,13 @@ func (s *Service) deviceView(ctx context.Context, p *auth.Principal, f health.Fl
 	v := DeviceView{ID: id, Host: ds.Hostname, Customer: custName, CustomerID: dev.CustomerID, Chips: ChipsFor(*ds, c, ri), Badges: BadgesFor(*ds, c), AsOf: c.clock(f.Computed)}
 	v.Sub = append(v.Sub, custName)
 	if dev.OSVersion != "" {
-		v.Sub = append(v.Sub, dev.OSVersion)
+		v.Sub = append(v.Sub, osLabel(dev.OSVersion))
 	}
 	if dev.DeviceClass != "" && dev.DeviceClass != "unknown" {
 		v.Sub = append(v.Sub, dev.DeviceClass)
 	}
 	if ds.Detail.AgentVersion != "" {
-		v.Sub = append(v.Sub, "agent "+ds.Detail.AgentVersion)
+		v.Sub = append(v.Sub, "agent "+safeVersion(ds.Detail.AgentVersion))
 	}
 	seen := "never seen"
 	if !ds.Detail.LastSeen.IsZero() && dev.EnrollConfirmedAt != nil {

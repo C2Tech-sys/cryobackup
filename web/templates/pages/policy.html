@@ -8,8 +8,8 @@
 {{with .Notice}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
 <article class="card" aria-labelledby="pol-title">
   <header class="page-head">
-    <div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-file"/></svg><h2 id="pol-title">{{.Head.Name}}</h2>
-      <span class="row"><span class="st {{if eq .Head.Scope "default"}}info{{else}}neutral{{end}} sm"><i aria-hidden="true"></i>{{.Head.ScopeLabel}}</span>{{if .Head.Version}}<span class="st neutral sm"><i aria-hidden="true"></i>VERSION {{.Head.Version}}</span>{{end}}</span></div>
+    <div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-file"/></svg><div class="tt"><h2 id="pol-title">{{.Head.Name}}</h2>
+      <span class="row"><span class="st {{if eq .Head.Scope "default"}}info{{else}}neutral{{end}} sm"><i aria-hidden="true"></i>{{.Head.ScopeLabel}}</span>{{if .Head.Version}}<span class="st neutral sm vtag"><i aria-hidden="true"></i>VERSION {{.Head.Version}}</span>{{end}}</span></div></div>
     <div class="sub">{{if .Head.Customer}}<span>for <a href="{{.Head.CustomerHref}}">{{.Head.Customer}}</a></span>{{end}}{{if .IsDefault}}<span>The base of every other policy</span>{{end}}{{if eq .Mode "new"}}<span>Starts from the default policy</span>{{end}}</div>
   </header>
   <form class="mt stack" method="post" action="{{.Action}}" id="policy-form" novalidate>
@@ -38,9 +38,9 @@
     </div>
   </form>
   {{if .Revisions}}<section class="mt" aria-labelledby="h-revs"><h3 class="h-label" id="h-revs">Revisions <span class="count">{{len .Revisions}}</span></h3>
-  <div class="table-wrap" role="region" aria-label="Revisions" tabindex="0"><table class="fleet compact"><caption class="sr-only">Revisions of this policy, newest first</caption>
+  <div class="table-wrap" role="region" aria-label="Revisions" tabindex="0"><table class="fleet compact revs"><caption class="sr-only">Revisions of this policy, newest first</caption>
     <thead><tr><th scope="col">Version</th><th scope="col">Changed by</th><th scope="col">When</th><th scope="col">Note</th></tr></thead>
-    <tbody>{{range .Revisions}}<tr><td class="mono">v{{.Version}}{{if .Current}} <span class="st info sm"><i aria-hidden="true"></i>CURRENT</span>{{end}}</td><td>{{.By}}</td><td><time datetime="{{.ISO}}">{{.When}}</time></td><td class="wrap">{{.Note}}</td></tr>{{end}}</tbody></table></div></section>{{end}}
+    <tbody>{{range .Revisions}}<tr><td class="mono rv-ver">v{{.Version}}{{if .Current}} <span class="st info sm"><i aria-hidden="true"></i>CURRENT</span>{{end}}</td><td class="rv-by" data-label="Changed by">{{.By}}</td><td class="rv-when" data-label="When"><time datetime="{{.ISO}}">{{.When}}</time></td><td class="wrap rv-note" data-label="Note">{{if .Note}}{{.Note}}{{else}}<span class="muted">none</span>{{end}}</td></tr>{{end}}</tbody></table></div></section>{{end}}
 </article>
 
 {{else if eq .Mode "review"}}

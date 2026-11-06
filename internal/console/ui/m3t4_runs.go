@@ -692,10 +692,16 @@ func (s *Service) runsEmpty(q runQuery, resp adminapi.RunListResponse, fleet hea
 type RunsPage struct {
 	Page
 	Runs RunListView
+	// Views is the saved-views control (M3-T5, m3t5_runsviews.go).
+	Views *ViewsControl
 }
 
 func (s *Service) runsPage(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
+	done, viewWarn := s.runsViewRedirect(w, r, p) // M3-T5: /runs?view={id} is a saved view
+	if done {
+		return
+	}
 	fleet, ok := s.fleetFor(w, r, p, "Runs")
 	if !ok {
 		return
@@ -711,7 +717,7 @@ func (s *Service) runsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := s.buildRunsView(r, p, fleet, q, runsSpec{Base: "/runs"})
-	s.render(w, r, http.StatusOK, "runs", "base", RunsPage{Page: s.page(r.Context(), p, fleet, "Runs", "runs", "/ui/events"), Runs: view})
+	s.render(w, r, http.StatusOK, "runs", "base", RunsPage{Page: s.page(r.Context(), p, fleet, "Runs", "runs", "/ui/events"), Runs: view, Views: s.runsViews(r, p, q, viewWarn)})
 }
 
 // runsTablePartial is GET /ui/runs/table: the results region for htmx paging.

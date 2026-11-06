@@ -4,7 +4,7 @@
 {{define "chip"}}<span class="st {{.Class}}{{if .Small}} sm{{end}}{{if .Pulse}} pulse{{end}}{{if .Dashed}} dashed{{end}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}
 
 {{/* chipbtn: the chip inside a table State column is a button so keyboard users reach the reason popover. */}}
-{{define "chipbtn"}}<span class="tipwrap"><button type="button" class="st {{.Class}}{{if .Small}} sm{{end}}{{if .Pulse}} pulse{{end}}{{if .Dashed}} dashed{{end}}" aria-describedby="tip-{{.ID}}"><i aria-hidden="true"></i>{{.Text}}</button>{{if .Reason}}<span class="tip" role="tooltip" id="tip-{{.ID}}"><b>{{.Title}}</b>{{.Reason}}</span>{{end}}</span>{{end}}
+{{define "chipbtn"}}<span class="tipwrap"><button type="button" class="st {{.Class}}{{if .Small}} sm{{end}}{{if .Pulse}} pulse{{end}}{{if .Dashed}} dashed{{end}}" aria-describedby="tip-{{.ID}}"{{if .Explain}} hx-get="{{.Explain}}" hx-trigger="mouseenter once delay:200ms, focus once delay:200ms" hx-target="#tip-{{.ID}}" hx-swap="innerHTML"{{end}}><i aria-hidden="true"></i>{{.Text}}</button>{{if or .Reason .Explain}}<span class="tip" role="tooltip" id="tip-{{.ID}}"><b>{{.Title}}</b>{{.Reason}}</span>{{end}}</span>{{end}}
 
 {{define "badges"}}{{if or .Shown .More}}<span class="badges">{{range .Shown}}<span class="badge {{.Class}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}{{if .More}}<details class="more"><summary aria-label="{{len .More}} more attributes">+{{len .More}}</summary><div class="more-pop">{{range .More}}<span class="badge {{.Class}}"><i aria-hidden="true"></i>{{.Text}}</span>{{end}}</div></details>{{end}}</span>{{end}}{{end}}
 
@@ -17,10 +17,14 @@
 {{/* stampbody: the pill's contents, shared with the /design states matrix. fresh.js updates these nodes in place: .word, .t, .agents b. */}}
 {{define "stampbody"}}<i class="dot" aria-hidden="true"></i><span class="word" aria-live="polite">{{.Word}}</span><i class="sep" aria-hidden="true"></i><span class="t" data-at="{{.At}}">{{.Time}}</span>{{if .HasAgents}}<i class="sep" aria-hidden="true"></i><span class="agents"><b>{{.N}}</b> of <b>{{.M}}</b> agents</span>{{end}}{{end}}
 
-{{/* banners: the condition strip (components 9.2). Critical banners are never dismissible; beyond the third they collapse behind a button whose count is visible. */}}
-{{define "banners"}}<section id="banners" aria-label="System conditions"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>{{if or .Items .Extra}}<ul class="banners" role="status" aria-live="polite">
-{{range .Items}}<li class="banner {{.Class}}{{if eq .Class "warn"}} warn-item{{end}}"><span class="st {{.Class}}"><i aria-hidden="true"></i>{{.Label}}</span><div class="b-text"><span class="sr-only">{{if eq .Class "crit"}}Critical{{else}}Warning{{end}}: </span>{{.Text}}</div>{{if .Action}}<div class="act"><a class="btn sm" href="{{.Action.Href}}">{{.Action.Label}}</a></div>{{end}}</li>
-{{end}}{{if .Extra}}<li><details class="more-banners"><summary>and {{len .Extra}} more critical conditions</summary><ul class="banners">{{range .Extra}}<li class="banner {{.Class}}"><span class="st {{.Class}}"><i aria-hidden="true"></i>{{.Label}}</span><div class="b-text"><span class="sr-only">Critical: </span>{{.Text}}</div>{{if .Action}}<div class="act"><a class="btn sm" href="{{.Action.Href}}">{{.Action.Label}}</a></div>{{end}}</li>{{end}}</ul></details></li>{{end}}
+{{/* banners: the condition strip (components 9.2, ADR 0015, M3-T5 D). Order: the first three critical banners, "and N more critical conditions" (a button whose count is always visible),
+     then the warnings: inline when there are one or two, folded into one summary line beyond that (never removed). A critical banner is never behind a warning. */}}
+{{define "banner_item"}}<li class="banner {{.Class}}{{if eq .Class "warn"}} warn-item{{end}}"><span class="st {{.Class}}"><i aria-hidden="true"></i>{{.Label}}</span><div class="b-text"><span class="sr-only">{{if eq .Class "crit"}}Critical{{else}}Warning{{end}}: </span>{{.Text}}</div>{{if .Action}}<div class="act"><a class="btn sm" href="{{.Action.Href}}">{{.Action.Label}}</a></div>{{end}}</li>
+{{end}}
+{{define "banners"}}<section id="banners" aria-label="System conditions"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>{{if or .Items .Extra .Warn}}<ul class="banners" role="status" aria-live="polite">
+{{range .Items}}{{template "banner_item" .}}{{end}}{{if .Extra}}<li><details class="more-banners"><summary>and {{len .Extra}} more critical conditions</summary><ul class="banners">{{range .Extra}}{{template "banner_item" .}}{{end}}</ul></details></li>{{end}}
+{{if .Warn}}{{if .WarnFold}}<li><details class="warn-banners"><summary><span class="st warn"><i aria-hidden="true"></i>{{len .Warn}} WARNINGS</span><span class="wl">{{.WarnLabels}}</span></summary><ul class="banners">{{range .Warn}}{{template "banner_item" .}}{{end}}</ul></details></li>
+{{else}}{{range .Warn}}{{template "banner_item" .}}{{end}}{{end}}{{end}}
 </ul>{{end}}</section>{{end}}
 
 {{/* strip: the ten-day strip (components 4.1). Every kind has its own shape, so colour is never the only carrier. */}}

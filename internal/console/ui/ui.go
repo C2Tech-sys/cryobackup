@@ -164,6 +164,7 @@ func (s *Service) funcs() template.FuncMap {
 		"join":    strings.Join,
 		"urlq":    url.QueryEscape,
 		"copybtn": copyButton, // M2-W3A (copy.go)
+		"viewrow": viewRow,    // M3-T5 (m3t5_views.go)
 	}
 }
 
@@ -197,6 +198,7 @@ func (s *Service) Register(reg httpx.Registrar) {
 	r.Handle("GET /{$}", ro(s.board))
 	r.Handle("GET /devices/{id}", ro(s.devicePanel))
 	s.registerM2(r)
+	s.registerM3T5(r)       // M3-T5: explain tooltip, saved views, park and resume (m3t5_board.go)
 	s.registerM3T4(r)       // M3-T4: runs, activity, overdue, unseen, system (m3t4.go)
 	s.registerPolicies(r)   // M2-W2A: policies, customer Policy tab, device overrides (policy_routes.go)
 	s.registerCommandsUI(r) // M2-W2C (commands.go)
@@ -221,6 +223,7 @@ func Patterns(fixtures bool) []string {
 		"POST /ui/devices/{id}/restore", "GET /restores/{id}", "POST /ui/restores/{id}/download", "GET /ui/events", "GET /ui/partials/board",
 		"GET /ui/partials/run-progress/{run_id}", "GET /ui/partials/restore/{id}", "GET /static/{path...}"}
 	p = append(p, m2Patterns()...)
+	p = append(p, m3t5Patterns()...)      // M3-T5
 	p = append(p, m3t4Patterns()...)      // M3-T4
 	p = append(p, policyUIPatterns()...)  // M2-W2A
 	p = append(p, commandPatterns()...)   // M2-W2C
@@ -275,9 +278,9 @@ func principal(r *http.Request) *auth.Principal {
 	return p
 }
 
-func (s *Service) sysItems() []SysItem {
+func (s *Service) sysItems(f health.Fleet) []SysItem {
 	var out []SysItem
-	out = append(out, SysItem{Label: "Gateway", Value: "not probed", Class: ClassNeutral})
+	out = append(out, s.gatewayItem(f))
 	m := health.MaintainStatus{}
 	if s.Maintain != nil {
 		m = s.Maintain()
@@ -315,7 +318,7 @@ func (s *Service) stamp(ctx context.Context, f health.Fleet) Stamp {
 func (s *Service) page(ctx context.Context, p *auth.Principal, f health.Fleet, title, nav, events string) Page {
 	d := s.displayOf(ctx)
 	return Page{Title: title, Nav: nav, User: &UserView{Username: p.Admin.Username, Role: p.Role.String()}, CSRF: p.CSRF,
-		Banners: buildBanners(f, false), Stamp: s.stamp(ctx, f), Refresh: d.RefreshS, Events: events, Fixtures: s.Fixtures, Sys: s.sysItems(), Zone: d.Zone}
+		Banners: buildBannersIn(f, false, d.Loc).forRole(p.Role), Stamp: s.stamp(ctx, f), Refresh: d.RefreshS, Events: events, Fixtures: s.Fixtures, Sys: s.sysItems(f), Zone: d.Zone}
 }
 
 func (s *Service) errorPage(w http.ResponseWriter, r *http.Request, p *auth.Principal, status int, title, body string) {
@@ -412,7 +415,7 @@ func (s *Service) loginPost(w http.ResponseWriter, r *http.Request) {
 		s.renderLogin(w, r, status, d)
 		return
 	}
-	s.Auth.SetCookies(w, r, res)
+	s.setSessionCookies(w, r, res)
 	auth.ClearLoginNonce(w, r)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -512,67 +515,7 @@ func (s *Service) deviceMetas(ctx context.Context, p *auth.Principal) map[string
 	}
 }
 
-func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fleet, stateFilter, events string, oob bool) BoardData {
-	c := s.fc(ctx)
-	strips, err := health.TenDay(ctx, s.Store, p.Scope, f.View, f.Computed, s.loc(ctx))
-	if err != nil {
-		s.log().Warn("ten day strips unavailable", logx.Err(err))
-		strips = nil
-	}
-	metas := s.deviceMetas(ctx, p)
-	pg := s.page(ctx, p, f, "Fleet health", "fleet", events)
-	pg.Banners = buildBanners(f, oob)
-	pg.Stamp.OOB = oob
-	b := BoardData{Page: pg, Columns: 5, AsOf: c.clock(f.Computed)}
-	if validStateName(stateFilter) {
-		b.QS = "?state=" + url.QueryEscape(stateFilter)
-		b.Filter = FilterView{Active: true, State: stateFilter, Label: stateLabel(state.State(stateFilter))}
-	}
-	running := 0
-	total, shown := 0, 0
-	rowsByCustomer := map[string][]DeviceRow{}
-	for _, cs := range f.View.Customers {
-		var rows []DeviceRow
-		for _, ds := range cs.Devices {
-			if ds.Primary == state.StateRetired {
-				continue
-			}
-			total++
-			ri := s.runningInfo(ctx, p, ds)
-			if ri.Open {
-				running++
-			}
-			if b.Filter.Active && string(ds.Primary) != b.Filter.State {
-				continue
-			}
-			shown++
-			rows = append(rows, deviceRow(ds, metas[ds.ID], strips, ri, c))
-		}
-		rowsByCustomer[cs.ID] = rows
-	}
-	b.Filter.Shown, b.Filter.Total = shown, total
-	for _, cs := range f.View.Customers {
-		rows := rowsByCustomer[cs.ID]
-		if b.Filter.Active && len(rows) == 0 {
-			continue
-		}
-		b.Groups = append(b.Groups, groupView(cs, rows, c))
-	}
-	b.KPIs = kpis(f, c, running)
-	b.Rings = []Ring{ageRing(f, c), customerRing(f)}
-	switch {
-	case f.View.FirstRun:
-		b.Empty = &EmptyView{Kind: "neutral", Title: "No customers yet",
-			Body: "Create the first customer and an enrollment token with: cryo-console token --create-customer \"Customer name\". Devices appear here as pending their first backup."}
-	case total == 0:
-		b.Empty = &EmptyView{Kind: "alarm", Title: "No devices are enrolled",
-			Body: "Nothing is being backed up. Enroll a customer or check the agent listener."}
-	case b.Filter.Active && shown == 0:
-		b.Empty = &EmptyView{Kind: "neutral", Title: "No devices match these filters",
-			Body: fmt.Sprintf("0 of %d shown.", total), Link: &Link{Href: "/", Label: "Clear filters"}}
-	}
-	return b
-}
+// boardData is in m3t5_board.go (M3-T5: ring filters, saved views).
 
 func stateLabel(st state.State) string {
 	if spec, ok := catalogue[st]; ok {
@@ -589,14 +532,16 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusServiceUnavailable, "error", "base", errorData(s.fallbackPage(r.Context(), p), 503, "Fleet unavailable", "The fleet could not be loaded. This is an alarm, not an empty fleet. Try again shortly."))
 		return
 	}
-	data := s.boardData(r.Context(), p, f, r.URL.Query().Get("state"), "/ui/events", false)
+	bq := parseBoardQuery(r.URL.Query())
+	data := s.boardData(r.Context(), p, f, bq, "/ui/events"+bq.QS(), false)
+	data.Views = s.boardViews(r, p, bq, data.viewLoaded)
 	s.render(w, r, http.StatusOK, "board", "base", data)
 }
 
 func (s *Service) fallbackPage(ctx context.Context, p *auth.Principal) Page {
 	d := s.displayOf(ctx)
 	return Page{Title: "Fleet unavailable", Nav: "fleet", User: &UserView{Username: p.Admin.Username, Role: p.Role.String()}, CSRF: p.CSRF,
-		Stamp: Stamp{State: "unreachable", At: "--:--:--", Zone: d.Zone}, Refresh: d.RefreshS, Events: "/ui/events", Fixtures: s.Fixtures, Sys: s.sysItems(), Zone: d.Zone}
+		Stamp: Stamp{State: "unreachable", At: "--:--:--", Zone: d.Zone}, Refresh: d.RefreshS, Events: "/ui/events", Fixtures: s.Fixtures, Sys: s.sysItems(health.Fleet{}), Zone: d.Zone}
 }
 
 func errorData(pg Page, status int, title, body string) any {
@@ -618,7 +563,7 @@ func (s *Service) boardPartial(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	data := s.boardData(r.Context(), p, f, r.URL.Query().Get("state"), "", true)
+	data := s.boardData(r.Context(), p, f, parseBoardQuery(r.URL.Query()), "", true)
 	s.render(w, r, http.StatusOK, "board", "board_partial", data)
 }
 
@@ -639,13 +584,13 @@ func (s *Service) freshnessAt(ctx context.Context, f health.Fleet) string {
 // stamp. Events carry server-rendered HTML fragments keyed by element id.
 func (s *Service) renderEvents(ctx context.Context, sub *Sub) ([]Event, error) {
 	ctx = s.withDisplay(ctx) // one display snapshot for the whole render
-	p := &auth.Principal{Scope: sub.Scope, Role: sub.Role}
+	p := &auth.Principal{Scope: sub.Scope, Role: sub.Role, Admin: store.Admin{ID: sub.Viewer}}
 	f, err := s.Fleet.Fleet(ctx, sub.Scope)
 	if err != nil {
 		return nil, err
 	}
 	var evs []Event
-	ban, err := s.renderString("board", "banners", buildBanners(f, false))
+	ban, err := s.renderString("board", "banners", buildBannersIn(f, false, s.loc(ctx)).forRole(sub.Role))
 	if err != nil {
 		return nil, err
 	}
@@ -655,7 +600,8 @@ func (s *Service) renderEvents(ctx context.Context, sub *Sub) ([]Event, error) {
 			evs = append(evs, Event{Name: "fleet.state", Data: html})
 		}
 	} else {
-		data := s.boardData(ctx, p, f, sub.Filter, "", false)
+		fv, _ := url.ParseQuery(sub.Filter)
+		data := s.boardData(ctx, p, f, parseBoardQuery(fv), "", false)
 		html, err := s.renderString("board", "board", data)
 		if err != nil {
 			return nil, err
@@ -673,10 +619,7 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	filter := ""
-	if v := strings.ToUpper(r.URL.Query().Get("state")); validStateName(v) {
-		filter = v
-	}
+	filter := parseBoardQuery(r.URL.Query()).Encode() // the board's whole filter, so a live update keeps it (M3-T5)
 	device := r.URL.Query().Get("device")
 	if device != "" {
 		if _, err := s.Store.GetDevice(r.Context(), p.Scope, device); err != nil {
@@ -684,5 +627,5 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.Hub.ServeSSE(w, r, &Sub{Scope: p.Scope, Role: p.Role, Filter: filter, DeviceID: device})
+	s.Hub.ServeSSE(w, r, &Sub{Scope: p.Scope, Role: p.Role, Viewer: p.Admin.ID, Filter: filter, DeviceID: device})
 }

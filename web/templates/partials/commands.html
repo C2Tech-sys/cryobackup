@@ -2,29 +2,45 @@
      Path-free: command names, states, times and fixed result phrases only. Every action is a plain form post (no script needed);
      unavailable actions say why in text, never by colour or a dead button alone. */}}
 
-{{/* dev_action: one entry of the action menu: enabled (a form), in flight (state chip, note, Undo while still queued) or unavailable (reason). */}}
+{{/* dev_action: one entry of the action menu: enabled (a form), in flight (state chip, note, Undo while still queued) or unavailable (reason).
+     M3-T5 (ruling 1): the hint, reason and state note of an item are a tooltip on its button (hover or keyboard focus), not a line under it; the button still names it with aria-describedby. */}}
 {{define "dev_action"}}<span class="act-item" id="{{.ID}}">
 {{- if .Enabled}}
-  {{- if .Confirm}}
-  <details class="rowmenu act-confirm"><summary class="btn sm danger">{{.Label}}…</summary>
+  {{- if .Pause}}
+  <span class="tipwrap"><details class="rowmenu act-confirm act-pause"><summary class="btn sm"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</summary>
+    <div class="rowmenu-pop pausepop" role="group" aria-label="Park this device">
+      <form method="post" action="{{.Pause.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.Pause.CSRF}}">
+        <fieldset class="plain stack"><legend class="h-label">Park for</legend>
+          <div class="pausegrid">{{range $i, $h := .Pause.Hours}}<label class="check"><input type="radio" name="when" value="{{$h}}"{{if eq $i 0}} required{{end}}> {{$h}} {{if eq $h 1}}hour{{else}}hours{{end}}</label>{{end}}
+          <label class="check"><input type="radio" name="when" value="until"> Until a date</label>
+          <label class="check"><input type="radio" name="when" value="indefinite"> Indefinitely</label></div>
+        </fieldset>
+        <div class="field"><label for="park-until">Until <span class="muted">(only for “Until a date”, {{.Pause.Zone}})</span></label>
+          <input class="input" id="park-until" type="datetime-local" name="until" min="{{.Pause.Min}}" max="{{.Pause.Max}}"></div>
+        <div class="field"><label for="park-reason">Reason <span class="muted">(required, kept in the audit log)</span></label>
+          <input class="input" id="park-reason" name="reason" type="text" maxlength="200" required autocomplete="off"><span class="help">One line. No file paths.</span></div>
+        <div class="actions"><button class="btn sm primary" type="submit">Park device</button></div>
+      </form>
+    </div>
+  </details>{{if .Hint}}<span class="tip" role="tooltip" id="{{.ID}}-hint">{{.Hint}}</span>{{end}}</span>
+  {{- else if .Confirm}}
+  <span class="tipwrap"><details class="rowmenu act-confirm"><summary class="btn sm danger">{{.Label}}…</summary>
     <div class="rowmenu-pop" role="group" aria-label="{{.Label}}">
       <form method="post" action="{{.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="key" value="{{.IdemKey}}">
         <p>{{.Confirm}}</p>
         <div class="actions"><button class="btn sm danger-solid" type="submit">{{.ConfirmBtn}}</button></div>
       </form>
     </div>
-  </details>
+  </details></span>
   {{- else}}
-  <span class="act-row"><form class="inl" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="key" value="{{.IdemKey}}"><button class="btn sm{{if .Primary}} primary{{end}}" type="submit"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</button></form>
-  {{- with .Suffix}} {{template "chip" .}}{{end}}</span>
+  <span class="tipwrap act-row"><form class="inl" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="key" value="{{.IdemKey}}"><button class="btn sm{{if .Primary}} primary{{end}}" type="submit"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</button></form>
+  {{- with .Suffix}} {{template "chip" .}}{{end}}{{if .Hint}}<span class="tip" role="tooltip" id="{{.ID}}-hint">{{.Hint}}</span>{{end}}</span>
   {{- end}}
-  {{- if .Hint}}<span class="meta-mono act-note" id="{{.ID}}-hint">{{.Hint}}</span>{{end}}
 {{- else if .State}}
-  <span class="act-row"><span class="btn sm" role="link" aria-disabled="true" aria-describedby="{{.ID}}-why">{{.Label}}</span> {{template "chip" .State}}
-  {{- if .Undo}}<form class="inl" method="post" action="{{.Undo}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn sm" type="submit" aria-label="Undo {{.Label}}">Undo</button></form>{{end}}</span>
-  <span class="meta-mono act-note" id="{{.ID}}-why">{{.StateNote}}</span>
+  <span class="tipwrap act-row"><span class="btn sm" role="link" tabindex="0" aria-disabled="true" aria-describedby="{{.ID}}-why">{{.Label}}</span> {{template "chip" .State}}
+  {{- if .Undo}}<form class="inl" method="post" action="{{.Undo}}"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn sm" type="submit" aria-label="Undo {{.Label}}">Undo</button></form>{{end}}<span class="tip" role="tooltip" id="{{.ID}}-why">{{.StateNote}}</span></span>
 {{- else}}
-  <span class="act-row"><span class="btn sm" role="link" aria-disabled="true" aria-describedby="{{.ID}}-why">{{.Label}}</span></span><span class="meta-mono act-note" id="{{.ID}}-why">{{.Why}}</span>
+  <span class="tipwrap act-row"><span class="btn sm" role="link" tabindex="0" aria-disabled="true" aria-describedby="{{.ID}}-why">{{.Label}}</span><span class="tip" role="tooltip" id="{{.ID}}-why">{{.Why}}</span></span>
 {{- end}}
 </span>{{end}}
 

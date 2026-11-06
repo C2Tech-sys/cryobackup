@@ -87,23 +87,26 @@ type CustPolicyView struct {
 	Assigned     string
 	AssignedHref string
 	AssignedMeta string
-	IsDefault    bool
-	DefaultHref  string
-	Options      []Option
-	Action       string
-	ConfirmTo    string
-	NewHref      string
-	Devices      string
-	Overridden   string
-	OverrideNote string
-	Groups       []EffGroup
-	Set          int
-	Review       *PolReview
-	Hidden       []PolHidden
-	Err          string
-	Version      int
-	CSRFToken    string
-	CustomerID   string
+	// AssignedScope and AssignedVersion are the parts of AssignedMeta the header shows on two lines (M3-T5 ruling 2).
+	AssignedScope   string
+	AssignedVersion int
+	IsDefault       bool
+	DefaultHref     string
+	Options         []Option
+	Action          string
+	ConfirmTo       string
+	NewHref         string
+	Devices         string
+	Overridden      string
+	OverrideNote    string
+	Groups          []EffGroup
+	Set             int
+	Review          *PolReview
+	Hidden          []PolHidden
+	Err             string
+	Version         int
+	CSRFToken       string
+	CustomerID      string
 	// Broken: the assigned policy does not compose over the default (an alarm).
 	Broken bool
 }
@@ -127,6 +130,7 @@ func (s *Service) custPolicyView(csrf string, cp store.CustomerPolicy, selected 
 	v.AssignedHref = "/policies/" + cp.Effective.PolicyID
 	v.IsDefault = cp.Assigned == nil
 	v.AssignedMeta = fmt.Sprintf("%s · version %d", scopeWord(cp.Effective.PolicyScope), cp.Effective.Version)
+	v.AssignedScope, v.AssignedVersion = scopeWord(cp.Effective.PolicyScope), cp.Effective.Version
 	if cp.Overridden > 0 {
 		v.Overridden = plural(cp.Overridden, "device has", "devices have") + " its own override"
 		v.OverrideNote = "An override changes only that device's own values; see its Policy tab."

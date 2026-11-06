@@ -45,19 +45,22 @@ type OvForm struct {
 
 // DevPolicyView is the Policy tab.
 type DevPolicyView struct {
-	PolicyText   string
-	PolicyHref   string
-	PolicyMeta   string
-	ETag         string
-	Override     *OvInfo
-	Groups       []EffGroup
-	Set          int
-	CanEdit      bool
-	Form         *OvForm
-	ClearAction  string
-	CSRFToken    string
-	Why          string
-	DefaultsNote string
+	PolicyText string
+	PolicyHref string
+	PolicyMeta string
+	// PolicyScope and PolicyVersion are the parts of PolicyMeta the header shows on two lines (M3-T5 ruling 2).
+	PolicyScope   string
+	PolicyVersion int
+	ETag          string
+	Override      *OvInfo
+	Groups        []EffGroup
+	Set           int
+	CanEdit       bool
+	Form          *OvForm
+	ClearAction   string
+	CSRFToken     string
+	Why           string
+	DefaultsNote  string
 }
 
 const expiresLayout = "2006-01-02T15:04"
@@ -135,6 +138,7 @@ func (s *Service) devPolicyView(p *auth.Principal, dev store.DeviceEffective, c 
 	v.PolicyText = dev.PolicyName
 	v.PolicyHref = "/customers/" + dev.CustomerID + "/policy"
 	v.PolicyMeta = fmt.Sprintf("%s · version %d", scopeWord(dev.PolicyScope), dev.Version)
+	v.PolicyScope, v.PolicyVersion = scopeWord(dev.PolicyScope), dev.Version
 	v.Override = ovInfoOf(dev.Override, c)
 	v.Groups = effGroups(dev.Fields, dev.PolicyName)
 	if overrideFromToken(dev.Override) {

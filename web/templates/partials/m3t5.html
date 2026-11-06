@@ -1,0 +1,56 @@
+{{/* m3t5.html - M3-T5: the saved-views control (components 5.3) and the state-explain tooltip body (components 3.1).
+     Everything is server-rendered; the control is plain forms and links, so it works without JavaScript. Path-free: names, counts and times only. */}}
+
+{{/* state_explain: the tip of a state chip, loaded from GET /api/v1/devices/{id}/state on hover or focus. */}}
+{{define "state_explain"}}<b>Why this state</b>
+{{- if .Err}}<span class="xl">{{.Err}}</span>
+{{- else}}{{range .Lines}}<span class="xl">{{template "chip" .Chip}} {{.Text}}</span>{{end}}
+<span class="xf">{{range .Facts}}<span><i>{{.Key}}</i> {{.Value}}</span>{{end}}</span>
+{{- with .Note}}<span class="xl">{{.}}</span>{{end}}{{end}}
+{{- if .AsOf}}<span class="xa">{{.AsOf}}</span>{{end}}{{end}}
+
+{{/* view_row: one saved view in the popover. A locked view (your own, shared with customers you can no longer see) can only be made private or deleted. */}}
+{{define "view_row"}}<li class="vrow{{if .Current}} cur{{end}}{{if .Locked}} locked{{end}}">
+  <div class="vmain"><a class="vname" href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}>{{if .Current}}<svg width="12" height="12" aria-hidden="true"><use href="#i-check"/></svg>{{else}}<span class="vgap"></span>{{end}}{{.Name}}</a>
+    {{if .Builtin}}<span class="vbadge" title="Built-in views cannot be renamed or deleted"><svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 7V5a3.5 3.5 0 0 1 7 0v2M3.5 7h9v6.5h-9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>Built-in</span>{{end}}
+    {{if .Shared}}<span class="vbadge shared" title="{{if .AudienceTip}}{{.AudienceTip}}{{else}}Visible to every account that sees every customer{{end}}">Shared · {{.Audience}}</span>{{end}}
+    {{if .Locked}}<span class="vbadge lock" title="This view is shared with customers you can no longer see. You can make it private or delete it; it cannot be renamed or changed."><svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 7V5a3.5 3.5 0 0 1 7 0v2M3.5 7h9v6.5h-9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>Locked</span>{{end}}
+    {{if and (not .Mine) (not .Builtin)}}{{with .Owner}}<span class="vowner">by {{.}}</span>{{end}}{{end}}
+  </div>
+  {{if .CanManage}}<details class="vmanage"><summary class="btn ghost sm" aria-label="Manage {{.Name}}">Manage</summary>
+    <div class="vmpop" role="group" aria-label="Manage {{.Name}}">
+      {{if .CanEdit}}<form method="post" action="/ui/views/{{.ID}}/rename" class="vform"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="entity" value="{{.Entity}}">{{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+        <label class="sr-only" for="rn-{{.ID}}">New name for {{.Name}}</label><input class="input" id="rn-{{.ID}}" name="name" type="text" maxlength="100" value="{{.Name}}" required autocomplete="off"><button class="btn sm" type="submit">Rename</button></form>{{end}}
+      {{if and .Current .CanEdit .SaveOK}}<form method="post" action="/ui/views/{{.ID}}/update" class="vform"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="entity" value="{{.Entity}}">{{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+        <button class="btn sm" type="submit">Update this view with the current filters</button></form>{{end}}
+      {{if .Shared}}<form method="post" action="/ui/views/{{.ID}}/private" class="vform"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="entity" value="{{.Entity}}">{{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+        <button class="btn sm" type="submit">Make private</button></form>{{end}}
+      <form method="post" action="/ui/views/{{.ID}}/delete" class="vform"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="entity" value="{{.Entity}}">{{range .Fields}}{{if ne .Name "view"}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}{{end}}
+        <button class="btn sm danger" type="submit">Delete “{{.Name}}”</button></form>
+    </div></details>{{end}}
+</li>{{end}}
+
+{{define "views_control"}}{{with .}}<div class="viewctl" id="views-{{.Entity}}">
+{{with .Flash}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}{{with .Link}} <a href="{{.Href}}">{{.Label}}</a>{{end}}</div></div>{{end}}
+<details class="viewmenu"><summary class="btn sm" aria-label="Saved views: {{.Label}}"><span class="vlbl">{{.Label}}</span>{{if .Modified}}<i class="vdot" title="Unsaved changes" aria-hidden="true"></i>{{end}}<svg width="12" height="12" aria-hidden="true" class="vcaret"><use href="#i-chev"/></svg></summary>
+  <div class="viewpop" role="group" aria-label="Saved views">
+    <div class="vhead"><span class="h-label">Saved views</span><button type="button" class="btn ghost sm" data-close aria-label="Close saved views">Close</button></div>
+    {{if .Err}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text">{{.Err}}</div></div>{{end}}
+    <h4 class="h-label">Built-in</h4>
+    <ul class="vlist">{{range .Builtins}}{{template "view_row" (viewrow . $)}}{{end}}</ul>
+    <h4 class="h-label">Your views</h4>
+    {{if .Mine}}<ul class="vlist">{{range .Mine}}{{template "view_row" (viewrow . $)}}{{end}}</ul>{{else if not .Err}}<p class="meta-mono">No saved views yet. Save the current filters to reuse them.</p>{{end}}
+    {{if .Shared}}<h4 class="h-label">Shared with you</h4><ul class="vlist">{{range .Shared}}{{template "view_row" (viewrow . $)}}{{end}}</ul>{{end}}
+    <form method="post" action="/ui/views" class="vsave stack"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="entity" value="{{.Entity}}">{{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+      <h4 class="h-label">Save the current filters as a view</h4>
+      {{if not .SaveOK}}<p class="meta-mono" role="status">{{.SaveWhy}}</p>{{end}}
+      <div class="field"><label for="vs-name-{{.Entity}}">Name</label><input class="input" id="vs-name-{{.Entity}}" name="name" type="text" maxlength="100" required autocomplete="off"{{if not .SaveOK}} disabled{{end}}></div>
+      <fieldset class="plain stack"{{if not .SaveOK}} disabled{{end}}><label class="check"><input type="checkbox" name="shared" value="1"> Share with other admins</label>
+        <div class="vaud"><span class="help">Who sees it. Your choice is explicit: nobody gets a view by guessing at its filters.</span>
+          <label class="check"><input type="radio" name="audience" value="all" aria-label="Share with all customers"{{if not .CanAll}} disabled{{end}}> All customers{{if not .CanAll}} <span class="muted">(your account does not see every customer)</span>{{end}}</label>
+          <label class="check"><input type="radio" name="audience" value="list" aria-label="Share with the customers ticked below" checked> These customers:</label>
+          <ul class="vcust">{{range .Customers}}<li><label class="check"><input type="checkbox" name="customer_id" value="{{.Value}}"> {{.Label}}</label></li>{{end}}</ul></div></fieldset>
+      <div class="actions"><button class="btn sm primary" type="submit"{{if not .SaveOK}} disabled{{end}}>Save view</button></div>
+    </form>
+  </div>
+</details></div>{{end}}{{end}}

@@ -330,7 +330,7 @@ func (s *Service) pageNotes() []Note {
 	if _, _, problem := adminapi.AgentServerURL(s.PublicURL); problem != "" {
 		class, title := "warn", "Public URL needs attention."
 		if strings.TrimSpace(s.PublicURL) == "" {
-			class, title = "crit", "Public URL not set."
+			class, title = "warn", "Public URL not set." // M3-T5 ruling 6: a warning, not critical
 		}
 		out = append(out, Note{Class: class, Title: title, Text: problem})
 	}

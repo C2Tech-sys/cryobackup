@@ -212,7 +212,9 @@ func TestFixturesPagesRenderWithTheirMarkers(t *testing.T) {
 		t.Fatal("html/template rejected a value somewhere (ZgotmplZ)")
 	}
 	// Exception-first: Summit (alarm) and the MISSING customer come before healthy Northwind.
-	if strings.Index(board, "Blue Ridge Accounting") > strings.Index(board, "Northwind Dental") || strings.Index(board, "Summit Eye Care") > strings.Index(board, "Northwind Dental") {
+	// (in the table: the saved-views control above it lists the customers by name, for the share dialog)
+	tbl := board[strings.Index(board, "<table"):]
+	if strings.Index(tbl, "Blue Ridge Accounting") > strings.Index(tbl, "Northwind Dental") || strings.Index(tbl, "Summit Eye Care") > strings.Index(tbl, "Northwind Dental") {
 		t.Fatal("customer groups are not exception-first")
 	}
 	devPage := func(host string) string {
@@ -303,7 +305,7 @@ func TestBoardFilterAndPartials(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Fatal(res.StatusCode)
 	}
-	mustContain(t, "filtered", body, "FRONTDESK-01", "Showing 1 of", "Remove filter: State FAILED")
+	mustContain(t, "filtered", body, "FRONTDESK-01", "Showing 1 of", "Remove filter: State: FAILED")
 	if strings.Contains(body, "LAB-RETINA-02") {
 		t.Fatal("filter must hide other devices")
 	}
@@ -716,7 +718,7 @@ func TestEmptyFleetAndPartialDataAreAlarms(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A scope with no customers, on an installation that has enrolled before: C08, an alarm panel and an alarm ring.
-	b := e.svc.boardData(context.Background(), p, f, "", "", false)
+	b := e.svc.boardData(context.Background(), p, f, boardQuery{}, "", false)
 	if b.Empty == nil || b.Empty.Kind != "alarm" {
 		t.Fatalf("empty fleet must be an alarm panel: %+v", b.Empty)
 	}
@@ -725,7 +727,7 @@ func TestEmptyFleetAndPartialDataAreAlarms(t *testing.T) {
 	}
 	// First run is the only neutral case.
 	fr := health.Fleet{View: state.FleetView{FirstRun: true, Complete: true}}
-	if b := e.svc.boardData(context.Background(), p, fr, "", "", false); b.Empty == nil || b.Empty.Kind != "neutral" {
+	if b := e.svc.boardData(context.Background(), p, fr, boardQuery{}, "", false); b.Empty == nil || b.Empty.Kind != "neutral" {
 		t.Fatalf("first run: %+v", b.Empty)
 	}
 	// Partial data: C09 with its action.

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
+	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
@@ -75,6 +77,8 @@ func (s Stamp) HasAgents() bool { return s.M > 0 }
 type Link struct {
 	Href  string
 	Label string
+	// Admin marks a destination only an admin may open (forRole drops it for the others).
+	Admin bool
 }
 
 // BannerView is a rendered condition banner.
@@ -86,12 +90,32 @@ type BannerView struct {
 	Action *Link
 }
 
-// BannersView is the banner strip: critical banners beyond the third collapse
-// into Extra, behind a button whose count is always visible.
+// BannersView is the banner strip. Order is fixed (components 9.2, M3-T5 D): the
+// first three critical banners (Items), then the rest of the critical ones
+// behind a button whose count is always visible (Extra), then every warning
+// (Warn). Critical banners are therefore never hidden behind warnings; up to
+// warnInline warnings show as banners, more fold into one summary line that
+// states their count and names. A warning is never removed.
 type BannersView struct {
 	Items []BannerView
 	Extra []BannerView
+	Warn  []BannerView
 	OOB   bool
+}
+
+// warnInline is how many warning banners the strip shows in full; more fold.
+const warnInline = 2
+
+// WarnFold reports whether the warnings fold into one summary line.
+func (v BannersView) WarnFold() bool { return len(v.Warn) > warnInline }
+
+// WarnLabels names the folded warnings in one line, for the summary.
+func (v BannersView) WarnLabels() string {
+	l := make([]string, len(v.Warn))
+	for i, b := range v.Warn {
+		l[i] = b.Label
+	}
+	return strings.Join(l, " · ")
 }
 
 // Page is what the base template needs; page data structs embed it.
@@ -128,25 +152,70 @@ func BannerLabel(id string) string {
 
 // bannerView maps an engine banner to its view. Only banners whose destination
 // exists in this milestone carry an action.
-func bannerView(b state.Banner) BannerView {
-	v := BannerView{ID: b.ID, Label: BannerLabel(b.ID), Class: ClassWarn, Text: b.Text}
+func bannerView(b state.Banner) BannerView { return bannerViewIn(b, time.Time{}, nil) }
+
+// bannerViewIn is bannerView with the banner's clock time worded in loc (retime); nil leaves the engine's text.
+func bannerViewIn(b state.Banner, now time.Time, loc *time.Location) BannerView {
+	v := BannerView{ID: b.ID, Label: BannerLabel(b.ID), Class: ClassWarn, Text: retime(b.Text, b.At, now, loc)}
 	if b.Severity >= state.SeverityCritical {
 		v.Class = ClassCrit
 	}
 	if b.ID == "C08" && !strings.Contains(b.Text, "Nothing is being backed up") {
 		v.Text += " Nothing is being backed up."
 	}
-	if b.ID == "C09" {
-		v.Action = &Link{Href: "/?state=UNKNOWN", Label: "Show UNKNOWN devices"}
+	v.Action = bannerAction(b.ID)
+	return v
+}
+
+// bannerAction is the action of a console banner (components 9.2). Every banner
+// the engine raises has a row on the System page (adminapi healthRowBanners),
+// so "Open System health" is where each one is explained, including C00 and the
+// "b" not-checked warnings. The spec names "Open email settings" for C03 and
+// C14; there is no mail settings page yet, so they open the System row that
+// carries their evidence. C10 (live updates) is client-side and has none.
+func bannerAction(id string) *Link {
+	switch id {
+	case "C09":
+		return &Link{Href: "/?state=UNKNOWN", Label: "Show UNKNOWN devices"}
+	case "C08":
+		return &Link{Href: "/enroll", Label: "Enroll devices", Admin: true}
+	case "C10":
+		return nil
 	}
+	if strings.HasPrefix(id, "C") && len(id) >= 3 {
+		return &Link{Href: "/system", Label: "Open System health"}
+	}
+	return nil
+}
+
+// forRole drops the actions a role cannot open: a read-only or operator account
+// is never offered a link that answers 403.
+func (v BannersView) forRole(role auth.Role) BannersView {
+	if role >= auth.RoleAdmin {
+		return v
+	}
+	strip := func(in []BannerView) []BannerView {
+		out := make([]BannerView, len(in))
+		for i, b := range in {
+			if b.Action != nil && b.Action.Admin {
+				b.Action = nil
+			}
+			out[i] = b
+		}
+		return out
+	}
+	v.Items, v.Extra, v.Warn = strip(v.Items), strip(v.Extra), strip(v.Warn)
 	return v
 }
 
 // buildBanners merges the console banners with the entity banners.
-func buildBanners(f health.Fleet, oob bool) BannersView {
+func buildBanners(f health.Fleet, oob bool) BannersView { return buildBannersIn(f, oob, nil) }
+
+// buildBannersIn is buildBanners with every clock time in a banner worded in loc, the reader's display zone.
+func buildBannersIn(f health.Fleet, oob bool, loc *time.Location) BannersView {
 	var crit, warn []BannerView
 	for _, b := range f.View.Banners {
-		v := bannerView(b)
+		v := bannerViewIn(b, f.Computed, loc)
 		if v.Class == ClassCrit {
 			crit = append(crit, v)
 		} else {
@@ -177,16 +246,16 @@ func buildBanners(f health.Fleet, oob bool) BannersView {
 		crit = append(crit, BannerView{ID: "missing-many", Label: "MISSING CUSTOMER", Class: ClassCrit,
 			Text: fmt.Sprintf("%d expected customers have no devices: %s.", len(missing), strings.Join(names, ", "))})
 	}
-	bv := BannersView{OOB: oob}
+	bv := BannersView{OOB: oob, Warn: warn}
 	if len(crit) > 3 {
-		bv.Items, bv.Extra = append(crit[:3:3], warn...), crit[3:]
+		bv.Items, bv.Extra = crit[:3:3], crit[3:]
 	} else {
-		bv.Items = append(crit, warn...)
+		bv.Items = crit
 	}
 	return bv
 }
 
-func (v BannersView) any() bool { return len(v.Items)+len(v.Extra) > 0 }
+func (v BannersView) any() bool { return len(v.Items)+len(v.Extra)+len(v.Warn) > 0 }
 
 // ---- board view models ----
 
@@ -214,6 +283,9 @@ type LegendRow struct {
 	Class string
 	Label string
 	N     int
+	// Href filters the board by this segment (B03); empty when there is nothing to show.
+	Href    string
+	Current bool
 }
 
 // Ring is a doughnut (components §4.4).
@@ -285,10 +357,12 @@ type Group struct {
 // FilterView is the active board filter.
 type FilterView struct {
 	Active bool
-	State  string
-	Label  string
+	Chips  []FilterChip // each active filter, removable
 	Shown  int
 	Total  int
+	// CustText is how many customers are on screen ("3 customers"): the customer ring counts customers, and a
+	// customer with no devices has no rows to show for it.
+	CustText string
 }
 
 // EmptyView is an empty-state panel (components §9.5).
@@ -310,6 +384,11 @@ type BoardData struct {
 	QS      string
 	AsOf    string
 	Columns int
+	// Views is the saved-views control (nil in the live fragment); ViewWarn says a view in the link could not be applied.
+	Views    *ViewsControl
+	ViewWarn *CauseView
+	// viewLoaded is the saved view the link names, when it could be read.
+	viewLoaded *store.SavedView
 }
 
 const ringCircumference = 2 * math.Pi * 46
@@ -374,10 +453,10 @@ func ageRing(f health.Fleet, c fmtCtx) Ring {
 	r := Ring{Title: "Last successful backup"}
 	h := int(stale / time.Hour)
 	r.Legend = []LegendRow{
-		{ClassOK, "under 24 h", ok},
-		{ClassWarn, fmt.Sprintf("24–%d h", h), warn},
-		{ClassCrit, fmt.Sprintf("over %d h or never", h), crit},
-		{ClassNeutral, "parked", parked},
+		{Class: ClassOK, Label: "under 24 h", N: ok},
+		{Class: ClassWarn, Label: fmt.Sprintf("24–%d h", h), N: warn},
+		{Class: ClassCrit, Label: fmt.Sprintf("over %d h or never", h), N: crit},
+		{Class: ClassNeutral, Label: "parked", N: parked},
 	}
 	switch {
 	case total == 0:
@@ -412,7 +491,7 @@ func customerRing(f health.Fleet) Ring {
 	}
 	total := ok + warn + crit + other
 	r := Ring{Title: "Customer health", Legend: []LegendRow{
-		{ClassOK, "fully within SLA", ok}, {ClassWarn, "has warnings", warn}, {ClassCrit, "has critical or missing", crit}, {ClassNeutral, "onboarding or empty", other}}}
+		{Class: ClassOK, Label: "fully within SLA", N: ok}, {Class: ClassWarn, Label: "has warnings", N: warn}, {Class: ClassCrit, Label: "has critical or missing", N: crit}, {Class: ClassNeutral, Label: "onboarding or empty", N: other}}}
 	if total == 0 {
 		r.Alarm, r.Center, r.Caption, r.Aria = true, "0", "none yet", "Customer health ring: no customers"
 		return r
@@ -536,10 +615,10 @@ func cellWord(c health.Day) string {
 
 // deviceRow builds a table row.
 func deviceRow(ds state.DeviceState, meta deviceMeta, strips map[string][health.StripDays]health.Day, run RunInfo, c fmtCtx) DeviceRow {
-	row := DeviceRow{ID: ds.ID, Host: ds.Hostname, Chips: ChipsFor(ds, c, run), Badges: BadgesFor(ds, c), Agent: ds.Detail.AgentVersion}
+	row := DeviceRow{ID: ds.ID, Host: ds.Hostname, Chips: ChipsFor(ds, c, run), Badges: BadgesFor(ds, c), Agent: agentLabel(ds.Detail.AgentVersion)}
 	var bits []string
 	if meta.OS != "" {
-		bits = append(bits, meta.OS)
+		bits = append(bits, osLabel(meta.OS))
 	}
 	if meta.Class != "" && meta.Class != "unknown" {
 		bits = append(bits, meta.Class)

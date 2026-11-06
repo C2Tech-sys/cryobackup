@@ -147,6 +147,8 @@ type ActionItem struct {
 	Suffix     *Chip  // QUEUED, on an enabled item whose device is offline
 	StateNote  string // "Queued Mon 30 Oct, 1:42 PM"
 	Undo       string // POST target that cancels the in-flight command ("" = cannot be undone)
+	// Pause, when set, is the Park dialog (m3t5_pause.go): the item opens a form instead of posting at once.
+	Pause *PauseForm
 }
 
 // IdentityPanel is the banner and the resolve form of an identity conflict.
@@ -336,6 +338,7 @@ func (s *Service) actionBar(r *http.Request, p *auth.Principal, f health.Fleet, 
 		bar.Items = append(bar.Items, it)
 	}
 	bar.Items = append(bar.Items, mk("refresh_policy", store.CommandRefreshPolicy, "Refresh policy", "refresh-policy"))
+	bar.Items = append(bar.Items, s.parkItems(p, dev, c, retired, parked)) // M3-T5 (B15): Park or Resume
 	bar.More = append(bar.More, mk("check_in", store.CommandCheckIn, "Check in now", "check-in"))
 
 	if dev.IdentityConflictAt != nil && !retired {
