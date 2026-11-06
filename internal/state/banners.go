@@ -503,11 +503,13 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 		}
 	}
 	since, sinceOK := recorded(d.WorkerStoreFailingSince, c.now)
+	var at time.Time // the one clock time in the text, so a page can re-render it
 	switch n := d.WorkerStoreFailures; {
 	case n >= WorkerStoreFailuresToCritical:
 		cause := "the maintenance worker cannot read or write the console database"
 		if sinceOK {
 			cause += " (since " + c.clock(since) + ")"
+			at = since
 		}
 		add(SeverityCritical, cause)
 	case n < 0, n == 0 && d.WorkerStoreFailingSince != 0, n > 0 && !sinceOK:
@@ -516,7 +518,7 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 	if len(causes) == 0 {
 		return nil
 	}
-	return []Banner{{ID: "C11", Severity: sev, Count: len(causes),
+	return []Banner{{ID: "C11", Severity: sev, Count: len(causes), At: at,
 		Text: "Console database needs attention: " + strings.Join(causes, "; ") + "."}}
 }
 

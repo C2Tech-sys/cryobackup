@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"html"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
 )
@@ -23,7 +25,7 @@ import (
 // that measurement to fail, so the test is known to see the fault it guards against.
 //
 // They need a Chrome or Chromium: CRYO_CHROME names it, otherwise the usual install paths and PATH
-// names are tried. Without one the tests skip and say so.
+// names are tried. Without one the tests skip and say so, or fail when CI is set.
 
 func chromeBinary() string {
 	if p := os.Getenv("CRYO_CHROME"); p != "" {
@@ -142,7 +144,9 @@ window.addEventListener('load', function () { setTimeout(function () {
 	if keep := os.Getenv("CRYO_LAYOUT_KEEP"); keep != "" { // to look at what the browser was given: the page and its static/ files
 		_ = os.CopyFS(filepath.Join(keep, strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())+"_"+strconv.Itoa(o.W)), os.DirFS(dir))
 	}
-	out, err := exec.Command(chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars", "--window-size="+strconv.Itoa(o.W+300)+","+strconv.Itoa(o.H+300),
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // a hung browser must not burn the package's limit
+	defer cancel()
+	out, err := exec.CommandContext(ctx, chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars", "--window-size="+strconv.Itoa(o.W+300)+","+strconv.Itoa(o.H+300),
 		"--user-data-dir="+filepath.Join(dir, "profile"), "--virtual-time-budget=6000", "--dump-dom", "file:///"+filepath.ToSlash(file)).Output()
 	if err != nil {
 		if os.Getenv("CI") != "" {
