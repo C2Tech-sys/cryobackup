@@ -1960,7 +1960,7 @@ paths:
       operationId: runJob
       tags: [system]
       summary: Run a job now
-      description: Lease-guarded. Answers 202 when the run was accepted (and audited); the outcome is the job's row in the job table. 409 while another holder has the lease, 404 for an unknown job, 503 when the console has no job runner.
+      description: Lease-guarded. Answers 202 when the run was accepted (and audited); the outcome is the job's row in the job table. 409 while another holder has the lease, 404 for an unknown job, 503 when the console has no job runner or is shutting down.
       x-min-role: AD
       parameters:
         - {name: name, in: path, required: true, schema: {type: string}}
@@ -1981,7 +1981,7 @@ paths:
       operationId: probeStorageTarget
       tags: [system]
       summary: Probe the gateway, storage and certificates now
-      description: Runs the health-prober's gateway probe (which also reads the gateway certificate's expiry) and storage probe now under the probe lease, waits for them (at most 90 s; a probe already in flight is waited for, not doubled), and reads three checks (gateway, storage including the quota banner, certificates). A check reads only a fact produced at or after the request started; an older one is `not_checked`. A fresh fact is judged by the banners the engine raises from it, the "not checked" banners included, and a probe that failed just now is `failed` before its streak raises a banner. When another console holds the probe lease nothing is probed here and the answer is 409. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt.
+      description: Runs the health-prober's gateway probe (which also reads the gateway certificate's expiry) and storage probe now under the probe lease, waits for them (at most 90 s; a probe already in flight is waited for, not doubled), and reads three checks (gateway, storage including the quota banner, certificates). A check reads only a fact produced at or after the request started; an older one is `not_checked`. A fresh fact is judged by the banners the engine raises from it, the "not checked" banners included, and a probe that failed just now is `failed` before its streak raises a banner. When another console holds the probe lease nothing is probed here and the answer is 409. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt, with result `error` when nothing was probed. While the console is shutting down the answer is 503, nothing is probed and no audit row is written.
       x-min-role: AD
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -1996,6 +1996,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
 security:
   - sessionCookie: []
   - apiToken: []
@@ -3906,10 +3907,10 @@ components:
         reason: {type: string, description: Why the probe could not run; the checks are then not_checked.}
         job:
           type: object
-          description: This request's probe run. ok when the probes ran and ended within the bound; error with error_class timeout, failed, cancelled or nothing_probed otherwise (cancelled means the probes ended without a result because the probe lease was lost or the console is shutting down; nothing_probed means neither the gateway probe nor the storage probe could run).
+          description: This request's probe run. ok when the probes ran and ended within the bound; error with error_class timeout, failed, cancelled, nothing_probed or internal_panic otherwise (cancelled means the probes ended without a result because the probe lease was lost or the console is shutting down; nothing_probed means neither the gateway probe nor the storage probe could run; internal_panic means a probe failed with an internal error). Absent when the console runs no prober; the reason then says so.
           properties:
             status: {type: string, enum: [ok, error]}
-            error_class: {type: string, enum: [timeout, failed, cancelled, nothing_probed]}
+            error_class: {type: string, enum: [timeout, failed, cancelled, nothing_probed, internal_panic]}
             duration_ms: {type: integer}
         checks:
           type: array

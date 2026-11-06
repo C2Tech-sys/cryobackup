@@ -98,6 +98,8 @@ type Runner struct {
 	order  []string
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
+	// stopWait overrides RunnerStopWait (tests).
+	stopWait time.Duration
 }
 
 // NewRunner returns a runner whose leases are held under holder.
@@ -205,15 +207,32 @@ func (r *Runner) Start(ctx context.Context) {
 	}
 }
 
-// Stop cancels the jobs and waits for them to finish.
+// RunnerStopWait bounds Runner.Stop.
+const RunnerStopWait = 10 * time.Second
+
+// Stop cancels the jobs and waits for them to finish, at most RunnerStopWait: a job
+// that ignores its context (one stuck inside a store Write) must not hold serve's
+// shutdown. It is abandoned, logged by class, and ends with the process.
 func (r *Runner) Stop() {
 	r.mu.Lock()
 	cancel := r.cancel
+	wait := r.stopWait
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	r.wg.Wait()
+	if wait <= 0 {
+		wait = RunnerStopWait
+	}
+	done := make(chan struct{})
+	go func() { r.wg.Wait(); close(done) }()
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		r.Log.Warn("a job did not stop at shutdown; it is abandoned", logx.Class("shutdown"))
+	}
 }
 
 func jittered(d time.Duration) time.Duration {

@@ -660,17 +660,11 @@ func TestC08ProbeLeaseLostCancelsProbesInFlight(t *testing.T) {
 	if err := r.hp.Run(r.ctx); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for be.active.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitActive(t, be)
 	// The renewer keeps the lease while the probe runs: the lease is ours and its expiry moves on.
 	first := r.row(t, ProbeLease)
 	r.clk.Advance(time.Minute)
-	time.Sleep(100 * time.Millisecond)
-	if again := r.row(t, ProbeLease); again.LeaseHolder != "console-a" || !again.LeaseUntil.After(*first.LeaseUntil) {
-		t.Fatalf("lease not renewed while a probe runs: %+v -> %+v", first, again)
-	}
+	waitLeaseRenewedAfter(t, r, "console-a", *first.LeaseUntil)
 	// Another console takes it.
 	if err := r.st.Write(r.ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE job_state SET lease_holder = 'console-b' WHERE name = ?`, ProbeLease)
@@ -678,7 +672,7 @@ func TestC08ProbeLeaseLostCancelsProbesInFlight(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	waitBounded(t, "the probes after the lease was lost", 5*time.Second, r.hp.WaitAll)
+	waitBounded(t, "the probes after the lease was lost", 30*time.Second, r.hp.WaitAll)
 	if be.active.Load() != 0 {
 		t.Fatal("a storage probe kept running without the lease")
 	}

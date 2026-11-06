@@ -49,7 +49,8 @@ type Store struct {
 	closeOnce sync.Once
 	closed    atomic.Bool
 	closeErr  error
-	cleanup   func() // removes the temp directory of OpenMemory
+	closeWait time.Duration // overrides CloseWait (tests)
+	cleanup   func()        // removes the temp directory of OpenMemory
 
 	// prev holds, per Scope, the device count of the last complete LoadWorld in
 	// this process (state.World.PreviousDeviceCount; absent means -1).
@@ -60,6 +61,8 @@ type Store struct {
 const (
 	defaultBusyTimeout = 5 * time.Second
 	defaultReadPool    = 4
+	// CloseWait bounds Close: how long it waits for in-flight writes and reads.
+	CloseWait = 10 * time.Second
 )
 
 // Open opens (creating if needed) the SQLite database at o.Path, configures every
@@ -206,26 +209,48 @@ func OpenMemory(ctx context.Context, clock func() time.Time) (*Store, error) {
 func (s *Store) Path() string { return s.path }
 
 // Close closes both pools and, for OpenMemory, removes the temporary database.
+// It waits at most CloseWait: a Write stuck in its callback must not hold the
+// process's exit. Past that it answers ErrCloseAbandoned and the caller exits with
+// the transaction unfinished. Nothing committed is lost, because SQLite's WAL
+// recovers on the next open and the unfinished transaction never happened. The
+// close still completes in the background if the stuck work ever ends.
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)
-		// Wait for an in-flight writer: take the semaphore.
-		s.wsem <- struct{}{}
-		// Release afterwards so a Write queued behind Close wakes up and returns ErrClosed.
-		defer func() { <-s.wsem }()
-		// Fold the WAL back into the main file so the file alone is a complete copy.
-		if conn, err := s.wdb.Conn(context.Background()); err == nil {
-			_, _ = conn.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)")
-			_ = conn.Close()
+		wait := s.closeWait
+		if wait <= 0 {
+			wait = CloseWait
 		}
-		err1 := s.rdb.Close()
-		err2 := s.wdb.Close()
-		s.closeErr = errors.Join(err1, err2)
-		if s.cleanup != nil {
-			s.cleanup()
+		done := make(chan error, 1)
+		go func() { done <- s.closeNow() }()
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case s.closeErr = <-done:
+		case <-t.C:
+			s.closeErr = ErrCloseAbandoned
 		}
 	})
 	return s.closeErr
+}
+
+// closeNow is the close itself. It blocks behind an in-flight Write.
+func (s *Store) closeNow() error {
+	// Wait for an in-flight writer: take the semaphore.
+	s.wsem <- struct{}{}
+	// Release afterwards so a Write queued behind Close wakes up and returns ErrClosed.
+	defer func() { <-s.wsem }()
+	// Fold the WAL back into the main file so the file alone is a complete copy.
+	if conn, err := s.wdb.Conn(context.Background()); err == nil {
+		_, _ = conn.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)")
+		_ = conn.Close()
+	}
+	err1 := s.rdb.Close()
+	err2 := s.wdb.Close()
+	if s.cleanup != nil {
+		s.cleanup()
+	}
+	return errors.Join(err1, err2)
 }
 
 // Now returns the store clock's current time in UTC.
