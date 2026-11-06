@@ -123,6 +123,15 @@
     if (!window.htmx) return;
     $$('[data-poll]').forEach(function (el) { window.htmx.trigger(el, 'cryo:poll'); });
   }
+  /* pollSoon: a poll asked for by a stream event (drop, reopen). At most one per POLL_MIN, so a flapping stream cannot
+     turn into a request storm; the refresh timer and recovery after a real outage still poll as before. */
+  var RETRY_MIN = 3000, RETRY_MAX = 60000, STABLE_UP = 30000, POLL_MIN = 15000;
+  var retryMs = RETRY_MIN, upSince = 0, lastPollTry = -POLL_MIN;
+  function pollSoon() {
+    var n = Date.now();
+    if (n - lastPollTry < POLL_MIN) return;
+    lastPollTry = n; poll();
+  }
   /* Polling state: the stream is down but successful polls keep the data current. The pill must not claim
      "Live" (it says "Polling" with the time of the last data) and no NO DATA stamp or banner is raised. */
   function setPolling(on) {
@@ -158,7 +167,7 @@
     var el = e.detail && e.detail.elt;
     if (el && el.hasAttribute && el.hasAttribute('data-poll') && e.detail.successful) markPoll();
   });
-  document.addEventListener('htmx:afterSwap', function () { syncStamp(); applyGroups(); renderC10(); markLive(); });
+  document.addEventListener('htmx:afterSwap', function () { syncStamp(); applyGroups(); renderC10(); markLive(); if (tipOpen && tipOpen.isConnected) placeTip(tipOpen); /* the explain tip changed size */ });
 
   /* ---- SSE ---- */
   function swap(html) {
@@ -184,14 +193,21 @@
     if (!eventsURL || !window.EventSource || dropped) return;
     if (es) { es.close(); }
     es = new EventSource(eventsURL);
-    es.addEventListener('open', function () { live = true; last = Date.now(); downSince = 0; setPolling(false); if (stale && !forced) { poll(); setStale(false); } });
+    es.addEventListener('open', function () { live = true; upSince = last = Date.now(); downSince = 0; setPolling(false); if (stale && !forced) { pollSoon(); setStale(false); } });
     ['fleet.state', 'run.progress', 'banner.update'].forEach(function (n) { es.addEventListener(n, function (e) { mark(); swap(e.data); }); });
     es.addEventListener('freshness', function (e) { mark(); onFresh(e.data); });
     es.addEventListener('ping', function () { mark(); });
     es.addEventListener('error', function () {
       if (unloading) return; /* the browser errors every open stream when the page is left */
-      live = false; if (!downSince) { downSince = Date.now(); poll(); } /* ask once now: a poll that works means the console is up and only the stream broke */
-      if (es && es.readyState === 2 && !dropped) { clearTimeout(retry); retry = setTimeout(connect, 3000); }
+      var now = Date.now();
+      live = false; if (!downSince) { downSince = now; pollSoon(); } /* ask once now: a poll that works means the console is up and only the stream broke */
+      /* A flapping stream (it opens, drops, opens, drops) used to reconnect by the browser's own 3 s retry and, because each
+         open cleared the down clock, ask for a poll on every drop: about 20 requests a minute. The page now owns the
+         reconnect and backs off 3 s, 6 s, 12 s ... 60 s; the delay resets only after the stream stayed up for STABLE_UP.
+         Polls on a drop are at most one per POLL_MIN. */
+      if (upSince && now - upSince >= STABLE_UP) retryMs = RETRY_MIN;
+      upSince = 0;
+      if (es && !dropped) { es.close(); clearTimeout(retry); retry = setTimeout(connect, retryMs); retryMs = Math.min(retryMs * 2, RETRY_MAX); }
     });
   }
   window.cryoFresh = {
@@ -276,8 +292,14 @@
   }
   function placeTip(tw) {
     var tip = tw && tw.querySelector ? tw.querySelector('.tip') : null; if (!tip) return;
+    /* M3-T5: measure the tip as it will be shown. On mouseover it is still display:none (the :hover rule has not applied yet), so
+       its width read as 0 and a right-aligned tip was placed from the chip's right edge and ran off to the right. The class
+       "right" is on the .tip itself (shared.html "roll"), not on the wrapper. */
+    var was = tip.style.display; tip.style.display = 'block';
     var a = tw.getBoundingClientRect(), r = tip.getBoundingClientRect();
-    var p = tipPlace(a, r.width, r.height, document.documentElement.clientWidth, document.documentElement.clientHeight, tw.classList.contains('right'));
+    tip.style.display = was;
+    var right = tw.classList.contains('right') || !!(tip.classList && tip.classList.contains('right'));
+    var p = tipPlace(a, r.width, r.height, document.documentElement.clientWidth, document.documentElement.clientHeight, right);
     tip.style.position = 'fixed'; tip.style.right = 'auto'; tip.style.left = p.left + 'px'; tip.style.top = p.top + 'px';
     tipOpen = tw;
   }

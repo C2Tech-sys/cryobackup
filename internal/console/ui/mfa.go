@@ -235,7 +235,7 @@ func (s *Service) mfaPost(w http.ResponseWriter, r *http.Request) {
 		s.mfaFailed(w, r, p, err)
 		return
 	}
-	s.Auth.SetCookies(w, r, res)
+	s.setSessionCookies(w, r, res)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -246,7 +246,7 @@ func (s *Service) mfaRecoveryPost(w http.ResponseWriter, r *http.Request) {
 		s.mfaFailed(w, r, p, err)
 		return
 	}
-	s.Auth.SetCookies(w, r, res)
+	s.setSessionCookies(w, r, res)
 	http.Redirect(w, r, "/account?done=recovery_login&left="+strconv.Itoa(left), http.StatusSeeOther)
 }
 
@@ -282,7 +282,7 @@ func (s *Service) mfaEnrollPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if res != nil {
-		s.Auth.SetCookies(w, r, *res)
+		s.setSessionCookies(w, r, *res)
 	}
 	d := s.mfaBase(p)
 	d.Mode, d.Title, d.Codes, d.CodesTxt = "codes", "Save your recovery codes", codes, codesFile(p.Admin.Username, codes, s.fc(r.Context()).fullTime(s.now()))

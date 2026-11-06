@@ -38,8 +38,27 @@ func Clock() func() time.Time { n := Now(); return func() time.Time { return n }
 // Banners returns the full C01 to C16 console condition set with the copy of
 // components.md §9.2, timestamps relative to now. It is what /design renders and
 // what the banner golden test checks.
-func Banners(now time.Time) []state.Banner {
-	hm := func(d time.Duration) string { return now.Add(-d).Format("15:04") }
+func Banners(now time.Time) []state.Banner { return BannersIn(now, Zone()) }
+
+// Zone is the display zone of fixtures mode: the one Now is stated in (America/Chicago, a fixed
+// UTC-5 when the host has no zone database).
+func Zone() *time.Location {
+	if l, err := time.LoadLocation("America/Chicago"); err == nil {
+		return l
+	}
+	return time.FixedZone("CDT", -5*3600)
+}
+
+// BannersIn is Banners with its clock times in loc on a 12-hour clock, as every banner of the
+// console words them (M3-T5): "Last OK 1:33 PM", with the weekday and date on any other day.
+func BannersIn(now time.Time, loc *time.Location) []state.Banner {
+	hm := func(d time.Duration) string {
+		t, ln := now.Add(-d).In(loc), now.In(loc)
+		if t.Year() == ln.Year() && t.YearDay() == ln.YearDay() {
+			return t.Format("3:04 PM")
+		}
+		return t.Format("Mon 2 Jan 3:04 PM")
+	}
 	crit, warn := state.SeverityCritical, state.SeverityAlarm
 	return []state.Banner{
 		{ID: "C01", Severity: crit, Text: "Gateway unreachable: no agent can back up. Last OK " + hm(9*time.Minute) + "."},
@@ -57,7 +76,7 @@ func Banners(now time.Time) []state.Banner {
 		{ID: "C11", Severity: warn, Text: "Console database needs attention: self-backup older than 26 h."},
 		{ID: "C12", Severity: crit, Text: "Master key unavailable: enrollment, escrow reveal and server-side retention are disabled."},
 		{ID: "C13", Severity: warn, Text: "Server clock may be wrong: device offsets agree."},
-		{ID: "C14", Severity: crit, Text: "Daily digest was not delivered. It was due by 07:30."},
+		{ID: "C14", Severity: crit, Text: "Daily digest was not delivered. It was due by 7:30 AM."},
 		{ID: "C15", Severity: warn, Count: 84, Text: "Storage at 84% of quota."},
 		{ID: "C16", Severity: warn, Text: "Release manifest rejected."},
 	}

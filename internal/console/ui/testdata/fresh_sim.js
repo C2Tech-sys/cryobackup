@@ -322,6 +322,39 @@ run('stream down, polls worked once then stopped: NO DATA', (s) => {
   s.expect(s.stale() && s.state() === 'unreachable', 'polls stopped but the page still says ' + s.state());
 });
 
+// M3-T5: a flapping stream (up for 2 s, down, up, down...) polled on every drop, about 20 requests a minute.
+run('a flapping stream backs off: few polls, few reconnects', (s) => {
+  open(s);
+  const n0 = s.polls();
+  for (let t = 0; t < 300000; t += 1000) { // five minutes
+    if (!s.es().closed) { open(s); s.advance(2000); t += 2000; drop(s); }
+    s.advance(1000);
+  }
+  const perMin = (s.polls() - n0) / 5;
+  s.expect(perMin <= 4, 'flapping made ' + perMin + ' polls a minute (limit 4)');
+  s.expect(s.streams() <= 14, 'flapping reopened the stream ' + s.streams() + ' times in five minutes');
+  // the delay resets once a stream stays up for 30 s: the next drop reconnects after 3 s again
+  while (s.es().closed) s.advance(1000);
+  open(s);
+  s.advance(40000); s.es().emit('ping');
+  const n = s.streams();
+  drop(s);
+  s.advance(3500);
+  s.expect(s.streams() === n + 1, 'a stable stream did not reset the reconnect delay');
+});
+
+// M3-T5: the device-count tooltip (class "right" on the .tip, hidden until :hover applies) was placed from a 0-wide
+// box and from the chip's left edge, so it sat too far right. It is measured as shown and right-aligned to its chip.
+run('a right-aligned .tip is measured as shown and ends at its chip', (s) => {
+  const tip = { style: { display: '' }, classList: { contains: (c) => c === 'right' },
+    getBoundingClientRect() { return { width: tip.style.display === 'block' ? 117 : 0, height: 40 }; } };
+  const tw = { isConnected: true, classList: { contains: () => false }, querySelector: () => tip, removeAttribute() {},
+    getBoundingClientRect: () => ({ left: 1230, right: 1267, top: 300, bottom: 320 }) };
+  s.fireDoc('mouseover', { target: { closest: () => tw } });
+  s.expect(tip.style.left === '1150px', 'tip left is ' + tip.style.left + ', want 1150px (its right edge on the chip\'s)');
+  s.expect(tip.style.display === '', 'the measuring left display:block behind');
+});
+
 run('a closed tooltip is no longer tracked: scrolling does no layout work', (s) => {
   let rects = 0;
   const tip = { style: {}, getBoundingClientRect: () => ({ width: 100, height: 20 }) };

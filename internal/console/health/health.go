@@ -57,6 +57,9 @@ type Evaluator struct {
 	Probes func() state.ProbeFacts
 	// Refresh is the page refresh interval behind C10; nil means state.DefaultRefreshInterval.
 	Refresh func() time.Duration
+	// Zone is the operator's display zone for this call (M3-T5): the engine words every banner time
+	// ("last OK 1:42 PM") in it on a 12-hour clock. Nil means UTC, the engine's own default.
+	Zone func(ctx context.Context) *time.Location
 	// SystemDrive is passed to the facts loader (default "C").
 	SystemDrive string
 }
@@ -98,6 +101,9 @@ func (e *Evaluator) fleet(ctx context.Context, scope store.Scope, page bool) (Fl
 	}
 	jobs, jerr := e.Store.ListJobStates(ctx)
 	w.Probes = e.ProbeFacts(jobs, jerr, page)
+	if e.Zone != nil {
+		w.DisplayZone = e.Zone(ctx)
+	}
 	view := state.Evaluate(w, now)
 
 	f := Fleet{View: view, Computed: now, Jobs: jobs, Reporting: len(state.ReportingDevices(w, now))}
@@ -132,7 +138,7 @@ func (e *Evaluator) fleet(ctx context.Context, scope store.Scope, page bool) (Fl
 		for _, j := range jobs {
 			if j.Name == EvaluatorJob && j.LastFinishedAt != nil && now.Sub(*j.LastFinishedAt) > 3*EvaluatorPeriod {
 				extra = append(extra, state.Banner{ID: "C06", Severity: state.SeverityCritical,
-					Text: fmt.Sprintf("Alerting is stalled: this view and notifications may be stale. Last evaluation %s.", j.LastFinishedAt.UTC().Format("15:04"))})
+					Text: fmt.Sprintf("Alerting is stalled: this view and notifications may be stale. Last evaluation %s.", bannerClock(*j.LastFinishedAt, now, w.DisplayZone))})
 			}
 		}
 	}
@@ -247,4 +253,17 @@ func EntityBanners(v state.FleetView) []EntityBanner {
 		}
 	}
 	return out
+}
+
+// bannerClock words t for banner text the way the engine does (state banners.go clock):
+// "3:04 PM" on the display zone's current date, "Mon 2 Jan 3:04 PM" on any other, in loc (nil is UTC).
+func bannerClock(t, now time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	lt, ln := t.In(loc), now.In(loc)
+	if ly, lm, ld := lt.Date(); ly == ln.Year() && lm == ln.Month() && ld == ln.Day() {
+		return lt.Format("3:04 PM")
+	}
+	return lt.Format("Mon 2 Jan 3:04 PM")
 }

@@ -32,18 +32,24 @@ func AllBannersOn() bool { return allBanners.Load() }
 
 // ExtraBanners is the evaluator's Extra hook: nothing while the switch is off,
 // every banner of AllBanners while it is on.
-func ExtraBanners(now time.Time) []state.Banner {
+func ExtraBanners(now time.Time) []state.Banner { return ExtraBannersIn(now, Zone()) }
+
+// ExtraBannersIn is ExtraBanners with the clock times in loc: ui passes the operator's display zone.
+func ExtraBannersIn(now time.Time, loc *time.Location) []state.Banner {
 	if !allBanners.Load() {
 		return nil
 	}
-	return AllBanners(now)
+	return AllBannersIn(now, loc)
 }
 
 // AllBanners is every condition the console can raise: C01 to C16 (C11 at its
 // critical severity), C00 (the self-checks are not wired) and every "b"
 // not-checked warning. Timestamps are relative to now.
-func AllBanners(now time.Time) []state.Banner {
-	out := Banners(now)
+func AllBanners(now time.Time) []state.Banner { return AllBannersIn(now, Zone()) }
+
+// AllBannersIn is AllBanners with the clock times in loc.
+func AllBannersIn(now time.Time, loc *time.Location) []state.Banner {
+	out := BannersIn(now, loc)
 	for i := range out {
 		if out[i].ID == "C11" {
 			out[i].Severity = state.SeverityCritical
