@@ -104,6 +104,9 @@ type HealthcheckPing struct {
 	EvaluatorPeriod time.Duration
 	// Client replaces the HTTP client (tests).
 	Client *http.Client
+	// Started is when this console process started: a ping is skipped, not failed, while the
+	// evaluator has not finished since then and still has its three periods to do so.
+	Started time.Time
 }
 
 // Job returns the schedule for the runner.
@@ -135,9 +138,39 @@ func EvaluatorHealthy(ctx context.Context, st *store.Store, period time.Duration
 	return age >= -time.Minute && age <= time.Duration(EvaluatorHealthyPeriods)*period, nil
 }
 
+// awaitingFirstEvaluation reports whether the evaluator has yet to finish a run on
+// this console and still has its time to do so. Both jobs start within seconds of each
+// other in no fixed order, so a ping at that moment says nothing about alerting. Past
+// EvaluatorHealthyPeriods periods from the start, no evaluation is the failure it looks like.
+func (j *HealthcheckPing) awaitingFirstEvaluation(ctx context.Context, now time.Time) (bool, error) {
+	period := j.EvaluatorPeriod
+	if period <= 0 {
+		period = AlarmEvaluatorEvery
+	}
+	if !j.Started.IsZero() && now.Sub(j.Started) > time.Duration(EvaluatorHealthyPeriods)*period {
+		return false, nil
+	}
+	row, err := j.Store.GetJobState(ctx, NameAlarmEvaluator)
+	if errors.Is(err, store.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return row.LastFinishedAt == nil || (!j.Started.IsZero() && row.LastFinishedAt.Before(j.Started.Truncate(time.Millisecond))), nil // job_state holds milliseconds
+}
+
 // Run is one ping.
 func (j *HealthcheckPing) Run(ctx context.Context) error {
-	ok, err := EvaluatorHealthy(ctx, j.Store, j.EvaluatorPeriod, j.Store.Now())
+	now := j.Store.Now()
+	waiting, err := j.awaitingFirstEvaluation(ctx, now)
+	if err != nil {
+		return err
+	}
+	if waiting {
+		return errSkipped // no ping goes out, so the external monitor still alerts if this never ends
+	}
+	ok, err := EvaluatorHealthy(ctx, j.Store, j.EvaluatorPeriod, now)
 	if err != nil {
 		return err
 	}

@@ -746,6 +746,16 @@ func uiMutationCases() map[string]uiMutation {
 				}
 			},
 		},
+		// ---- M3-T4: the System page's "Run now" (written by the admin API's own handler, one row) ----
+		"POST /ui/system/jobs/{name}/run": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				e.svc.Jobs = newFakeJobs("alarm-evaluator") // before the first request: the page API reads it once
+				return func() (*http.Response, string) {
+					return e.post("/ui/system/jobs/alarm-evaluator/run", vals(), false)
+				}
+			},
+		},
 	}
 }
 

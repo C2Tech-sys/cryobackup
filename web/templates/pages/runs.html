@@ -1,0 +1,6 @@
+{{/* S21 - runs search (M3-T4): the flat clause builder, the results table and the pager are partials/m3_runs.html. */}}
+{{define "title"}}Runs{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Runs</span></nav>
+{{template "runs_view" .Runs}}
+{{end}}

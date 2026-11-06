@@ -72,8 +72,15 @@ type Service struct {
 	// htpasswd file drops its login at once instead of at the next five-minute run.
 	SyncGateway func()
 
+	// Jobs is the console's job runner, for the System page's "Run now" and its
+	// job table (M3-T4, m3t4.go). cli sets it once the runner exists, before the
+	// first request; nil leaves "Run now" disabled and says so.
+	Jobs jobRunner
+
 	templates map[string]*template.Template
 	assets    map[string]string
+	// m3 is the private admin API the M3-T4 pages read through (m3t4.go).
+	m3 m3State
 	// winRL limits the live window validator per session (policy.go, M2-W2A).
 	winRL *ratelimit.Bucket
 }
@@ -122,6 +129,7 @@ func New(s *Service) (*Service, error) {
 		s.Hub.freshness = s.freshnessPayload
 		s.Hub.RefreshNow = func() time.Duration { return time.Duration(s.display().RefreshS) * time.Second } // M2-W3A: a changed interval reaches the stream
 	}
+	s.initM3() // M3-T4: the pages' private admin API, built now (m3t4.go)
 	return s, nil
 }
 
@@ -189,6 +197,7 @@ func (s *Service) Register(reg httpx.Registrar) {
 	r.Handle("GET /{$}", ro(s.board))
 	r.Handle("GET /devices/{id}", ro(s.devicePanel))
 	s.registerM2(r)
+	s.registerM3T4(r)       // M3-T4: runs, activity, overdue, unseen, system (m3t4.go)
 	s.registerPolicies(r)   // M2-W2A: policies, customer Policy tab, device overrides (policy_routes.go)
 	s.registerCommandsUI(r) // M2-W2C (commands.go)
 	r.Handle("GET /devices/{id}/restore", op(s.restorePage))
@@ -212,6 +221,7 @@ func Patterns(fixtures bool) []string {
 		"POST /ui/devices/{id}/restore", "GET /restores/{id}", "POST /ui/restores/{id}/download", "GET /ui/events", "GET /ui/partials/board",
 		"GET /ui/partials/run-progress/{run_id}", "GET /ui/partials/restore/{id}", "GET /static/{path...}"}
 	p = append(p, m2Patterns()...)
+	p = append(p, m3t4Patterns()...)      // M3-T4
 	p = append(p, policyUIPatterns()...)  // M2-W2A
 	p = append(p, commandPatterns()...)   // M2-W2C
 	p = append(p, accountUIPatterns()...) // M2-W1A
@@ -220,6 +230,7 @@ func Patterns(fixtures bool) []string {
 	p = append(p, settingsUIPatterns()...)
 	if fixtures {
 		p = append(p, "GET /design", "GET /design/{component}")
+		p = append(p, fixturesM3Patterns()...) // M3-T4
 	}
 	return p
 }

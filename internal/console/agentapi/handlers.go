@@ -300,11 +300,16 @@ func (s *Service) handleRuns(w http.ResponseWriter, r *http.Request, d device) {
 	results := make([]api.RunResult, len(req.Runs))
 	var inputs []store.RunInput
 	var index []int
+	unusable := false
 	for i, rec := range req.Runs {
 		results[i] = api.RunResult{ID: rec.ID}
 		if err := rec.Validate(); err != nil {
 			results[i].Status, results[i].Reason = api.RunRejected, api.ReasonInvalid
 			continue
+		}
+		// A label that is not a version loses the label, never the run: the value is not stored, shown or logged.
+		if rec.AgentVersion != "" && !api.VersionShape(rec.AgentVersion) {
+			rec.AgentVersion, unusable = api.UnknownVersion, true
 		}
 		in, err := runInput(rec)
 		if err != nil {
@@ -312,6 +317,9 @@ func (s *Service) handleRuns(w http.ResponseWriter, r *http.Request, d device) {
 			continue
 		}
 		inputs, index = append(inputs, in), append(index, i)
+	}
+	if unusable {
+		s.Log.Warn("runs: an agent version was not a build version, so it is stored as unknown", logx.ID("device_id", d.ID), logx.Class("agent_version_unusable"))
 	}
 	if len(inputs) > 0 {
 		out, err := s.Store.AgentIngestRuns(r.Context(), d.ID, inputs, now)

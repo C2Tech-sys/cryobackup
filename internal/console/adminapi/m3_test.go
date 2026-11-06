@@ -924,7 +924,7 @@ func TestM3SystemHealthNeverSaysOKWithoutEvidence(t *testing.T) { // F18 F19, H2
 		}
 	})
 	h = decode[SystemHealthResponse](t, mustGet(e, "/api/v1/system/health", owner))
-	want := map[string]string{"release_manifest": statusNotChecked, "master_key": statusNotChecked, "gateway": statusFailed, "certificates": statusWarn, "storage": statusWarn}
+	want := map[string]string{"release_manifest": statusNotChecked, "master_key": statusNotChecked, "gateway": statusFailed, "certificates": statusWarn, "storage_quota": statusWarn}
 	for id, st := range want {
 		if c := comp(h, id); c.Status != st || len(c.Banners) == 0 {
 			t.Errorf("%s = %+v, want %s with its banner listed", id, c, st)
@@ -1007,12 +1007,16 @@ func TestSystemHealthMapsEveryBannerTheEngineCanRaise(t *testing.T) { // H2: a n
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	ran := now.Add(-time.Minute)
 	next := now.Add(time.Hour)
-	full := healthFacts{Now: now, Complete: true, EndpointWired: true, WorkerPinged: true, WorkerReachable: true, MaintainKnown: true,
-		EvaluatorRanAt: &ran, MasterKeyWired: true, ReportingDevices: 9,
-		Jobs: []store.JobState{{Name: "j", LastStatus: "ok", NextDueAt: &next}}}
+	full := fullEvidence(now, &ran, &next)
+	control := func(id string) string {
+		if slices.Contains(fullEvidenceNotInBuild, id) {
+			return statusNotInBuild
+		}
+		return statusOK
+	}
 	for _, c := range buildComponents(full) {
-		if c.Status != statusOK {
-			t.Fatalf("with every piece of evidence and no banner, %s = %+v; the control must be all ok", c.ID, c)
+		if c.Status != control(c.ID) {
+			t.Fatalf("with every piece of evidence and no banner, %s = %+v; the control must be all ok or not in this build", c.ID, c)
 		}
 	}
 	rows := func(bs ...state.Banner) map[string]SystemComponentJSON {
@@ -1024,10 +1028,14 @@ func TestSystemHealthMapsEveryBannerTheEngineCanRaise(t *testing.T) { // H2: a n
 		}
 		return out
 	}
-	// C00 takes every row off ok.
+	// C00 takes every row off ok. A check this build does not run stays what it is: wiring cannot change that.
 	for id, c := range rows(state.Banner{ID: bannerNotWired, Severity: state.SeverityAlarm}) {
-		if c.Status != statusNotChecked {
-			t.Errorf("with C00 raised, %s = %s, want not_checked", id, c.Status)
+		want := statusNotChecked
+		if control(id) == statusNotInBuild {
+			want = statusNotInBuild
+		}
+		if c.Status != want {
+			t.Errorf("with C00 raised, %s = %s, want %s", id, c.Status, want)
 		}
 	}
 	for _, id := range ids {
@@ -1041,11 +1049,11 @@ func TestSystemHealthMapsEveryBannerTheEngineCanRaise(t *testing.T) { // H2: a n
 		}
 		for _, sev := range []state.Severity{state.SeverityAlarm, state.SeverityCritical} {
 			got := rows(state.Banner{ID: id, Severity: sev})
-			if got[row].Status == statusOK || !slices.Contains(got[row].Banners, id) {
+			if got[row].Status == statusOK || got[row].Status == statusNotInBuild || !slices.Contains(got[row].Banners, id) {
 				t.Errorf("banner %s (severity %s) raised, but row %s = %+v", id, sev, row, got[row])
 			}
 			for other, c := range got {
-				if other != row && c.Status != statusOK {
+				if other != row && c.Status != control(other) {
 					t.Errorf("banner %s raised and row %s (not its row) = %s", id, other, c.Status)
 				}
 			}
@@ -1062,9 +1070,8 @@ func TestSystemHealthMapsEveryBannerTheEngineCanRaise(t *testing.T) { // H2: a n
 	for name, mut := range map[string]func(*healthFacts){
 		"agent_api":          func(f *healthFacts) { f.EndpointWired = false },
 		"maintenance_worker": func(f *healthFacts) { f.WorkerPinged, f.WorkerReachable, f.MaintainKnown = false, false, false },
-		"evaluator":          func(f *healthFacts) { f.EvaluatorRanAt = nil },
+		"evaluator":          func(f *healthFacts) { f.Probes.Evaluator = nil },
 		"master_key":         func(f *healthFacts) { f.MasterKeyWired = false },
-		"clock":              func(f *healthFacts) { f.ReportingDevices = 4 },
 		"jobs":               func(f *healthFacts) { f.Jobs = nil },
 	} {
 		f := full

@@ -386,6 +386,7 @@ type CustomerPage struct {
 // when canPolicy is true.
 func custTabs(id, cur string, canPolicy bool) []CustTab {
 	out := []CustTab{{Key: "overview", Label: "Overview", Href: "/customers/" + id}, {Key: "devices", Label: "Devices", Href: "/customers/" + id + "/devices"},
+		{Key: "runs", Label: "Runs", Href: "/customers/" + id + "/runs"}, // M3-T4 (S16, m3t4_runs.go)
 		{Key: "settings", Label: "Settings", Href: "/customers/" + id + "/settings"}}
 	if canPolicy {
 		out = append(out, CustTab{Key: "policy", Label: "Policy", Href: "/customers/" + id + "/policy"})

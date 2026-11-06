@@ -1,0 +1,18 @@
+{{/* Fixtures mode only (M3-T4): the lab switch that shows every console banner. The fleet is fictional; nothing here is a claim about a real console. */}}
+{{define "title"}}Fixtures mode{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Fixtures mode</span></nav>
+<article class="card" aria-labelledby="fx-h">
+  <h2 id="fx-h">Show every console banner</h2>
+  <p>This console is running on a fictional fleet. The banners above each page are the conditions the console really raises, which on this fleet are few. Turn this on to see every one of them at once, on every page and in the system health rows: C00 to C16, every "not checked" variant, and C11 at its critical severity.</p>
+  <p class="row"><span class="st {{if .On}}warn{{else}}neutral{{end}}"><i aria-hidden="true"></i>{{if .On}}ALL BANNERS ON{{else}}ALL BANNERS OFF{{end}}</span>
+  {{if .On}}<a class="btn" href="/fixtures?banners=off">Turn off</a>{{else}}<a class="btn primary" href="/fixtures?banners=all">Show every banner</a>{{end}}</p>
+  <p class="meta-mono">The switch is for this process and every viewer of it. It changes only what the pages show; it stops when the console restarts.</p>
+</article>
+<article class="card" aria-labelledby="fx-h2">
+  <h2 id="fx-h2">Show a healthy console</h2>
+  <p>This fleet raises real conditions and has more than five devices, so the System page cannot read overall OK here, and its clock row is never "not applicable". Turn this on to see the System page as a small healthy console reads, with <a href="/system">both of those states</a>.</p>
+  <p class="row"><span class="st {{if .Healthy}}warn{{else}}neutral{{end}}"><i aria-hidden="true"></i>{{if .Healthy}}HEALTHY VIEW ON{{else}}HEALTHY VIEW OFF{{end}}</span>
+  {{if .Healthy}}<a class="btn" href="/fixtures?health=real">Turn off</a>{{else}}<a class="btn primary" href="/fixtures?health=ok">Show a healthy console</a>{{end}}</p>
+</article>
+{{end}}

@@ -289,7 +289,7 @@ func TestValidateRunRecord(t *testing.T) {
 		{"attempt 1", func(r *RunRecord) { r.Attempt = 1 }, nil},
 		{"policy version negative", func(r *RunRecord) { r.PolicyVersion = -1 }, []string{"policy_version"}},
 		{"policy version 0", func(r *RunRecord) { r.PolicyVersion = 0 }, nil},
-		{"agent_version too long", func(r *RunRecord) { r.AgentVersion = strings.Repeat("v", 129) }, []string{"agent_version"}},
+		{"agent_version too long is a lost label, not a lost run", func(r *RunRecord) { r.AgentVersion = strings.Repeat("v", 129) }, nil},
 		{"stats negative", func(r *RunRecord) { r.Stats.FilesNew = -1 }, []string{"stats.files_new"}},
 		{"stats vss lower case", func(r *RunRecord) { r.Stats.VSSFallbackVolumes = []string{"c"} }, []string{"stats.vss_fallback_volumes[0]"}},
 		{"error row class bogus", func(r *RunRecord) { r.ErrorCounts[0].Class = "x" }, []string{"error_counts[0].class"}},

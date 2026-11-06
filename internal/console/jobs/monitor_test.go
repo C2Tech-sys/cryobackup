@@ -51,10 +51,10 @@ func recordEvaluator(t *testing.T, st *store.Store, status string, at time.Time)
 func TestC13HealthcheckPingOnlyWhileEvaluatorHealthy(t *testing.T) {
 	st, now, srv, hits, method := pingRig(t)
 	ctx := context.Background()
-	j := &HealthcheckPing{Store: st, URL: srv.URL + "/ping/abc", Method: "POST"}
+	j := &HealthcheckPing{Store: st, URL: srv.URL + "/ping/abc", Method: "POST", Started: now.Add(-time.Hour)}
 	var ce *ClassError
 
-	// Never ran: withheld.
+	// Never ran, an hour after this console started: withheld, and that is a failure.
 	if err := j.Run(ctx); !errors.As(err, &ce) || ce.Class != ClassEvaluatorUnhealthy || hits.Load() != 0 {
 		t.Fatalf("no evaluator row: err %v hits %d", err, hits.Load())
 	}
@@ -133,10 +133,10 @@ func TestC13AlarmEvaluatorLoopRecordsRuns(t *testing.T) {
 
 // Through the runner: the job_state row says why, and the log never carries the URL.
 func TestHealthcheckPingThroughTheRunnerIsTokenFree(t *testing.T) {
-	st, _, srv, _, _ := pingRig(t)
+	st, now, srv, _, _ := pingRig(t)
 	var logs bytes.Buffer
 	r := NewRunner(st, "t", logx.New(&logs, logx.LevelDebug))
-	r.Add((&HealthcheckPing{Store: st, URL: srv.URL + "/ping/secret-token"}).Job())
+	r.Add((&HealthcheckPing{Store: st, URL: srv.URL + "/ping/secret-token", Started: now.Add(-time.Hour)}).Job())
 	if ran, err := r.RunOnce(context.Background(), NameHealthcheckPing); !ran || err == nil {
 		t.Fatalf("ran %v err %v", ran, err)
 	}

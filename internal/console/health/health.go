@@ -73,13 +73,15 @@ type Fleet struct {
 	LastHeartbeat time.Time
 	// Jobs are the job_state rows (the last status of each job).
 	Jobs []store.JobState
+	// Reporting is how many devices of this scope C13 judged from (state.ReportingDevices).
+	Reporting int
 }
 
 // Fleet loads the facts for scope and evaluates them for a page or an API
 // response: the view facts (C10) are always set on this path, so no handler can
 // forget them.
 func (e *Evaluator) Fleet(ctx context.Context, scope store.Scope) (Fleet, error) {
-	return e.fleet(ctx, scope, true)
+	return e.memoized(ctx, scope, func() (Fleet, error) { return e.fleet(ctx, scope, true) }) // one evaluation per request under WithMemo (memo.go)
 }
 
 // Alarms evaluates the whole fleet for a caller without a page (the
@@ -98,7 +100,7 @@ func (e *Evaluator) fleet(ctx context.Context, scope store.Scope, page bool) (Fl
 	w.Probes = e.ProbeFacts(jobs, jerr, page)
 	view := state.Evaluate(w, now)
 
-	f := Fleet{View: view, Computed: now, Jobs: jobs}
+	f := Fleet{View: view, Computed: now, Jobs: jobs, Reporting: len(state.ReportingDevices(w, now))}
 	var active int
 	for i := range view.Devices {
 		d := &view.Devices[i]

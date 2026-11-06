@@ -71,6 +71,6 @@ func (a *App) addMonitorJobs(cfg config.Config, fleet *health.Evaluator) {
 	a.Runner.Add((&jobs.AbandonedRunSweeper{Store: a.Store}).Job())
 	if hp := cfg.HealthcheckPing; hp.URL != "" {
 		a.Runner.Add((&jobs.HealthcheckPing{Store: a.Store, URL: hp.URL, Method: hp.Method,
-			Every: time.Duration(hp.IntervalS) * time.Second}).Job())
+			Every: time.Duration(hp.IntervalS) * time.Second, Started: a.clock().UTC()}).Job())
 	}
 }

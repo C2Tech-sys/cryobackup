@@ -1931,7 +1931,7 @@ paths:
       operationId: getSystemHealth
       tags: [system]
       summary: Probe results and versions
-      description: Gateway, storage, alert e-mail, certificates, agent API, maintenance worker, database, alarm evaluator, master key, jobs, fleet data, clock and release manifest. Every banner the engine can raise, its "not checked" (b) variants included, maps to a row. A component is `ok` only when none of its banners is raised and there is evidence for it; while C00 (self-checks not wired) is raised no row is `ok`. `overall` is the worst component.
+      description: Gateway, storage, storage quota, alert e-mail, daily digest, certificates, agent API, maintenance worker, database, database self-backup, alarm evaluator, master key, jobs, fleet data, clock and release manifest. Every banner the engine can raise, its "not checked" (b) variants included, maps to a row. One rule decides every component: no attempt on record is `not_checked`; a newest attempt that failed is `warn` or `failed`, however fresh an older pass is; a newest attempt that was skipped keeps the last pass until its freshness limit and is then `not_checked`; a stale one is `not_checked`; `ok` needs a newest attempt that passed, is fresh, and has none of its banners raised; while C00 (self-checks not wired) is raised no row is `ok`. `not_in_build` is a check this build does not run (release manifest, storage quota, daily digest, database self-backup, until the job that produces each one exists) and `not_applicable` one that cannot apply to this console as it stands (the clock needs at least 5 reporting devices; no storage target has a quota; the digest is turned off). Each says why in `detail`. `overall` is the worst component, in the order failed, warn, not_checked; `not_in_build` and `not_applicable` do not count against it, so `overall` can be `ok` beside them. `not_checked` for anything else always blocks `ok`. The certificates row is `failed`, with the reason, for a certificate a probe refused (expired, untrusted, wrong host, wrong pin) or one that has run out since, and judges the days left itself by the C05 thresholds: `warn` under 21 days, `failed` under 7. The clock row counts the reporting devices the engine judged C13 from, in the caller's scope, and says so. The jobs row judges only jobs registered in this process: a registered job with no finished run counts against it, `not_checked` while its first run is in progress or for 5 minutes after the console starts and `warn` after that, and a job past the runner's jitter (10 % of its period) and a minute is `overdue` in the job table and makes this row `warn`, naming the job. The ping's skip while no evaluation has finished yet (`awaiting_first_evaluation`) does not count against this row until the job is overdue. `first_run` is true on a console that has never enrolled a device; `fleet_data` is then `not_applicable` and says nothing is being backed up.
       x-min-role: RO
       responses:
         '200':
@@ -1945,7 +1945,7 @@ paths:
       operationId: listJobs
       tags: [system]
       summary: Job table
-      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`. The health-prober's probe lease and per-probe result rows (`health-prober.*`) are not jobs and are not listed; the probe results are the system health rows.
+      description: Last run, status and next due of every console job; a registered job that never ran is listed as `never_run`. A row with `registered` false is a job this process does not run, usually one no longer scheduled, which is never `overdue` and never counts against system health; the exception is `maintenance-scheduler`, which runs in the maintenance worker and is judged by the maintenance_worker row. The health-prober's probe lease and per-probe result rows (`health-prober.*`) are not jobs and are not listed; the probe results are the system health rows.
       x-min-role: AD
       responses:
         '200':
@@ -1981,7 +1981,7 @@ paths:
       operationId: probeStorageTarget
       tags: [system]
       summary: Probe the gateway, storage and certificates now
-      description: Runs the health-prober's gateway probe (which also reads the gateway certificate's expiry) and storage probe now under the probe lease, waits for them (at most 90 s; a probe already in flight is waited for, not doubled), and reads three checks (gateway, storage including the quota banner, certificates). A check reads only a fact produced at or after the request started; an older one is `not_checked`. A fresh fact is judged by the banners the engine raises from it, the "not checked" banners included, and a probe that failed just now is `failed` before its streak raises a banner. When another console holds the probe lease nothing is probed here and the answer is 409. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt, with result `error` when nothing was probed. While the console is shutting down the answer is 503, nothing is probed and no audit row is written.
+      description: Runs the health-prober's gateway probe (which also reads the gateway certificate's expiry) and storage probe now under the probe lease, waits for them (at most 90 s; a probe already in flight is waited for, not doubled), and reads three checks (gateway, storage including the quota banner, certificates). Each check is judged by the same rule as the `/system/health` row of the same id. They can still differ in three ways. A gateway or storage result, and the gateway half of certificates, counts only if it was produced at or after the request started; an older one is `not_checked` here where the row may still read it as fresh. The agent listener half of certificates is not re-probed by this request: it reads the newest self-probe, within that probe's own freshness limit, as the row does. And the storage check also speaks for the quota banners C15 and C15b, which on the health page belong to the `storage_quota` row, so with one raised this check can be worse than the `storage` row. A certificate that was read and refused, or is inside the C05 thresholds, is `failed` or `warn` with the reason. When another console holds the probe lease nothing is probed here and the answer is 409. The engine keeps these facts for the console as a whole, not per storage target, so the answer says `scope: console-wide` and does not claim per-target evidence; an unknown target id answers 404. When the probe cannot run, or console self-checks are not wired (C00), a check is `not_checked`, never `ok`. One audit row for the attempt, with result `error` when nothing was probed. While the console is shutting down the answer is 503, nothing is probed and no audit row is written.
       x-min-role: AD
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -3169,7 +3169,7 @@ components:
         attempt: {type: integer, minimum: 1}
         deferred_reason: {type: string}
         policy_version: {type: integer}
-        agent_version: {type: string}
+        agent_version: {type: string, description: "A display label, never a reason to refuse the run. The console keeps it only when it looks like a build version; anything else is stored as `unknown`, and the value is neither stored, shown nor logged. Like every string in the body it must still pass the path-free check."}
         initial: {type: boolean}
     RunsRequest:
       type: object
@@ -3831,6 +3831,7 @@ components:
         - type: object
           required: [overall, components, banners, versions]
           properties:
+            first_run: {type: boolean}
             overall: {type: string, enum: [ok, not_checked, warn, failed]}
             components:
               type: array
@@ -3840,7 +3841,7 @@ components:
                 properties:
                   id: {type: string}
                   label: {type: string}
-                  status: {type: string, enum: [ok, not_checked, warn, failed]}
+                  status: {type: string, enum: [ok, not_checked, warn, failed, not_in_build, not_applicable]}
                   detail: {type: string}
                   banners:
                     type: array
