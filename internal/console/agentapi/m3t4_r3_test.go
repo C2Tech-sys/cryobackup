@@ -86,6 +86,9 @@ func TestR3ARunWithAnUnusableVersionLabelIsStoredAndTheLabelIsNot(t *testing.T) 
 			if !strings.Contains(out2, `"class":"agent_version_unusable"`) {
 				t.Errorf("no class in the log: %s", out2)
 			}
+			if !strings.Contains(out2, `"msg":"runs: an agent version was not a build version, so it is stored as unknown"`) || strings.Contains(out2, "<path:") {
+				t.Errorf("the log message was redacted or changed: %s", out2)
+			}
 			for _, leak := range []string{bad, "Patient", "John", "rc1-3", "af518e2c"} {
 				if strings.Contains(out2, leak) {
 					t.Errorf("the log carries the value (%q): %s", leak, out2)

@@ -319,7 +319,7 @@ func (s *Service) handleRuns(w http.ResponseWriter, r *http.Request, d device) {
 		inputs, index = append(inputs, in), append(index, i)
 	}
 	if unusable {
-		s.Log.Warn("runs: an agent version is not version-shaped; stored as unknown", logx.ID("device_id", d.ID), logx.Class("agent_version_unusable"))
+		s.Log.Warn("runs: an agent version was not a build version, so it is stored as unknown", logx.ID("device_id", d.ID), logx.Class("agent_version_unusable"))
 	}
 	if len(inputs) > 0 {
 		out, err := s.Store.AgentIngestRuns(r.Context(), d.ID, inputs, now)
