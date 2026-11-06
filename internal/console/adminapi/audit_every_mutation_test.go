@@ -608,7 +608,37 @@ func auditMutationCases() map[string]mutation {
 				return func() call { return call{method: "DELETE", path: "/api/v1/devices/" + e.dev.ID + "/override"} }
 			},
 		},
+		// ---- device retire (M3-T6) ----
+		PatternDeviceRetire: {
+			build: func(e *env, s *session) func() call {
+				d := e.deviceNamed("FRONTDESK-02")
+				return func() call {
+					return call{method: "POST", path: "/api/v1/devices/" + d.ID + "/retire", body: DeviceRetireRequest{Reason: "dead lab machine"}}
+				}
+			},
+		},
+		PatternDeviceRetire + "#final_backup": {
+			status: 202,
+			build: func(e *env, s *session) func() call {
+				d := e.deviceNamed("FRONTDESK-02")
+				return func() call {
+					return call{method: "POST", path: "/api/v1/devices/" + d.ID + "/retire", body: DeviceRetireRequest{Reason: "replaced next week", FinalBackup: true}}
+				}
+			},
+		},
 		// ---- enrollment tokens ----
+		PatternEnrollTokenDelete: {
+			status: 204,
+			build: func(e *env, s *session) func() call {
+				c := e.customerNamed("Summit Eye Care")
+				tok, code, b := createToken(e.t, e, s, map[string]any{"customer_id": c.ID, "label": "delete me"})
+				if code != 201 {
+					e.t.Fatalf("create token: %d %s", code, b)
+				}
+				e.mustReq("DELETE", "/api/v1/enrollment-tokens/"+tok.ID, s, nil, 204)
+				return func() call { return call{method: "POST", path: "/api/v1/enrollment-tokens/" + tok.ID + "/delete"} }
+			},
+		},
 		PatternEnrollTokenCreate: {
 			status: 201,
 			build: func(e *env, s *session) func() call {

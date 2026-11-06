@@ -12,8 +12,8 @@ import (
 // evaluation per scope and reuses it only while the change generation it was
 // made at is current (m3_events.go). So every API mutation that can change what
 // the evaluation reads (customers, devices, policies and assignments, overrides,
-// settings, runs and commands, enrollment, restores, probe facts) must advance
-// the generation, and tell the hub so open streams and pages re-render, before
+// settings, runs and commands, enrollment, device retire and token delete, restores,
+// probe facts) must advance the generation, and tell the hub so open streams and pages re-render, before
 // its answer reaches the client. fleetChanged is the one place that does both.
 //
 // Register wraps every mutating route (any method but GET) in fleetSignal

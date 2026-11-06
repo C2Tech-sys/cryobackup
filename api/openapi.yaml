@@ -1434,6 +1434,22 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/enrollment-tokens/{id}/delete:
+    post:
+      operationId: deleteEnrollmentToken
+      tags: [enrollment]
+      summary: Delete a revoked or expired token
+      description: Hides the token from the lists (ADR 0016). The row, each device's link to it and the audit trail stay, and a direct read still finds it with `deleted_at` set. An active or used-up token answers 409 with the reason `token_live`; revoke it first. One audit row. Deleting a deleted token answers 204 and writes nothing.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: The token is hidden.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/enrollment-tokens/{id}/script:
     get:
       operationId: getEnrollmentScript
@@ -1742,6 +1758,38 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/DevicePauseResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/devices/{id}/retire:
+    post:
+      operationId: retireDevice
+      tags: [devices]
+      summary: Retire a device
+      description: |
+        Ends the device's identity for good (ADR 0016): revokes every device token and the gateway login, ends a pause, cancels queued commands and stops maintenance, in one transaction with one audit row. Nothing is deleted: the repository, snapshots, escrowed key, runs and audit trail stay until the separate purge. A retired device raises no alarm and leaves every denominator (§4.2 row 1, §4.3); an expected customer whose last device is retired reads MISSING. Retiring a retired device answers the same state with `changed` false and writes nothing; its first reason stands. `final_backup` retires nothing: it queues a backup_now and answers 202, because a backup needs the credentials a retire takes away. Call again without it once that run has finished.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeviceRetireRequest'}
+      responses:
+        '200':
+          description: The device is retired, with `changed` false when it already was.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceRetireResponse'}
+        '202':
+          description: The final backup is queued and the device is not retired yet.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceRetireResponse'}
         '400': {$ref: '#/components/responses/ValidationFailed'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -2911,13 +2959,16 @@ components:
         created_at: {$ref: '#/components/schemas/Timestamp'}
         last_used_at: {$ref: '#/components/schemas/Timestamp'}
         revoked_at: {$ref: '#/components/schemas/Timestamp'}
+        deleted_at: {$ref: '#/components/schemas/Timestamp'}
     EnrollTokenListResponse:
       type: object
-      required: [computed_at, total, of, truncated, tokens]
+      description: The tokens that can still enroll come first, then newest first. A deleted token is not listed.
+      required: [computed_at, total, of, truncated, counts, tokens]
       properties:
         computed_at: {$ref: '#/components/schemas/Timestamp'}
         total: {type: integer}
         of: {type: integer}
+        counts: {type: object, description: How many tokens hold each status under the customer filter., additionalProperties: {type: integer}}
         truncated: {type: boolean}
         next_cursor: {type: string}
         tokens:
@@ -3637,6 +3688,31 @@ components:
         duration_hours: {type: integer, enum: [1, 2, 4, 8, 24]}
         until: {type: string, format: date-time}
         indefinite: {type: boolean}
+    DeviceRetireRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: {type: string, description: 'Required: one line, no file paths. Kept on the device and in the audit row.'}
+        final_backup: {type: boolean, description: Queue a last backup and do not retire yet.}
+        replaced_by: {type: string, description: 'The device that takes over: active, and of the same customer.'}
+    DeviceRetireResponse:
+      type: object
+      required: [computed_at, id, customer_id, hostname, retired, changed, tokens_revoked, logins_revoked, commands_cancelled]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        id: {type: string}
+        customer_id: {type: string}
+        hostname: {type: string}
+        retired: {type: boolean}
+        state: {type: string, description: RETIRED once retired; absent while a final backup is pending.}
+        retired_at: {$ref: '#/components/schemas/Timestamp'}
+        reason: {type: string}
+        replaced_by: {type: string}
+        changed: {type: boolean, description: False when the device was already retired; nothing was written.}
+        tokens_revoked: {type: integer}
+        logins_revoked: {type: integer}
+        commands_cancelled: {type: integer}
+        final_backup_command_id: {type: string}
     DevicePauseResponse:
       type: object
       required: [computed_at, device_id, paused, indefinite, changed, queued_commands]
