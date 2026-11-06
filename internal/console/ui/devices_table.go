@@ -195,7 +195,7 @@ func (s *Service) buildDevTable(ctx context.Context, p *auth.Principal, fleet he
 			}
 		}
 		if dr.Agent == "" {
-			dr.Agent = r.AgentVersion
+			dr.Agent = agentLabel(r.AgentVersion)
 		}
 		row := DevRow{DeviceRow: dr, Customer: r.CustomerName, CustomerID: r.CustomerID, Friendly: r.FriendlyName, OS: r.OSVersion, Retired: r.RetiredAt != nil}
 		row.NextText, row.NextTitle, row.NextClass = nextDueView(r.Next, c)

@@ -385,7 +385,7 @@ func (s *Service) settingsForm(p *auth.Principal, dev store.Device, c fmtCtx) De
 		f.Facts = append(f.Facts, Fact{Key: "Architecture", Value: dev.Arch, Mono: true})
 	}
 	if dev.AgentVersion != "" {
-		f.Facts = append(f.Facts, Fact{Key: "Agent", Value: dev.AgentVersion, Mono: true})
+		f.Facts = append(f.Facts, Fact{Key: "Agent", Value: safeVersion(dev.AgentVersion), Mono: true})
 	}
 	if dev.ResticVersion != "" {
 		f.Facts = append(f.Facts, Fact{Key: "Restic", Value: dev.ResticVersion, Mono: true})

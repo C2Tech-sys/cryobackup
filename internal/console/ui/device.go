@@ -269,7 +269,7 @@ func (s *Service) deviceView(ctx context.Context, p *auth.Principal, f health.Fl
 		v.Sub = append(v.Sub, dev.DeviceClass)
 	}
 	if ds.Detail.AgentVersion != "" {
-		v.Sub = append(v.Sub, "agent "+ds.Detail.AgentVersion)
+		v.Sub = append(v.Sub, "agent "+safeVersion(ds.Detail.AgentVersion))
 	}
 	seen := "never seen"
 	if !ds.Detail.LastSeen.IsZero() && dev.EnrollConfirmedAt != nil {
