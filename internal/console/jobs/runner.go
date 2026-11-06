@@ -133,6 +133,10 @@ func (r *Runner) Names() []string {
 // tick passed that did not happen.
 var errDidNotRun = errors.New("jobs: the job did not run")
 
+// errSkipped is what a job's Run answers when it looked and had nothing it could do
+// yet. RunOnce records the run as "skipped": it happened, and it did not fail.
+var errSkipped = errors.New("jobs: the job skipped this run")
+
 // RunOnce runs the named job now under its lease. It returns (false, nil) when
 // another holder has the lease or the job answers errDidNotRun, and (true, err)
 // with the job's error otherwise. The outcome is recorded in job_state; a panic
@@ -167,7 +171,10 @@ func (r *Runner) RunOnce(ctx context.Context, name string) (ran bool, err error)
 	}
 	next := finished.Add(j.Every)
 	rec := store.JobRun{Status: "ok", StartedAt: started, FinishedAt: finished, NextDueAt: &next}
-	if runErr != nil {
+	switch {
+	case errors.Is(runErr, errSkipped):
+		rec.Status, runErr = "skipped", nil
+	case runErr != nil:
 		rec.Status, rec.ErrorClass = "error", classOf(runErr)
 		r.Log.Warn("job failed", logx.Str("job", name), logx.Class(rec.ErrorClass))
 	}
@@ -238,6 +245,12 @@ func (r *Runner) Stop() {
 func jittered(d time.Duration) time.Duration {
 	span := float64(d) * jitterFraction
 	return d + time.Duration((rand.Float64()*2-1)*span)
+}
+
+// MaxJitter is the most a job on this period can run after the time RunOnce recorded
+// as its next due time: the timer fires at the period plus or minus jitterFraction of it.
+func MaxJitter(every time.Duration) time.Duration {
+	return time.Duration(float64(every) * jitterFraction)
 }
 
 func (r *Runner) loop(ctx context.Context, j Job) {
