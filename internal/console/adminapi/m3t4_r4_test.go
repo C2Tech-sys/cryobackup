@@ -60,6 +60,9 @@ func TestR4NoRowReadsOKWhenItsLastAttemptFailedButItsDataLooksFresh(t *testing.T
 			{"the agent listener's certificate expired on its newest run", statusFailed, func(f *healthFacts) {
 				f.Endpoint.Last = probe.Result{At: now.Add(-10 * time.Second), OK: false, Stage: probe.StageCertExpired, Class: "expired", NotAfter: now.Add(-time.Hour)}
 			}},
+			{"the self-probe's own verdict is expired, with no expiry on file to compare", statusFailed, func(f *healthFacts) {
+				f.Endpoint.Last = probe.Result{At: now.Add(-10 * time.Second), OK: false, Stage: probe.StageCertExpired, Class: "expired"}
+			}},
 			{"the agent listener's certificate is untrusted, with a good expiry", statusFailed, func(f *healthFacts) {
 				f.Endpoint.Last = probe.Result{At: now.Add(-10 * time.Second), OK: false, Stage: probe.StageTLS, Class: "untrusted", NotAfter: soon2(now)}
 			}},
