@@ -633,5 +633,5 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.Hub.ServeSSE(w, r, &Sub{Scope: p.Scope, Role: p.Role, Viewer: p.Admin.ID, Filter: filter, DeviceID: device})
+	s.Hub.ServeSSE(w, r, &Sub{Scope: p.Scope, Role: p.Role, Viewer: p.Admin.ID, Filter: filter, DeviceID: device, Recheck: s.streamRecheck(r, p)})
 }

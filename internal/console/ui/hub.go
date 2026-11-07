@@ -35,6 +35,9 @@ type Sub struct {
 	// Filter is the board's filter as a query string (boardQuery.Encode).
 	Filter   string
 	DeviceID string
+	// Recheck, when set, is asked after every ping; false ends the stream (the
+	// credential check of streamRecheck, m3h_stream.go).
+	Recheck func(ctx context.Context) bool
 
 	ch     chan Event
 	closed bool
@@ -288,6 +291,9 @@ func (h *Hub) ServeSSE(w http.ResponseWriter, r *http.Request, sub *Sub) {
 				return
 			}
 			fl.Flush()
+			if ev.Name == "ping" && sub.Recheck != nil && !sub.Recheck(r.Context()) {
+				return
+			}
 		}
 	}
 }
