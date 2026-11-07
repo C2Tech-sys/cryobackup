@@ -1942,7 +1942,7 @@ paths:
       tags: [monitoring]
       summary: Machine status for external monitors
       description: |
-        The state of every device and customer and one `overall` verdict: `ok` only when the engine says all clear, `critical` when anything is critical, `unknown` when the data is incomplete or an enrolled fleet is empty, otherwise `warning`. The HTTP status is 200 whatever the verdict, so a monitor can tell "the console says critical" from "the console is down". An API token of the read scope may call it; narrower token scopes (`status:read`) are not built yet.
+        The state of every device and customer and one `overall` verdict: `ok` only when the engine says all clear, `critical` when anything is critical, `unknown` when the data is incomplete or an enrolled fleet is empty, otherwise `warning`. The HTTP status is 200 whatever the verdict, so a monitor can tell "the console says critical" from "the console is down". An API token of the `read` or `full` scope may call it, and so may one of the narrow `status:read` scope, which opens this route and no other.
       x-min-role: RO
       parameters:
         - {$ref: '#/components/parameters/CustomerFilter'}
@@ -1979,7 +1979,7 @@ paths:
       operationId: getSystemHealth
       tags: [system]
       summary: Probe results and versions
-      description: Gateway, storage, storage quota, alert e-mail, daily digest, certificates, agent API, maintenance worker, database, database self-backup, alarm evaluator, master key, jobs, fleet data, clock and release manifest. Every banner the engine can raise, its "not checked" (b) variants included, maps to a row. One rule decides every component: no attempt on record is `not_checked`; a newest attempt that failed is `warn` or `failed`, however fresh an older pass is; a newest attempt that was skipped keeps the last pass until its freshness limit and is then `not_checked`; a stale one is `not_checked`; `ok` needs a newest attempt that passed, is fresh, and has none of its banners raised; while C00 (self-checks not wired) is raised no row is `ok`. `not_in_build` is a check this build does not run (release manifest, storage quota, daily digest, database self-backup, until the job that produces each one exists) and `not_applicable` one that cannot apply to this console as it stands (the clock needs at least 5 reporting devices; no storage target has a quota; the digest is turned off). Each says why in `detail`. `overall` is the worst component, in the order failed, warn, not_checked; `not_in_build` and `not_applicable` do not count against it, so `overall` can be `ok` beside them. `not_checked` for anything else always blocks `ok`. The certificates row is `failed`, with the reason, for a certificate a probe refused (expired, untrusted, wrong host, wrong pin) or one that has run out since, and judges the days left itself by the C05 thresholds: `warn` under 21 days, `failed` under 7. The clock row counts the reporting devices the engine judged C13 from, in the caller's scope, and says so. The jobs row judges only jobs registered in this process: a registered job with no finished run counts against it, `not_checked` while its first run is in progress or for 5 minutes after the console starts and `warn` after that, and a job past the runner's jitter (10 % of its period) and a minute is `overdue` in the job table and makes this row `warn`, naming the job. The ping's skip while no evaluation has finished yet (`awaiting_first_evaluation`) does not count against this row until the job is overdue. `first_run` is true on a console that has never enrolled a device; `fleet_data` is then `not_applicable` and says nothing is being backed up.
+      description: Gateway, storage, storage quota, alert e-mail, daily digest, certificates, agent API, maintenance worker, database, database self-backup, alarm evaluator, master key, jobs, fleet data, clock and release manifest. Every banner the engine can raise, its "not checked" (b) variants included, maps to a row. One rule decides every component: no attempt on record is `not_checked`; a newest attempt that failed is `warn` or `failed`, however fresh an older pass is; a newest attempt that was skipped keeps the last pass until its freshness limit and is then `not_checked`; a stale one is `not_checked`; a pass dated in the future, past the allowed clock skew, is `not_checked` and is not evidence of now; `ok` needs a newest attempt that passed, is fresh, and has none of its banners raised; while C00 (self-checks not wired) is raised no row is `ok`. `not_in_build` is a check this build does not run (release manifest, storage quota, daily digest, database self-backup, until the job that produces each one exists) and `not_applicable` one that cannot apply to this console as it stands (the clock needs at least 5 reporting devices; no storage target has a quota; the digest is turned off). Each says why in `detail`. `overall` is the worst component, in the order failed, warn, not_checked; `not_in_build` and `not_applicable` do not count against it, so `overall` can be `ok` beside them. `not_checked` for anything else always blocks `ok`. The certificates row is `failed`, with the reason, for a certificate a probe refused (expired, untrusted, wrong host, wrong pin) or one that has run out since, and judges the days left itself by the C05 thresholds: `warn` under 21 days, `failed` under 7. The clock row counts the reporting devices the engine judged C13 from, in the caller's scope, and says so. The jobs row judges only jobs registered in this process: a registered job with no finished run counts against it, `not_checked` while its first run is in progress or for 5 minutes after the console starts and `warn` after that, and a job past the runner's jitter (10 % of its period) and a minute is `overdue` in the job table and makes this row `warn`, naming the job. The ping's skip while no evaluation has finished yet (`awaiting_first_evaluation`) does not count against this row until the job is overdue. `first_run` is true on a console that has never enrolled a device; `fleet_data` is then `not_applicable` and says nothing is being backed up.
       x-min-role: RO
       responses:
         '200':
@@ -2058,7 +2058,7 @@ components:
     apiToken:
       type: http
       scheme: bearer
-      description: Admin API token (`cbk_...`), created at `POST /api/v1/me/api-tokens`. Scope `read` allows reads only.
+      description: Admin API token (`cbk_...`), created at `POST /api/v1/me/api-tokens`. Scope `read` allows reads only; `status:read` allows `GET /api/v1/status` and nothing else; `metrics:read` allows `GET /metrics` and nothing else.
     deviceToken:
       type: http
       scheme: bearer
@@ -2348,7 +2348,7 @@ components:
       additionalProperties: false
       properties:
         name: {type: string}
-        scope: {type: string, enum: [read, full]}
+        scope: {type: string, enum: [read, full, 'status:read', 'metrics:read']}
         days: {type: integer, enum: [7, 30, 90, 365]}
     ApiTokenCreateResponse:
       type: object

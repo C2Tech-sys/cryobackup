@@ -190,7 +190,7 @@ func explainState(d state.DeviceState, st state.State, now time.Time) string {
 	case state.StateDeferred:
 		return "The agent is deliberately not running backups (" + string(d.Reason) + ")."
 	case state.StateOutdated:
-		return fmt.Sprintf("The agent runs %s; %s is expected.", x.AgentVersion, x.ExpectedVersion)
+		return fmt.Sprintf("The agent runs %s; %s is expected.", api.VersionLabel(x.AgentVersion), api.VersionLabel(x.ExpectedVersion))
 	case state.StateOK:
 		return "Nothing is wrong."
 	}

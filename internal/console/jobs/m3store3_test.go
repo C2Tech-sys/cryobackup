@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,13 +68,13 @@ func TestC08StopWaitsForACallTakingTheLease(t *testing.T) { // M3-STORE1 C1, M3-
 	<-entered
 
 	began := time.Now()
-	var waited time.Duration
+	var waitedNS atomic.Int64 // the release runs on its own goroutine, and on the slow path Stop can return before it
 	hp.releaseLease = func(ctx context.Context) error {
-		waited = time.Since(began)
+		waitedNS.Store(int64(time.Since(began)))
 		return r.st.ReleaseJobLease(ctx, ProbeLease, "console-a")
 	}
 	hp.Stop() // returns with the Run still at the gate: the bound ran out
-	if waited < bound {
+	if waited := time.Duration(waitedNS.Load()); waited != 0 && waited < bound {
 		t.Fatalf("Stop released the lease after %v, inside its bound of %v, with a Run still taking the lease", waited, bound)
 	}
 

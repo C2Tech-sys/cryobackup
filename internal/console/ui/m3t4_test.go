@@ -899,6 +899,17 @@ func TestM3T4AgentTextIsAllowListed(t *testing.T) {
 			t.Errorf("os %q withheld", ok)
 		}
 	}
+	// M3-HARDEN: real OS names pass; a file name dressed as one does not.
+	for _, ok := range []string{"Microsoft Windows 10 Pro 22H2", "Windows 11 Pro 24H2", "Ubuntu 24.04", "Ubuntu 24.04 LTS", "Debian GNU/Linux 12", "macOS 14.5", "Windows 8.1", "Windows 10 Enterprise LTSC", "Red Hat Enterprise Linux 9.4"} {
+		if safeOS(ok) != ok {
+			t.Errorf("os %q withheld", ok)
+		}
+	}
+	for _, bad := range []string{"Windows 11 Pro.docx", "Ubuntu 24.04.xlsx", "Ubuntu payroll", "Windows payroll", "Windows 10 Patient Chart", "Debian/etc/passwd", "macOS 14.5 John Smith", "Windows 24H2.pdf", "/etc/Ubuntu 24.04"} {
+		if got := safeOS(bad); got != withheld {
+			t.Errorf("safeOS(%q) = %q", bad, got)
+		}
+	}
 	if safeCommit("abc1234") != "abc1234" || safeBuildDate("2026-11-05T10:20:30Z") != "2026-11-05T10:20:30Z" || safeCommit("unknown") != "unknown" || safeBuildDate("unknown") != "unknown" {
 		t.Error("the build stamp is withheld")
 	}

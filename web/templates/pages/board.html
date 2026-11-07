@@ -5,6 +5,7 @@
 {{template "kpis" .KPIs}}
 <div class="rings">{{range .Rings}}{{template "ring" .}}{{end}}</div>
 {{if .Filter.Active}}<div class="chipbar" role="status"><span>Showing {{.Filter.Shown}} of {{.Filter.Total}}{{with .Filter.CustText}} · {{.}}{{end}}</span>{{range .Filter.Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}<a class="btn ghost sm" href="/">Clear all</a></div>{{end}}
+{{with .Filter.MissingOut}}<div class="banner warn dense" role="status" id="filter-missing-out"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Not listed, and still MISSING: {{range $i, $n := .}}{{if $i}}, {{end}}{{$n}}{{end}}.</b> This filter matches devices, and an expected customer with no devices has none to match. <a href="/?cust=crit">Show critical customers</a></div></div>{{end}}
 {{if .Groups}}<div class="table-wrap" role="region" aria-label="Devices" tabindex="0">
 <table class="fleet board">
 <caption>Devices, grouped by customer, exceptions first</caption>

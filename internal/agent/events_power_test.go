@@ -166,8 +166,16 @@ func TestHandleEventCannotDelayStop(t *testing.T) {
 }
 
 // run_on_wake changed at runtime: a policy pushed with run_on_wake off is
-// mirrored into the lock-free flag HandleEvent reads (applyPolicy), so a
-// resume after it is ignored (M1-FIX1 D13).
+// mirrored into the lock-free flag HandleEvent reads (applyPolicy), so a resume
+// after it is ignored (M1-FIX1 D13).
+//
+// What this judges is the resume, not the run count. applyPolicy publishes the
+// policy and then asks the scheduler to re-plan, so that re-plan can read the clock
+// after this test moved it a day on, and the daily slot it then finds due is really
+// due: a schedule-triggered run is correct there (it failed 1 run in 40 on exactly
+// that, "backup starting trigger=schedule" 39 ms after the policy applied;
+// TestAPolicyChangeOnlyRePlans below pins both halves). So a run is allowed; a wake
+// run, or the resume reaching the scheduler at all, is not.
 func TestRunOnWakeTurnedOffAtRuntimeIgnoresTheNextResume(t *testing.T) {
 	p := newPowerRig(t, true)
 	a := p.r.a
@@ -182,12 +190,55 @@ func TestRunOnWakeTurnedOffAtRuntimeIgnoresTheNextResume(t *testing.T) {
 	p.sleepPastTheSlot()
 	a.HandleEvent(resumeEvent(service.PBTAPMResumeAutomatic))
 	time.Sleep(1500 * time.Millisecond)
-	if n := len(p.fc.closedRuns()); n != 1 {
-		t.Fatalf("%d runs after a resume under a policy with run_on_wake off, want 1", n)
+	for _, r := range p.fc.closedRuns() {
+		if r.Trigger == api.TriggerWake {
+			t.Fatalf("a wake run under a policy with run_on_wake off: %+v", r)
+		}
 	}
-	if !strings.Contains(p.log.String(), "run_on_wake is off") {
-		t.Errorf("the ignored resume was not logged; log:\n%s", p.log.String())
+	log := p.log.String()
+	if !strings.Contains(log, "run_on_wake is off") {
+		t.Errorf("the ignored resume was not logged; log:\n%s", log)
 	}
+	if strings.Contains(log, "resume: the scheduler re-plans") {
+		t.Errorf("the resume reached the scheduler under a policy with run_on_wake off; log:\n%s", log)
+	}
+}
+
+// M3-HARDEN A4: a policy change is a re-plan and nothing more. With nothing due it
+// starts nothing; with a slot due the run it starts is the schedule's, which is what
+// the hourly tick would have started anyway.
+func TestAPolicyChangeOnlyRePlans(t *testing.T) {
+	v2 := func() api.PolicyResponse {
+		return api.PolicyResponse{Policy: testPolicy(), PolicyID: testPolicyID, Version: 2, ETag: `"policy-v2"`, ServerTime: time.Now()}
+	}
+	waitV2 := func(t *testing.T, p *powerRig) {
+		t.Helper()
+		a := p.r.a
+		waitFor(t, "policy v2 to be applied", 10*time.Second, func() bool {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return a.pol != nil && a.pol.Version == 2
+		})
+	}
+	t.Run("nothing due starts nothing", func(t *testing.T) {
+		p := newPowerRig(t, true)
+		p.fc.setPolicy(v2())
+		waitV2(t, p)
+		time.Sleep(1500 * time.Millisecond)
+		if n := len(p.fc.closedRuns()); n != 1 {
+			t.Fatalf("%d runs after a policy change with nothing due, want 1", n)
+		}
+	})
+	t.Run("a due slot runs as the schedule", func(t *testing.T) {
+		p := newPowerRig(t, true)
+		p.sleepPastTheSlot()
+		p.fc.setPolicy(v2())
+		waitV2(t, p)
+		waitFor(t, "the due slot to run", 30*time.Second, func() bool { return len(p.fc.closedRuns()) == 2 })
+		if got := p.fc.closedRuns()[1].Trigger; got != api.TriggerSchedule {
+			t.Fatalf("trigger = %q, want schedule", got)
+		}
+	})
 }
 
 // schedUp publishes a.sched to the service's control goroutine, so it must not

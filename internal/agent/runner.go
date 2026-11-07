@@ -17,7 +17,6 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/agent/scheduler"
 	"github.com/c2tech-sys/cryobackup/internal/agent/supervisor"
 	"github.com/c2tech-sys/cryobackup/internal/api"
-	"github.com/c2tech-sys/cryobackup/internal/buildinfo"
 	"github.com/c2tech-sys/cryobackup/internal/policy"
 	"github.com/c2tech-sys/cryobackup/internal/restic"
 	"github.com/c2tech-sys/cryobackup/internal/ulid"
@@ -171,7 +170,7 @@ func (a *Agent) journalSkipped(ctx context.Context, trigger api.Trigger) {
 	now := a.clock().UTC()
 	rec := api.RunRecord{
 		ID: id, Kind: restic.KindBackup, Trigger: trigger, StartedAt: now, FinishedAt: &now,
-		Outcome: restic.OutcomeSkipped, Attempt: 1, AgentVersion: buildinfo.Version,
+		Outcome: restic.OutcomeSkipped, Attempt: 1, AgentVersion: versionLabel(),
 	}
 	a.mu.Lock()
 	if a.pol != nil {
@@ -253,7 +252,7 @@ func (a *Agent) runBackup(ctx context.Context, id string, out scheduler.Output) 
 	started := a.clock().UTC()
 	rec := api.RunRecord{
 		ID: id, Kind: restic.KindBackup, Trigger: out.Trigger, StartedAt: started,
-		Attempt: f.Attempts + 1, PolicyVersion: pol.Version, AgentVersion: buildinfo.Version, Initial: !hasSnap,
+		Attempt: f.Attempts + 1, PolicyVersion: pol.Version, AgentVersion: versionLabel(), Initial: !hasSnap,
 	}
 	if stoppedWaiting {
 		a.journalStoppedBeforeStart(ctx, jctx, &rec)

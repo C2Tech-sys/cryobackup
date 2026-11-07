@@ -147,7 +147,16 @@ func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fle
 			continue
 		}
 		if deviceFilter && len(rows) == 0 {
-			continue
+			// A MISSING customer has no device for a filter to match. Named by the filter's own
+			// customer clause it is the answer, and "No devices match" would be a false calm: show
+			// its alarm group. Otherwise it is left out, and the page says so and why.
+			if cs.Status != state.CustomerMissing {
+				continue
+			}
+			if !tree.namesCustomer(cs.ID) {
+				b.Filter.MissingOut = append(b.Filter.MissingOut, cs.Name)
+				continue
+			}
 		}
 		g := groupView(cs, rows, c)
 		if b.Filter.Active {

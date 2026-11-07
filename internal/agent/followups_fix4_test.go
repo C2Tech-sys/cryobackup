@@ -120,7 +120,25 @@ func copyExe(t *testing.T) string {
 		t.Fatal(err)
 	}
 	defer in.Close()
-	dst := filepath.Join(t.TempDir(), "restic-copy"+filepath.Ext(src))
+	dir, err := os.MkdirTemp("", "cryo-restic-copy-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Not t.TempDir: its two-second retry is shorter than Windows can take to let go of
+	// an executable that has just run, and a copy left behind fails no assertion.
+	t.Cleanup(func() {
+		for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+			err := os.RemoveAll(dir)
+			if err == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Logf("temp copy not removed: %v", err)
+				return
+			}
+		}
+	})
+	dst := filepath.Join(dir, "restic-copy"+filepath.Ext(src))
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o700)
 	if err != nil {
 		t.Fatal(err)
@@ -180,12 +198,23 @@ func TestGuardRefusalAtStartKeepsTheBootLabel(t *testing.T) {
 	exe := copyExe(t)
 	o.ResticPath, o.ResticSHA256 = exe, fileSHA(t, exe)
 	r := startAfter(t, o, func() {
-		f, err := os.OpenFile(exe, os.O_APPEND|os.O_WRONLY, 0)
-		if err != nil {
-			t.Fatal(err)
+		// New just ran this copy to read its version. On Windows the image of a process
+		// that has exited stays mapped for a moment, and a fresh executable may be under
+		// an antivirus scan: both refuse a write with a sharing violation. So retry.
+		var err error
+		for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			var f *os.File
+			if f, err = os.OpenFile(exe, os.O_APPEND|os.O_WRONLY, 0); err == nil {
+				_, err = f.Write([]byte("tampered"))
+				if cerr := f.Close(); err == nil {
+					err = cerr
+				}
+			}
+			if err == nil {
+				return
+			}
 		}
-		_, _ = f.Write([]byte("tampered"))
-		_ = f.Close()
+		t.Fatalf("the copy could not be changed: %v", err)
 	})
 	waitFor(t, "the refused run at the console", 30*time.Second, func() bool { return len(fc.closedRuns()) == 1 })
 	run := fc.closedRuns()[0]

@@ -322,7 +322,11 @@ func safeVersion(s string) string {
 }
 
 var (
-	osWordRE   = regexp.MustCompile(`^(?:Windows(?: Server)?(?: [0-9]{1,4})?(?: R2)?(?: (?:Home|Pro|Enterprise|Education|Standard|Datacenter|Essentials|LTSC))?|windows|linux|darwin|[0-9]{1,3}(?:\.[0-9]{1,6}){1,3})$`)
+	// osWordRE is a closed vocabulary of OS names, each with an optional dotted version and
+	// release label. A name with an extension does not fit: after a dot only digits may follow.
+	osWordRE = regexp.MustCompile(`^(?:(?:Microsoft )?Windows(?: Server)?(?: [0-9]{1,4}(?:\.[0-9])?)?(?: R2)?(?: (?:Home|Pro|Enterprise|Education|Standard|Datacenter|Essentials|LTSC|IoT))*(?: [0-9]{2}H[12])?` +
+		`|(?:Ubuntu|Debian|Debian GNU/Linux|Fedora|CentOS|Rocky Linux|AlmaLinux|Red Hat Enterprise Linux|SUSE Linux Enterprise Server|openSUSE|Alpine|macOS)(?: [0-9]{1,4}(?:\.[0-9]{1,4}){0,2})?(?: LTS)?` +
+		`|windows|linux|darwin|[0-9]{1,3}(?:\.[0-9]{1,6}){1,3})$`)
 	buildDate  = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`)
 	commitHash = regexp.MustCompile(`^[0-9a-f]{4,40}$`)
 	jobClassRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)

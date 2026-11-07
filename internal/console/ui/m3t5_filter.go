@@ -71,6 +71,20 @@ func parseVFNode(raw []byte, depth int) (*vfNode, error) {
 }
 
 // devFacts is what a device clause reads: the engine's verdict and the registry row.
+// namesCustomer reports whether the tree asks for this customer: a customer clause
+// listing it, outside any "not".
+func (n *vfNode) namesCustomer(id string) bool {
+	if n == nil || n.Op == "not" {
+		return false
+	}
+	for _, k := range n.Kids {
+		if k.namesCustomer(id) {
+			return true
+		}
+	}
+	return n.Field == "customer" && n.Op == "in" && containsStr(n.list(), id)
+}
+
 type devFacts struct {
 	DS    state.DeviceState
 	OS    string

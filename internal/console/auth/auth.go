@@ -123,6 +123,8 @@ type Principal struct {
 	// token (Authorization: Bearer) instead of a session; SessionID is then "".
 	TokenID   string
 	TokenName string
+	// TokenScopes are the scopes the token holds: the gate stops a narrow one at its route.
+	TokenScopes []string
 }
 
 // Enrolled reports whether the account has a TOTP enrollment.
@@ -327,10 +329,54 @@ func (m *Manager) Authenticate(ctx context.Context, cookie string) (*Principal, 
 	return p, nil
 }
 
-// sessionPrincipal resolves a cookie to a Principal, pending sessions
-// included (Pending set). A pending session past PendingTTL is no session (a
-// session written before MFA existed has no mfa_verified_at and dies here).
+// CheckSession answers what Authenticate answers and leaves the session as it
+// found it: the idle expiry does not slide. It is for what a machine asks on its own
+// (an open event stream checking its credential), which is not the operator doing
+// anything. It writes nothing.
+func (m *Manager) CheckSession(ctx context.Context, cookie string) (*Principal, error) {
+	p, err := m.lookupSession(ctx, cookie)
+	if err != nil {
+		return nil, err
+	}
+	if p.Pending {
+		return nil, ErrMFAPending
+	}
+	return p, nil
+}
+
+// sessionPrincipal is lookupSession for a request that counts as activity: a
+// completed login's idle expiry slides, written at most once a minute per session.
 func (m *Manager) sessionPrincipal(ctx context.Context, cookie string) (*Principal, error) {
+	p, err := m.lookupSession(ctx, cookie)
+	if err != nil || p.Pending {
+		return p, err
+	}
+	now := m.Now()
+	m.mu.Lock()
+	last := m.touched[p.SessionID]
+	touch := now.Sub(last) >= time.Minute
+	if touch {
+		m.touched[p.SessionID] = now
+		if len(m.touched) > 4096 {
+			for k, t := range m.touched {
+				if now.Sub(t) > time.Hour {
+					delete(m.touched, k)
+				}
+			}
+		}
+	}
+	m.mu.Unlock()
+	if touch {
+		_ = m.Store.TouchSession(ctx, p.SessionID, m.Idle)
+	}
+	return p, nil
+}
+
+// lookupSession resolves a cookie to a Principal, pending sessions included
+// (Pending set), and writes nothing. A pending session past PendingTTL is no
+// session (a session written before MFA existed has no mfa_verified_at and dies
+// here).
+func (m *Manager) lookupSession(ctx context.Context, cookie string) (*Principal, error) {
 	if cookie == "" || len(cookie) > 128 {
 		return nil, ErrNoSession
 	}
@@ -358,23 +404,6 @@ func (m *Manager) sessionPrincipal(ctx context.Context, cookie string) (*Princip
 			return nil, ErrNoSession
 		}
 		return &Principal{Admin: a, SessionID: sess.ID, Role: role, Scope: a.Scope(), CSRF: CSRFToken(cookie), Pending: true}, nil
-	}
-	m.mu.Lock()
-	last := m.touched[sess.ID]
-	touch := now.Sub(last) >= time.Minute
-	if touch {
-		m.touched[sess.ID] = now
-		if len(m.touched) > 4096 {
-			for k, t := range m.touched {
-				if now.Sub(t) > time.Hour {
-					delete(m.touched, k)
-				}
-			}
-		}
-	}
-	m.mu.Unlock()
-	if touch {
-		_ = m.Store.TouchSession(ctx, sess.ID, m.Idle)
 	}
 	return &Principal{Admin: a, SessionID: sess.ID, Role: role, Scope: a.Scope(), MFAVerifiedAt: sess.MFAVerifiedAt, CSRF: CSRFToken(cookie)}, nil
 }

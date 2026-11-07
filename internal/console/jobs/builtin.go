@@ -100,10 +100,20 @@ type LoginFileCheck struct {
 	InFile []string
 	// ReadClass is why the file could not be read ("" = a clean read).
 	ReadClass string
+	// CleanAt is when the read that InFile comes from began. Zero: no clean read yet.
+	CleanAt time.Time
 }
 
 // Has reports whether the device's login was in the file at the newest clean read.
 func (c LoginFileCheck) Has(deviceID string) bool { return slices.Contains(c.InFile, deviceID) }
+
+// ReadSince reports whether the newest clean read began after t. Then a login absent from
+// InFile whose device was retired at t stays absent (see Check): the retire had committed
+// before that read looked at the logins, and every later run reads them after it.
+// Milliseconds, the store's resolution: a read in the same millisecond does not count.
+func (c LoginFileCheck) ReadSince(t time.Time) bool {
+	return !c.CleanAt.IsZero() && c.CleanAt.UnixMilli() > t.UnixMilli()
+}
 
 func (j *HtpasswdSync) take(ctx context.Context) error {
 	j.slotOnce.Do(func() { j.slot = make(chan struct{}, 1) })
@@ -127,7 +137,7 @@ func (j *HtpasswdSync) Check(ctx context.Context) LoginFileCheck {
 	if err := j.take(ctx); err != nil {
 		c := LoginFileCheck{At: j.Store.Now(), ReadClass: LoginFileBusy}
 		if prev := j.last.Load(); prev != nil {
-			c.InFile = prev.InFile
+			c.InFile, c.CleanAt = prev.InFile, prev.CleanAt
 		}
 		return c
 	}
@@ -140,11 +150,11 @@ func (j *HtpasswdSync) measure(ctx context.Context) LoginFileCheck {
 	c := LoginFileCheck{At: j.Store.Now()}
 	in, class := j.retiredInFile(ctx)
 	if class == "" {
-		c.InFile = in
+		c.InFile, c.CleanAt = in, c.At
 	} else {
 		c.ReadClass = class
 		if prev := j.last.Load(); prev != nil {
-			c.InFile = prev.InFile
+			c.InFile, c.CleanAt = prev.InFile, prev.CleanAt
 		}
 	}
 	j.last.Store(&c)

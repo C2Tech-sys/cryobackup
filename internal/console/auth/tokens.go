@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -22,8 +23,10 @@ import (
 // acts with at most that account's role, always inside the account's customer
 // scope, and only while the account is enabled. Scopes, in words:
 //
-//	read  the read-only role, whatever the account's role is
-//	full  the account's own role
+//	read         the read-only role, whatever the account's role is
+//	full         the account's own role
+//	status:read  GET /api/v1/status and nothing else, at the read-only role
+//	metrics:read GET /metrics and nothing else, at the read-only role
 //
 // Every token expires (7, 30, 90 or 365 days); expiry and revocation are
 // checked on every request (no cache), and the last use is recorded at most
@@ -36,7 +39,30 @@ const (
 	tokenPrefixShow = 8
 	ScopeRead       = "read"
 	ScopeFull       = "full"
+	// ScopeStatusRead and ScopeMetricsRead are for an external monitor (architecture
+	// §5.2): each opens one route. A new route is closed to them until it is listed
+	// in tokenScopeAllows.
+	ScopeStatusRead  = "status:read"
+	ScopeMetricsRead = "metrics:read"
 )
+
+// tokenScopeAllows is where a narrow token stops. A token holding read or full, or one
+// with no scope on record (it has always acted read-only), is judged by its role alone.
+func tokenScopeAllows(scopes []string, r *http.Request) bool {
+	if len(scopes) == 0 || slices.Contains(scopes, ScopeRead) || slices.Contains(scopes, ScopeFull) {
+		return true
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	switch r.URL.Path {
+	case "/api/v1/status":
+		return slices.Contains(scopes, ScopeStatusRead)
+	case "/metrics":
+		return slices.Contains(scopes, ScopeMetricsRead)
+	}
+	return false
+}
 
 // TokenLifetimes are the expiry choices, in days.
 var TokenLifetimes = []int{7, 30, 90, 365}
@@ -96,7 +122,7 @@ func (m *Manager) AuthenticateBearer(ctx context.Context, raw string) (*Principa
 	if touch {
 		_ = m.Store.Write(ctx, func(tx *store.Tx) error { return tx.TouchAPIToken(tok.ID) })
 	}
-	return &Principal{Admin: a, Role: TokenRole(tok.Scopes, role), Scope: a.Scope(), TokenID: tok.ID, TokenName: tok.Name}, nil
+	return &Principal{Admin: a, Role: TokenRole(tok.Scopes, role), Scope: a.Scope(), TokenID: tok.ID, TokenName: tok.Name, TokenScopes: tok.Scopes}, nil
 }
 
 // CreateAPIToken creates a token for the principal's own account and returns
@@ -113,7 +139,7 @@ func (m *Manager) CreateAPIToken(ctx context.Context, p *Principal, name, scope 
 	}
 	name = strings.TrimSpace(name)
 	if name == "" || utf8.RuneCountInString(name) > 100 || strings.ContainsAny(name, "\r\n\t") ||
-		(scope != ScopeRead && scope != ScopeFull) || !slices.Contains(TokenLifetimes, days) {
+		!slices.Contains([]string{ScopeRead, ScopeFull, ScopeStatusRead, ScopeMetricsRead}, scope) || !slices.Contains(TokenLifetimes, days) {
 		return "", store.APIToken{}, ErrTokenInvalid
 	}
 	raw := make([]byte, 32)

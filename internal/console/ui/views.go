@@ -366,6 +366,8 @@ type FilterView struct {
 	// CustText is how many customers are on screen ("3 customers"): the customer ring counts customers, and a
 	// customer with no devices has no rows to show for it.
 	CustText string
+	// MissingOut names the MISSING customers this filter left out: they have no device for it to match.
+	MissingOut []string
 }
 
 // EmptyView is an empty-state panel (components §9.5).

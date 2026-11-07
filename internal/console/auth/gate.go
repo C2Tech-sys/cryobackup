@@ -105,7 +105,7 @@ func (m *Manager) gate(kind gateKind, min Role, mode Mode, next http.Handler) ht
 				return
 			}
 			httpx.SetActor(r.Context(), "api_token", p.TokenID)
-			if p.Role < min {
+			if p.Role < min || !tokenScopeAllows(p.TokenScopes, r) {
 				httpx.Problem(w, r, api.CodeForbidden, 0)
 				return
 			}
@@ -116,7 +116,11 @@ func (m *Manager) gate(kind gateKind, min Role, mode Mode, next http.Handler) ht
 		var p *Principal
 		if c, err := r.Cookie(SessionCookie); err == nil {
 			var aerr error
-			p, aerr = m.sessionPrincipal(r.Context(), c.Value)
+			if IsBackground(r) {
+				p, aerr = m.lookupSession(r.Context(), c.Value)
+			} else {
+				p, aerr = m.sessionPrincipal(r.Context(), c.Value)
+			}
 			if aerr != nil && !errors.Is(aerr, ErrNoSession) {
 				deny(api.CodeInternal, "The console could not check the session. Try again shortly.", http.StatusInternalServerError)
 				return
@@ -125,6 +129,14 @@ func (m *Manager) gate(kind gateKind, min Role, mode Mode, next http.Handler) ht
 		if p == nil {
 			if mode == ModeAPI {
 				httpx.Problem(w, r, api.CodeUnauthorized, 0)
+				return
+			}
+			if r.Header.Get("HX-Request") != "" || isEventStream(r) {
+				// A redirect here would be followed unseen: htmx would swap the sign-in page
+				// into the board and an EventSource would fetch it every few seconds. htmx
+				// moves the whole page on HX-Redirect; an EventSource only sees the refusal.
+				w.Header().Set("HX-Redirect", SessionEndedPath)
+				http.Error(w, "Your session has ended. Sign in again.", http.StatusUnauthorized)
 				return
 			}
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -174,6 +186,30 @@ func (m *Manager) gate(kind gateKind, min Role, mode Mode, next http.Handler) ht
 
 // MFAPath is the UI's MFA step page; the gates send a pending browser there.
 const MFAPath = "/login/mfa"
+
+// SessionEndedPath is the sign-in page saying why the page the operator left open
+// came back to it.
+const SessionEndedPath = "/login?ended=1"
+
+// HeaderBackground marks a request the page made on its own: fresh.js sets it on
+// the refresh of every element marked data-poll or data-fast-poll.
+const HeaderBackground = "X-Cryo-Background"
+
+// IsBackground reports a request that is not the operator doing anything: a marked
+// page refresh or an event stream connecting. It reads a session and does not slide
+// its idle expiry, so a board left open reaches the idle timeout. Only GET and HEAD
+// qualify. The client asserts it, which is safe: all a false claim can do is bring
+// its own session's expiry closer.
+func IsBackground(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	return r.Header.Get(HeaderBackground) != "" || isEventStream(r)
+}
+
+func isEventStream(r *http.Request) bool {
+	return r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+}
 
 // RequestIsTLS reports whether the request reached the console over TLS (the
 // rule the session cookie's Secure flag follows), for building absolute links.

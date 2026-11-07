@@ -28,6 +28,10 @@ var allBanners atomic.Bool
 // the same banners.
 func SetAllBanners(on bool) { allBanners.Store(on) }
 
+// AwaitingFirstEvaluation is jobs.ClassAwaitingFirstEvaluation: fixtures cannot import jobs, so
+// the jobs package's tests hold the two together.
+const AwaitingFirstEvaluation = "awaiting_first_evaluation"
+
 // AllBannersOn reports whether the switch is on.
 func AllBannersOn() bool { return allBanners.Load() }
 
@@ -35,7 +39,7 @@ func AllBannersOn() bool { return allBanners.Load() }
 // every banner of AllBanners while it is on.
 func ExtraBanners(now time.Time) []state.Banner { return ExtraBannersIn(now, Zone()) }
 
-// ExtraBannersIn is ExtraBanners with the clock times in loc: ui passes the operator's display zone.
+// ExtraBannersIn is ExtraBanners with the clock times in loc; ExtraBanners, the hook ui installs, passes Zone().
 func ExtraBannersIn(now time.Time, loc *time.Location) []state.Banner {
 	if !allBanners.Load() {
 		return nil
@@ -176,7 +180,7 @@ func SeedM3(ctx context.Context, st *store.Store, now time.Time) error {
 		case "restore-purge":
 			rec.Status, rec.ErrorClass = "error", "storage"
 		case JobSkipped:
-			rec.Status, rec.ErrorClass = "skipped", "awaiting_first_evaluation" // jobs.ClassAwaitingFirstEvaluation: fixtures cannot import jobs
+			rec.Status, rec.ErrorClass = "skipped", AwaitingFirstEvaluation
 		case JobOverdue:
 			long := now.Add(-2 * h)
 			due := long.Add(15 * time.Minute)

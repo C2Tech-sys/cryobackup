@@ -228,7 +228,7 @@ func (s *Service) retiredCause(ctx context.Context, p *auth.Principal, dev store
 	class := ClassNeutral
 	rctx, cancel := context.WithTimeout(ctx, retiredPageCheck)
 	defer cancel()
-	switch v := s.m3.api.GatewayLoginNow(rctx, dev.ID); {
+	switch v := s.m3.api.GatewayLoginNow(rctx, dev.ID, *dev.RetiredAt); {
 	case v.Status == adminapi.GatewayLoginRemoved:
 		text = append(text, "Its device token is revoked and a read of the gateway's file finds no login for it, so no backups can reach the gateway.")
 	case v.InFile:

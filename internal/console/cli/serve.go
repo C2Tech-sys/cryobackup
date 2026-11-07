@@ -110,7 +110,13 @@ func runServe(args []string, io IO) int {
 		printFixturesLogin(io.Stdout, suppliedPassword != "", app.FixturesPassword)
 		fmt.Fprintf(io.Stdout, "design check page: %s://%s/design\n", adminScheme, app.Server.AdminAddr())
 	}
-	if err := app.Run(ctx); err != nil {
+	return serveExit(app.Run(ctx), io)
+}
+
+// serveExit is serve's exit code: a listener that failed or a database not closed
+// cleanly is non-zero, so the supervisor restarts it. A clean stop is 0.
+func serveExit(err error, io IO) int {
+	if err != nil {
 		fmt.Fprintln(io.Stderr, "cryo-console serve:", sanitize(err))
 		return ExitFailed
 	}

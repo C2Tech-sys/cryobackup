@@ -29,19 +29,20 @@ import (
 const testPassword = "ui-test-password-1"
 
 type env struct {
-	t    *testing.T
-	st   *store.Store
-	svc  *Service
-	srv  *httptest.Server
-	be   *fixtures.Backend
-	hub  *Hub
-	now  time.Time
-	loc  *time.Location
-	cli  *http.Client
-	sess []*http.Cookie
-	csrf string
-	dev  map[string]string // hostname -> id
-	mfa  *uiMFA            // account_test.go: the MFA step of e.login
+	t     *testing.T
+	st    *store.Store
+	svc   *Service
+	srv   *httptest.Server
+	be    *fixtures.Backend
+	hub   *Hub
+	now   time.Time
+	nowMu sync.Mutex // guards now against a stream reading the clock: e.advance
+	loc   *time.Location
+	cli   *http.Client
+	sess  []*http.Cookie
+	csrf  string
+	dev   map[string]string // hostname -> id
+	mfa   *uiMFA            // account_test.go: the MFA step of e.login
 	// loginFile is what a read of the gateway's file finds (M3-T6). Nil: a clean read, no retired login in it.
 	loginFile func() jobs.LoginFileCheck
 	// wakes records the devices the pages' private API woke.
@@ -61,7 +62,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e := &env{t: t, now: fixtures.Now(), loc: loc, dev: map[string]string{}}
-	clock := func() time.Time { return e.now }
+	clock := func() time.Time { e.nowMu.Lock(); defer e.nowMu.Unlock(); return e.now }
 	st, err := store.OpenMemory(ctx, clock)
 	if err != nil {
 		t.Fatal(err)

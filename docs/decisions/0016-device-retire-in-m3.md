@@ -40,8 +40,12 @@ is the worst place for a false calm, because it may be a compromised endpoint. S
   for a run that may hold logins read before the commit; a login a check finds gone therefore stays gone. No new lease
   across consoles: the runner's lease and the generation header already stand guard, and two consoles on one gateway is
   unsupported (ADR D3).
+- **Two consoles on one file (known limit, recorded by M3-HARDEN).** A second console sharing the gateway file can write a
+  retired login back after `removed`: its sync may hold logins read before the retire. The next tick of the first console's
+  login check reads the file and raises C17, and its sync repairs it. One console per gateway is the supported setup.
 - **How long the answer can take.** After the commit: 5 s for the reads, then at most 2 s for the outcome's audit row, so
-  7 s. Before the commit a retire queues for the store's one writer like any other write, so that part is bounded only by
+  7 s on a working disk. A COMMIT cannot be cancelled, so a disk that hangs inside that row's commit holds the answer past
+  7 s for as long as it hangs (amended by M3-HARDEN; the store's own shutdown bound still ends the process). Before the commit a retire queues for the store's one writer like any other write, so that part is bounded only by
   the request. A read of a hung mount cannot be cancelled, so it runs apart from the answer.
 - **Two audit rows, not one (foreman ruling).** `device.retire` commits with the retire, so an unwritable audit table
   refuses it. Its outcome cannot be known until the file has been read after that commit, and `trg_audit_events_immutable`

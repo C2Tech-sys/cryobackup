@@ -206,8 +206,13 @@ func (s *Service) tokenRow(ctx context.Context, t store.APIToken) TokenRow {
 		Expires: s.when(ctx, t.ExpiresAt), Revoked: s.when(ctx, t.RevokedAt)}
 	row.Scope = "Read-only"
 	for _, sc := range t.Scopes {
-		if sc == auth.ScopeFull {
+		switch sc {
+		case auth.ScopeFull:
 			row.Scope = "Full (your role)"
+		case auth.ScopeStatusRead:
+			row.Scope = "Status endpoint only"
+		case auth.ScopeMetricsRead:
+			row.Scope = "Metrics endpoint only"
 		}
 	}
 	switch {

@@ -46,6 +46,13 @@ type Store struct {
 	wsem   chan struct{}
 	writer atomic.Uint64 // goroutine id currently inside Write, 0 when none
 
+	// readMu guards reads and readsDone: how many Read calls are in progress and what
+	// Close waits on. database/sql closes an in-use connection only when it is
+	// released, so rdb.Close alone can return with the file still open.
+	readMu    sync.Mutex
+	reads     int
+	readsDone chan struct{}
+
 	closeOnce sync.Once
 	closed    atomic.Bool
 	closeErr  error
@@ -234,8 +241,46 @@ func (s *Store) Close() error {
 	return s.closeErr
 }
 
-// closeNow is the close itself. It blocks behind an in-flight Write.
+// enterRead counts a Read in, unless the store is closing. leaveRead counts it out.
+func (s *Store) enterRead() bool {
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+	if s.closed.Load() {
+		return false
+	}
+	s.reads++
+	return true
+}
+
+func (s *Store) leaveRead() {
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+	s.reads--
+	if s.reads == 0 && s.readsDone != nil {
+		close(s.readsDone)
+		s.readsDone = nil
+	}
+}
+
+// waitReads returns when every Read in progress has ended. closed is already set, so
+// no new one can start.
+func (s *Store) waitReads() {
+	s.readMu.Lock()
+	if s.reads == 0 {
+		s.readMu.Unlock()
+		return
+	}
+	done := make(chan struct{})
+	s.readsDone = done
+	s.readMu.Unlock()
+	<-done
+}
+
+// closeNow is the close itself. It blocks behind in-flight Reads and a Write, so a
+// Close that answers nil has released the file; one that cannot says so.
 func (s *Store) closeNow() error {
+	// Reads first: a Read that calls Write inside it must get through.
+	s.waitReads()
 	// Wait for an in-flight writer: take the semaphore.
 	s.wsem <- struct{}{}
 	// Release afterwards so a Write queued behind Close wakes up and returns ErrClosed.
@@ -408,9 +453,10 @@ func abandonWrite(ctx context.Context, conn writeConn) {
 // snapshot of the last committed state, any number in parallel with the writer
 // (WAL). The transaction is query_only; a write attempt is an error.
 func (s *Store) Read(ctx context.Context, fn func(tx *Tx) error) error {
-	if s.closed.Load() {
+	if !s.enterRead() {
 		return ErrClosed
 	}
+	defer s.leaveRead()
 	sqlTx, err := s.rdb.BeginTx(ctx, nil)
 	if err != nil {
 		return mapErr(err)

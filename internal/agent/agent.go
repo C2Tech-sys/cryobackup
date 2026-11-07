@@ -24,7 +24,6 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/agent/supervisor"
 	"github.com/c2tech-sys/cryobackup/internal/agent/uplink"
 	"github.com/c2tech-sys/cryobackup/internal/api"
-	"github.com/c2tech-sys/cryobackup/internal/buildinfo"
 	"github.com/c2tech-sys/cryobackup/internal/policy"
 	"github.com/c2tech-sys/cryobackup/internal/ulid"
 )
@@ -357,7 +356,7 @@ func New(ctx context.Context, o Options) (*Agent, error) {
 		if err != nil {
 			return fail(err)
 		}
-		closed, err := a.jr.OpenRunsOnStart(ctx, marker, buildinfo.Version)
+		closed, err := a.jr.OpenRunsOnStart(ctx, marker, versionLabel())
 		if err != nil {
 			return fail(fmt.Errorf("agent: close stale runs: %w", err))
 		}
@@ -396,7 +395,7 @@ func New(ctx context.Context, o Options) (*Agent, error) {
 
 	// 8. uplink.
 	a.up, err = uplink.New(uplink.Options{
-		BaseURL: cfg.ServerURL, Token: a.token, AgentVersion: buildinfo.Version,
+		BaseURL: cfg.ServerURL, Token: a.token, AgentVersion: versionLabel(),
 		InsecureLab: cfg.InsecureLab, SPKIPin: cfg.SPKIPin, Proxy: cfg.Proxy, Clock: a.clock, HTTPClient: o.httpClient,
 		StartLeaseTimeout: o.leaseTimeout, // 0 = api.StartLeaseTimeout; the run context bounds it too
 	})
@@ -420,7 +419,7 @@ func New(ctx context.Context, o Options) (*Agent, error) {
 	}
 
 	a.eventLog("info", 1000, "CryoBackup agent started")
-	a.log.Info("agent started", "version", buildinfo.Version, "service_mode", o.ServiceMode)
+	a.log.Info("agent started", "version", versionLabel(), "service_mode", o.ServiceMode)
 	return a, nil
 }
 

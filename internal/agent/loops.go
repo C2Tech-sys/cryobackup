@@ -15,7 +15,6 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/agent/supervisor"
 	"github.com/c2tech-sys/cryobackup/internal/agent/uplink"
 	"github.com/c2tech-sys/cryobackup/internal/api"
-	"github.com/c2tech-sys/cryobackup/internal/buildinfo"
 	"github.com/c2tech-sys/cryobackup/internal/policy"
 	"github.com/c2tech-sys/cryobackup/internal/restic"
 )
@@ -231,7 +230,7 @@ func (a *Agent) buildHeartbeat(ctx context.Context) api.HeartbeatRequest {
 
 	a.mu.Lock()
 	req := api.HeartbeatRequest{
-		AgentVersion: buildinfo.Version, ResticVersion: a.resticVer,
+		AgentVersion: versionLabel(), ResticVersion: a.resticVer,
 		UptimeS: int64(now.Sub(a.boot.UTC()).Seconds()),
 		OnAC:    pw.OnAC, BatteryPct: pw.BatteryPct,
 		QueueDepth: queue, JournalDepth: open, DeviceTime: now,

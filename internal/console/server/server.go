@@ -258,9 +258,9 @@ func (s *Server) AdminTLSEnabled() bool {
 	return s.adminTLS
 }
 
-// Serve runs both listeners until ctx is cancelled, then shuts them down
+// Serve runs both listeners until ctx is cancelled or one fails, then shuts them down
 // gracefully (ShutdownGrace). It returns the first listener error that is not a
-// normal close.
+// normal close, naming the listener, and logs every one by name.
 func (s *Server) Serve(ctx context.Context) error {
 	s.mu.Lock()
 	adminSrv, adminLn, agentSrv, agentLn := s.adminSrv, s.adminLn, s.agentSrv, s.agentLn
@@ -277,7 +277,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.mu.Unlock()
 	errc := make(chan error, 2)
 	var wg sync.WaitGroup
-	run := func(srv *http.Server, ln net.Listener, tlsOn bool) {
+	run := func(name string, srv *http.Server, ln net.Listener, tlsOn bool) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -288,13 +288,14 @@ func (s *Server) Serve(ctx context.Context) error {
 				err = srv.Serve(ln)
 			}
 			if !errors.Is(err, http.ErrServerClosed) {
-				errc <- err
+				s.log.Error("listener failed", logx.Str("listener", name), logx.Class("listener_failed"))
+				errc <- fmt.Errorf("server: the %s listener failed: %w", name, err)
 			}
 		}()
 	}
-	run(adminSrv, adminLn, adminTLS)
+	run("admin", adminSrv, adminLn, adminTLS)
 	if agentSrv != nil {
-		run(agentSrv, agentLn, agentTLS)
+		run("agent", agentSrv, agentLn, agentTLS)
 	}
 	s.log.Info("listening", logx.Str("admin", "up"), logx.Bool("admin_tls", adminTLS), logx.Bool("agent", agentSrv != nil), logx.Bool("agent_tls", agentTLS))
 
@@ -372,26 +373,48 @@ func (c *certReloader) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 
 // ---- limiting listener ----
 
+// limitListener holds Accept back while max connections are open. An Accept that
+// is waiting for a slot does not touch the socket, so it must also end when the
+// listener closes: otherwise http.Server.Serve never returns, Server.Serve hangs on
+// its WaitGroup and the shutdown budget in cli/app.go is false. For the same reason
+// a socket that dies while every slot is held is noticed when the next slot frees.
 type limitListener struct {
 	net.Listener
-	sem chan struct{}
+	sem       chan struct{}
+	closed    chan struct{}
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func newLimitListener(ln net.Listener, max int) net.Listener {
 	if max <= 0 {
 		return ln
 	}
-	return &limitListener{Listener: ln, sem: make(chan struct{}, max)}
+	return &limitListener{Listener: ln, sem: make(chan struct{}, max), closed: make(chan struct{})}
 }
 
 func (l *limitListener) Accept() (net.Conn, error) {
-	l.sem <- struct{}{}
+	select {
+	case l.sem <- struct{}{}:
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
 	c, err := l.Listener.Accept()
 	if err != nil {
 		<-l.sem
 		return nil, err
 	}
 	return &limitConn{Conn: c, release: func() { <-l.sem }}, nil
+}
+
+// Close closes the socket and ends every Accept waiting for a slot. http.Server and
+// Serve both close the listener; the second call answers what the first did.
+func (l *limitListener) Close() error {
+	l.closeOnce.Do(func() {
+		close(l.closed)
+		l.closeErr = l.Listener.Close()
+	})
+	return l.closeErr
 }
 
 type limitConn struct {

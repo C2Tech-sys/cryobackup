@@ -1135,3 +1135,13 @@ table.fleet.unseen td.act .btn { white-space: nowrap; }
   table.fleet tr.retired-row td { display: block; width: auto; border: 0; }
   table.fleet.unseen td.act { grid-column: 1 / -1; width: auto; text-align: left; white-space: normal; }
 }
+
+/* ===== M3-HARDEN: the token table keeps its actions in view whatever the font metrics =====
+   A font wider than the design's (DejaVu Sans on Linux) made the no-wrap table wider than its box, and the buttons went past the
+   right edge. Text cells wrap, and the actions stay pinned to the box's right edge if the table still has to scroll. Above the
+   phone layout only: there every cell is already a block. */
+@media (min-width: 641px) {
+  table.fleet.tokens td { white-space: normal; overflow-wrap: anywhere; }
+  table.fleet.tokens td.act, table.fleet.tokens th:last-child { position: sticky; right: 0; z-index: 1; background: var(--surface); }
+  table.fleet.tokens td.act { white-space: nowrap; width: 1%; overflow-wrap: normal; box-shadow: -1px 0 0 var(--border); }
+}

@@ -412,6 +412,10 @@ func TestFleetCapEndToEnd(t *testing.T) {
 //
 // The fake backup must be slow enough to be caught. With backup_ok the first process
 // has exited before the second starts even with the cap off, so nothing could overlap.
+//
+// It is probabilistic as a guard: under heavy load the cap-off mutant was caught 8 runs in
+// 16, because the two windows then need not meet at all. It never raises a false alarm.
+// TestFleetCapEndToEnd is the deterministic guard.
 func TestFleetCapBothDueAtOnce(t *testing.T) {
 	r := newCapRig(t)
 	fakerestic.Use(t, "slow") // about half a second per backup

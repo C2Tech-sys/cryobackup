@@ -79,12 +79,12 @@ const DefaultMaxEventStreamsPerPrincipal = 4
 // slot freed.
 const DefaultEventWriteTimeout = 30 * time.Second
 
-// The stream's credential is checked again once per ping interval (15 s, the
-// same Authenticate calls the gate makes): a revoked or expired session or
-// token, or a disabled account, loses its stream within one interval. A role or
-// customer-scope change takes effect on the next evaluation. Note that this
-// check counts as activity for the session's sliding idle expiry, as any
-// request would; the absolute session lifetime still ends the stream.
+// The stream's credential is checked again once per ping interval (15 s): a
+// revoked or expired session or token, or a disabled account, loses its stream
+// within one interval. A role or customer-scope change takes effect on the next
+// evaluation. The check does not count as activity: an open stream is no operator,
+// so a session with nothing but a stream open reaches its idle expiry and the
+// stream ends there.
 
 // sseShareDefault is how long one fleet evaluation may serve every stream of the
 // same scope: a change that fans out to N streams costs one evaluation, not N.
@@ -269,7 +269,7 @@ func (s *Service) revalidate(ctx context.Context, bearer, cookie string, cur *au
 	case bearer != "":
 		p, err = s.Auth.AuthenticateBearer(ctx, bearer)
 	case cookie != "":
-		p, err = s.Auth.Authenticate(ctx, cookie)
+		p, err = s.Auth.CheckSession(ctx, cookie)
 	default:
 		return cur, false
 	}

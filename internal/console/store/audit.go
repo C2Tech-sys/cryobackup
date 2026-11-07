@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -52,10 +53,20 @@ func scanAudit(sc scanner) (AuditEvent, error) {
 	return e, nil
 }
 
-// looksLikePath is deliberately crude: a drive-letter path, a UNC prefix, or a
-// "word\word" Windows path inside a JSON string. It exists so a bug elsewhere
-// cannot silently write a client path into the one table that is never edited.
+// posixPathRE is an absolute POSIX path of two or more segments, at the start of a value or
+// after a space or an opening mark: /home/bob/x.txt. Prose with a slash ("and/or", "on/off",
+// "1/2", "gateway/storage") has no slash at a token start, and "/24" has one segment. A URL
+// does not match: what comes before its slashes is ":" or a host.
+var posixPathRE = regexp.MustCompile(`(?:^|["\s(=,;'])/[^/\s"]+/[^\s"]`)
+
+// looksLikePath is deliberately crude: a drive-letter path, a UNC prefix, a
+// "word\word" Windows path or an absolute POSIX path inside a JSON string. It exists so
+// a bug elsewhere cannot silently write a client path into the one table that is never
+// edited.
 func looksLikePath(details string) bool {
+	if posixPathRE.MatchString(details) {
+		return true
+	}
 	for i := 0; i+2 < len(details); i++ {
 		c := details[i]
 		if (c|0x20) >= 'a' && (c|0x20) <= 'z' && details[i+1] == ':' && (details[i+2] == '\\' || details[i+2] == '/') {

@@ -355,6 +355,7 @@ type loginData struct {
 	Fixtures bool
 	Next     string
 	Nonce    string // hidden login_nonce field value (auth.IssueLoginNonce)
+	Ended    bool   // the page came here because its session ended (auth.SessionEndedPath)
 }
 
 // renderLogin issues a fresh login nonce (cookie plus hidden field) and renders
@@ -371,7 +372,7 @@ func (s *Service) loginPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.renderLogin(w, r, http.StatusOK, loginData{Title: "Sign in", Fixtures: s.Fixtures})
+	s.renderLogin(w, r, http.StatusOK, loginData{Title: "Sign in", Fixtures: s.Fixtures, Ended: r.URL.Query().Get("ended") == "1"})
 }
 
 func (s *Service) loginPost(w http.ResponseWriter, r *http.Request) {
@@ -633,5 +634,5 @@ func (s *Service) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.Hub.ServeSSE(w, r, &Sub{Scope: p.Scope, Role: p.Role, Viewer: p.Admin.ID, Filter: filter, DeviceID: device})
+	s.Hub.ServeSSE(w, r, &Sub{Scope: p.Scope, Role: p.Role, Viewer: p.Admin.ID, Filter: filter, DeviceID: device, Recheck: s.streamRecheck(r, p)})
 }
