@@ -734,7 +734,7 @@ func TestGatewayLoginNowReadsEveryAnswerAsItIs(t *testing.T) {
 	ctx := context.Background()
 	check := func(c jobs.LoginFileCheck) GatewayLoginState {
 		e.svc.CheckGatewayLogins = func(context.Context) jobs.LoginFileCheck { return c }
-		return e.svc.GatewayLoginNow(ctx, id)
+		return e.svc.GatewayLoginNow(ctx, id, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	}
 	if got := check(jobs.LoginFileCheck{}); got.Status != GatewayLoginRemoved || got.InFile {
 		t.Errorf("a clean read without it: %+v", got)

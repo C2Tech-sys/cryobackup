@@ -115,9 +115,12 @@ type GatewayLoginState struct {
 	InFile bool
 }
 
-// GatewayLoginNow reads the file once. Only a clean read that does not find the login says
-// removed. The job's result only explains a login that is in the file.
-func (s *Service) GatewayLoginNow(ctx context.Context, deviceID string) GatewayLoginState {
+// GatewayLoginNow reads the file once for a device retired at retiredAt. Only a clean read that
+// began after the retire and does not find the login says removed. A sync in flight holds the
+// slot, which is the normal state right after a fault is repaired: the read that met it answers
+// from the newest clean read, so a page does not call a removed login pending because a run is
+// busy. The job's result only explains a login that is in the file.
+func (s *Service) GatewayLoginNow(ctx context.Context, deviceID string, retiredAt time.Time) GatewayLoginState {
 	if s.CheckGatewayLogins == nil {
 		return GatewayLoginState{Status: GatewayLoginPending, Reason: gatewayCheckNotWired}
 	}
@@ -140,6 +143,8 @@ func (s *Service) GatewayLoginNow(ctx context.Context, deviceID string) GatewayL
 	switch {
 	case c.Has(deviceID):
 		return GatewayLoginState{Status: GatewayLoginPending, Reason: s.inFileReason(ctx, c), InFile: true}
+	case c.ReadClass == jobs.LoginFileBusy && c.ReadSince(retiredAt):
+		return GatewayLoginState{Status: GatewayLoginRemoved}
 	case c.ReadClass != "":
 		return GatewayLoginState{Status: GatewayLoginPending, Reason: c.ReadClass}
 	}
@@ -174,7 +179,7 @@ func (s *Service) syncFailedSince(ctx context.Context, t time.Time) (string, boo
 // holding the job's lease, so it is repeated while waiting.
 func (s *Service) awaitLoginRemoved(ctx context.Context, deviceID string, retiredAt time.Time) GatewayLoginState {
 	if s.SyncGateway == nil || s.CheckGatewayLogins == nil {
-		return s.GatewayLoginNow(ctx, deviceID)
+		return s.GatewayLoginNow(ctx, deviceID, retiredAt)
 	}
 	wait := s.GatewaySyncWait
 	if wait <= 0 {
@@ -187,7 +192,7 @@ func (s *Service) awaitLoginRemoved(ctx context.Context, deviceID string, retire
 	defer poll.Stop()
 	defer again.Stop()
 	for {
-		v := s.GatewayLoginNow(ctx, deviceID)
+		v := s.GatewayLoginNow(ctx, deviceID, retiredAt)
 		switch {
 		case v.Status == GatewayLoginRemoved:
 			return v
@@ -245,7 +250,7 @@ func (s *Service) deviceRetire(w http.ResponseWriter, r *http.Request) {
 	} else {
 		ctx, cancel := context.WithTimeout(r.Context(), DefaultGatewaySyncWait)
 		defer cancel()
-		login = s.GatewayLoginNow(ctx, id)
+		login = s.GatewayLoginNow(ctx, id, *res.Device.RetiredAt)
 		if login.Status != GatewayLoginRemoved && s.SyncGateway != nil {
 			s.SyncGateway() // the repeat is a good moment to try again; the banner stays until it works
 		}
@@ -269,7 +274,7 @@ func (s *Service) retireFinalBackup(w http.ResponseWriter, r *http.Request, p *a
 		out := s.retireResponse(store.RetireResult{Device: dev})
 		ctx, cancel := context.WithTimeout(r.Context(), DefaultGatewaySyncWait)
 		defer cancel()
-		login := s.GatewayLoginNow(ctx, id)
+		login := s.GatewayLoginNow(ctx, id, *dev.RetiredAt)
 		out.GatewayLogin, out.GatewayLoginReason = login.Status, login.Reason
 		httpx.WriteJSON(w, http.StatusOK, out)
 		return

@@ -274,10 +274,13 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 		t.Error("the active device's login left the file")
 	}
 	w.waitFor("the banner to clear", func() bool { return w.banner("C17") == "" })
-	_, page = w.c.do("GET", "/devices/"+dead, nil)
-	if strings.Contains(page, "gateway login not removed") || strings.Contains(page, "may still accept") {
-		t.Error("the device page still says pending after the sync passed")
-	}
+	// The page reads the file with a bound of its own, and a slow machine can run out of it (check_timed_out): one
+	// load may say so, the next must not. A sync in flight is not that case, and has its own test
+	// (TestRetiredPageWithASyncInFlightReadsTheNewestCleanRead): it answers from the newest clean read.
+	w.waitFor("the device page to say the login is gone", func() bool {
+		_, page = w.c.do("GET", "/devices/"+dead, nil)
+		return strings.Contains(page, "finds no login for it") && !strings.Contains(page, "gateway login not removed") && !strings.Contains(page, "may still accept")
+	})
 	if again := w.retire(dead); again.GatewayLogin != adminapi.GatewayLoginRemoved || again.GatewayLoginReason != "" {
 		t.Errorf("repeat after the fix: %+v", again)
 	}
