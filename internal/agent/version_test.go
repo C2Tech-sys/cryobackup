@@ -16,9 +16,9 @@ import (
 // themselves still stand for real run data.
 func TestAPathLikeBuildStampDoesNotStopABackup(t *testing.T) {
 	for name, stamp := range map[string]string{
-		"windows": `C:\builds\agent-1.2.3`,
-		"posix":   "/home/builder/agent/1.2.3",
-		"unc":     `\\share\builds\agent`,
+		"windows":  `C:\builds\agent-1.2.3`,
+		"posix":    "/home/builder/agent/1.2.3",
+		"unc":      `\\share\builds\agent`,
 		"sentence": "built on the build box",
 	} {
 		t.Run(name, func(t *testing.T) {
