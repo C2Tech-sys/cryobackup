@@ -6,7 +6,7 @@
       <form method="post" action="{{.Retire.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.Retire.CSRF}}">{{if .Retire.Return}}<input type="hidden" name="return" value="{{.Retire.Return}}">{{end}}
         <p class="retire-lede"><b>Retire {{.Retire.Host}} for good?</b></p>
         <ul class="retire-does">
-          <li>Revokes its device token now, and removes its gateway login from the gateway's file at the next sync, within seconds. If that sync fails, the console says so and a critical banner stays up until it works.</li>
+          <li>Revokes its device token now, and removes its gateway login from the gateway's file at the next sync, within seconds. If that sync fails, the console says so and a banner stays up until a read of the file finds the login gone.</li>
           <li>Stops its maintenance, and it leaves every alarm and health count. If it is an expected customer's last active device, that customer reads MISSING, or ONBOARDING while its onboarding window is open.</li>
           <li>Deletes nothing: the repository and its snapshots stay in storage. Restoring from a retired device is not available in the console yet.</li>
           <li>Cannot be undone. Uninstall the agent from the machine: it keeps trying until you do. While an enrollment token is active, a recurring RMM script enrolls the same machine again as a new device, so stop the script or revoke the token.</li>

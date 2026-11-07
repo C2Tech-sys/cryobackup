@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -670,5 +671,57 @@ func TestRetireRepeatWithAnEmptyReasonAnswersTheState(t *testing.T) {
 		if got := decode[DeviceRetireResponse](t, b); got.Changed || !got.Retired || got.Reason != "first" {
 			t.Errorf("repeat: %+v", got)
 		}
+	}
+}
+
+// m07: a signal can be lost to a run holding the job's lease, so the wait repeats it.
+func TestRetireSignalsTheSyncAgainWhileItWaits(t *testing.T) {
+	e := newEnv(t)
+	dev := e.deviceNamed("FRONTDESK-02")
+	var signals atomic.Int32
+	e.svc.SyncGateway, e.svc.GatewaySyncWait = func() { signals.Add(1) }, 1300*time.Millisecond
+	e.svc.CheckGatewayLogins = func(context.Context) jobs.LoginFileCheck { return jobs.LoginFileCheck{InFile: []string{dev.ID}} }
+	res, b := e.req("POST", "/api/v1/devices/"+dev.ID+"/retire", e.login("admin", pw), DeviceRetireRequest{Reason: "r"})
+	if res.StatusCode != 200 {
+		t.Fatalf("retire: %d %s", res.StatusCode, b)
+	}
+	if n := signals.Load(); n < 2 {
+		t.Errorf("signalled %d times in a wait longer than a second: a lost signal would never be made good", n)
+	}
+}
+
+// m24: a repeat while the login is in the file tries the sync again, and one after it is gone does not.
+func TestARepeatedRetireSignalsTheSyncOnlyWhileTheLoginIsThere(t *testing.T) {
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	dev := e.deviceNamed("FRONTDESK-02")
+	path := "/api/v1/devices/" + dev.ID + "/retire"
+	var signals atomic.Int32
+	var inFile atomic.Bool
+	inFile.Store(true)
+	e.svc.SyncGateway, e.svc.GatewaySyncWait = func() { signals.Add(1) }, 40*time.Millisecond
+	e.svc.CheckGatewayLogins = func(context.Context) jobs.LoginFileCheck {
+		if inFile.Load() {
+			return jobs.LoginFileCheck{InFile: []string{dev.ID}}
+		}
+		return jobs.LoginFileCheck{}
+	}
+	e.mustReq("POST", path, owner, DeviceRetireRequest{Reason: "r"}, 200)
+	before := signals.Load()
+	_, b := e.req("POST", path, owner, DeviceRetireRequest{})
+	if got := decode[DeviceRetireResponse](t, b); got.Changed || got.GatewayLogin != GatewayLoginPending {
+		t.Fatalf("repeat: %+v", got)
+	}
+	if signals.Load() != before+1 {
+		t.Errorf("a repeat with the login in the file signalled %d times", signals.Load()-before)
+	}
+	inFile.Store(false)
+	before = signals.Load()
+	_, b = e.req("POST", path, owner, DeviceRetireRequest{})
+	if got := decode[DeviceRetireResponse](t, b); got.GatewayLogin != GatewayLoginRemoved {
+		t.Fatalf("repeat after it left: %+v", got)
+	}
+	if signals.Load() != before {
+		t.Errorf("a repeat with the login gone signalled %d times", signals.Load()-before)
 	}
 }

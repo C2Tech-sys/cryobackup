@@ -20,6 +20,7 @@ import (
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
+	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/gateway"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
@@ -410,4 +411,39 @@ func TestAnOldCopyOfTheFilePutBackIsSeenByTheProbersTick(t *testing.T) {
 	app.Htpasswd.Sig.Notify()
 	w.waitFor("the sync to repair the file", func() bool { return !w.inFile(w.dir, ids[0]) })
 	w.waitFor("the banner to clear", func() bool { return w.banner("C17") == "" })
+}
+
+// m22's successor: fixtures mode has no gateway and no file. Its fictional file holds no retired
+// login, so a retire answers removed, with no wait and no banner.
+func TestFixturesModeRetireAnswersRemoved(t *testing.T) {
+	cfg := config.Default()
+	cfg.Resolve()
+	cfg.Fixtures = true
+	cfg.AdminListen = "127.0.0.1:0"
+	app, err := Build(context.Background(), cfg, BuildOptions{FixturesPassword: "fixtures-pass-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	srv := httptest.NewServer(app.Server.AdminRouter)
+	t.Cleanup(srv.Close)
+	w := &retireWorld{t: t, app: app, c: r3SignIn(t, app, srv.URL)}
+	l, err := app.Store.ListDevices(context.Background(), store.ScopeAll(), store.ListDevicesOptions{Search: "FRONTDESK-01"})
+	if err != nil || len(l.Items) != 1 {
+		t.Fatalf("fixture device: %d, %v", len(l.Items), err)
+	}
+	began := time.Now()
+	got := w.retire(l.Items[0].ID)
+	if got.GatewayLogin != adminapi.GatewayLoginRemoved {
+		t.Fatalf("answer: %+v", got)
+	}
+	if took := time.Since(began); took >= adminapi.DefaultGatewaySyncWait {
+		t.Errorf("fixtures mode waited %v", took)
+	}
+	if b := w.banner("C17"); b != "" {
+		t.Errorf("C17 = %q", b)
+	}
+	if b := w.banner("C17b"); b != "" {
+		t.Errorf("C17b = %q", b)
+	}
 }
