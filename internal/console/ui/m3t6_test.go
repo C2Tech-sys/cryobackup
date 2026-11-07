@@ -166,7 +166,11 @@ func TestM3T6B_TheRetireDialog(t *testing.T) {
 	id := e.dev["FRONTDESK-01"]
 	page := e.page("/devices/"+id, 200)
 	mustContain(t, "dialog", page, `act-retire`, `action="/ui/devices/`+id+`/retire"`, `name="reason"`, `name="confirm"`, `name="final_backup"`, `name="replaced_by"`, "Retire device",
-		"Deletes nothing", "not available in the console yet", "reads MISSING")
+		"Deletes nothing", "not available in the console yet", "reads MISSING, or ONBOARDING while its onboarding window is open", "Uninstall the agent", "recurring RMM script",
+		"at the next sync", "If that sync fails")
+	if strings.Contains(page, "Revokes its gateway login and device token now") {
+		t.Error("the dialog promises the login is gone at once: the sync can fail")
+	}
 	post := func(form url.Values) *http.Response { return e.postForm("/ui/devices/"+id+"/retire", form) }
 	// The confirm step: without the name typed, nothing happens.
 	if r := post(url.Values{"reason": {"dead"}, "confirm": {"WRONG"}}); !strings.Contains(e.location(r), "cmd=err_retire_confirm") || e.t6Device(id).RetiredAt != nil {
@@ -191,7 +195,11 @@ func TestM3T6B_TheRetireDialog(t *testing.T) {
 	mustContain(t, "final backup notice", e.page("/devices/"+id+"?cmd=final_backup_queued", 200), "The device is not retired yet")
 
 	repl := e.dev["DR-OFFICE-PC"]
-	r := post(url.Values{"reason": {"dead lab machine"}, "confirm": {"frontdesk-01"}, "replaced_by": {repl}})
+	// L7: "exactly" means exactly.
+	if r := post(url.Values{"reason": {"dead lab machine"}, "confirm": {"frontdesk-01"}}); !strings.Contains(e.location(r), "cmd=err_retire_confirm") || e.t6Device(id).RetiredAt != nil {
+		t.Fatalf("a name in the wrong case: %q", e.location(r))
+	}
+	r := post(url.Values{"reason": {"dead lab machine"}, "confirm": {"FRONTDESK-01"}, "replaced_by": {repl}})
 	if !strings.Contains(e.location(r), "cmd=retired_ok") {
 		t.Fatalf("retire: %q", e.location(r))
 	}
@@ -203,7 +211,7 @@ func TestM3T6B_TheRetireDialog(t *testing.T) {
 		t.Fatalf("device.retire audit rows = %d, want 1", n)
 	}
 	after := e.page("/devices/"+id+"?cmd=retired_ok", 200)
-	mustContain(t, "after", after, "Device retired.", "RETIRED", "Reason: dead lab machine.", "DR-OFFICE-PC", "Already retired.", "Its repository is kept")
+	mustContain(t, "after", after, "Device retired.", "RETIRED", "Reason: dead lab machine.", "DR-OFFICE-PC", "Already retired.", "Its repository is kept", "Uninstall the agent", "recurring RMM script")
 	if strings.Contains(after, "never seen") || strings.Contains(after, "history unavailable") {
 		t.Error("the retired device's page reads as if data were missing: the engine loads no presence or strip for it, on purpose")
 	}
@@ -211,8 +219,8 @@ func TestM3T6B_TheRetireDialog(t *testing.T) {
 	if strings.Contains(after, `action="/ui/devices/`+id+`/retire"`) {
 		t.Error("a retired device still offers the dialog")
 	}
-	// Retiring again answers the same state, with no second audit row.
-	if r := post(url.Values{"reason": {"again"}, "confirm": {"FRONTDESK-01"}}); !strings.Contains(e.location(r), "cmd=retired_ok") {
+	// Retiring again answers the same state, with no second audit row and nothing left to confirm.
+	if r := post(url.Values{}); !strings.Contains(e.location(r), "cmd=retired_ok") {
 		t.Fatalf("second retire: %q", e.location(r))
 	}
 	if n := len(e.auditRows("device.retire", id)); n != 1 {
@@ -243,6 +251,16 @@ func TestM3T6B_NotSeenLinksToTheRetireDialogAndComesBack(t *testing.T) {
 	id := e.dev["LAB-RETINA-02"]
 	link := `/devices/` + id + `?retire=1&amp;from=unseen`
 	mustContain(t, "not seen", page, link)
+	// Below admin: the same row, and no link. (Checked here, while the device still has a row.)
+	for _, role := range []string{"read_only", "operator"} {
+		e.signInAs("t6-unseen-"+role, role, nil)
+		p := e.page("/fleet/unseen", 200)
+		mustContain(t, role, p, `id="dev-`+id+`"`)
+		if strings.Contains(p, "retire=1") {
+			t.Errorf("%s gets a Retire link", role)
+		}
+	}
+	e.login()
 	dialog := e.page("/devices/"+id+"?retire=1&from=unseen", 200)
 	mustContain(t, "opened", dialog, `act-retire" open`, `name="return" value="unseen"`)
 	r := e.postForm("/ui/devices/"+id+"/retire", url.Values{"reason": {"gone"}, "confirm": {"LAB-RETINA-02"}, "return": {"unseen"}})
@@ -260,11 +278,6 @@ func TestM3T6B_NotSeenLinksToTheRetireDialogAndComesBack(t *testing.T) {
 	if loc := e.location(r); !strings.Contains(loc, "retire=1") || !strings.Contains(loc, "from=unseen") {
 		t.Errorf("refused from the list: %q", loc)
 	}
-	// Below admin: no link.
-	e.signInAs("t6-op", "operator", nil)
-	if p := e.page("/fleet/unseen", 200); strings.Contains(p, "retire=1") {
-		t.Error("an operator gets a Retire link")
-	}
 }
 
 // ---- Retired (n) on every list ----
@@ -275,6 +288,14 @@ func TestM3T6B_RetiredDevicesCollapseUnderRetiredNOnEveryList(t *testing.T) {
 	id := e.retiredDevice()
 	summit := e.customerID("Summit Eye Care")
 	row := `id="dev-` + id + `"`
+	// The token the retired device enrolled with.
+	tok := e.t6Token(summit, "the retired device's token", false)
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE devices SET enrollment_token_id = ? WHERE id = ?`, tok, id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for name, path := range map[string]string{
 		"board":         "/",
 		"devices":       "/devices",
@@ -282,11 +303,8 @@ func TestM3T6B_RetiredDevicesCollapseUnderRetiredNOnEveryList(t *testing.T) {
 		"unseen":        "/fleet/unseen",
 		"overdue":       "/fleet/overdue",
 		"activity":      "/activity",
-		"token devices": "",
+		"token devices": "/enroll/tokens/" + tok,
 	} {
-		if path == "" {
-			continue
-		}
 		page := e.page(path, 200)
 		mustContain(t, name, page, `class="retired-fold"`, "Retired (1)", `id="retired-`+id+`"`, "RETIRED")
 		if strings.Contains(page, row) {
@@ -314,6 +332,92 @@ func TestM3T6B_RetiredDevicesCollapseUnderRetiredNOnEveryList(t *testing.T) {
 	if p := e.page("/fleet/unseen?customer="+e.customerID("Northwind Dental"), 200); strings.Contains(p, `id="retired-`+id+`"`) {
 		t.Error("another customer's Not seen lists it")
 	}
+}
+
+// M1, on the page: a sync that has not passed since the retire reads pending, in the
+// notice and on the device page, and is never called revoked.
+func TestM3T6B_ASyncThatDidNotPassReadsPending(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	e.syncDown = true
+	e.svc.m3.api.GatewaySyncWait = 60 * time.Millisecond
+	id := e.dev["FRONTDESK-01"]
+	r := e.postForm("/ui/devices/"+id+"/retire", url.Values{"reason": {"compromised"}, "confirm": {"FRONTDESK-01"}})
+	if !strings.Contains(e.location(r), "cmd=retired_pending") || !strings.Contains(e.location(r), "why=not_checked") {
+		t.Fatalf("went to %q", e.location(r))
+	}
+	page := e.page(e.location(r), 200)
+	mustContain(t, "pending", page, "Device retired, but its gateway login is not removed.", "the gateway may still accept this device&#39;s login until the sync succeeds", "Reason: not_checked.")
+	if strings.Contains(page, "Its device token and gateway login are revoked") {
+		t.Error("the page says the login is revoked")
+	}
+	// A pass from before the retire: the page names the class, critical.
+	e.now = e.now.Add(time.Minute)
+	if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: "error", ErrorClass: "io", StartedAt: e.now, FinishedAt: e.now}); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, "failed run", e.page("/devices/"+id, 200), "gateway login not removed", "until the sync succeeds (reason: io)", `class="banner crit dense"`)
+	// A passing run clears it, by itself.
+	e.now = e.now.Add(time.Minute)
+	if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: "ok", StartedAt: e.now, FinishedAt: e.now}); err != nil {
+		t.Fatal(err)
+	}
+	cleared := e.page("/devices/"+id, 200)
+	mustContain(t, "cleared", cleared, "Its device token and gateway login are revoked")
+	if strings.Contains(cleared, "gateway login not removed") {
+		t.Error("still pending after a passing run")
+	}
+}
+
+// L4: no runs on a retired device is not an alarm, and the page does not call it one.
+func TestM3T6B_ARetiredDeviceWithNoRunsIsNotCalledAnAlarm(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	ctx := context.Background()
+	id := ""
+	for host, dev := range e.dev {
+		runs, err := e.st.ListRuns(ctx, store.ScopeAll(), dev, store.Page{Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.Items) == 0 && host != "OLD-RECEPTION-PC" {
+			id = dev
+			mustContain(t, "active with no runs", e.page("/devices/"+id, 200), "No runs recorded yet.") // the wording it replaces
+			if r := e.postForm("/ui/devices/"+id+"/retire", url.Values{"reason": {"never ran"}, "confirm": {host}}); !strings.Contains(e.location(r), "cmd=retired_ok") {
+				t.Fatalf("retire: %q", e.location(r))
+			}
+			break
+		}
+	}
+	if id == "" {
+		t.Fatal("the fixtures have no active device without runs")
+	}
+	page := e.page("/devices/"+id, 200)
+	mustContain(t, "retired with no runs", page, "this raises no alarm")
+	if strings.Contains(page, "is an alarm") {
+		t.Error("the retired device's page calls it an alarm")
+	}
+}
+
+// L6: only not-found is 404. A store that cannot answer fails loudly and changes nothing.
+func TestM3T6B_AStoreErrorIsNotCalledNotFound(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	id := e.dev["FRONTDESK-01"]
+	if res, _ := e.post("/ui/devices/01J9Y4K3A0B1C2D3E4F5G6H7ZZ/retire", vals("reason", "r", "confirm", "x"), false); res.StatusCode != http.StatusNotFound {
+		t.Errorf("a device that does not exist: %d", res.StatusCode)
+	}
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE devices RENAME COLUMN notes TO notes_gone`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, body := e.post("/ui/devices/"+id+"/retire", vals("reason", "r", "confirm", "FRONTDESK-01"), false)
+	if res.StatusCode == http.StatusNotFound || res.StatusCode < 500 {
+		t.Fatalf("a read failure answered %d", res.StatusCode)
+	}
+	mustContain(t, "failure", body, "Not retired") // the page around it needs the same store, so it is the title alone
 }
 
 // layoutProbe measures the page as laid out: sideways overflow, and every visible

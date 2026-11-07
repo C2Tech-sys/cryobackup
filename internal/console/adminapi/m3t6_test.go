@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/gateway"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
+	"github.com/c2tech-sys/cryobackup/internal/logx"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // M3-T6: device retire and enrollment-token delete through the admin API, with the
@@ -130,14 +133,22 @@ func TestRetireCutsOffTheRealAgentAPIAndTheGeneratedHtpasswd(t *testing.T) {
 		t.Fatalf("before the retire the login must be in the file and accept the agent's password (hash %q)", hash)
 	}
 
+	// The real runner runs the real job, so the wait sees the run it records, as in serve.
+	runner := jobs.NewRunner(e.st, "m3t6-test", logx.New(io.Discard, logx.LevelError))
+	runner.Add(job.Job())
 	synced := 0
-	e.svc.SyncGateway = func() { synced++ }
+	e.svc.SyncGateway = func() {
+		synced++
+		if _, err := runner.RunOnce(ctx, jobs.NameHtpasswdSync); err != nil {
+			t.Error(err)
+		}
+	}
 	res, body := e.req("POST", "/api/v1/devices/"+enrolled.DeviceID+"/retire", owner, DeviceRetireRequest{Reason: "dead lab machine"})
 	if res.StatusCode != 200 {
 		t.Fatalf("retire: %d %s", res.StatusCode, body)
 	}
 	got := decode[DeviceRetireResponse](t, body)
-	if !got.Retired || got.State != "RETIRED" || !got.Changed || got.TokensRevoked != 1 || got.LoginsRevoked != 1 {
+	if !got.Retired || got.State != "RETIRED" || !got.Changed || got.TokensRevoked != 1 || got.LoginsRevoked != 1 || got.GatewayLogin != GatewayLoginRemoved {
 		t.Fatalf("retire answered %+v", got)
 	}
 	if synced != 1 {
@@ -162,10 +173,7 @@ func TestRetireCutsOffTheRealAgentAPIAndTheGeneratedHtpasswd(t *testing.T) {
 		t.Error("an enrollment replay brought the retired device's credentials back")
 	}
 
-	// The real job drops the login from the real file; the probe login and the others stay.
-	if err := job.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
+	// The real job dropped the login from the real file before the answer; the probe login and the others stay.
 	after := read()
 	probe := false
 	for _, l := range after {
@@ -187,7 +195,7 @@ func TestRetireCutsOffTheRealAgentAPIAndTheGeneratedHtpasswd(t *testing.T) {
 		t.Fatalf("second retire: %d %s", res.StatusCode, body)
 	}
 	again := decode[DeviceRetireResponse](t, body)
-	if again.Changed || !again.Retired || again.State != "RETIRED" || again.Reason != "dead lab machine" || !again.RetiredAt.Equal(*got.RetiredAt) {
+	if again.Changed || !again.Retired || again.State != "RETIRED" || again.Reason != "dead lab machine" || !again.RetiredAt.Equal(*got.RetiredAt) || again.GatewayLogin != GatewayLoginRemoved {
 		t.Errorf("second retire: %+v", again)
 	}
 	if synced != 1 {
@@ -449,4 +457,119 @@ func TestDeleteTokenThroughTheAPI(t *testing.T) {
 	}
 	e.clk.Advance(2 * time.Hour)
 	e.mustReq("POST", "/api/v1/enrollment-tokens/"+exp.ID+"/delete", owner, nil, 204)
+}
+
+// M1: anything but a passing run after the retire reads pending, with its reason, within the bound.
+func TestRetireAnswersPendingUnlessASyncPassedAfterIt(t *testing.T) {
+	retireOf := func(t *testing.T, e *env, host string) DeviceRetireResponse {
+		t.Helper()
+		res, b := e.req("POST", "/api/v1/devices/"+e.deviceNamed(host).ID+"/retire", e.login("admin", pw), DeviceRetireRequest{Reason: "r"})
+		if res.StatusCode != 200 {
+			t.Fatalf("retire: %d %s", res.StatusCode, b)
+		}
+		return decode[DeviceRetireResponse](t, b)
+	}
+	record := func(t *testing.T, e *env, status, class string) {
+		t.Helper()
+		if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: status, ErrorClass: class, StartedAt: e.clk.Now(), FinishedAt: e.clk.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("no sync wired", func(t *testing.T) {
+		e := newEnv(t)
+		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewaySyncNotWired {
+			t.Fatalf("%+v", got)
+		}
+	})
+	t.Run("the job never ran", func(t *testing.T) {
+		e := newEnv(t)
+		e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, 60*time.Millisecond
+		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != state.LoginNotChecked {
+			t.Fatalf("%+v", got)
+		}
+	})
+	t.Run("a pass from before the retire proves nothing", func(t *testing.T) {
+		e := newEnv(t)
+		record(t, e, "ok", "")
+		e.clk.Advance(time.Minute)
+		e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, 60*time.Millisecond
+		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != state.LoginNoSyncSinceRetire {
+			t.Fatalf("%+v", got)
+		}
+	})
+	t.Run("a failed run answers at once with its class", func(t *testing.T) {
+		e := newEnv(t)
+		e.svc.GatewaySyncWait = time.Minute // the test fails on time if it waits this out
+		e.svc.SyncGateway = func() { record(t, e, "error", "io") }
+		began := time.Now()
+		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != "io" {
+			t.Fatalf("%+v", got)
+		}
+		if took := time.Since(began); took > 30*time.Second {
+			t.Errorf("it waited %v for a run that had already failed", took)
+		}
+	})
+	t.Run("a passing run answers removed", func(t *testing.T) {
+		e := newEnv(t)
+		e.svc.SyncGateway = func() { record(t, e, "ok", "") }
+		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginRemoved || got.GatewayLoginReason != "" {
+			t.Fatalf("%+v", got)
+		}
+	})
+}
+
+// L1: final_backup keeps the reason and holds replaced_by to the retire's rule.
+func TestRetireFinalBackupValidatesTheReplacementAndKeepsTheReason(t *testing.T) {
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	dev := e.deviceNamed("FRONTDESK-02")
+	path := "/api/v1/devices/" + dev.ID + "/retire"
+	for name, repl := range map[string]string{"bogus": "01J9Y4K3A0B1C2D3E4F5G6H7ZZ", "another customer": e.deviceNamed("LEGAL-PC-01").ID, "itself": dev.ID} {
+		res, b := e.req("POST", path, owner, DeviceRetireRequest{Reason: "r", FinalBackup: true, ReplacedBy: repl})
+		if res.StatusCode != 400 || !bytes.Contains(b, []byte("replaced_by")) {
+			t.Errorf("%s: %d %s, want 400 on replaced_by", name, res.StatusCode, b)
+		}
+	}
+	ctx := context.Background()
+	if cmds, err := e.st.ListCommands(ctx, store.ScopeAll(), dev.ID, store.Page{Limit: 50}); err != nil {
+		t.Fatal(err)
+	} else {
+		for _, c := range cmds.Items {
+			if c.Type == store.CommandBackupNow && c.Status == "queued" {
+				t.Fatal("a refused final backup queued a command")
+			}
+		}
+	}
+	good := e.deviceNamed("DR-OFFICE-PC").ID
+	res, b := e.req("POST", path, owner, DeviceRetireRequest{Reason: "replaced next week", FinalBackup: true, ReplacedBy: good})
+	if res.StatusCode != 202 {
+		t.Fatalf("final backup: %d %s", res.StatusCode, b)
+	}
+	if out := decode[DeviceRetireResponse](t, b); out.Reason != "replaced next week" || out.ReplacedBy != good {
+		t.Errorf("answer: %+v", out)
+	}
+	l, err := e.st.ListAudit(ctx, store.ScopeAll(), store.AuditFilter{Action: "command.queue"}, store.Page{Limit: 5})
+	if err != nil || len(l.Items) == 0 || !strings.Contains(string(l.Items[0].Details), "replaced next week") {
+		t.Errorf("the command's audit row does not keep the reason: %v %+v", err, l.Items)
+	}
+}
+
+// L7: a repeat with an empty reason answers the state, not 400.
+func TestRetireRepeatWithAnEmptyReasonAnswersTheState(t *testing.T) {
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	path := "/api/v1/devices/" + e.deviceNamed("FRONTDESK-02").ID + "/retire"
+	if res, b := e.req("POST", path, owner, DeviceRetireRequest{Reason: " "}); res.StatusCode != 400 {
+		t.Fatalf("a first retire with no reason: %d %s", res.StatusCode, b)
+	}
+	e.mustReq("POST", path, owner, DeviceRetireRequest{Reason: "first"}, 200)
+	for _, final := range []bool{false, true} {
+		res, b := e.req("POST", path, owner, DeviceRetireRequest{FinalBackup: final})
+		if res.StatusCode != 200 {
+			t.Fatalf("repeat (final backup %v): %d %s", final, res.StatusCode, b)
+		}
+		if got := decode[DeviceRetireResponse](t, b); got.Changed || !got.Retired || got.Reason != "first" {
+			t.Errorf("repeat: %+v", got)
+		}
+	}
 }

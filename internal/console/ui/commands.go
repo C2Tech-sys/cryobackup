@@ -113,7 +113,7 @@ var cmdNotices = map[string]CauseView{
 	"coalesced":            {Class: ClassInfo, Title: "Already queued.", Text: "An identical request is still in flight, so no second one was added."},
 	"cancelled":            {Class: ClassOK, Title: "Cancelled.", Text: "The command was withdrawn before the device received it."},
 	"kept":                 {Class: ClassOK, Title: "Identity conflict resolved.", Text: "The device keeps its identity. The resolution is in the audit trail."},
-	"retired":              {Class: ClassWarn, Title: "Device retired.", Text: "Its credentials are revoked. Enroll the real machine again as a new device."},
+	"retired":              {Class: ClassWarn, Title: "Device retired.", Text: "Its device token is revoked and its gateway login goes at the next sync; the device page says if that fails. Enroll the real machine again as a new device."},
 	"err_parked":           {Class: ClassWarn, Title: "Not queued.", Text: "The device is parked. Resume it first."},
 	"err_retired":          {Class: ClassWarn, Title: "Not queued.", Text: "The device is retired."},
 	"err_delivered":        {Class: ClassWarn, Title: "Too late to undo.", Text: "The device already has this command. To stop a running backup, use Cancel run."},
@@ -216,6 +216,9 @@ func noticeFrom(r *http.Request) *CauseView {
 	n, ok := cmdNotices[code]
 	if !ok {
 		return nil
+	}
+	if why := r.URL.Query().Get("why"); code == "retired_pending" && cmdErrCode.MatchString(why) {
+		n.Text += " Reason: " + why + "." // M3-T6: a job's error class, one of a known shape
 	}
 	if t := r.URL.Query().Get("t"); code == "queued" && cmdErrCode.MatchString(t) {
 		if _, known := commandLabels[t]; known {
@@ -598,6 +601,7 @@ func commandAuditDetails(ev store.AuditEvent) string {
 		TTL        int64  `json:"ttl_s"`
 		Resolution string `json:"resolution"`
 		Reason     string `json:"reason"`
+		Gateway    string `json:"gateway_login"`
 	}
 	if len(ev.Details) == 0 || json.Unmarshal(ev.Details, &d) != nil {
 		return ""
@@ -611,6 +615,11 @@ func commandAuditDetails(ev store.AuditEvent) string {
 		return "Resolution: " + d.Resolution + " · " + d.Reason
 	case "device.retire":
 		return d.Reason
+	case "device.retire_sync":
+		if d.Reason != "" {
+			return "Gateway login: " + d.Gateway + " · " + d.Reason
+		}
+		return "Gateway login: " + d.Gateway
 	}
 	return ""
 }

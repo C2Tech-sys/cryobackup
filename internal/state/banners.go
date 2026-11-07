@@ -209,6 +209,8 @@ func probeBanners(w World, now time.Time) []Banner {
 			unsupplied("C15b", "Storage quota", "a full quota would go unnoticed")},
 		{p.Release != nil, func() []Banner { return releaseBanners(p.Release, c) },
 			unsupplied("C16b", "Release manifests", "a rejected manifest would go unnoticed")},
+		{p.LoginSync != nil, func() []Banner { return loginSyncBanners(p.LoginSync, c) },
+			unsupplied("C17b", "Gateway login removal", "a retired device's login left in the gateway's file would go unnoticed")},
 	}
 	for _, k := range checks {
 		switch {
@@ -776,4 +778,100 @@ func quotaBanners(q *QuotaFacts, c bannerCtx) []Banner {
 			Text: subject + " not checked: " + unmeasuredWhy + ", so a full quota would go unnoticed."})
 	}
 	return out
+}
+
+// LoginSyncStatus is what JudgeLoginSync decides about a retired device's gateway login.
+type LoginSyncStatus string
+
+const (
+	// LoginRemoved: the sync ran after the retire and passed, so the login is gone from the file.
+	LoginRemoved LoginSyncStatus = "removed"
+	// LoginPending: the login may still be in the file, so the gateway may still accept it.
+	LoginPending LoginSyncStatus = "pending"
+	// LoginUnchecked: the facts cannot say. This is never read as removed.
+	LoginUnchecked LoginSyncStatus = "unchecked"
+)
+
+// Reason classes of a login that is not known to be removed. A failed run reports the job's own
+// error class instead.
+const (
+	// LoginNoSyncSinceRetire: the job has not started a run since the retire.
+	LoginNoSyncSinceRetire = "no_sync_since_retire"
+	// LoginSyncFailed: the newest run failed and named no class.
+	LoginSyncFailed = "sync_failed"
+	// LoginSyncSkipped: the newest run says nothing about the file.
+	LoginSyncSkipped = "sync_skipped"
+	// LoginNotChecked: the facts could not be read or are garbled.
+	LoginNotChecked = "not_checked"
+)
+
+// LoginSyncVerdict is the judgement with its reason class and, when unchecked, why in words.
+type LoginSyncVerdict struct {
+	Status LoginSyncStatus
+	Class  string
+	Why    string
+}
+
+// JudgeLoginSync decides from the facts alone. It is the one rule behind banner C17, the retire
+// answer and the device page, so they cannot disagree. A run that started in the retire's own
+// millisecond counts as after it: the retire signals the job after its commit, so a run that read
+// the logins just before that commit is followed at once by the signalled one.
+func JudgeLoginSync(f LoginSyncFacts, now time.Time) LoginSyncVerdict {
+	unchecked := func(why string) LoginSyncVerdict {
+		return LoginSyncVerdict{Status: LoginUnchecked, Class: LoginNotChecked, Why: why}
+	}
+	if f.NotRead != "" {
+		return unchecked(f.NotRead)
+	}
+	if f.NewestRetireAt == 0 {
+		return LoginSyncVerdict{Status: LoginRemoved}
+	}
+	retired, ok := recorded(f.NewestRetireAt, now)
+	if !ok {
+		return unchecked("the newest retire" + garbledWhy)
+	}
+	if f.LastStartedAt == 0 {
+		return unchecked("the login sync has no recorded run")
+	}
+	started, ok := recorded(f.LastStartedAt, now)
+	if !ok {
+		return unchecked("the login sync's newest run" + garbledWhy)
+	}
+	if started.Before(retired) {
+		return LoginSyncVerdict{Status: LoginPending, Class: LoginNoSyncSinceRetire}
+	}
+	switch f.LastStatus {
+	case "ok":
+		return LoginSyncVerdict{Status: LoginRemoved}
+	case "error":
+		if f.LastErrorClass != "" {
+			return LoginSyncVerdict{Status: LoginPending, Class: f.LastErrorClass}
+		}
+		return LoginSyncVerdict{Status: LoginPending, Class: LoginSyncFailed}
+	case "skipped":
+		return LoginSyncVerdict{Status: LoginPending, Class: LoginSyncSkipped}
+	}
+	return unchecked("the login sync's newest status is not one this console knows")
+}
+
+// loginSyncBanners is C17: a retired device's gateway login may still be in the deployed file. It
+// clears by itself when a sync passes. C17b: the facts cannot say, which is never read as removed.
+func loginSyncBanners(f *LoginSyncFacts, c bannerCtx) []Banner {
+	v := JudgeLoginSync(*f, c.now)
+	switch v.Status {
+	case LoginPending:
+		why := "the newest login sync failed: " + v.Class
+		if v.Class == LoginNoSyncSinceRetire {
+			why = "no login sync has run since the retire"
+		}
+		b := Banner{ID: "C17", Severity: SeverityCritical,
+			Text: "A retired device's gateway login is not removed: the gateway may still accept it until the sync succeeds (" + why + ")."}
+		if t, ok := recorded(f.NewestRetireAt, c.now); ok {
+			b.At = t
+		}
+		return []Banner{b}
+	case LoginUnchecked:
+		return []Banner{notChecked("C17b", "Gateway login removal", "a retired device's login left in the gateway's file would go unnoticed", v.Why, 0)}
+	}
+	return nil
 }

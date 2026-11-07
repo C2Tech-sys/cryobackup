@@ -455,6 +455,24 @@ type ProbeFacts struct {
 	Quota *QuotaFacts
 	// Release is the release manifest check (C16).
 	Release *ReleaseFacts
+	// LoginSync says whether the gateway's login file has caught up with the newest retire (C17).
+	LoginSync *LoginSyncFacts
+}
+
+// LoginSyncFacts compares the newest device retire with the htpasswd-sync job's newest run. A run
+// that started at or after a retire read the logins without that device, and "ok" means the file on
+// disk then matched them, so that run's result answers whether the retired login is gone (C17).
+type LoginSyncFacts struct {
+	// NewestRetireAt is the newest retired_at; zero means no device is retired, so nothing can be pending.
+	NewestRetireAt Millis
+	// LastStartedAt and LastStatus are the job's newest recorded run: its start and ok, error or
+	// skipped. A zero start means the job has no recorded run.
+	LastStartedAt Millis
+	LastStatus    string
+	// LastErrorClass is that run's error class, path-free.
+	LastErrorClass string
+	// NotRead names what could not be read, so nothing can be judged ("" = both were read).
+	NotRead string
 }
 
 // World is one complete load of the fleet, handed to Evaluate.

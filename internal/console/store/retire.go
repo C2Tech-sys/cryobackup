@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 )
 
 // Device retire (M3-T6, ADR 0016; architecture §5.2 POST /devices/{id}/retire,
@@ -21,6 +23,10 @@ import (
 // The htpasswd file is the caller's half: it signals the htpasswd-sync job after
 // the commit (adminapi.Service.SyncGateway), and ListGatewayLoginsForHtpasswd has
 // already stopped listing the login.
+
+// JobHtpasswdSync is the job that renders the gateway's login file. Its job_state
+// row is what says whether a retired login has left that file.
+const JobHtpasswdSync = "htpasswd-sync"
 
 // maxRetireReason bounds the reason of a retire (it is kept on the device row and
 // in the audit details).
@@ -66,14 +72,11 @@ func ValidateRetireReason(raw string) (string, []FieldError) {
 // refuses the change and the credentials stay as they were. A device outside
 // scope is ErrNotFound. Retiring a retired device changes nothing, answers the
 // state it is in with Changed false, and writes no second audit row: the first
-// retire's reason and replacement stand. Rejected input is a *ValidationError; a
-// ReplacedBy the caller cannot see reads exactly like one of another customer.
+// retire's reason and replacement stand, whatever this call's reason says. Rejected
+// input is a *ValidationError; a ReplacedBy the caller cannot see reads exactly like
+// one of another customer.
 func (s *Store) RetireDeviceAudited(ctx context.Context, scope Scope, deviceID string, req RetireRequest, actor AuditActor) (RetireResult, error) {
 	if err := scope.check(); err != nil {
-		return RetireResult{}, err
-	}
-	reason, bad := ValidateRetireReason(req.Reason)
-	if err := validation(bad); err != nil {
 		return RetireResult{}, err
 	}
 	var out RetireResult
@@ -85,6 +88,10 @@ func (s *Store) RetireDeviceAudited(ctx context.Context, scope Scope, deviceID s
 		if cur.RetiredAt != nil {
 			out = RetireResult{Device: cur}
 			return nil
+		}
+		reason, bad := ValidateRetireReason(req.Reason)
+		if err := validation(bad); err != nil {
+			return err
 		}
 		if err := checkReplacement(tx, scope, cur, req.ReplacedBy); err != nil {
 			return err
@@ -116,8 +123,10 @@ func (s *Store) RetireDeviceAudited(ctx context.Context, scope Scope, deviceID s
 			WHERE device_id = ? AND status = 'queued'`, now, now, deviceID); err != nil {
 			return err
 		}
+		// The file cannot have changed yet: the job reads this commit. The outcome is its own row
+		// (RecordRetireSyncAudited), because this one commits with the retire and audit rows are immutable.
 		details := map[string]any{"reason": reason, "tokens_revoked": res.TokensRevoked, "logins_revoked": res.LoginsRevoked,
-			"commands_cancelled": res.CommandsCancelled, "was_parked": cur.PausedAt != nil}
+			"commands_cancelled": res.CommandsCancelled, "was_parked": cur.PausedAt != nil, "gateway_login": "sync_requested"}
 		if req.ReplacedBy != "" {
 			details["replaced_by"] = req.ReplacedBy
 		}
@@ -137,6 +146,66 @@ func (s *Store) RetireDeviceAudited(ctx context.Context, scope Scope, deviceID s
 		return RetireResult{}, err
 	}
 	return out, nil
+}
+
+// CheckRetireReplacement says whether replacedBy could replace the device, without
+// changing anything: the final-backup step holds it to the same rule as the retire
+// (a *ValidationError on field replaced_by). A device outside scope is ErrNotFound.
+func (s *Store) CheckRetireReplacement(ctx context.Context, scope Scope, deviceID, replacedBy string) error {
+	if err := scope.check(); err != nil {
+		return err
+	}
+	return s.Read(ctx, func(tx *Tx) error {
+		cur, err := getDevice(tx, scope, deviceID)
+		if err != nil {
+			return err
+		}
+		return checkReplacement(tx, scope, cur, replacedBy)
+	})
+}
+
+// RecordRetireSyncAudited writes the "device.retire_sync" audit row: what a retire
+// found when it waited for the login sync. status is removed or pending; reason is
+// the class of a pending one. A later successful sync writes no row here: the
+// htpasswd-sync job audits its own runs.
+func (s *Store) RecordRetireSyncAudited(ctx context.Context, scope Scope, deviceID, status, reason string, actor AuditActor) error {
+	if err := scope.check(); err != nil {
+		return err
+	}
+	return s.Write(ctx, func(tx *Tx) error {
+		cur, err := getDevice(tx, scope, deviceID)
+		if err != nil {
+			return err
+		}
+		details := map[string]any{"gateway_login": status}
+		if reason != "" {
+			details["reason"] = reason
+		}
+		ev, err := actor.event("device.retire_sync", "device", deviceID, cur.CustomerID, details)
+		if err != nil {
+			return err
+		}
+		if status != "removed" {
+			ev.Severity, ev.Result = "critical", "error"
+		}
+		return audited(tx, ev)
+	})
+}
+
+// NewestRetiredAt is the newest retired_at of any device, or nil when none is
+// retired. It is a time and nothing else: the C17 banner speaks for the console,
+// and it names no customer or device.
+func (s *Store) NewestRetiredAt(ctx context.Context) (*time.Time, error) {
+	var out *time.Time
+	err := s.Read(ctx, func(tx *Tx) error {
+		var ms sql.NullInt64
+		if err := tx.QueryRow(`SELECT MAX(retired_at) FROM devices`).Scan(&ms); err != nil {
+			return err
+		}
+		out = ptrTime(ms)
+		return nil
+	})
+	return out, err
 }
 
 // checkReplacement holds a retire's replacement to §3.5: a device inside scope,

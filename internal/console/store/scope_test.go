@@ -352,7 +352,6 @@ func matrix() map[string]matrixCase {
 		}},
 	}
 	addM2Matrix(m)       // the M2 customer, device and run methods (scope_m2_test.go)
-	addM3T6Matrix(m)     // M3-T6: retire and token delete (m3t6_test.go)
 	addEnrollM2Matrix(m) // M2-W2B: token management (enroll_m2_test.go)
 	addW2CMatrix(m)      // M2-W2C: commands and identity conflicts (scope_w2c_test.go)
 	addAuditM2Matrix(m)  // M2-W3A: audit viewer reads and console-wide settings (audit_m2_test.go)
@@ -381,7 +380,8 @@ var globalMethods = map[string]string{
 	"IntegrityCheck":               "diagnostics (doctor)",
 	"ListExpiredRestores":          "restore-purge job",
 	"ListGatewayLoginsForHtpasswd": "htpasswd-sync job", "MarkHtpasswdSynced": "htpasswd-sync job",
-	"TrimHeartbeats": "heartbeat-ring-trim job", "ExpireCommands": "command-expiry job",
+	"NewestRetiredAt": "banner C17: one time, no customer or device named",
+	"TrimHeartbeats":  "heartbeat-ring-trim job", "ExpireCommands": "command-expiry job",
 	"GetStorageTarget": "global configuration", "SetStorageTargetMaxConcurrentBackups": "global configuration (the fleet cap, ADR 0005)",
 	"DeleteExpiredStartLeases": "heartbeat-ring-trim job (expired start leases)",
 	"ListStartLeases":          "fleet cap of a global storage target (CLI and tests); ids only, no customer data",

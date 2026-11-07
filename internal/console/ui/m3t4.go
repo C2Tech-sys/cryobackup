@@ -107,7 +107,7 @@ func (p jobProxy) RunOnce(ctx context.Context, name string) (bool, error) {
 // evaluator unless something already supplies extra banners.
 func (s *Service) initM3() {
 	a := &adminapi.Service{Auth: s.Auth, Store: s.Store, Fleet: s.Fleet, Restores: s.Restores, Backend: s.Backend, Clock: s.Clock, Log: s.Log,
-		Loc: s.Loc, Display: s.Display, Jobs: jobProxy{s}}
+		Loc: s.Loc, Display: s.Display, Jobs: jobProxy{s}, SyncGateway: s.SyncGateway, WakeAgent: s.WakeAgent}
 	mux := http.NewServeMux()
 	a.Register(muxRegistrar{mux})
 	s.m3.api, s.m3.mux = a, mux
@@ -554,6 +554,7 @@ var bannerLabelsM3 = map[string]string{
 	"C00": "SELF-CHECKS NOT WIRED", "C01b": "GATEWAY NOT CHECKED", "C02b": "STORAGE NOT CHECKED", "C03b": "EMAIL NOT CHECKED",
 	"C05b": "CERTIFICATE NOT CHECKED", "C06b": "ALERTING NOT CHECKED", "C07b": "MAINTENANCE WORKER NOT CHECKED", "C12b": "MASTER KEY NOT CHECKED",
 	"C14b": "DIGEST NOT CHECKED", "C15b": "STORAGE QUOTA NOT CHECKED", "C16b": "RELEASE MANIFEST NOT CHECKED",
+	"C17b": "GATEWAY LOGIN NOT CHECKED",
 }
 
 func init() {

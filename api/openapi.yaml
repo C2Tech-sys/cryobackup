@@ -1769,7 +1769,7 @@ paths:
       tags: [devices]
       summary: Retire a device
       description: |
-        Ends the device's identity for good (ADR 0016): revokes every device token and the gateway login, ends a pause, cancels queued commands and stops maintenance, in one transaction with one audit row. Nothing is deleted: the repository, snapshots, escrowed key, runs and audit trail stay until the separate purge. A retired device raises no alarm and leaves every denominator (§4.2 row 1, §4.3); an expected customer whose last device is retired reads MISSING. Retiring a retired device answers the same state with `changed` false and writes nothing; its first reason stands. `final_backup` retires nothing: it queues a backup_now and answers 202, because a backup needs the credentials a retire takes away. Call again without it once that run has finished.
+        Ends the device's identity for good (ADR 0016): revokes every device token and the gateway login, ends a pause, cancels queued commands and stops maintenance, in one transaction with one audit row. Nothing is deleted: the repository, snapshots, escrowed key, runs and audit trail stay until the separate purge. The answer waits a few seconds for the login sync and says in `gateway_login` whether the login has left the file the gateway reads: `removed`, or `pending` with `gateway_login_reason`, in which case the gateway may still accept this device's login until the sync succeeds and banner C17 is up. Two audit rows: `device.retire` commits with the retire and `device.retire_sync` records that outcome. A retired device raises no alarm and leaves every denominator (§4.2 row 1, §4.3); an expected customer whose last device is retired reads MISSING. Retiring a retired device answers the same state with `changed` false, whatever the reason says, and writes nothing; its first reason stands. `final_backup` retires nothing: it queues a backup_now and answers 202, because a backup needs the credentials a retire takes away. Call again without it once that run has finished.
       x-min-role: AD
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -3692,7 +3692,7 @@ components:
       type: object
       required: [reason]
       properties:
-        reason: {type: string, description: 'Required: one line, no file paths. Kept on the device and in the audit row.'}
+        reason: {type: string, description: 'Required unless the device is already retired: one line, no file paths. Kept on the device and in the audit row.'}
         final_backup: {type: boolean, description: Queue a last backup and do not retire yet.}
         replaced_by: {type: string, description: 'The device that takes over: active, and of the same customer.'}
     DeviceRetireResponse:
@@ -3712,6 +3712,8 @@ components:
         tokens_revoked: {type: integer}
         logins_revoked: {type: integer}
         commands_cancelled: {type: integer}
+        gateway_login: {type: string, enum: [removed, pending], description: Whether the login has left the file the gateway reads. Absent while not retired.}
+        gateway_login_reason: {type: string, description: The reason class of a pending login.}
         final_backup_command_id: {type: string}
     DevicePauseResponse:
       type: object

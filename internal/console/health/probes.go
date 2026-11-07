@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/maintain"
@@ -59,6 +60,36 @@ func jobFacts(jobs []store.JobState, jerr error, name string, period time.Durati
 		}
 	}
 	return j
+}
+
+// loginSyncFacts reads what C17 is judged from: the newest retire against the
+// htpasswd-sync job's newest run. What cannot be read is NotRead (C17b), never ok.
+func (e *Evaluator) loginSyncFacts(ctx context.Context, jobs []store.JobState, jerr error) state.LoginSyncFacts {
+	if jerr != nil {
+		return state.LoginSyncFacts{NotRead: "the login sync's job state could not be read"}
+	}
+	newest, err := e.Store.NewestRetiredAt(ctx)
+	if err != nil {
+		return state.LoginSyncFacts{NotRead: "the newest retire could not be read"}
+	}
+	f := state.LoginSyncFacts{NewestRetireAt: millis(newest)}
+	for _, j := range jobs {
+		if j.Name == store.JobHtpasswdSync {
+			f.LastStartedAt, f.LastStatus, f.LastErrorClass = millis(j.LastStartedAt), j.LastStatus, j.LastErrorClass
+		}
+	}
+	return f
+}
+
+// LoginSync judges one retire: has the gateway's login file caught up with a device
+// retired at retiredAt? It reads the job's row now, so a caller can poll it.
+func (e *Evaluator) LoginSync(ctx context.Context, retiredAt time.Time) state.LoginSyncVerdict {
+	jobs, jerr := e.Store.ListJobStates(ctx)
+	f := e.loginSyncFacts(ctx, jobs, jerr)
+	if f.NotRead == "" {
+		f.NewestRetireAt = state.Millis(retiredAt.UnixMilli())
+	}
+	return state.JudgeLoginSync(f, e.Clock().UTC())
 }
 
 // ProbeFacts assembles the World's probe facts. Without a probe source

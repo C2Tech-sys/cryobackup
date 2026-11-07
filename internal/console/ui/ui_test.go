@@ -41,6 +41,8 @@ type env struct {
 	csrf string
 	dev  map[string]string // hostname -> id
 	mfa  *uiMFA            // account_test.go: the MFA step of e.login
+	// syncDown stops the login sync's job recording runs: a retire then answers pending (M3-T6).
+	syncDown bool
 }
 
 type muxReg struct{ m *http.ServeMux }
@@ -77,7 +79,12 @@ func newEnv(t *testing.T) *env {
 	fleet := &health.Evaluator{Store: st, Clock: clock, MasterLoaded: mk.Loaded, Maintain: maintain}
 	e.hub = NewHub(30*time.Second, nil)
 	svc, err := New(&Service{Auth: am, Store: st, Fleet: fleet, Restores: rest, Backend: e.be, Hub: e.hub, Clock: clock, Loc: loc, Zone: "America/Chicago",
-		Refresh: 30, Fixtures: true, MasterLoaded: mk.Loaded, Maintain: maintain})
+		Refresh: 30, Fixtures: true, MasterLoaded: mk.Loaded, Maintain: maintain,
+		SyncGateway: func() { // a working htpasswd-sync job: M3-T6's retire waits for its run
+			if !e.syncDown {
+				_ = st.RecordJobRun(ctx, store.JobHtpasswdSync, store.JobRun{Status: "ok", StartedAt: e.now, FinishedAt: e.now})
+			}
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -186,7 +186,7 @@ type SystemHealthResponse struct {
 // reads the banner ids out of the state and health sources and fails when one
 // is missing here, so a new banner cannot be added without a row to show it.
 var healthRowBanners = map[string][]string{
-	"gateway":            {"C01", "C01b"},
+	"gateway":            {"C01", "C01b", "C17", "C17b"},
 	"storage":            {"C02", "C02b"},
 	"storage_quota":      {"C15", "C15b"},
 	"smtp":               {"C03", "C03b"},

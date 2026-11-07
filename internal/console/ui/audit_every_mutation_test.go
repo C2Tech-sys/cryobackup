@@ -676,6 +676,7 @@ func uiMutationCases() map[string]uiMutation {
 		},
 		// ---- device retire (M3-T6) ----
 		"POST /ui/devices/{id}/retire": {
+			audits: 2, // device.retire commits with the retire; device.retire_sync records what the sync did
 			build: func(e *env) func() (*http.Response, string) {
 				e.login()
 				id := e.dev["FRONTDESK-01"]

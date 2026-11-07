@@ -610,6 +610,7 @@ func auditMutationCases() map[string]mutation {
 		},
 		// ---- device retire (M3-T6) ----
 		PatternDeviceRetire: {
+			audits: 2, // device.retire commits with the retire; device.retire_sync records what the sync did
 			build: func(e *env, s *session) func() call {
 				d := e.deviceNamed("FRONTDESK-02")
 				return func() call {

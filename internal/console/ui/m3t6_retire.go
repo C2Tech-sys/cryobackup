@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"sort"
@@ -59,7 +60,7 @@ type RetireForm struct {
 // retireItem is the Retire entry of the action bar for a device.
 func (s *Service) retireItem(r *http.Request, p *auth.Principal, dev store.Device, retired, parked bool) ActionItem {
 	it := ActionItem{ID: "act-retire", Key: "retire", Label: "Retire…", CSRF: p.CSRF, Enabled: true,
-		Hint: "Revokes this device's credentials and ends its backups for good. Its data stays."}
+		Hint: "Revokes this device's token and gateway login and ends its backups for good. Its data stays."}
 	switch {
 	case retired:
 		it.Enabled, it.Why, it.Hint = false, "Already retired.", ""
@@ -98,8 +99,11 @@ func init() {
 	auditActionText["device.retire"] = "Device retired"
 	auditActionLabels["device.retire"] = "Device retired"
 	auditActionLabels["enrollment_token.delete"] = "Enrollment token deleted"
+	auditActionText["device.retire_sync"] = "Gateway login after the retire"
+	auditActionLabels["device.retire_sync"] = "Gateway login after a retire"
 	for k, v := range map[string]CauseView{
-		"retired_ok":          {Class: ClassOK, Title: "Device retired.", Text: "Its gateway login and device token are revoked and its backups have stopped. Nothing was deleted: its repository stays in storage."},
+		"retired_ok":          {Class: ClassOK, Title: "Device retired.", Text: "Its device token is revoked and its gateway login is gone from the gateway's file. Nothing was deleted: its repository stays in storage."},
+		"retired_pending":     {Class: ClassCrit, Title: "Device retired, but its gateway login is not removed.", Text: "The device token is revoked, but the gateway may still accept this device's login until the sync succeeds. A critical banner stays up until then."},
 		"final_backup_queued": {Class: ClassInfo, Title: "Final backup queued. The device is not retired yet.", Text: "A backup needs the credentials a retire takes away. When this one has finished, retire the device."},
 		"err_retire_confirm":  {Class: ClassCrit, Title: "Not retired.", Text: "Type the device name exactly to confirm."},
 		"err_retire_reason":   {Class: ClassCrit, Title: "Not retired.", Text: "A reason is required: one line, no file paths."},
@@ -120,19 +124,26 @@ func (s *Service) deviceRetirePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	dev, err := s.Store.GetDevice(r.Context(), p.Scope, id) // 404 for another customer's device, before anything else
-	if err != nil {
+	dev, err := s.Store.GetDevice(r.Context(), p.Scope, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound): // 404 for another customer's device, before anything else
 		s.notFound(w, r, p, "This device")
 		return
-	}
-	if !strings.EqualFold(strings.TrimSpace(r.PostFormValue("confirm")), dev.Hostname) {
-		back(w, r, id, "", "err_retire_confirm", retireBackExtra(r)...)
+	case err != nil:
+		s.log().Error("ui: device unreadable for a retire", logx.Err(err))
+		s.errorPage(w, r, p, http.StatusServiceUnavailable, "Not retired", "The device could not be read, so nothing was changed. Try again shortly.")
 		return
 	}
 	reason := strings.TrimSpace(r.PostFormValue("reason"))
-	if reason == "" {
-		back(w, r, id, "", "err_retire_reason", retireBackExtra(r)...)
-		return
+	if dev.RetiredAt == nil { // a retired device answers its state: there is nothing left to confirm
+		if strings.TrimSpace(r.PostFormValue("confirm")) != dev.Hostname {
+			back(w, r, id, "", "err_retire_confirm", retireBackExtra(r)...)
+			return
+		}
+		if reason == "" {
+			back(w, r, id, "", "err_retire_reason", retireBackExtra(r)...)
+			return
+		}
 	}
 	body := adminapi.DeviceRetireRequest{Reason: reason, ReplacedBy: r.PostFormValue("replaced_by"), FinalBackup: r.PostFormValue("final_backup") == "1"}
 	status, resp, err := s.apiSend(r, http.MethodPost, "/api/v1/devices/"+id+"/retire", body)
@@ -141,12 +152,10 @@ func (s *Service) deviceRetirePost(w http.ResponseWriter, r *http.Request) {
 	}
 	switch status {
 	case http.StatusOK:
-		if r.PostFormValue("return") == "unseen" {
-			http.Redirect(w, r, listURL("/fleet/unseen", url.Values{"cmd": {"retired_ok"}}), http.StatusSeeOther)
-			return
-		}
-		back(w, r, id, "", "retired_ok")
+		s.changed()
+		s.retireAnswered(w, r, id, resp)
 	case http.StatusAccepted:
+		s.changed()
 		back(w, r, id, "", "final_backup_queued")
 	case http.StatusConflict: // only the final backup can conflict: the device is parked
 		back(w, r, id, "", "err_parked")
@@ -170,6 +179,27 @@ func (s *Service) deviceRetirePost(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// retireAnswered sends the operator back with what the answer says about the
+// gateway. Only an answer that says removed reads as removed: anything else,
+// including one this cannot read, is pending.
+func (s *Service) retireAnswered(w http.ResponseWriter, r *http.Request, id string, resp []byte) {
+	var out adminapi.DeviceRetireResponse
+	_ = json.Unmarshal(resp, &out)
+	code, extra := "retired_ok", []string(nil)
+	if out.GatewayLogin != adminapi.GatewayLoginRemoved {
+		code, extra = "retired_pending", []string{"why", out.GatewayLoginReason}
+	}
+	if r.PostFormValue("return") == "unseen" {
+		v := url.Values{"cmd": {code}}
+		if extra != nil {
+			v.Set(extra[0], extra[1])
+		}
+		http.Redirect(w, r, listURL("/fleet/unseen", v), http.StatusSeeOther)
+		return
+	}
+	back(w, r, id, "", code, extra...)
+}
+
 // retireBackExtra reopens the dialog after a refused retire, keeping where it came from.
 func retireBackExtra(r *http.Request) []string {
 	extra := []string{"retire", "1"}
@@ -184,18 +214,34 @@ func (s *Service) retiredCause(ctx context.Context, p *auth.Principal, dev store
 	if dev.RetiredAt == nil {
 		return nil
 	}
-	text := ""
+	var text []string
 	if dev.RetiredReason != "" {
-		text = "Reason: " + dev.RetiredReason + "."
+		text = append(text, "Reason: "+dev.RetiredReason+".")
 	}
 	if dev.ReplacedByDeviceID != "" {
 		if repl, err := s.Store.GetDevice(ctx, p.Scope, dev.ReplacedByDeviceID); err == nil {
-			text += " Replaced by " + repl.Hostname + "."
+			text = append(text, "Replaced by "+repl.Hostname+".")
 		}
 	}
-	text += " Its credentials are revoked and no backups run. Its repository is kept; restoring from a retired device is not available in the console yet."
-	return &CauseView{Class: ClassNeutral, Title: "Retired " + c.dateClock(*dev.RetiredAt), Text: strings.TrimSpace(text)}
+	title := "Retired " + c.dateClock(*dev.RetiredAt)
+	class := ClassNeutral
+	switch v := s.Fleet.LoginSync(ctx, *dev.RetiredAt); v.Status {
+	case state.LoginRemoved:
+		text = append(text, "Its device token and gateway login are revoked and no backups can reach the gateway.")
+	case state.LoginPending:
+		class, title = ClassCrit, title+", gateway login not removed"
+		text = append(text, "Its device token is revoked, but the gateway may still accept this device's login until the sync succeeds (reason: "+v.Class+").")
+	default:
+		class = ClassWarn
+		text = append(text, "Its device token is revoked. Whether its gateway login has left the gateway's file is not checked: "+v.Why+".")
+	}
+	text = append(text, retiredAdvice)
+	return &CauseView{Class: class, Title: title, Text: strings.Join(text, " ")}
 }
+
+// retiredAdvice is what the operator still has to do and cannot get from the console.
+const retiredAdvice = "Its repository is kept; restoring from a retired device is not available in the console yet. " +
+	"Uninstall the agent from the machine: it keeps trying until you do. While an enrollment token is active, a recurring RMM script enrolls the same machine again as a new device, so stop the script or revoke the token."
 
 // ---- the "Retired (n)" control ----
 

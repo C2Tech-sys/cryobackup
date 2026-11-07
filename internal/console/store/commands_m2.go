@@ -185,8 +185,11 @@ func (s *Store) QueueCommandAudited(ctx context.Context, scope Scope, deviceID s
 			now+ttl.Milliseconds(), now, now); err != nil {
 			return err
 		}
-		ev, err := actor.event("command.queue", "device", deviceID, dev.CustomerID,
-			map[string]any{"command_id": id, "type": in.Type, "ttl_s": int64(ttl / time.Second)})
+		queued := map[string]any{"command_id": id, "type": in.Type, "ttl_s": int64(ttl / time.Second)}
+		if in.AuditNote != "" {
+			queued["note"] = in.AuditNote
+		}
+		ev, err := actor.event("command.queue", "device", deviceID, dev.CustomerID, queued)
 		if err != nil {
 			return err
 		}

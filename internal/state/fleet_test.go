@@ -492,6 +492,7 @@ func healthyProbes() ProbeFacts {
 		Gateway:        &gw,
 		Storage:        &st,
 		SMTP:           &SMTPFacts{Probe: okProbe(), LastSendOKAt: ago(hour)},
+		LoginSync:      &LoginSyncFacts{},
 		Evaluator:      &JobFacts{LastFinishedAt: ago(20 * time.Second), Period: time.Minute},
 		Maintain:       &MaintainFacts{RPC: okProbe(), Scheduler: &JobFacts{LastFinishedAt: ago(4 * time.Minute), Period: 5 * time.Minute}},
 		View:           &ViewFacts{RefreshInterval: 30 * time.Second},
@@ -1056,7 +1057,7 @@ func TestProbeBannersNilAndZeroChecks(t *testing.T) {
 		w := healthyFleet(1, 2)
 		w.Probes = ProbeFacts{Wired: true, StartedAt: ago(day)}
 		v := Evaluate(w, t0)
-		want := []string{"C01b", "C02b", "C03b", "C06b", "C07b", "C11", "C12b", "C14b", "C15b", "C16b"}
+		want := []string{"C01b", "C02b", "C03b", "C06b", "C07b", "C11", "C12b", "C14b", "C15b", "C16b", "C17b"}
 		if !reflect.DeepEqual(bannerIDs(v), want) {
 			t.Fatalf("banners = %v, want %v", bannerIDs(v), want)
 		}
@@ -1091,7 +1092,7 @@ func TestProbeBannersNilAndZeroChecks(t *testing.T) {
 			Gateway: &ProbeRun{}, Storage: &ProbeRun{}, SMTP: &SMTPFacts{}, Evaluator: &JobFacts{},
 			Maintain: &MaintainFacts{Scheduler: &JobFacts{}}, View: &ViewFacts{}, Database: &DatabaseFacts{SelfBackup: &SelfBackupFacts{}},
 			MasterKey: &MasterKeyFacts{}, Digest: &DigestFacts{}, Quota: &QuotaFacts{Targets: []TargetUsage{{SoftQuotaBytes: 1}}},
-			Release: &ReleaseFacts{},
+			Release: &ReleaseFacts{}, LoginSync: &LoginSyncFacts{},
 		}
 		w.LoadedAt = time.Time{}
 		v := Evaluate(w, t0)

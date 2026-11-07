@@ -24,6 +24,12 @@ func addM3T6Matrix(m map[string]matrixCase) {
 			_, err := w.s.RetireDeviceAudited(w.ctx, sc, t.freshDevice, RetireRequest{Reason: "matrix"}, actor)
 			return nil, err
 		}}
+	m["CheckRetireReplacement"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		return nil, w.s.CheckRetireReplacement(w.ctx, sc, t.dev, "")
+	}}
+	m["RecordRetireSyncAudited"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		return nil, w.s.RecordRetireSyncAudited(w.ctx, sc, t.dev, "pending", "io", actor)
+	}}
 	m["DeleteEnrollmentTokenAudited"] = matrixCase{kind: byID,
 		prep: func(w *world, t *target) {
 			t.freshToken = must[EnrollmentToken](w.t)(w.s.CreateEnrollmentToken(w.ctx, ScopeAll(), EnrollmentToken{CustomerID: t.cust, TokenHash: sha256Hex(uniq("del")), ExpiresAt: w.clk.Now().Add(time.Hour)})).ID
@@ -349,5 +355,66 @@ func TestDeletedTokenCannotEnroll(t *testing.T) {
 	w.clk.Advance(-time.Hour)
 	if _, err := w.s.AgentEnroll(w.ctx, enrollInput("gone", "NEVER-1")); err == nil {
 		t.Fatal("a deleted token enrolled a device")
+	}
+}
+
+// L7: a repeat answers the state, whatever its reason says; a first retire still needs one.
+func TestRetireRepeatWithNoReasonAnswersTheState(t *testing.T) {
+	w := seed(t)
+	if _, err := w.s.RetireDeviceAudited(w.ctx, ScopeAll(), w.devA.ID, RetireRequest{Reason: " "}, wActor); len(FieldErrors(err)) != 1 {
+		t.Fatalf("a first retire with no reason: %v", err)
+	}
+	must[RetireResult](t)(w.s.RetireDeviceAudited(w.ctx, ScopeAll(), w.devA.ID, RetireRequest{Reason: "first"}, wActor))
+	again := must[RetireResult](t)(w.s.RetireDeviceAudited(w.ctx, ScopeAll(), w.devA.ID, RetireRequest{Reason: " "}, wActor))
+	if again.Changed || again.Device.RetiredReason != "first" {
+		t.Fatalf("repeat: %+v", again)
+	}
+}
+
+// The retire's own row says the sync was asked for, not that the login is gone; the outcome row says what happened.
+func TestRetireOutcomeRowAndNewestRetire(t *testing.T) {
+	w := seed(t)
+	if at := must[*time.Time](t)(w.s.NewestRetiredAt(w.ctx)); at != nil {
+		t.Fatalf("no retired device, newest %v", at)
+	}
+	res := must[RetireResult](t)(w.s.RetireDeviceAudited(w.ctx, ScopeAll(), w.devA.ID, RetireRequest{Reason: "r"}, wActor))
+	if at := must[*time.Time](t)(w.s.NewestRetiredAt(w.ctx)); at == nil || !at.Equal(*res.Device.RetiredAt) {
+		t.Fatalf("newest %v, want %v", at, res.Device.RetiredAt)
+	}
+	l := must[Listing[AuditEvent]](t)(w.s.ListAudit(w.ctx, ScopeAll(), AuditFilter{Action: "device.retire"}, Page{Limit: 5}))
+	if d := string(l.Items[0].Details); !strings.Contains(d, `"gateway_login":"sync_requested"`) {
+		t.Errorf("the retire row: %s", d)
+	}
+	ok(t, w.s.RecordRetireSyncAudited(w.ctx, ScopeAll(), w.devA.ID, "pending", "io", wActor))
+	ok(t, w.s.RecordRetireSyncAudited(w.ctx, ScopeAll(), w.devA.ID, "removed", "", wActor))
+	rows := must[Listing[AuditEvent]](t)(w.s.ListAudit(w.ctx, ScopeAll(), AuditFilter{Action: "device.retire_sync"}, Page{Limit: 5}))
+	if len(rows.Items) != 2 {
+		t.Fatalf("rows: %d", len(rows.Items))
+	}
+	var pending, removed AuditEvent
+	for _, ev := range rows.Items {
+		if strings.Contains(string(ev.Details), "pending") {
+			pending = ev
+		} else {
+			removed = ev
+		}
+	}
+	if pending.Severity != "critical" || pending.Result != "error" || !strings.Contains(string(pending.Details), `"reason":"io"`) {
+		t.Errorf("pending row: %+v", pending)
+	}
+	if removed.Result != "ok" || removed.Severity == "critical" {
+		t.Errorf("removed row: %+v", removed)
+	}
+}
+
+func TestCheckRetireReplacementChangesNothing(t *testing.T) {
+	w := seed(t)
+	other := w.enroll("tok-a", "A-DESK-2").Device
+	ok(t, w.s.CheckRetireReplacement(w.ctx, ScopeAll(), w.devA.ID, ""))
+	ok(t, w.s.CheckRetireReplacement(w.ctx, ScopeAll(), w.devA.ID, other.ID))
+	for name, repl := range map[string]string{"bogus": "01J9Y4K3A0B1C2D3E4F5G6H7ZZ", "another customer": w.devB.ID, "self": w.devA.ID} {
+		if err := w.s.CheckRetireReplacement(w.ctx, ScopeAll(), w.devA.ID, repl); len(FieldErrors(err)) != 1 || FieldErrors(err)[0].Field != "replaced_by" {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

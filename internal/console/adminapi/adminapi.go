@@ -88,6 +88,9 @@ type Service struct {
 	// SyncGateway, when set, is called after a device is retired so the gateway's
 	// htpasswd file drops its login at once instead of at the next five-minute run.
 	SyncGateway func()
+	// GatewaySyncWait bounds how long a retire waits for that sync before it answers
+	// pending. Zero means DefaultGatewaySyncWait.
+	GatewaySyncWait time.Duration
 	// Jobs is the console's job runner (jobs.Runner), for the job table and "run
 	// now" (M3-T3). Nil answers "run now" with 503 and lists only the job_state rows.
 	Jobs JobRunner

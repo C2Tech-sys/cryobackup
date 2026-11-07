@@ -98,6 +98,10 @@ func (e *Evaluator) fleet(ctx context.Context, scope store.Scope, page bool) (Fl
 	}
 	jobs, jerr := e.Store.ListJobStates(ctx)
 	w.Probes = e.ProbeFacts(jobs, jerr, page)
+	if w.Probes.Wired && w.Probes.LoginSync == nil {
+		f := e.loginSyncFacts(ctx, jobs, jerr)
+		w.Probes.LoginSync = &f
+	}
 	view := state.Evaluate(w, now)
 
 	f := Fleet{View: view, Computed: now, Jobs: jobs, Reporting: len(state.ReportingDevices(w, now))}
