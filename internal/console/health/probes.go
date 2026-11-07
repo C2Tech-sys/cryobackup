@@ -62,34 +62,16 @@ func jobFacts(jobs []store.JobState, jerr error, name string, period time.Durati
 	return j
 }
 
-// loginSyncFacts reads what C17 is judged from: the newest retire against the
-// htpasswd-sync job's newest run. What cannot be read is NotRead (C17b), never ok.
-func (e *Evaluator) loginSyncFacts(ctx context.Context, jobs []store.JobState, jerr error) state.LoginSyncFacts {
-	if jerr != nil {
-		return state.LoginSyncFacts{NotRead: "the job state of the login sync could not be read"}
-	}
-	newest, err := e.Store.NewestRetiredAt(ctx)
+// withRetired adds the retired devices to the prober's measurement of the login file.
+// What cannot be read is NotRead (C17b), never "nothing is retired".
+func (e *Evaluator) withRetired(ctx context.Context, f state.LoginFileFacts) state.LoginFileFacts {
+	total, garbled, err := e.Store.RetiredDeviceCounts(ctx)
 	if err != nil {
-		return state.LoginSyncFacts{NotRead: "the newest retire could not be read"}
+		f.NotRead = "the retired devices could not be read"
+		return f
 	}
-	f := state.LoginSyncFacts{NewestRetireAt: millis(newest)}
-	for _, j := range jobs {
-		if j.Name == store.JobHtpasswdSync {
-			f.LastStartedAt, f.LastStatus, f.LastErrorClass = millis(j.LastStartedAt), j.LastStatus, j.LastErrorClass
-		}
-	}
+	f.Retired, f.RetiredGarbled = total, garbled
 	return f
-}
-
-// LoginSync judges one retire: has the gateway's login file caught up with a device
-// retired at retiredAt? It reads the job's row now, so a caller can poll it.
-func (e *Evaluator) LoginSync(ctx context.Context, retiredAt time.Time) state.LoginSyncVerdict {
-	jobs, jerr := e.Store.ListJobStates(ctx)
-	f := e.loginSyncFacts(ctx, jobs, jerr)
-	if f.NotRead == "" {
-		f.NewestRetireAt = state.Millis(retiredAt.UnixMilli())
-	}
-	return state.JudgeLoginSync(f, e.Clock().UTC())
 }
 
 // ProbeFacts assembles the World's probe facts. Without a probe source
@@ -125,9 +107,9 @@ func (e *Evaluator) ProbeFacts(jobs []store.JobState, jerr error, page bool) sta
 	if p.Release == nil {
 		p.Release = &state.ReleaseFacts{NotInBuild: true}
 	}
-	if p.LoginSync == nil && p.Wired {
-		f := e.loginSyncFacts(context.Background(), jobs, jerr) // a read of one time; this path takes no request context
-		p.LoginSync = &f
+	if p.LoginFile != nil {
+		f := e.withRetired(context.Background(), *p.LoginFile) // two counts; this path takes no request context
+		p.LoginFile = &f
 	}
 	if page && p.View == nil {
 		v := &state.ViewFacts{RefreshInterval: state.DefaultRefreshInterval}
@@ -164,7 +146,7 @@ func FixtureProbes(clock func() time.Time) func() state.ProbeFacts {
 			Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second),
 				FreeBytes: 80 << 30, TotalBytes: 100 << 30, WALBytes: 4 << 20},
 			MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "fixtures"},
-			LoginSync: &state.LoginSyncFacts{},
+			LoginFile: &state.LoginFileFacts{MeasuredAt: at(20 * time.Second)},
 		}
 	}
 }

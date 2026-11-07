@@ -2,10 +2,8 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
-	"time"
 )
 
 // Device retire (M3-T6, ADR 0016; architecture §5.2 POST /devices/{id}/retire,
@@ -25,7 +23,8 @@ import (
 // already stopped listing the login.
 
 // JobHtpasswdSync is the job that renders the gateway's login file. Its job_state
-// row is what says whether a retired login has left that file.
+// row can say why a login is still in that file, never that it has left: only a read
+// of the file says that (jobs.HtpasswdSync.Check).
 const JobHtpasswdSync = "htpasswd-sync"
 
 // maxRetireReason bounds the reason of a retire (it is kept on the device row and
@@ -192,20 +191,34 @@ func (s *Store) RecordRetireSyncAudited(ctx context.Context, scope Scope, device
 	})
 }
 
-// NewestRetiredAt is the newest retired_at of any device, or nil when none is
-// retired. It is a time and nothing else: the C17 banner speaks for the console,
-// and it names no customer or device.
-func (s *Store) NewestRetiredAt(ctx context.Context) (*time.Time, error) {
-	var out *time.Time
+// RetiredDeviceIDs lists every device with a retired_at, whatever its value. A
+// device's gateway username is its id, so these are the logins that must not be in
+// the gateway's file. Ids only: the login-file check needs nothing else.
+func (s *Store) RetiredDeviceIDs(ctx context.Context) ([]string, error) {
+	var out []string
 	err := s.Read(ctx, func(tx *Tx) error {
-		var ms sql.NullInt64
-		if err := tx.QueryRow(`SELECT MAX(retired_at) FROM devices`).Scan(&ms); err != nil {
-			return err
-		}
-		out = ptrTime(ms)
-		return nil
+		var err error
+		out, err = collect(tx, `SELECT id FROM devices WHERE retired_at IS NOT NULL ORDER BY id`, nil, func(sc scanner) (string, error) {
+			var id string
+			return id, sc.Scan(&id)
+		})
+		return err
 	})
 	return out, err
+}
+
+// MinPlausibleTime is the oldest millisecond time a record can hold (the schema's
+// floor on enrolled_at): anything before it is corrupt.
+const MinPlausibleTime = 1000000000000
+
+// RetiredDeviceCounts counts the devices with a retired_at, and those whose
+// retired_at is not a usable time. Counts only: banner C17 speaks for the console
+// and names no customer or device.
+func (s *Store) RetiredDeviceCounts(ctx context.Context) (total, garbled int, err error) {
+	err = s.Read(ctx, func(tx *Tx) error {
+		return tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(retired_at < ?), 0) FROM devices WHERE retired_at IS NOT NULL`, MinPlausibleTime).Scan(&total, &garbled)
+	})
+	return total, garbled, err
 }
 
 // checkReplacement holds a retire's replacement to §3.5: a device inside scope,

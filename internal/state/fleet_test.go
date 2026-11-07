@@ -492,7 +492,7 @@ func healthyProbes() ProbeFacts {
 		Gateway:        &gw,
 		Storage:        &st,
 		SMTP:           &SMTPFacts{Probe: okProbe(), LastSendOKAt: ago(hour)},
-		LoginSync:      &LoginSyncFacts{},
+		LoginFile:      &LoginFileFacts{},
 		Evaluator:      &JobFacts{LastFinishedAt: ago(20 * time.Second), Period: time.Minute},
 		Maintain:       &MaintainFacts{RPC: okProbe(), Scheduler: &JobFacts{LastFinishedAt: ago(4 * time.Minute), Period: 5 * time.Minute}},
 		View:           &ViewFacts{RefreshInterval: 30 * time.Second},
@@ -1092,7 +1092,7 @@ func TestProbeBannersNilAndZeroChecks(t *testing.T) {
 			Gateway: &ProbeRun{}, Storage: &ProbeRun{}, SMTP: &SMTPFacts{}, Evaluator: &JobFacts{},
 			Maintain: &MaintainFacts{Scheduler: &JobFacts{}}, View: &ViewFacts{}, Database: &DatabaseFacts{SelfBackup: &SelfBackupFacts{}},
 			MasterKey: &MasterKeyFacts{}, Digest: &DigestFacts{}, Quota: &QuotaFacts{Targets: []TargetUsage{{SoftQuotaBytes: 1}}},
-			Release: &ReleaseFacts{}, LoginSync: &LoginSyncFacts{},
+			Release: &ReleaseFacts{}, LoginFile: &LoginFileFacts{},
 		}
 		w.LoadedAt = time.Time{}
 		v := Evaluate(w, t0)

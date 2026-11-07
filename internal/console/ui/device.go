@@ -290,7 +290,7 @@ func (s *Service) deviceView(ctx context.Context, p *auth.Principal, f health.Fl
 	if ds.Primary != state.StateOK && ds.Primary != state.StateRetired {
 		v.Cause = &CauseView{Class: ClassOf(ds.Primary), Title: v.Chips[0].Title, Text: reasonLine(*ds, c)}
 	}
-	if ds.Primary == state.StateRetired {
+	if dev.RetiredAt != nil { // the record, not the verdict: a corrupt retire time reads as no state at all
 		v.Retired = true
 		v.Cause = s.retiredCause(ctx, p, dev, c) // M3-T6: when, why, what it means
 	}

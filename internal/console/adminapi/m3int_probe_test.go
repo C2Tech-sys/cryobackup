@@ -97,6 +97,11 @@ func (e *env) realProber(be adminpath.Backend, holder string) (*jobs.HealthProbe
 	mk, _ := escrow.NewMasterKey(bytes.Repeat([]byte{7}, 32))
 	hp := &jobs.HealthProber{Store: e.st, Backend: be, Master: mk, Clock: e.clk.Now, Started: e.clk.Now().Add(-time.Hour), Holder: holder}
 	hp.Gateway.URL, hp.Gateway.Roots = gw.URL, pool
+	logins := &jobs.HtpasswdSync{Store: e.st, Master: mk, Dir: e.t.TempDir()} // the fixture fleet has a retired device: C17 needs a file to read
+	if err := logins.Run(context.Background()); err != nil {
+		e.t.Fatal(err)
+	}
+	hp.Logins = logins
 	e.t.Cleanup(hp.Stop)
 	hook := &proberHook{}
 	hook.set(hp)

@@ -23,6 +23,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
+	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/ratelimit"
 	"github.com/c2tech-sys/cryobackup/internal/console/restores"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
@@ -71,6 +72,9 @@ type Service struct {
 	// SyncGateway, when set, is called after a device is retired so the gateway's
 	// htpasswd file drops its login at once instead of at the next five-minute run.
 	SyncGateway func()
+	// CheckGatewayLogins reads the file the gateway reads (jobs.HtpasswdSync.Check). A retire says
+	// removed only when a read finds the login gone.
+	CheckGatewayLogins func(context.Context) jobs.LoginFileCheck
 
 	// Jobs is the console's job runner, for the System page's "Run now" and its
 	// job table (M3-T4, m3t4.go). cli sets it once the runner exists, before the

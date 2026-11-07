@@ -24,18 +24,29 @@ whatever the reason says, writes nothing, and the first reason stands.
 That job can fail, for example on a disk or permission fault, and the login then still works. A retire during that fault
 is the worst place for a false calm, because it may be a compromised endpoint. So:
 
-- The handler signals the job and waits at most 5 s for a run that started after the retire. A healthy sync takes well
-  under a second. The answer says `gateway_login: removed` or `pending` with a reason class, and the notice and device page
-  say plainly that the gateway may still accept the login until the sync succeeds.
-- Banner **C17** (critical) is up while the newest retire has no passing sync after it. **C17b** (not checked) is up when
-  the job's state or the retire time cannot be read or is garbled, which is never read as removed. Both are the job's
-  result against the newest `retired_at` (`state.JudgeLoginSync`), so the banner, the answer and the page cannot disagree.
-  Identity-conflict retires count too. C17 clears by itself when a sync passes. A later failure of the job also raises it,
-  even if that retire's login already left the file: the console cannot tell from the job's result alone, so it errs loud.
-- **Two audit rows, not one.** `device.retire` commits with the retire, so an unwritable audit table refuses it. Its
-  outcome cannot be known until the job has read that commit, and `trg_audit_events_immutable` forbids amending the row. So
-  `device.retire_sync` records `removed` or `pending` when the wait ends. A later successful sync writes no retire row; the
-  job audits its own run (`gateway.htpasswd.sync`).
+- **The file is the only witness.** `HtpasswdSync.Check` reads the deployed file and returns which retired devices' logins
+  are in it: usernames only, never hashes, never logged. It changes nothing. Nothing is inferred from when the job ran: an
+  earlier design compared the job's start with the retire and answered `removed` with the login in the file.
+- The handler signals the job and reads the file for at most 5 s. `gateway_login: removed` means a read after the retire
+  committed found the login gone. Anything else is `pending` with a reason class, and a read that fails is `pending` at
+  once. The notice and device page say plainly that the gateway may still accept the login until the sync succeeds.
+- Banner **C17** (critical) is up while the newest clean read found a retired device's login, and only a clean read clears
+  it. **C17b** (not checked) is up when there are retired devices and the file cannot be read or has not been read lately,
+  when the retired devices cannot be read, or when a retired device has an unusable `retired_at`. The measurement runs on
+  the health-prober's tick (60 s by default) and at the end of every run of the job, so a failed sync and an old copy put
+  back are both seen within about a minute. A second console's prober does not measure, so it reads C17b.
+- **Runs do not overlap.** The job has one slot in-process, whoever starts a run (signal, timer, Run now). A run takes it
+  before it reads the logins, so a later run can never be overwritten by an earlier one. A check takes it too, so it waits
+  for a run that may hold logins read before the commit; a login a check finds gone therefore stays gone. No new lease
+  across consoles: the runner's lease and the generation header already stand guard, and two consoles on one gateway is
+  unsupported (ADR D3).
+- **How long the answer can take.** After the commit: 5 s for the reads, then at most 2 s for the outcome's audit row, so
+  7 s. Before the commit a retire queues for the store's one writer like any other write, so that part is bounded only by
+  the request. A read of a hung mount cannot be cancelled, so it runs apart from the answer.
+- **Two audit rows, not one (foreman ruling).** `device.retire` commits with the retire, so an unwritable audit table
+  refuses it. Its outcome cannot be known until the file has been read after that commit, and `trg_audit_events_immutable`
+  forbids amending the row. So `device.retire_sync` records `removed` or `pending` when the wait ends. A later successful
+  sync writes no retire row; the job audits its own run (`gateway.htpasswd.sync`).
 
 **What "stops schedules" means here.** The console's own schedule stops: `maintain` selects only non-retired devices
 (`maintain/loop.go`). An agent still running on a machine cannot be told anything, because the token that would carry
@@ -62,11 +73,12 @@ the device not retired; the admin retires it after that run. A backup needs the 
 two cannot share a transaction. A deferred retire would need a pending state, a job to finish it and a rule for a device
 that never comes back, and the devices this exists for are the ones that never come back. M5 can add that on top.
 
-**The state engine does not change.** `internal/state` already has the rules: RETIRED never alarms and suppresses
+**The state engine's device rules do not change**, and its one addition is banner C17 over the measured fact above.
+`internal/state` already has the rules: RETIRED never alarms and suppresses
 everything (§4.2 row 1, §4.3, B14), is excluded from rings and rollups (B15), and leaves the health denominator (§4.5,
 D10). "Zero active devices" is judged on non-retired devices, so retiring an expected customer's last device reads
-MISSING and critical (§4.5, D02, §9). That is deliberate: silence is an alarm. To retire a customer's last device
-without the alarm, clear `expected` first.
+MISSING and critical, or ONBOARDING while its onboarding window is open (§4.5, D02, §9). That is deliberate: silence is an
+alarm. To retire a customer's last device without the alarm, clear `expected` first.
 
 **Lists.** A retired device is on no list as an ordinary row. The board's customer groups, `/devices`, a customer's Devices
 tab, Overdue, Not seen, Activity and a token's device list hold them under a collapsed "Retired (n)".

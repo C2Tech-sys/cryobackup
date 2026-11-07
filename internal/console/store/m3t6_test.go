@@ -374,12 +374,12 @@ func TestRetireRepeatWithNoReasonAnswersTheState(t *testing.T) {
 // The retire's own row says the sync was asked for, not that the login is gone; the outcome row says what happened.
 func TestRetireOutcomeRowAndNewestRetire(t *testing.T) {
 	w := seed(t)
-	if at := must[*time.Time](t)(w.s.NewestRetiredAt(w.ctx)); at != nil {
-		t.Fatalf("no retired device, newest %v", at)
+	if ids := must[[]string](t)(w.s.RetiredDeviceIDs(w.ctx)); len(ids) != 0 {
+		t.Fatalf("no retired device, ids %v", ids)
 	}
-	res := must[RetireResult](t)(w.s.RetireDeviceAudited(w.ctx, ScopeAll(), w.devA.ID, RetireRequest{Reason: "r"}, wActor))
-	if at := must[*time.Time](t)(w.s.NewestRetiredAt(w.ctx)); at == nil || !at.Equal(*res.Device.RetiredAt) {
-		t.Fatalf("newest %v, want %v", at, res.Device.RetiredAt)
+	must[RetireResult](t)(w.s.RetireDeviceAudited(w.ctx, ScopeAll(), w.devA.ID, RetireRequest{Reason: "r"}, wActor))
+	if ids := must[[]string](t)(w.s.RetiredDeviceIDs(w.ctx)); len(ids) != 1 || ids[0] != w.devA.ID {
+		t.Fatalf("ids %v", ids)
 	}
 	l := must[Listing[AuditEvent]](t)(w.s.ListAudit(w.ctx, ScopeAll(), AuditFilter{Action: "device.retire"}, Page{Limit: 5}))
 	if d := string(l.Items[0].Details); !strings.Contains(d, `"gateway_login":"sync_requested"`) {
@@ -404,6 +404,34 @@ func TestRetireOutcomeRowAndNewestRetire(t *testing.T) {
 	}
 	if removed.Result != "ok" || removed.Severity == "critical" {
 		t.Errorf("removed row: %+v", removed)
+	}
+}
+
+// L-f: a retired_at of zero is corrupt, and counts as retired and as garbled.
+func TestRetiredDeviceCountsSeeACorruptRetireTime(t *testing.T) {
+	w := seed(t)
+	count := func() (int, int) {
+		t.Helper()
+		total, garbled, err := w.s.RetiredDeviceCounts(w.ctx)
+		ok(t, err)
+		return total, garbled
+	}
+	if total, garbled := count(); total != 0 || garbled != 0 {
+		t.Fatalf("seed: %d, %d", total, garbled)
+	}
+	must[RetireResult](t)(w.s.RetireDeviceAudited(w.ctx, ScopeAll(), w.devA.ID, RetireRequest{Reason: "r"}, wActor))
+	if total, garbled := count(); total != 1 || garbled != 0 {
+		t.Fatalf("a real retire: %d, %d", total, garbled)
+	}
+	ok(t, w.s.Write(w.ctx, func(tx *Tx) error {
+		_, err := tx.Exec(`UPDATE devices SET retired_at = 0 WHERE id = ?`, w.devB.ID)
+		return err
+	}))
+	if total, garbled := count(); total != 2 || garbled != 1 {
+		t.Fatalf("a corrupt retire time: %d, %d", total, garbled)
+	}
+	if ids := must[[]string](t)(w.s.RetiredDeviceIDs(w.ctx)); len(ids) != 2 {
+		t.Fatalf("ids %v", ids)
 	}
 }
 

@@ -7,54 +7,49 @@ import (
 	"time"
 )
 
-// C17 and C17b (M3-T6, ADR 0016): a retired device's gateway login may still be in
-// the file the gateway reads. Table-driven like §4.8: the job's result against the
-// newest retire, and what cannot be determined is not checked, never ok.
-func TestC17_LoginSyncAgainstTheNewestRetire(t *testing.T) {
-	retired := ago(10 * time.Minute)
+// C17 and C17b (M3-T6, ADR 0016): a retired device's gateway login in the file the
+// gateway reads. Table-driven like §4.8, over the measured fact: what a read of the
+// file found. What cannot be determined is not checked, never ok.
+func TestC17_LoginFileMeasurement(t *testing.T) {
+	read := ago(30 * time.Second)
 	for _, c := range []struct {
 		name     string
-		f        LoginSyncFacts
-		status   LoginSyncStatus
-		class    string
+		f        LoginFileFacts
 		banner   string // "" = none
 		severity Severity
 		contains string
 	}{
-		{name: "C17_nothing_retired_no_banner", f: LoginSyncFacts{}, status: LoginRemoved},
-		{name: "C17_nothing_retired_a_failing_job_is_not_this_banner", f: LoginSyncFacts{LastStartedAt: ago(time.Minute), LastStatus: "error", LastErrorClass: "io"}, status: LoginRemoved},
-		{name: "C17_sync_passed_after_the_retire_clears", f: LoginSyncFacts{NewestRetireAt: retired, LastStartedAt: ago(9 * time.Minute), LastStatus: "ok"}, status: LoginRemoved},
-		{name: "C17_sync_started_in_the_same_millisecond_counts", f: LoginSyncFacts{NewestRetireAt: retired, LastStartedAt: retired, LastStatus: "ok"}, status: LoginRemoved},
-		{name: "C17_sync_failed_after_the_retire_is_critical_with_its_class", f: LoginSyncFacts{NewestRetireAt: retired, LastStartedAt: ago(9 * time.Minute), LastStatus: "error", LastErrorClass: "io"},
-			status: LoginPending, class: "io", banner: "C17", severity: SeverityCritical, contains: "the gateway may still accept it until the sync succeeds (the newest login sync failed: io)"},
-		{name: "C17_sync_failed_without_a_class_still_fails", f: LoginSyncFacts{NewestRetireAt: retired, LastStartedAt: ago(9 * time.Minute), LastStatus: "error"},
-			status: LoginPending, class: LoginSyncFailed, banner: "C17", severity: SeverityCritical},
-		{name: "C17_a_pass_from_before_the_retire_proves_nothing", f: LoginSyncFacts{NewestRetireAt: retired, LastStartedAt: ago(11 * time.Minute), LastStatus: "ok"},
-			status: LoginPending, class: LoginNoSyncSinceRetire, banner: "C17", severity: SeverityCritical, contains: "no login sync has run since the retire"},
-		{name: "C17_a_skipped_run_says_nothing_about_the_file", f: LoginSyncFacts{NewestRetireAt: retired, LastStartedAt: ago(time.Minute), LastStatus: "skipped"},
-			status: LoginPending, class: LoginSyncSkipped, banner: "C17", severity: SeverityCritical},
-		{name: "C17b_the_job_never_ran", f: LoginSyncFacts{NewestRetireAt: retired},
-			status: LoginUnchecked, class: LoginNotChecked, banner: "C17b", severity: SeverityAlarm, contains: "the login sync has no recorded run"},
-		{name: "C17b_not_read", f: LoginSyncFacts{NotRead: "the newest retire could not be read"},
-			status: LoginUnchecked, class: LoginNotChecked, banner: "C17b", severity: SeverityAlarm, contains: "the newest retire could not be read"},
-		{name: "C17b_a_retire_in_the_future", f: LoginSyncFacts{NewestRetireAt: ahead(day), LastStartedAt: ago(time.Minute), LastStatus: "ok"},
-			status: LoginUnchecked, class: LoginNotChecked, banner: "C17b", severity: SeverityAlarm},
-		{name: "C17b_a_run_in_the_future", f: LoginSyncFacts{NewestRetireAt: retired, LastStartedAt: ahead(day), LastStatus: "ok"},
-			status: LoginUnchecked, class: LoginNotChecked, banner: "C17b", severity: SeverityAlarm},
-		{name: "C17b_a_garbled_retire", f: LoginSyncFacts{NewestRetireAt: -5, LastStartedAt: ago(time.Minute), LastStatus: "ok"},
-			status: LoginUnchecked, class: LoginNotChecked, banner: "C17b", severity: SeverityAlarm},
-		{name: "C17b_an_unknown_status", f: LoginSyncFacts{NewestRetireAt: retired, LastStartedAt: ago(time.Minute), LastStatus: "running"},
-			status: LoginUnchecked, class: LoginNotChecked, banner: "C17b", severity: SeverityAlarm},
+		{name: "C17_nothing_retired_no_banner", f: LoginFileFacts{}},
+		{name: "C17_nothing_retired_a_failed_read_is_not_this_banner", f: LoginFileFacts{MeasuredAt: read, ReadFailed: "file_unreadable"}},
+		{name: "C17_a_clean_read_without_the_login_clears", f: LoginFileFacts{Retired: 3, MeasuredAt: read}},
+		{name: "C17_a_clean_read_with_the_login_is_critical", f: LoginFileFacts{Retired: 3, MeasuredAt: read, InFile: 1},
+			banner: "C17", severity: SeverityCritical, contains: "the gateway may still accept it until the sync succeeds"},
+		{name: "C17_a_failed_read_after_the_login_was_seen_does_not_clear", f: LoginFileFacts{Retired: 3, MeasuredAt: read, ReadFailed: "file_unreadable", InFile: 1},
+			banner: "C17", severity: SeverityCritical},
+		{name: "C17_an_old_read_that_found_the_login_stands", f: LoginFileFacts{Retired: 3, MeasuredAt: ago(day), InFile: 1},
+			banner: "C17", severity: SeverityCritical},
+		{name: "C17b_the_file_cannot_be_read", f: LoginFileFacts{Retired: 1, MeasuredAt: read, ReadFailed: "file_missing"},
+			banner: "C17b", severity: SeverityAlarm, contains: "cannot be read (file_missing)"},
+		{name: "C17b_never_read", f: LoginFileFacts{Retired: 1},
+			banner: "C17b", severity: SeverityAlarm, contains: "has not been read yet"},
+		{name: "C17b_not_read_lately", f: LoginFileFacts{Retired: 1, MeasuredAt: ago(day), Interval: time.Minute},
+			banner: "C17b", severity: SeverityAlarm, contains: "has not been read for"},
+		{name: "C17b_a_read_in_the_future", f: LoginFileFacts{Retired: 1, MeasuredAt: ahead(day)},
+			banner: "C17b", severity: SeverityAlarm},
+		{name: "C17b_a_garbled_read_time", f: LoginFileFacts{Retired: 1, MeasuredAt: -5},
+			banner: "C17b", severity: SeverityAlarm},
+		{name: "C17b_the_retired_devices_cannot_be_read", f: LoginFileFacts{NotRead: "the retired devices could not be read", MeasuredAt: read},
+			banner: "C17b", severity: SeverityAlarm, contains: "the retired devices could not be read"},
+		{name: "C17b_a_corrupt_retire_time_is_not_nothing", f: LoginFileFacts{Retired: 1, RetiredGarbled: 1, MeasuredAt: read},
+			banner: "C17b", severity: SeverityAlarm, contains: "unusable retire time"},
+		{name: "C17b_a_garbled_count", f: LoginFileFacts{Retired: -1, MeasuredAt: read},
+			banner: "C17b", severity: SeverityAlarm},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			v := JudgeLoginSync(c.f, t0)
-			if v.Status != c.status || v.Class != c.class {
-				t.Fatalf("verdict %+v, want %s %q", v, c.status, c.class)
-			}
 			w := healthyFleet(1, 2)
 			w.Probes = healthyProbes()
 			f := c.f
-			w.Probes.LoginSync = &f
+			w.Probes.LoginFile = &f
 			view := Evaluate(w, t0)
 			var got *Banner
 			for i, b := range view.Banners {
@@ -88,22 +83,36 @@ func TestC17_LoginSyncAgainstTheNewestRetire(t *testing.T) {
 func TestC17_NotSuppliedWhileWiredIsNotChecked(t *testing.T) {
 	w := healthyFleet(1, 2)
 	w.Probes = healthyProbes()
-	w.Probes.LoginSync = nil
+	w.Probes.LoginFile = nil
 	if got := bannerIDs(Evaluate(w, t0)); !reflect.DeepEqual(got, []string{"C17b"}) {
 		t.Fatalf("banners %v, want C17b", got)
 	}
 }
 
-// The banner clears by itself: only the facts change, and the engine holds no state.
-func TestC17_ClearsWhenASyncPasses(t *testing.T) {
+// The banner clears by itself, on a clean read: only the measured fact changes.
+func TestC17_ClearsOnACleanRead(t *testing.T) {
 	w := healthyFleet(1, 2)
 	w.Probes = healthyProbes()
-	w.Probes.LoginSync = &LoginSyncFacts{NewestRetireAt: ago(time.Hour), LastStartedAt: ago(time.Minute), LastStatus: "error", LastErrorClass: "io"}
+	w.Probes.LoginFile = &LoginFileFacts{Retired: 1, MeasuredAt: ago(time.Minute), InFile: 1}
 	if got := bannerIDs(Evaluate(w, t0)); !reflect.DeepEqual(got, []string{"C17"}) {
 		t.Fatalf("banners %v", got)
 	}
-	w.Probes.LoginSync = &LoginSyncFacts{NewestRetireAt: ago(time.Hour), LastStartedAt: ago(time.Second), LastStatus: "ok"}
+	w.Probes.LoginFile = &LoginFileFacts{Retired: 1, MeasuredAt: ago(time.Second)}
 	if got := bannerIDs(Evaluate(w, t0)); len(got) != 0 {
-		t.Fatalf("banners %v, want none after the sync passed", got)
+		t.Fatalf("banners %v, want none after a clean read", got)
+	}
+}
+
+// The default cadence applies when the fact names none.
+func TestC17_StalenessUsesTheProberCadenceByDefault(t *testing.T) {
+	w := healthyFleet(1, 2)
+	w.Probes = healthyProbes() // ProberInterval one minute
+	w.Probes.LoginFile = &LoginFileFacts{Retired: 1, MeasuredAt: ago(time.Duration(ProbeStaleIntervals)*time.Minute - time.Second)}
+	if got := bannerIDs(Evaluate(w, t0)); len(got) != 0 {
+		t.Fatalf("just inside the limit: %v", got)
+	}
+	w.Probes.LoginFile = &LoginFileFacts{Retired: 1, MeasuredAt: ago(time.Duration(ProbeStaleIntervals)*time.Minute + time.Second)}
+	if got := bannerIDs(Evaluate(w, t0)); !reflect.DeepEqual(got, []string{"C17b"}) {
+		t.Fatalf("just past the limit: %v", got)
 	}
 }

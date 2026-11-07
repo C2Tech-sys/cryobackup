@@ -7,6 +7,7 @@ import (
 
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
+	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -25,23 +26,36 @@ import (
 //
 // The answer tells the truth about the gateway. Revoking the login in the database
 // does not take it out of the file the gateway reads: the htpasswd-sync job does, and
-// it can fail. So a retire waits a few seconds for that job and answers gateway_login
-// removed or pending. Banner C17 stays up from the same judgement
-// (state.JudgeLoginSync) while it is pending, and clears when a sync passes.
+// it can fail. So a retire signals that job and reads the file, repeatedly, for a few
+// seconds. It answers gateway_login removed only when a read after its commit found the
+// login gone, and pending otherwise. Banner C17 comes from the same read.
+//
+// How long the answer can take after the commit: GatewaySyncWait, at most 5 s, for the
+// reads, plus retireAuditWait, at most 2 s, for the outcome's audit row: 7 s. Before the
+// commit a retire queues for the store's one writer like every other write, so that part
+// is bounded only by the request.
 
 // PatternDeviceRetire retires a device.
 const PatternDeviceRetire = "POST /api/v1/devices/{id}/retire"
 
-// DefaultGatewaySyncWait bounds a retire's wait for the login sync. A healthy sync
-// takes well under a second; a failing one answers as soon as it has failed.
+// DefaultGatewaySyncWait bounds a retire's wait for the login to leave the file. A
+// healthy sync takes well under a second; a failing one answers as soon as it has failed.
 const DefaultGatewaySyncWait = 5 * time.Second
+
+// retireAuditWait bounds the write of the outcome's audit row, for a store whose
+// writer has stalled: the retire has committed, and the answer must not hang on it.
+const retireAuditWait = 2 * time.Second
 
 // Values of DeviceRetireResponse.GatewayLogin.
 const (
 	GatewayLoginRemoved = "removed"
 	GatewayLoginPending = "pending"
-	// gatewaySyncNotWired is the reason when this console has no sync to signal.
-	gatewaySyncNotWired = "sync_not_wired"
+	// gatewayCheckNotWired is the reason when this console cannot read the file.
+	gatewayCheckNotWired = "check_not_wired"
+	// gatewayStillInFile is the reason when the login is in the file and the sync job has not reported a failure.
+	gatewayStillInFile = "still_in_file"
+	// gatewayCheckTimedOut is the reason when the read did not finish in its time.
+	gatewayCheckTimedOut = "check_timed_out"
 )
 
 // DeviceRetireRequest is the body of POST /api/v1/devices/{id}/retire.
@@ -89,39 +103,79 @@ func (s *Service) retireResponse(res store.RetireResult) DeviceRetireResponse {
 	return out
 }
 
-// gatewayLogin words a verdict for the answer and the audit row: anything not known
-// to be removed is pending, with its reason.
-func gatewayLogin(v state.LoginSyncVerdict) (status, reason string) {
-	if v.Status == state.LoginRemoved {
-		return GatewayLoginRemoved, ""
-	}
-	return GatewayLoginPending, v.Class
+// GatewayLoginState is one reading of a retired device's login in the file the gateway reads.
+type GatewayLoginState struct {
+	// Status is GatewayLoginRemoved or GatewayLoginPending.
+	Status string
+	// Reason is the class of a pending login.
+	Reason string
+	// InFile: a clean read found the login. False with a pending status means the file was not read.
+	InFile bool
 }
 
-// awaitLoginSync signals the sync and waits, within a bound, for a run that started
-// after the retire. It returns as soon as that run has an outcome. A signal can be
-// lost to a run holding the job's lease, so it is repeated while waiting.
-func (s *Service) awaitLoginSync(ctx context.Context, retiredAt time.Time) state.LoginSyncVerdict {
-	if s.SyncGateway == nil {
-		return state.LoginSyncVerdict{Status: state.LoginPending, Class: gatewaySyncNotWired}
+// GatewayLoginNow reads the file once. Only a clean read that does not find the login says
+// removed. The job's result only explains a login that is in the file.
+func (s *Service) GatewayLoginNow(ctx context.Context, deviceID string) GatewayLoginState {
+	if s.CheckGatewayLogins == nil {
+		return GatewayLoginState{Status: GatewayLoginPending, Reason: gatewayCheckNotWired}
+	}
+	// In its own goroutine: a read of a hung mount cannot be cancelled, and the caller's bound must still hold.
+	done := make(chan jobs.LoginFileCheck, 1)
+	go func() { done <- s.CheckGatewayLogins(ctx) }()
+	var c jobs.LoginFileCheck
+	select {
+	case c = <-done:
+	case <-ctx.Done():
+		return GatewayLoginState{Status: GatewayLoginPending, Reason: gatewayCheckTimedOut}
+	}
+	switch {
+	case c.ReadClass != "":
+		return GatewayLoginState{Status: GatewayLoginPending, Reason: c.ReadClass, InFile: c.Has(deviceID)}
+	case c.Has(deviceID):
+		reason := gatewayStillInFile
+		if j, err := s.Store.GetJobState(ctx, store.JobHtpasswdSync); err == nil && j.LastStatus == "error" && j.LastErrorClass != "" {
+			reason = j.LastErrorClass
+		}
+		return GatewayLoginState{Status: GatewayLoginPending, Reason: reason, InFile: true}
+	}
+	return GatewayLoginState{Status: GatewayLoginRemoved}
+}
+
+// syncFailedSince reports whether the job's newest run began at or after t and failed. It can
+// only end the wait early: a pending answer may be pessimistic, a removed one may not.
+func (s *Service) syncFailedSince(ctx context.Context, t time.Time) bool {
+	j, err := s.Store.GetJobState(ctx, store.JobHtpasswdSync)
+	return err == nil && j.LastStatus == "error" && j.LastStartedAt != nil && !j.LastStartedAt.Before(t)
+}
+
+// awaitLoginRemoved signals the sync and reads the file until the login is gone, the file cannot
+// be read, a run after the retire has failed, or the bound ends. A signal can be lost to a run
+// holding the job's lease, so it is repeated while waiting.
+func (s *Service) awaitLoginRemoved(ctx context.Context, deviceID string, retiredAt time.Time) GatewayLoginState {
+	if s.SyncGateway == nil || s.CheckGatewayLogins == nil {
+		return s.GatewayLoginNow(ctx, deviceID)
 	}
 	wait := s.GatewaySyncWait
 	if wait <= 0 {
 		wait = DefaultGatewaySyncWait
 	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
 	s.SyncGateway()
-	deadline, poll, again := time.NewTimer(wait), time.NewTicker(25*time.Millisecond), time.NewTicker(time.Second)
-	defer deadline.Stop()
+	poll, again := time.NewTicker(25*time.Millisecond), time.NewTicker(time.Second)
 	defer poll.Stop()
 	defer again.Stop()
 	for {
-		v := s.Fleet.LoginSync(ctx, retiredAt)
-		if v.Status == state.LoginRemoved || (v.Status == state.LoginPending && v.Class != state.LoginNoSyncSinceRetire) {
+		v := s.GatewayLoginNow(ctx, deviceID)
+		switch {
+		case v.Status == GatewayLoginRemoved:
+			return v
+		case !v.InFile && v.Reason != jobs.LoginFileBusy && v.Reason != gatewayCheckTimedOut: // the file cannot be read
+			return v
+		case v.InFile && s.syncFailedSince(ctx, retiredAt):
 			return v
 		}
 		select {
-		case <-deadline.C:
-			return v
 		case <-ctx.Done():
 			return v
 		case <-again.C:
@@ -147,24 +201,29 @@ func (s *Service) deviceRetire(w http.ResponseWriter, r *http.Request) {
 		s.failM2(w, r, err)
 		return
 	}
-	var verdict state.LoginSyncVerdict
+	var login GatewayLoginState
 	if res.Changed {
 		s.committed(r)
-		verdict = s.awaitLoginSync(r.Context(), *res.Device.RetiredAt)
-		status, reason := gatewayLogin(verdict)
-		// The retire stands whatever this row does; the answer below is still the truth.
-		if aerr := s.Store.RecordRetireSyncAudited(context.WithoutCancel(r.Context()), p.Scope, id, status, reason, actorOf(r, p)); aerr != nil {
+		s.deviceChanged(id) // at the commit: an open command poll returns, the agent's next call answers 401, and pages see RETIRED
+		login = s.awaitLoginRemoved(r.Context(), id, *res.Device.RetiredAt)
+		// The retire stands whatever this row does; the answer below is still the truth. A client that has gone
+		// away does not take the row with it, and a stalled writer cannot hold the answer.
+		actx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), retireAuditWait)
+		defer cancel()
+		if aerr := s.Store.RecordRetireSyncAudited(actx, p.Scope, id, login.Status, login.Reason, actorOf(r, p)); aerr != nil {
 			s.log().Error("admin api: the retire's sync outcome was not audited", logx.Class("audit"), logx.Err(aerr))
 		}
-		s.deviceChanged(id) // an open command poll returns, the agent's next call answers 401, and pages see the outcome
+		s.deviceChanged(id) // and again with the outcome: the banner may have moved
 	} else {
-		verdict = s.Fleet.LoginSync(r.Context(), *res.Device.RetiredAt)
-		if verdict.Status != state.LoginRemoved && s.SyncGateway != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), DefaultGatewaySyncWait)
+		defer cancel()
+		login = s.GatewayLoginNow(ctx, id)
+		if login.Status != GatewayLoginRemoved && s.SyncGateway != nil {
 			s.SyncGateway() // the repeat is a good moment to try again; the banner stays until it works
 		}
 	}
 	out := s.retireResponse(res)
-	out.GatewayLogin, out.GatewayLoginReason = gatewayLogin(verdict)
+	out.GatewayLogin, out.GatewayLoginReason = login.Status, login.Reason
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
@@ -180,7 +239,10 @@ func (s *Service) retireFinalBackup(w http.ResponseWriter, r *http.Request, p *a
 	}
 	if dev.RetiredAt != nil {
 		out := s.retireResponse(store.RetireResult{Device: dev})
-		out.GatewayLogin, out.GatewayLoginReason = gatewayLogin(s.Fleet.LoginSync(r.Context(), *dev.RetiredAt))
+		ctx, cancel := context.WithTimeout(r.Context(), DefaultGatewaySyncWait)
+		defer cancel()
+		login := s.GatewayLoginNow(ctx, id)
+		out.GatewayLogin, out.GatewayLoginReason = login.Status, login.Reason
 		httpx.WriteJSON(w, http.StatusOK, out)
 		return
 	}

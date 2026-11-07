@@ -39,6 +39,7 @@ const (
 	ProbeRowIntegrity = NameHealthProber + ".integrity"
 	ProbeRowMasterKey = NameHealthProber + ".master-key"
 	ProbeRowEndpoint  = NameHealthProber + ".agent-endpoint"
+	ProbeRowLoginFile = NameHealthProber + ".login-file"
 )
 
 // ProbeLease is the job_state lease that guards the probes themselves. The
@@ -125,6 +126,9 @@ const (
 // that cannot run is "not checked" (Unconfigured), never healthy and never a
 // failure of the thing it would have probed.
 type HealthProber struct {
+	// Logins is the sync job whose deployed file each tick measures (C17). Nil: not measured, which
+	// reads as not checked.
+	Logins  *HtpasswdSync
 	Store   *store.Store
 	Backend adminpath.Backend
 	Master  *escrow.MasterKey
@@ -601,7 +605,7 @@ func (h *HealthProber) Run(ctx context.Context) error {
 	}{
 		{ProbeRowGateway, h.probeGateway}, {ProbeRowStorage, h.probeStorage}, {ProbeRowSMTP, h.probeSMTP},
 		{ProbeRowMaintain, h.probeMaintain}, {ProbeRowDatabase, h.probeDatabase}, {ProbeRowMasterKey, h.probeMasterKey},
-		{ProbeRowEndpoint, h.mirrorEndpoint},
+		{ProbeRowEndpoint, h.mirrorEndpoint}, {ProbeRowLoginFile, h.probeLoginFile},
 	} {
 		h.start(pctx, p.row, p.fn) // one still running from an earlier tick is not doubled: only its own facts age
 	}
@@ -1070,7 +1074,7 @@ func (h *HealthProber) Facts() state.ProbeFacts {
 	if sm.LastRunAt == 0 && sm.Unconfigured == "" && !h.SMTP.Configured() {
 		sm.Unconfigured = unconfSMTP
 	}
-	return state.ProbeFacts{
+	p := state.ProbeFacts{
 		Wired:          true,
 		StartedAt:      ms(h.Started),
 		ProberInterval: h.interval(),
@@ -1081,6 +1085,35 @@ func (h *HealthProber) Facts() state.ProbeFacts {
 		Database:       &db,
 		MasterKey:      h.masterKeyFacts(now),
 	}
+	if h.Logins != nil {
+		p.LoginFile = h.Logins.Facts()
+		p.LoginFile.Interval = h.interval()
+	}
+	return p
+}
+
+// LoginFileProbeTimeout bounds one tick's read of the gateway's login file, including
+// its wait for a sync in flight.
+const LoginFileProbeTimeout = 10 * time.Second
+
+// probeLoginFile is the timer behind C17: each tick reads the deployed login file, so a
+// failed sync and an old copy put back are both seen within about a minute.
+func (h *HealthProber) probeLoginFile(ctx context.Context) result {
+	start := h.now()
+	if h.Logins == nil {
+		return result{row: ProbeRowLoginFile, status: "skipped", class: "not_configured", started: start, finished: start}
+	}
+	ctx, cancel := context.WithTimeout(ctx, LoginFileProbeTimeout)
+	defer cancel()
+	c := h.Logins.Check(ctx)
+	r := result{row: ProbeRowLoginFile, status: "ok", started: start, finished: h.now()}
+	switch {
+	case c.ReadClass != "":
+		r.status, r.class = "error", c.ReadClass
+	case len(c.InFile) > 0:
+		r.status, r.class = "error", "retired_login_in_file"
+	}
+	return r
 }
 
 // MaintainRPC is the newest maintain RPC probe (the C07 input), for callers

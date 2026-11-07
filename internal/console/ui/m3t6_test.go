@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
@@ -334,40 +337,146 @@ func TestM3T6B_RetiredDevicesCollapseUnderRetiredNOnEveryList(t *testing.T) {
 	}
 }
 
-// M1, on the page: a sync that has not passed since the retire reads pending, in the
-// notice and on the device page, and is never called revoked.
-func TestM3T6B_ASyncThatDidNotPassReadsPending(t *testing.T) {
+// On the page: a login a read finds in the file reads pending, in the notice and on the
+// device page, and is never called removed. A clean read clears it, by itself.
+func TestM3T6B_ALoginInTheFileReadsPending(t *testing.T) {
 	e := newEnv(t)
 	e.login()
-	e.syncDown = true
 	e.svc.m3.api.GatewaySyncWait = 60 * time.Millisecond
-	e.now = e.now.Add(time.Minute) // the fixtures' passing run is now from before the retire
 	id := e.dev["FRONTDESK-01"]
+	e.loginFile = func() jobs.LoginFileCheck { return jobs.LoginFileCheck{At: e.now, InFile: []string{id}} }
 	r := e.postForm("/ui/devices/"+id+"/retire", url.Values{"reason": {"compromised"}, "confirm": {"FRONTDESK-01"}})
-	if !strings.Contains(e.location(r), "cmd=retired_pending") || !strings.Contains(e.location(r), "why=no_sync_since_retire") {
+	if !strings.Contains(e.location(r), "cmd=retired_pending") || !strings.Contains(e.location(r), "why=still_in_file") {
 		t.Fatalf("went to %q", e.location(r))
 	}
 	page := e.page(e.location(r), 200)
-	mustContain(t, "pending", page, "Device retired, but its gateway login is not removed.", "the gateway may still accept this device&#39;s login until the sync succeeds", "Reason: no_sync_since_retire.")
-	if strings.Contains(page, "Its device token and gateway login are revoked") {
-		t.Error("the page says the login is revoked")
+	mustContain(t, "pending", page, "Device retired, but its gateway login is not removed.", "the gateway may still accept this device&#39;s login until the sync succeeds", "Reason: still_in_file.",
+		"A banner stays up while a read of the gateway&#39;s file finds the login or cannot read the file.")
+	if strings.Contains(page, "a read of the gateway&#39;s file finds no login") || strings.Contains(page, "critical banner stays up") {
+		t.Error("the page claims what it cannot know")
 	}
-	// A failed run after the retire: the page names its class, critical.
-	e.now = e.now.Add(time.Minute)
+	// A failed run explains it: the page names the class, critical.
 	if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: "error", ErrorClass: "io", StartedAt: e.now, FinishedAt: e.now}); err != nil {
 		t.Fatal(err)
 	}
 	mustContain(t, "failed run", e.page("/devices/"+id, 200), "gateway login not removed", "until the sync succeeds (reason: io)", `class="banner crit dense"`)
-	// A passing run clears it, by itself.
-	e.now = e.now.Add(time.Minute)
-	if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: "ok", StartedAt: e.now, FinishedAt: e.now}); err != nil {
+	// A read that fails is not removed, and says so as a warning.
+	e.loginFile = func() jobs.LoginFileCheck { return jobs.LoginFileCheck{At: e.now, ReadClass: jobs.LoginFileUnreadable} }
+	unread := e.page("/devices/"+id, 200)
+	mustContain(t, "unreadable", unread, "could not be read (reason: file_unreadable)", "may still accept this device&#39;s login until a read finds it gone", `class="banner warn dense"`)
+	// A clean read clears it, by itself.
+	e.loginFile = nil
+	cleared := e.page("/devices/"+id, 200)
+	mustContain(t, "cleared", cleared, "a read of the gateway&#39;s file finds no login for it")
+	if strings.Contains(cleared, "gateway login not removed") {
+		t.Error("still pending after a clean read")
+	}
+}
+
+// m12: an answer the page cannot read is pending, never removed.
+func TestM3T6B_AnUnreadableAnswerReadsPending(t *testing.T) {
+	e := newEnv(t)
+	for name, body := range map[string]string{"garbage": "not json", "empty": "", "no field": `{"retired":true}`} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/ui/devices/x/retire", nil)
+		e.svc.retireAnswered(rec, req, "x", []byte(body))
+		if loc := rec.Header().Get("Location"); !strings.Contains(loc, "cmd=retired_pending") {
+			t.Errorf("%s: went to %q", name, loc)
+		}
+	}
+}
+
+// L-a, m11: every mutation made through the pages' private API signals the real hub.
+func TestM3T6_EveryPageMutationThroughThePrivateAPISignalsTheRealHub(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	id := e.dev["FRONTDESK-01"]
+	gone := e.t6Token(e.customerID("Summit Eye Care"), "gone", true)
+	for _, c := range []struct {
+		name, path string
+		form       url.Values
+		wantLoc    string
+	}{
+		{"pause", "/ui/devices/" + id + "/pause", url.Values{"when": {"4"}, "reason": {"patching"}}, "cmd=parked"},
+		{"resume", "/ui/devices/" + id + "/resume", url.Values{}, "cmd=resumed"},
+		{"final backup", "/ui/devices/" + id + "/retire", url.Values{"reason": {"later"}, "confirm": {"FRONTDESK-01"}, "final_backup": {"1"}}, "cmd=final_backup_queued"},
+		{"retire", "/ui/devices/" + id + "/retire", url.Values{"reason": {"gone"}, "confirm": {"FRONTDESK-01"}}, "cmd=retired_ok"},
+		{"token delete", "/ui/enroll/tokens/" + gone + "/delete", url.Values{}, "saved=deleted"},
+	} {
+		before := e.hub.Generation()
+		r := e.postForm(c.path, c.form)
+		if !strings.Contains(e.location(r), c.wantLoc) {
+			t.Fatalf("%s: went to %q", c.name, e.location(r))
+		}
+		if after := e.hub.Generation(); after <= before {
+			t.Errorf("%s: the hub's generation stayed at %d: open pages would not re-render", c.name, before)
+		}
+	}
+}
+
+// L-b: the hub hears of a retire at the commit, not after the wait.
+func TestM3T6_ARetireSignalsTheHubAtTheCommit(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	id := e.dev["FRONTDESK-01"]
+	before := e.hub.Generation()
+	var atFirstRead atomic.Uint64
+	e.loginFile = func() jobs.LoginFileCheck {
+		atFirstRead.CompareAndSwap(0, e.hub.Generation()+1)
+		return jobs.LoginFileCheck{At: e.now}
+	}
+	if r := e.postForm("/ui/devices/"+id+"/retire", url.Values{"reason": {"gone"}, "confirm": {"FRONTDESK-01"}}); !strings.Contains(e.location(r), "cmd=retired_ok") {
+		t.Fatalf("went to %q", e.location(r))
+	}
+	if got := atFirstRead.Load(); got == 0 || got-1 <= before {
+		t.Errorf("the first read of the file saw generation %d, from %d: the hub had not been told of the commit", int64(got)-1, before)
+	}
+}
+
+// m10: a retire and a pause through the pages wake the device's open command poll.
+func TestM3T6_APageMutationWakesTheAgent(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	id := e.dev["FRONTDESK-01"]
+	woken := func() int {
+		e.apiWakeMu.Lock()
+		defer e.apiWakeMu.Unlock()
+		n := 0
+		for _, w := range e.apiWakes {
+			if w == id {
+				n++
+			}
+		}
+		return n
+	}
+	e.postForm("/ui/devices/"+id+"/pause", url.Values{"when": {"4"}, "reason": {"patching"}})
+	if woken() == 0 {
+		t.Error("a pause through the pages woke nothing")
+	}
+	e.apiWakeMu.Lock()
+	e.apiWakes = nil
+	e.apiWakeMu.Unlock()
+	if r := e.postForm("/ui/devices/"+id+"/retire", url.Values{"reason": {"gone"}, "confirm": {"FRONTDESK-01"}}); !strings.Contains(e.location(r), "cmd=retired_ok") {
+		t.Fatalf("went to %q", e.location(r))
+	}
+	if woken() == 0 {
+		t.Error("a retire through the pages woke nothing: the agent would sit in its long poll with a dead token")
+	}
+}
+
+// L-f: a retired_at of zero is corrupt: the page says retired, not nothing.
+func TestM3T6_ACorruptRetireTimeStillReadsAsRetired(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	id := e.dev["FRONTDESK-01"]
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE devices SET retired_at = 0 WHERE id = ?`, id)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	cleared := e.page("/devices/"+id, 200)
-	mustContain(t, "cleared", cleared, "Its device token and gateway login are revoked")
-	if strings.Contains(cleared, "gateway login not removed") {
-		t.Error("still pending after a passing run")
-	}
+	page := e.page("/devices/"+id, 200)
+	mustContain(t, "corrupt", page, "Retired, at a time that cannot be read")
 }
 
 // L4: no runs on a retired device is not an alarm, and the page does not call it one.

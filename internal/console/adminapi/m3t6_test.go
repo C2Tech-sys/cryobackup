@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +16,12 @@ import (
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/api"
+	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/escrow"
 	"github.com/c2tech-sys/cryobackup/internal/console/gateway"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
-	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // M3-T6: device retire and enrollment-token delete through the admin API, with the
@@ -136,6 +137,7 @@ func TestRetireCutsOffTheRealAgentAPIAndTheGeneratedHtpasswd(t *testing.T) {
 	// The real runner runs the real job, so the wait sees the run it records, as in serve.
 	runner := jobs.NewRunner(e.st, "m3t6-test", logx.New(io.Discard, logx.LevelError))
 	runner.Add(job.Job())
+	e.svc.CheckGatewayLogins = job.Check
 	synced := 0
 	e.svc.SyncGateway = func() {
 		synced++
@@ -459,9 +461,10 @@ func TestDeleteTokenThroughTheAPI(t *testing.T) {
 	e.mustReq("POST", "/api/v1/enrollment-tokens/"+exp.ID+"/delete", owner, nil, 204)
 }
 
-// M1: anything but a passing run after the retire reads pending, with its reason, within the bound.
-func TestRetireAnswersPendingUnlessASyncPassedAfterIt(t *testing.T) {
-	retireOf := func(t *testing.T, e *env, host string) DeviceRetireResponse {
+// The answer is what a read of the file found, and nothing else.
+func TestRetireAnswersWhatAReadOfTheFileFound(t *testing.T) {
+	const host = "FRONTDESK-02"
+	retireOf := func(t *testing.T, e *env) DeviceRetireResponse {
 		t.Helper()
 		res, b := e.req("POST", "/api/v1/devices/"+e.deviceNamed(host).ID+"/retire", e.login("admin", pw), DeviceRetireRequest{Reason: "r"})
 		if res.StatusCode != 200 {
@@ -469,59 +472,149 @@ func TestRetireAnswersPendingUnlessASyncPassedAfterIt(t *testing.T) {
 		}
 		return decode[DeviceRetireResponse](t, b)
 	}
-	record := func(t *testing.T, e *env, status, class string) {
+	realJob := func(t *testing.T, e *env) *jobs.HtpasswdSync {
 		t.Helper()
-		if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: status, ErrorClass: class, StartedAt: e.clk.Now(), FinishedAt: e.clk.Now()}); err != nil {
+		job, _ := retireHtpasswd(t, e)
+		if err := job.Run(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+		e.svc.CheckGatewayLogins = job.Check
+		return job
 	}
-	t.Run("no sync wired", func(t *testing.T) {
+	t.Run("no check wired", func(t *testing.T) {
 		e := newEnv(t)
-		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewaySyncNotWired {
+		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewayCheckNotWired {
 			t.Fatalf("%+v", got)
 		}
 	})
-	t.Run("the job never ran", func(t *testing.T) {
+	t.Run("the login is in the file and no sync comes", func(t *testing.T) {
 		e := newEnv(t)
-		if err := e.st.Write(context.Background(), func(tx *store.Tx) error { // the fixtures record a passing run
-			_, err := tx.Exec(`DELETE FROM job_state WHERE name = ?`, store.JobHtpasswdSync)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
+		realJob(t, e)
 		e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, 60*time.Millisecond
-		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != state.LoginNotChecked {
+		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewayStillInFile {
 			t.Fatalf("%+v", got)
 		}
 	})
-	t.Run("a pass from before the retire proves nothing", func(t *testing.T) {
+	t.Run("a job that reads ok proves nothing: only the file does", func(t *testing.T) {
 		e := newEnv(t)
-		record(t, e, "ok", "")
-		e.clk.Advance(time.Minute)
-		e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, 60*time.Millisecond
-		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != state.LoginNoSyncSinceRetire {
+		realJob(t, e)
+		e.svc.GatewaySyncWait = 60 * time.Millisecond
+		e.svc.SyncGateway = func() {
+			if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: "ok", StartedAt: e.clk.Now(), FinishedAt: e.clk.Now()}); err != nil {
+				t.Error(err)
+			}
+		}
+		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewayStillInFile {
 			t.Fatalf("%+v", got)
 		}
 	})
 	t.Run("a failed run answers at once with its class", func(t *testing.T) {
 		e := newEnv(t)
+		realJob(t, e)
 		e.svc.GatewaySyncWait = time.Minute // the test fails on time if it waits this out
-		e.svc.SyncGateway = func() { record(t, e, "error", "io") }
+		e.svc.SyncGateway = func() {
+			if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: "error", ErrorClass: "io", StartedAt: e.clk.Now(), FinishedAt: e.clk.Now()}); err != nil {
+				t.Error(err)
+			}
+		}
 		began := time.Now()
-		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != "io" {
+		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != "io" {
 			t.Fatalf("%+v", got)
 		}
 		if took := time.Since(began); took > 30*time.Second {
 			t.Errorf("it waited %v for a run that had already failed", took)
 		}
 	})
-	t.Run("a passing run answers removed", func(t *testing.T) {
+	t.Run("a file that cannot be read answers at once with its class", func(t *testing.T) {
 		e := newEnv(t)
-		e.svc.SyncGateway = func() { record(t, e, "ok", "") }
-		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginRemoved || got.GatewayLoginReason != "" {
+		job := realJob(t, e)
+		e.svc.GatewaySyncWait, e.svc.SyncGateway = time.Minute, func() {}
+		if err := os.Remove(filepath.Join(job.Dir, gateway.FileName)); err != nil {
+			t.Fatal(err)
+		}
+		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != jobs.LoginFileMissing {
 			t.Fatalf("%+v", got)
 		}
 	})
+	t.Run("a run that takes the login out answers removed", func(t *testing.T) {
+		e := newEnv(t)
+		job := realJob(t, e)
+		e.svc.SyncGateway = func() {
+			if err := job.Run(context.Background()); err != nil {
+				t.Error(err)
+			}
+		}
+		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginRemoved || got.GatewayLoginReason != "" {
+			t.Fatalf("%+v", got)
+		}
+	})
+	t.Run("a read that never returns cannot hold the answer", func(t *testing.T) {
+		e := newEnv(t)
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, 100*time.Millisecond
+		e.svc.CheckGatewayLogins = func(context.Context) jobs.LoginFileCheck { <-release; return jobs.LoginFileCheck{} }
+		began := time.Now()
+		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewayCheckTimedOut {
+			t.Fatalf("%+v", got)
+		}
+		if took := time.Since(began); took > 20*time.Second {
+			t.Errorf("a hung read held the answer for %v", took)
+		}
+	})
+}
+
+// L-c: a stalled writer after the commit cannot hold the answer past the audit row's bound.
+func TestRetireAnswerIsBoundedWhenTheWriterStallsAfterTheCommit(t *testing.T) {
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	release, stalled := make(chan struct{}), make(chan struct{})
+	finished := make(chan struct{})
+	t.Cleanup(func() { close(release); <-finished })
+	e.svc.CheckGatewayLogins = func(context.Context) jobs.LoginFileCheck { return jobs.LoginFileCheck{} }
+	e.svc.SyncGateway = func() {
+		go func() {
+			defer close(finished)
+			_ = e.st.Write(context.Background(), func(*store.Tx) error { close(stalled); <-release; return nil })
+		}()
+		<-stalled
+	}
+	began := time.Now()
+	res, b := e.req("POST", "/api/v1/devices/"+e.deviceNamed("FRONTDESK-02").ID+"/retire", owner, DeviceRetireRequest{Reason: "r"})
+	took := time.Since(began)
+	if res.StatusCode != 200 {
+		t.Fatalf("retire: %d %s", res.StatusCode, b)
+	}
+	if got := decode[DeviceRetireResponse](t, b); got.GatewayLogin != GatewayLoginRemoved {
+		t.Fatalf("%+v", got)
+	}
+	if took > retireAuditWait+3*time.Second {
+		t.Errorf("the answer took %v with the writer stalled: the audit row's write must be bounded at %v", took, retireAuditWait)
+	}
+}
+
+// m08: a client that goes away during the wait does not take the outcome's audit row with it.
+func TestRetireOutcomeRowOutlivesAClientThatLeft(t *testing.T) {
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	dev := e.deviceNamed("FRONTDESK-02")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.svc.GatewaySyncWait = time.Minute
+	e.svc.SyncGateway = cancel // the client leaves right after the commit
+	e.svc.CheckGatewayLogins = func(context.Context) jobs.LoginFileCheck { return jobs.LoginFileCheck{InFile: []string{dev.ID}} }
+	raw, _ := json.Marshal(DeviceRetireRequest{Reason: "r"})
+	req := httptest.NewRequest("POST", "/api/v1/devices/"+dev.ID+"/retire", bytes.NewReader(raw)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	for _, ck := range owner.cookies {
+		req.AddCookie(ck)
+	}
+	req.Header.Set(auth.CSRFHeader, owner.csrf)
+	e.srv.Config.Handler.ServeHTTP(httptest.NewRecorder(), req)
+	l, err := e.st.ListAudit(context.Background(), store.ScopeAll(), store.AuditFilter{Action: "device.retire_sync"}, store.Page{Limit: 5})
+	if err != nil || len(l.Items) != 1 || l.Items[0].ObjectID != dev.ID || !strings.Contains(string(l.Items[0].Details), `"gateway_login":"pending"`) {
+		t.Fatalf("outcome rows: %v %+v", err, l.Items)
+	}
 }
 
 // L1: final_backup keeps the reason and holds replaced_by to the retire's rule.

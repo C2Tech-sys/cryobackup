@@ -60,7 +60,7 @@ type RetireForm struct {
 // retireItem is the Retire entry of the action bar for a device.
 func (s *Service) retireItem(r *http.Request, p *auth.Principal, dev store.Device, retired, parked bool) ActionItem {
 	it := ActionItem{ID: "act-retire", Key: "retire", Label: "Retire…", CSRF: p.CSRF, Enabled: true,
-		Hint: "Revokes this device's token and gateway login and ends its backups for good. Its data stays."}
+		Hint: "Revokes this device's token, removes its gateway login and ends its backups for good. Its data stays."}
 	switch {
 	case retired:
 		it.Enabled, it.Why, it.Hint = false, "Already retired.", ""
@@ -103,7 +103,7 @@ func init() {
 	auditActionLabels["device.retire_sync"] = "Gateway login after a retire"
 	for k, v := range map[string]CauseView{
 		"retired_ok":          {Class: ClassOK, Title: "Device retired.", Text: "Its device token is revoked and its gateway login is gone from the gateway's file. Nothing was deleted: its repository stays in storage."},
-		"retired_pending":     {Class: ClassCrit, Title: "Device retired, but its gateway login is not removed.", Text: "The device token is revoked, but the gateway may still accept this device's login until the sync succeeds. A critical banner stays up until then."},
+		"retired_pending":     {Class: ClassCrit, Title: "Device retired, but its gateway login is not removed.", Text: "The device token is revoked, but the gateway may still accept this device's login until the sync succeeds. A banner stays up while a read of the gateway's file finds the login or cannot read the file."},
 		"final_backup_queued": {Class: ClassInfo, Title: "Final backup queued. The device is not retired yet.", Text: "A backup needs the credentials a retire takes away. When this one has finished, retire the device."},
 		"err_retire_confirm":  {Class: ClassCrit, Title: "Not retired.", Text: "Type the device name exactly to confirm."},
 		"err_retire_reason":   {Class: ClassCrit, Title: "Not retired.", Text: "A reason is required: one line, no file paths."},
@@ -152,10 +152,8 @@ func (s *Service) deviceRetirePost(w http.ResponseWriter, r *http.Request) {
 	}
 	switch status {
 	case http.StatusOK:
-		s.changed()
 		s.retireAnswered(w, r, id, resp)
 	case http.StatusAccepted:
-		s.changed()
 		back(w, r, id, "", "final_backup_queued")
 	case http.StatusConflict: // only the final backup can conflict: the device is parked
 		back(w, r, id, "", "err_parked")
@@ -224,20 +222,28 @@ func (s *Service) retiredCause(ctx context.Context, p *auth.Principal, dev store
 		}
 	}
 	title := "Retired " + c.dateClock(*dev.RetiredAt)
+	if dev.RetiredAt.UnixMilli() < store.MinPlausibleTime {
+		title = "Retired, at a time that cannot be read"
+	}
 	class := ClassNeutral
-	switch v := s.Fleet.LoginSync(ctx, *dev.RetiredAt); v.Status {
-	case state.LoginRemoved:
-		text = append(text, "Its device token and gateway login are revoked and no backups can reach the gateway.")
-	case state.LoginPending:
+	rctx, cancel := context.WithTimeout(ctx, retiredPageCheck)
+	defer cancel()
+	switch v := s.m3.api.GatewayLoginNow(rctx, dev.ID); {
+	case v.Status == adminapi.GatewayLoginRemoved:
+		text = append(text, "Its device token is revoked and a read of the gateway's file finds no login for it, so no backups can reach the gateway.")
+	case v.InFile:
 		class, title = ClassCrit, title+", gateway login not removed"
-		text = append(text, "Its device token is revoked, but the gateway may still accept this device's login until the sync succeeds (reason: "+v.Class+").")
+		text = append(text, "Its device token is revoked, but the gateway may still accept this device's login until the sync succeeds (reason: "+v.Reason+").")
 	default:
 		class = ClassWarn
-		text = append(text, "Its device token is revoked. Whether its gateway login has left the gateway's file is not checked: "+v.Why+".")
+		text = append(text, "Its device token is revoked. The gateway's file could not be read (reason: "+v.Reason+"), so the gateway may still accept this device's login until a read finds it gone.")
 	}
 	text = append(text, retiredAdvice)
 	return &CauseView{Class: class, Title: title, Text: strings.Join(text, " ")}
 }
+
+// retiredPageCheck bounds the device page's read of the gateway's file.
+const retiredPageCheck = time.Second
 
 // retiredAdvice is what the operator still has to do and cannot get from the console.
 const retiredAdvice = "Its repository is kept; restoring from a retired device is not available in the console yet. " +

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/gateway"
+	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
@@ -195,15 +197,8 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 		t.Fatalf("before any retire: %s", b)
 	}
 
-	// The fault. Windows has no directory permission bits, so a plain file takes the directory's place: every
-	// platform's temp-file create fails, as on an unwritable mount. The deployed file itself is untouched.
-	aside := w.dir + ".aside"
-	if err := os.Rename(w.dir, aside); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(w.dir, []byte("not a directory"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// The fault: the sync cannot replace the file, and the file can still be read.
+	restore := blockLoginFileWrites(t, w.dir)
 
 	// The answer is pending, within the bound, with the reason class.
 	began := time.Now()
@@ -215,10 +210,10 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 		t.Fatalf("answer: %+v, want pending with reason io", got)
 	}
 	// The login really is still in the file, and the critical banner says so.
-	if !w.inFile(aside, dead) {
+	if !w.inFile(w.dir, dead) {
 		t.Fatal("the test proves nothing: the login left the file")
 	}
-	if b := w.banner("C17"); !strings.HasPrefix(b, "critical: ") || !strings.Contains(b, "the gateway may still accept it until the sync succeeds") || !strings.Contains(b, "io") {
+	if b := w.banner("C17"); !strings.HasPrefix(b, "critical: ") || !strings.Contains(b, "the gateway may still accept it until the sync succeeds") {
 		t.Fatalf("banner C17 = %q", b)
 	}
 	// The device page and the audit row say the same.
@@ -239,7 +234,7 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 		t.Fatalf("UI retire went to %q", loc)
 	}
 	_, notice := w.c.do("GET", loc, nil)
-	for _, want := range []string{"its gateway login is not removed", "the gateway may still accept this device&#39;s login until the sync succeeds", "Reason: io."} {
+	for _, want := range []string{"its gateway login is not removed", "the gateway may still accept this device&#39;s login until the sync succeeds", "Reason: io.", "A banner stays up"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the notice does not say %q", want)
 		}
@@ -249,13 +244,21 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 		t.Errorf("repeat: %+v", again)
 	}
 
+	// A read that fails while the login is in the file does not clear the banner: only a clean read does.
+	path := filepath.Join(w.dir, gateway.FileName)
+	restore()
+	if err := os.Rename(path, path+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	app.Htpasswd.Check(ctx)
+	if b := w.banner("C17"); !strings.HasPrefix(b, "critical: ") {
+		t.Errorf("a failed read cleared the banner: C17 = %q", b)
+	}
+	if err := os.Rename(path+".aside", path); err != nil {
+		t.Fatal(err)
+	}
+
 	// The fix. The next sync removes the logins and the banner clears, with no second retire row.
-	if err := os.Remove(w.dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(aside, w.dir); err != nil {
-		t.Fatal(err)
-	}
 	w.waitFor("the next sync to remove the logins", func() bool {
 		app.Htpasswd.Sig.Notify()
 		return !w.inFile(w.dir, dead) && !w.inFile(w.dir, viaUI)
@@ -293,4 +296,118 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 	if b := w.banner("C17"); b != "" {
 		t.Errorf("banner after a clean retire: %s", b)
 	}
+}
+
+// blockLoginFileWrites makes the sync unable to replace the deployed file while the file stays
+// readable, and returns the way back. Windows has no directory permission bits, and refuses to
+// rename over a read-only file; elsewhere a read-only directory refuses the temp file.
+func blockLoginFileWrites(t *testing.T, dir string) (restore func()) {
+	t.Helper()
+	path := filepath.Join(dir, gateway.FileName)
+	if runtime.GOOS == "windows" {
+		if err := os.Chmod(path, 0o444); err != nil {
+			t.Fatal(err)
+		}
+		done := false
+		restore = func() {
+			if !done {
+				done = true
+				if err := os.Chmod(path, 0o640); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		t.Cleanup(restore)
+		return restore
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.CreateTemp(dir, "probe"); err == nil { // root ignores the mode bits
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		_ = os.Chmod(dir, 0o755)
+		t.Skip("this user can write to a read-only directory: the fault cannot be made here")
+	}
+	done := false
+	restore = func() {
+		if !done {
+			done = true
+			if err := os.Chmod(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Cleanup(restore)
+	return restore
+}
+
+// The file cannot be read at all, and nothing has been seen in it: pending with the class,
+// C17b and not C17. Then it can, and everything clears.
+func TestRetireWithAnUnreadableFileReadsNotCheckedInRealServeWiring(t *testing.T) {
+	w, ids := r3World(t, 3)
+	app, ctx := w.app, context.Background()
+	if err := os.Rename(w.dir, w.dir+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(w.dir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := w.retire(ids[0])
+	if got.GatewayLogin != adminapi.GatewayLoginPending || (got.GatewayLoginReason != jobs.LoginFileUnreadable && got.GatewayLoginReason != jobs.LoginFileMissing) {
+		t.Fatalf("answer: %+v", got)
+	}
+	if b := w.banner("C17b"); !strings.Contains(b, "cannot be read") {
+		t.Errorf("C17b = %q", b)
+	}
+	if b := w.banner("C17"); b != "" {
+		t.Errorf("nothing was read, yet C17 = %q", b)
+	}
+	if d := w.auditDetails(ids[0]); len(d) != 1 || !strings.Contains(d[0], `"gateway_login":"pending"`) {
+		t.Errorf("audit: %v", d)
+	}
+	if err := os.Remove(w.dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(w.dir+".aside", w.dir); err != nil {
+		t.Fatal(err)
+	}
+	app.Htpasswd.Sig.Notify()
+	w.waitFor("the sync and a clean read", func() bool { app.Htpasswd.Sig.Notify(); return !w.inFile(w.dir, ids[0]) })
+	w.waitFor("the banner to clear", func() bool { return w.banner("C17b") == "" && w.banner("C17") == "" })
+	if c := app.Htpasswd.Check(ctx); c.ReadClass != "" || c.Has(ids[0]) {
+		t.Errorf("check: %+v", c)
+	}
+}
+
+// An old copy of the file put back, with the job reading ok: the prober's tick reads the file,
+// and C17 comes up with no sync having run. The sync then repairs it, and it clears.
+func TestAnOldCopyOfTheFilePutBackIsSeenByTheProbersTick(t *testing.T) {
+	w, ids := r3World(t, 2)
+	app := w.app
+	path := filepath.Join(w.dir, gateway.FileName)
+	old, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.retire(ids[0]); got.GatewayLogin != adminapi.GatewayLoginRemoved {
+		t.Fatalf("answer: %+v", got)
+	}
+	if b := w.banner("C17"); b != "" {
+		t.Fatalf("before: %s", b)
+	}
+	if err := os.WriteFile(path, old, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	// One tick of the real prober, by hand: the test does not wait out its 60 s.
+	if err := app.Prober.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.Prober.Wait()
+	if b := w.banner("C17"); !strings.HasPrefix(b, "critical: ") {
+		t.Fatalf("the tick did not see the old copy: C17 = %q", b)
+	}
+	app.Htpasswd.Sig.Notify()
+	w.waitFor("the sync to repair the file", func() bool { return !w.inFile(w.dir, ids[0]) })
+	w.waitFor("the banner to clear", func() bool { return w.banner("C17") == "" })
 }

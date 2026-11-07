@@ -592,10 +592,6 @@ func loadFixtures(tx *Tx, now time.Time, cfg fixtureConfig) error {
 
 	seedFixtureCommands(exec, now, adminID, devID) // M2-W2C (fixtures_commands_m2.go)
 
-	// The login sync passed after the fixture fleet's retire, so its retired device raises no C17 (M3-T6).
-	exec(`INSERT INTO job_state (name, last_started_at, last_finished_at, last_status, run_count, created_at, updated_at) VALUES (?,?,?,'ok',1,?,?)`,
-		JobHtpasswdSync, nowMS, nowMS, nowMS, nowMS)
-
 	// a short audit trail
 	for _, ev := range []AuditEvent{
 		{ActorType: "system", Method: "system", Action: "fixtures.load", ObjectType: "system"},

@@ -211,16 +211,19 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	a.Agent = &agentapi.Service{Store: a.Store, Keys: a.Keys, Backend: a.Backend, GatewayURL: cfg.GatewayURL, Clock: a.clock, Log: a.log, Pub: a.Hub,
 		HtpasswdSync: a.Htpasswd.Sig.Notify, Limits: cfg.RateLimits, Notifier: agentapi.NewNotifier()}
 	wake := a.Agent.Notifier.Notify // M2-W2C: a queued command wakes the device's open long poll
-	syncGateway := a.Htpasswd.Sig.Notify
-	if fix { // no gateway and no job in fixtures mode: the fictional sync passes, so a retire answers removed
-		syncGateway = func() { _ = fixtures.RecordLoginSync(context.Background(), a.Store, a.clock()) }
+	if a.Prober != nil {
+		a.Prober.Logins = a.Htpasswd // each tick reads the deployed login file (C17)
+	}
+	checkLogins := a.Htpasswd.Check
+	if fix { // no gateway and no file in fixtures mode: the fictional file holds no retired login
+		checkLogins = func(context.Context) jobs.LoginFileCheck { return jobs.LoginFileCheck{At: a.clock()} }
 	}
 	a.Admin = &adminapi.Service{Auth: a.Auth, Store: a.Store, Fleet: fleet, Restores: a.Restores, Backend: a.Backend, Clock: a.clock, Log: a.log, Loc: disp.Loc(), Display: disp,
-		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: syncGateway,
+		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify, CheckGatewayLogins: checkLogins,
 		Events: a.Hub, MaxEventStreams: cfg.RateLimits.EventStreamsMax, MaxEventStreamsPerPrincipal: cfg.RateLimits.EventStreamsPerAccount}
 	u, err := ui.New(&ui.Service{Auth: a.Auth, Store: a.Store, Fleet: fleet, Restores: a.Restores, Backend: a.Backend, Hub: a.Hub, Clock: a.clock, Loc: disp.Loc(), Display: disp,
 		Zone: disp.Zone(), Refresh: disp.RefreshS(), Fixtures: fix, Log: a.log, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status,
-		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: syncGateway})
+		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify, CheckGatewayLogins: checkLogins})
 	if err != nil {
 		return nil, err
 	}
