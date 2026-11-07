@@ -399,16 +399,24 @@ func TestAnOldCopyOfTheFilePutBackIsSeenByTheProbersTick(t *testing.T) {
 	if b := w.banner("C17"); b != "" {
 		t.Fatalf("before: %s", b)
 	}
-	if err := os.WriteFile(path, old, 0o640); err != nil {
-		t.Fatal(err)
+	// One tick of the real prober, by hand: the test does not wait out its 60 s. A sync still queued can repair
+	// the file first, which is right, and a tick in flight is not doubled and may have read before the copy
+	// went back. So: put it back, run a tick that begins after that, and judge only a file that still holds it.
+	seen := false
+	for i := 0; i < 20 && !seen; i++ {
+		if err := os.WriteFile(path, old, 0o640); err != nil {
+			time.Sleep(20 * time.Millisecond) // the job's rename, on Windows
+			continue
+		}
+		app.Prober.Wait() // a tick already in flight ends first
+		if err := app.Prober.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		app.Prober.Wait()
+		seen = strings.HasPrefix(w.banner("C17"), "critical: ") && w.inFile(w.dir, ids[0])
 	}
-	// One tick of the real prober, by hand: the test does not wait out its 60 s.
-	if err := app.Prober.Run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	app.Prober.Wait()
-	if b := w.banner("C17"); !strings.HasPrefix(b, "critical: ") {
-		t.Fatalf("the tick did not see the old copy: C17 = %q", b)
+	if !seen {
+		t.Fatal("the tick never saw the old copy")
 	}
 	app.Htpasswd.Sig.Notify()
 	w.waitFor("the sync to repair the file", func() bool { return !w.inFile(w.dir, ids[0]) })
