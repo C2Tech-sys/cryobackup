@@ -296,7 +296,7 @@ func (a *App) Run(parent context.Context) (err error) {
 	// here, so the Hub and the self-probe below stop too.
 	err = a.Server.Serve(ctx)
 	if err != nil {
-		a.log.Error("a listener failed; the console is shutting down", logx.Class("listener_failed"))
+		a.log.Error("the console is shutting down after a listener failure", logx.Class("listener_failed"))
 		err = fmt.Errorf("cli: a listener failed: %w", err)
 	}
 	cancel()
