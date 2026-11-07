@@ -17,7 +17,6 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/agent/supervisor"
 	"github.com/c2tech-sys/cryobackup/internal/agent/uplink"
 	"github.com/c2tech-sys/cryobackup/internal/api"
-	"github.com/c2tech-sys/cryobackup/internal/buildinfo"
 	"github.com/c2tech-sys/cryobackup/internal/policy"
 	"github.com/c2tech-sys/cryobackup/internal/ulid"
 )
@@ -155,7 +154,7 @@ func Enroll(ctx context.Context, o EnrollOptions) (EnrollResult, error) {
 	}
 
 	client, err := uplink.New(uplink.Options{
-		BaseURL: cfg.ServerURL, AgentVersion: buildinfo.Version, InsecureLab: cfg.InsecureLab,
+		BaseURL: cfg.ServerURL, AgentVersion: versionLabel(), InsecureLab: cfg.InsecureLab,
 		SPKIPin: cfg.SPKIPin, Proxy: cfg.Proxy, Clock: clock, HTTPClient: o.HTTPClient,
 	})
 	if err != nil {
@@ -164,7 +163,7 @@ func Enroll(ctx context.Context, o EnrollOptions) (EnrollResult, error) {
 	h := collectHost()
 	req := api.EnrollRequest{
 		Nonce: cfg.EnrollNonce, Hostname: h.Hostname, OS: h.OS, OSVersion: h.OSVersion, Arch: h.Arch,
-		DeviceClass: h.Class, HWFingerprint: h.HWFingerprint, AgentVersion: buildinfo.Version,
+		DeviceClass: h.Class, HWFingerprint: h.HWFingerprint, AgentVersion: versionLabel(),
 		ResticVersion: supervisor.PinnedVersion,
 	}
 	// Answers that mean "try again later" (429, 503, 502/504, transport

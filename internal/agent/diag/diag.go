@@ -112,7 +112,7 @@ func Status(ctx context.Context, stateDir string, now time.Time) (Report, error)
 		stateDir = config.DefaultStateDir()
 	}
 	layout := config.Layout{Root: stateDir}
-	r := Report{AgentVersion: buildinfo.Version, ServiceState: service.State(), ReportedAtDevice: now}
+	r := Report{AgentVersion: api.VersionLabel(buildinfo.Version), ServiceState: service.State(), ReportedAtDevice: now}
 	// Read before agent.json: after a quarantine the device is not enrolled.
 	r.VerdictChecked = config.VerdictLocation(layout.Root)
 	r.DefaultStateDir = config.VerdictID(layout.Root) == config.VerdictID(config.DefaultStateDir())

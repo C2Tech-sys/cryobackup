@@ -249,3 +249,12 @@ func VersionShape(s string) bool { return len(s) <= 64 && versionShapeRE.MatchSt
 // UnknownVersion is what the console stores for a run whose agent_version is not
 // version-shaped. It is itself version-shaped, so the pages show it as it is.
 const UnknownVersion = "unknown"
+
+// VersionLabel is s when it is version-shaped and UnknownVersion otherwise: what an
+// agent reports and what a page may show. A label decides nothing else.
+func VersionLabel(s string) string {
+	if VersionShape(s) {
+		return s
+	}
+	return UnknownVersion
+}
