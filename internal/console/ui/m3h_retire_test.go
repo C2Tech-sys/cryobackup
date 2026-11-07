@@ -12,7 +12,7 @@ import (
 // fault is repaired, and the device page's short read then meets a busy slot. It said the file
 // "could not be read" and the gateway "may still accept" the login, though the newest clean read,
 // taken after the retire, had found it gone. The page reads that read.
-func TestRetiredPageWithASyncInFlightReadsTheNewestCleanRead(t *testing.T) {
+func TestRetiredPageWithASyncInFlightSaysPending(t *testing.T) {
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -27,12 +27,12 @@ func TestRetiredPageWithASyncInFlightReadsTheNewestCleanRead(t *testing.T) {
 	e.loginFile = func() jobs.LoginFileCheck {
 		return jobs.LoginFileCheck{At: e.now, ReadClass: jobs.LoginFileBusy, CleanAt: after}
 	}
+	// An old copy of the file may have been put back since that clean read: only a read now proves
+	// the login is gone, so a busy read is pending.
 	page := e.page("/devices/"+id, 200)
-	mustContain(t, "busy, gone at the newest clean read", page, "finds no login for it")
-	for _, bad := range []string{"may still accept", "could not be read", "sync_busy"} {
-		if strings.Contains(page, bad) {
-			t.Errorf("the page says %q though the newest clean read found the login gone", bad)
-		}
+	mustContain(t, "busy, gone at an older clean read", page, "may still accept")
+	if strings.Contains(page, "finds no login for it") {
+		t.Errorf("a busy read answered removed from an older clean read")
 	}
 
 	// The newest clean read still holds the login: that is what the page says.

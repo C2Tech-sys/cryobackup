@@ -61,7 +61,7 @@ commands assume the systemd units in `deploy/systemd/`; under compose, use the m
 | --- | --- |
 | Do | On the lab database, with the console running: `sudo -u cryobackup sqlite3 /var/lib/cryobackup/console.db 'ALTER TABLE device_presence RENAME TO device_presence_drill;'` (use your `db_path`). |
 | Expect | Within **one refresh** (30 s): every device reads **UNKNOWN**, and a critical banner reads **"Partial data: N devices could not be classified (N load errors)"**. The board is not green and shows no all-clear. |
-| Undo | `ALTER TABLE device_presence_drill RENAME TO device_presence;`. The states and the banner recover by themselves within one refresh. |
+| Undo | `sudo -u cryobackup sqlite3 <db> 'ALTER TABLE device_presence_drill RENAME TO device_presence;'`. The states and the banner recover by themselves within one refresh. |
 | Fail if | Any device reads OK while the table is gone. |
 
 ## Step 5. Break or stop the agent listener: C04 (operator, sudo)
@@ -101,7 +101,7 @@ commands assume the systemd units in `deploy/systemd/`; under compose, use the m
 | Expect | The answer comes back within **about 5 s** (up to 7 s, longer only if the disk hangs in a commit; ADR 0016). The page says the device is retired and the gateway login is **not removed**, with the reason class. The device is RETIRED. |
 | Expect | The critical banner within **60 s** (the next login-file read): **"The gateway login of a retired device is still in the gateway file: the gateway may still accept it until the sync succeeds."** |
 | Look | Audit log: one `device.retire` and one `device.retire_sync` with result pending. |
-| Undo | `sudo chmod 0755 <gateway_auth_dir>` (your original mode). Within **5 minutes** (the next htpasswd-sync) the login leaves the file, the banner clears at the next read, and the device page says no login remains. |
+| Undo | `sudo chmod 0750 <gateway_auth_dir>` (the mode the unit's StateDirectoryMode sets; use your original if it differs). Within about **5 minutes** (the next htpasswd-sync, 4.5 to 5.5 min with the runner's jitter) the login leaves the file, the banner clears at the next read, and the device page says no login remains. |
 | Fail if | The answer claims the login was removed; no banner; the retire was refused because the file could not be written. |
 
 ## Step 9. The old file put back: C17 (operator, sudo)
@@ -109,7 +109,7 @@ commands assume the systemd units in `deploy/systemd/`; under compose, use the m
 | | |
 | --- | --- |
 | Do | Before retiring a device, `sudo cp -p <gateway_auth_dir>/<file> /root/htpasswd.old`. Retire it and wait until the page says no login remains. Put the old copy back: `sudo cp -p /root/htpasswd.old <gateway_auth_dir>/<file>`. Delete the copy afterwards: it holds password hashes. |
-| Expect | Within **60 s** the same critical C17 banner: the deployed file, not the database, is the proof of a removed login. The next htpasswd-sync (at most 5 minutes) repairs the file, and the banner clears. |
+| Expect | Within **60 s** the same critical C17 banner: the deployed file, not the database, is the proof of a removed login. The next htpasswd-sync (about 5 minutes, at most 5.5) repairs the file, and the banner clears. |
 | Fail if | No banner while a retired login is in the file. |
 
 ## Step 10. Real signals under systemd (operator, sudo; also automated)
@@ -119,7 +119,7 @@ commands assume the systemd units in `deploy/systemd/`; under compose, use the m
 | Do (clean stop) | With agents connected and a board open, `sudo systemctl stop cryo-console`, then `systemctl show -p ExecMainStatus cryo-console`. |
 | Expect | `ExecMainStatus=0`. It stops within **65 s** (`shutdownWorstCase`), usually a few seconds. |
 | Do (listener failure) | `sudo ss -K state listening sport = :<agent port>` kills the listening socket (needs a kernel with `CONFIG_INET_DIAG_DESTROY`; if it reports nothing killed, record the step as not run and rely on the automated test). |
-| Expect | Journal: `listener failed` with `"listener":"agent"` and class `listener_failed`. The process exits within 65 s, even with every connection slot held by open streams. `ExecMainStatus=1`, and `Restart=on-failure` starts it again 5 s later. |
+| Expect | Journal: `listener failed` with `"listener":"agent"` and class `listener_failed`. The process exits within 65 s. (If the listener that dies is the one whose every connection slot is held, the death is noticed only when a slot frees.) `ExecMainStatus=1`, and `Restart=on-failure` starts it again 5 s later. |
 | Automated | `TestServeEndsOnCancelWithEverySlotHeld`, `TestServeEndsOnListenerFailureWithTheOtherFull`, `TestServeListenerFailureEndsRunWithAnError`, `TestServeExitCode`. |
 | Fail if | Exit 0 after a listener failure; a console left running with a dead listener and no log line. |
 

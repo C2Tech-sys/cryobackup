@@ -117,10 +117,10 @@ type GatewayLoginState struct {
 }
 
 // GatewayLoginNow reads the file once for a device retired at retiredAt. Only a clean read that
-// began after the retire and does not find the login says removed. A sync in flight holds the
-// slot, which is the normal state right after a fault is repaired: the read that met it answers
-// from the newest clean read, so a page does not call a removed login pending because a run is
-// busy. The job's result only explains a login that is in the file.
+// began after the retire and does not find the login says removed. A read that meets a sync in
+// flight is pending (sync_busy), never removed from an older read: an old copy of the file can have
+// been put back since. A page converges on its next load. The job's result only explains a login
+// that is in the file.
 func (s *Service) GatewayLoginNow(ctx context.Context, deviceID string, retiredAt time.Time) GatewayLoginState {
 	if s.CheckGatewayLogins == nil {
 		return GatewayLoginState{Status: GatewayLoginPending, Reason: gatewayCheckNotWired}
@@ -144,8 +144,8 @@ func (s *Service) GatewayLoginNow(ctx context.Context, deviceID string, retiredA
 	switch {
 	case c.Has(deviceID):
 		return GatewayLoginState{Status: GatewayLoginPending, Reason: s.inFileReason(ctx, c), InFile: true}
-	case c.ReadClass == jobs.LoginFileBusy && c.ReadSince(retiredAt):
-		return GatewayLoginState{Status: GatewayLoginRemoved}
+	// A busy read is pending, even when an older clean read found the login gone: an old copy of
+	// the file can have been put back since, and only a read now can prove it is not there.
 	case c.ReadClass != "":
 		return GatewayLoginState{Status: GatewayLoginPending, Reason: c.ReadClass}
 	}
