@@ -105,13 +105,13 @@ func (s *Store) CreateEnrollmentToken(ctx context.Context, scope Scope, t Enroll
 }
 
 // ListEnrollmentTokens returns tokens inside scope, newest first; customerID ""
-// means every customer in scope.
+// means every customer in scope. A deleted token is not listed.
 func (s *Store) ListEnrollmentTokens(ctx context.Context, scope Scope, customerID string) ([]EnrollmentToken, error) {
 	if err := scope.check(); err != nil {
 		return nil, err
 	}
 	clause, args := scope.clause("customer_id")
-	q := `SELECT ` + enrollTokenCols + ` FROM enrollment_tokens WHERE ` + clause
+	q := `SELECT ` + enrollTokenCols + ` FROM enrollment_tokens WHERE deleted_at IS NULL AND ` + clause
 	if customerID != "" {
 		q, args = q+` AND customer_id = ?`, append(args, customerID)
 	}
@@ -188,7 +188,7 @@ func (s *Store) ConsumeEnrollmentToken(ctx context.Context, tokenHash string) (E
 func consumeToken(tx *Tx, tokenHash string) (EnrollmentToken, error) {
 	now := tx.nowMS()
 	t, err := one(tx, `UPDATE enrollment_tokens SET used_count = used_count + 1, updated_at = ?
-		WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ? AND (max_uses IS NULL OR used_count < max_uses)
+		WHERE token_hash = ? AND revoked_at IS NULL AND deleted_at IS NULL AND expires_at > ? AND (max_uses IS NULL OR used_count < max_uses)
 		RETURNING `+enrollTokenCols, []any{now, tokenHash, now}, scanEnrollToken)
 	if err == nil {
 		return t, nil

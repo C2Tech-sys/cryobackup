@@ -148,6 +148,8 @@ func conflictReason(err error) string {
 		return "command_expired"
 	case errors.Is(err, store.ErrNoIdentityConflict):
 		return "no_identity_conflict"
+	case errors.Is(err, store.ErrTokenLive):
+		return "token_live"
 	case errors.Is(err, store.ErrConflict):
 		return "conflict"
 	}

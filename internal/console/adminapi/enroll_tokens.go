@@ -23,6 +23,9 @@ const (
 	PatternEnrollToken       = "GET /api/v1/enrollment-tokens/{id}"
 	PatternEnrollTokenRevoke = "DELETE /api/v1/enrollment-tokens/{id}"
 	PatternEnrollTokenScript = "GET /api/v1/enrollment-tokens/{id}/script"
+	// PatternEnrollTokenDelete hides a revoked or expired token from the lists (M3-T6,
+	// ADR 0016). It is not DELETE on the token: that route is the revoke (§5.2).
+	PatternEnrollTokenDelete = "POST /api/v1/enrollment-tokens/{id}/delete"
 
 	// EnrollTokenHeader carries the secret into the script route. A header, not
 	// a query parameter: query strings end up in proxy logs and browser history.
@@ -32,11 +35,11 @@ const (
 // EnrollPatterns lists the enrollment routes with the role each needs.
 func EnrollPatterns() map[string]string {
 	return map[string]string{PatternEnrollTokens: "AD", PatternEnrollTokenCreate: "AD", PatternEnrollToken: "AD",
-		PatternEnrollTokenRevoke: "AD", PatternEnrollTokenScript: "AD"}
+		PatternEnrollTokenRevoke: "AD", PatternEnrollTokenScript: "AD", PatternEnrollTokenDelete: "AD"}
 }
 
 func enrollPatternList() []string {
-	return []string{PatternEnrollTokens, PatternEnrollTokenCreate, PatternEnrollToken, PatternEnrollTokenRevoke, PatternEnrollTokenScript}
+	return []string{PatternEnrollTokens, PatternEnrollTokenCreate, PatternEnrollToken, PatternEnrollTokenRevoke, PatternEnrollTokenScript, PatternEnrollTokenDelete}
 }
 
 func (s *Service) registerEnroll(r httpx.Registrar) {
@@ -46,6 +49,7 @@ func (s *Service) registerEnroll(r httpx.Registrar) {
 	r.Handle(PatternEnrollToken, ad(s.getEnrollToken))
 	r.Handle(PatternEnrollTokenRevoke, ad(s.revokeEnrollToken))
 	r.Handle(PatternEnrollTokenScript, ad(s.enrollTokenScript))
+	r.Handle(PatternEnrollTokenDelete, ad(s.deleteEnrollToken))
 }
 
 // EnrollTokenJSON is a token as the API shows it: never the secret, never its hash.
@@ -67,17 +71,21 @@ type EnrollTokenJSON struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	// DeletedAt is set on a token an admin hid from the lists; only a direct read still finds it.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }
 
 // EnrollTokenListResponse is GET /api/v1/enrollment-tokens.
 type EnrollTokenListResponse struct {
 	ComputedAt time.Time `json:"computed_at"`
 	// Total counts the tokens that match, Of every token in the caller's scope.
-	Total      int               `json:"total"`
-	Of         int               `json:"of"`
-	Truncated  bool              `json:"truncated"`
-	NextCursor string            `json:"next_cursor,omitempty"`
-	Tokens     []EnrollTokenJSON `json:"tokens"`
+	Total      int    `json:"total"`
+	Of         int    `json:"of"`
+	Truncated  bool   `json:"truncated"`
+	NextCursor string `json:"next_cursor,omitempty"`
+	// Counts is how many tokens hold each status under the customer filter, whatever the status filter says.
+	Counts map[string]int    `json:"counts"`
+	Tokens []EnrollTokenJSON `json:"tokens"`
 }
 
 // EnrollTokenResponse is GET /api/v1/enrollment-tokens/{id}.
@@ -122,6 +130,9 @@ func enrollTokenJSON(r store.EnrollTokenRow, now time.Time) EnrollTokenJSON {
 	if r.RevokedAt != nil {
 		out.RevokedAt = ptrTime(*r.RevokedAt)
 	}
+	if r.DeletedAt != nil {
+		out.DeletedAt = ptrTime(*r.DeletedAt)
+	}
 	return out
 }
 
@@ -139,7 +150,7 @@ func (s *Service) listEnrollTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.Store.Now()
-	resp := EnrollTokenListResponse{ComputedAt: now, Total: l.Page.Total, Of: l.All, Tokens: make([]EnrollTokenJSON, 0, len(l.Rows))}
+	resp := EnrollTokenListResponse{ComputedAt: now, Total: l.Page.Total, Of: l.All, Counts: l.Counts, Tokens: make([]EnrollTokenJSON, 0, len(l.Rows))}
 	resp.NextCursor, resp.Truncated = nextCursor(l.Page)
 	for _, row := range l.Rows {
 		resp.Tokens = append(resp.Tokens, enrollTokenJSON(row, now))
@@ -198,6 +209,20 @@ func (s *Service) revokeEnrollToken(w http.ResponseWriter, r *http.Request) {
 	p, _ := auth.FromContext(r.Context())
 	if _, err := s.Store.RevokeEnrollmentTokenAudited(r.Context(), p.Scope, r.PathValue("id"), actorOf(r, p)); err != nil {
 		s.failM2(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteEnrollToken hides a revoked or expired token from the lists; the row, the
+// devices' links to it and the audit trail stay. An active or used-up token answers
+// 409 with the reason token_live: revoke it first. Deleting a deleted token answers
+// 204 again and writes nothing.
+func (s *Service) deleteEnrollToken(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.FromContext(r.Context())
+	if _, err := s.Store.DeleteEnrollmentTokenAudited(r.Context(), p.Scope, r.PathValue("id"), actorOf(r, p)); err != nil {
+		s.failCommand(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

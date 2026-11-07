@@ -8,11 +8,12 @@
   {{else}}<span class="btn sm" role="link" aria-disabled="true" aria-describedby="restore-why"><svg width="12" height="12" aria-hidden="true"><use href="#i-restore"/></svg>Restore files…</span><span class="meta-mono" id="restore-why">{{.RestoreNote}}</span>{{end}}
 </div>
 {{with .Progress}}{{template "run_progress" .}}{{end}}
-<section aria-labelledby="h-strip"><h3 class="h-label" id="h-strip">Last 10 days</h3>{{template "strip" .Strip}}</section>
+{{if not .Retired}}<section aria-labelledby="h-strip"><h3 class="h-label" id="h-strip">Last 10 days</h3>{{template "strip" .Strip}}</section>{{end}}
 <section aria-labelledby="h-runs"><h3 class="h-label" id="h-runs">Last ten runs <span class="count">{{len .Runs}}</span></h3>
 {{if .Runs}}<ol class="hist">{{range .Runs}}<li><a class="runlink d" href="/runs/{{.ID}}" aria-label="Run of {{.Date}}, details"><time datetime="{{.DateISO}}">{{.Date}}</time></a><span class="sum">{{template "chip" .Chip}} {{.Summary}}</span><span class="s">{{.Exit}}</span><span class="s">{{.Duration}}</span></li>{{end}}</ol>
 <p><a href="/devices/{{.ID}}/history">All runs, with filters</a></p>
 {{else if .RunsErr}}<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>Recent runs could not be read.</b> This is an alarm, not an empty list. Reload the page; if it persists, check the console log and the database.</div></div>
+{{else if .Retired}}<p class="meta-mono">No runs were recorded for this device. It is retired, so this raises no alarm.</p>
 {{else}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>No runs recorded yet.</b> A device with no history past its grace period is an alarm, not an empty list.</div></div>{{end}}
 </section>
 <section aria-labelledby="h-facts"><h3 class="h-label" id="h-facts">Facts</h3>

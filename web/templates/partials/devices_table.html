@@ -32,7 +32,7 @@
 {{end}}</tbody></table></div>
 {{template "pager" .Pager}}
 <p class="meta-mono">Computed {{.AsOf}} ({{.Zone}}). The next-due time is an estimate from the schedule and the last success.</p>
-{{end}}{{end}}
+{{end}}{{template "retired_fold" .Retired}}{{end}}
 
 {{define "pager"}}<nav class="pager" aria-label="Pagination"><span class="pg-text" role="status">{{.Text}}</span>
 {{if .Clamp}}<span class="meta-mono">{{.Clamp}}</span>{{end}}

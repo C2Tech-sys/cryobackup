@@ -7,14 +7,17 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/escrow"
 	"github.com/c2tech-sys/cryobackup/internal/console/gateway"
 	"github.com/c2tech-sys/cryobackup/internal/console/restores"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // Settings keys the htpasswd-sync job keeps (global key/value rows).
@@ -60,11 +63,127 @@ func (s *Signal) C() <-chan struct{} { s.init(); return s.ch }
 // view (two consoles on one gateway: an unsupported topology, detected here) and
 // raises an audit event instead; an out-of-band edit is repaired and audited as
 // gateway.htpasswd.drift.
+//
+// Runs never overlap in this process, whoever starts them (the signal, the timer, Run
+// now): a run takes the slot before it reads the logins, so a later run can never be
+// overwritten by an earlier one. Across consoles the runner's lease and the generation
+// header are what stands guard (two consoles on one gateway is unsupported, ADR D3).
+//
+// Check reads the deployed file. It is the only thing that can say a login has left it.
 type HtpasswdSync struct {
 	Store  *store.Store
 	Master *escrow.MasterKey
 	Dir    string
 	Sig    *Signal
+
+	slotOnce sync.Once
+	slot     chan struct{} // one holder: a run, or a check
+	last     atomic.Pointer[LoginFileCheck]
+}
+
+// Classes of a LoginFileCheck that could not read the file.
+const (
+	LoginFileMissing    = "file_missing"
+	LoginFileUnreadable = "file_unreadable"
+	LoginFileGarbled    = "file_garbled"
+	LoginFileNoStore    = "store_unreadable"
+	// LoginFileBusy: a run or a check held the slot for the caller's whole wait. Nothing was read.
+	LoginFileBusy = "sync_busy"
+)
+
+// LoginFileCheck is what one read of the deployed file found: never hashes, and never logged.
+type LoginFileCheck struct {
+	// At is when the file was read, or when reading it failed.
+	At time.Time
+	// InFile lists the usernames of retired devices in the file. A failed read carries the newest
+	// clean read's list forward: only a clean read can clear a login.
+	InFile []string
+	// ReadClass is why the file could not be read ("" = a clean read).
+	ReadClass string
+}
+
+// Has reports whether the device's login was in the file at the newest clean read.
+func (c LoginFileCheck) Has(deviceID string) bool { return slices.Contains(c.InFile, deviceID) }
+
+func (j *HtpasswdSync) take(ctx context.Context) error {
+	j.slotOnce.Do(func() { j.slot = make(chan struct{}, 1) })
+	select {
+	case j.slot <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (j *HtpasswdSync) give() { <-j.slot }
+
+// Check reads the deployed file and returns which retired devices' logins are in it. It
+// waits for a run in flight, because that run may hold logins read before a retire
+// committed: a device absent from this answer stays absent, since every later run reads
+// the logins after this check, and so after any retire committed before the check began.
+// It changes nothing but the newest measurement. A wait that ends first reads nothing
+// (LoginFileBusy) and records nothing.
+func (j *HtpasswdSync) Check(ctx context.Context) LoginFileCheck {
+	if err := j.take(ctx); err != nil {
+		c := LoginFileCheck{At: j.Store.Now(), ReadClass: LoginFileBusy}
+		if prev := j.last.Load(); prev != nil {
+			c.InFile = prev.InFile
+		}
+		return c
+	}
+	defer j.give()
+	return j.measure(context.WithoutCancel(ctx)) // a caller that gave up must not record a store failure that never happened
+}
+
+// measure reads the file with the slot held and records the result.
+func (j *HtpasswdSync) measure(ctx context.Context) LoginFileCheck {
+	c := LoginFileCheck{At: j.Store.Now()}
+	in, class := j.retiredInFile(ctx)
+	if class == "" {
+		c.InFile = in
+	} else {
+		c.ReadClass = class
+		if prev := j.last.Load(); prev != nil {
+			c.InFile = prev.InFile
+		}
+	}
+	j.last.Store(&c)
+	return c
+}
+
+func (j *HtpasswdSync) retiredInFile(ctx context.Context) ([]string, string) {
+	raw, err := os.ReadFile(filepath.Join(j.Dir, gateway.FileName))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, LoginFileMissing
+	case err != nil:
+		return nil, LoginFileUnreadable
+	}
+	_, _, logins, err := gateway.Parse(raw)
+	if err != nil {
+		return nil, LoginFileGarbled
+	}
+	retired, err := j.Store.RetiredDeviceIDs(ctx)
+	if err != nil {
+		return nil, LoginFileNoStore
+	}
+	var in []string
+	for _, l := range logins {
+		if slices.Contains(retired, l.Username) {
+			in = append(in, l.Username)
+		}
+	}
+	return in, ""
+}
+
+// Facts is the newest measurement as the engine reads it (banner C17). The evaluator adds
+// the retired devices; the prober adds its cadence.
+func (j *HtpasswdSync) Facts() *state.LoginFileFacts {
+	c := j.last.Load()
+	if c == nil {
+		return &state.LoginFileFacts{}
+	}
+	return &state.LoginFileFacts{MeasuredAt: state.Millis(c.At.UnixMilli()), ReadFailed: c.ReadClass, InFile: len(c.InFile)}
 }
 
 // Job returns the schedule for the runner.
@@ -102,8 +221,17 @@ func (j *HtpasswdSync) audit(ctx context.Context, action, result, severity strin
 		ObjectID: "htpasswd", Result: result, Severity: severity, Details: []byte(details)})
 }
 
-// Run is one sync pass.
+// Run is one sync pass, measured at its end whatever it did, so a banner follows a run at once.
 func (j *HtpasswdSync) Run(ctx context.Context) error {
+	if err := j.take(ctx); err != nil {
+		return err
+	}
+	defer j.give()
+	defer func() { j.measure(context.WithoutCancel(ctx)) }()
+	return j.run(ctx)
+}
+
+func (j *HtpasswdSync) run(ctx context.Context) error {
 	if !j.Master.Loaded() {
 		return &ClassError{Class: ClassMasterKey}
 	}

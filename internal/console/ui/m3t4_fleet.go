@@ -189,6 +189,7 @@ type OverduePage struct {
 	AsOf    string
 	Zone    string
 	Live    string // this page's own URL, polled to refresh the live region
+	Retired *RetiredFold
 }
 
 func overdueReasonChips(id string, r adminapi.OverdueRowJSON, c fmtCtx) []Chip {
@@ -224,7 +225,7 @@ func (s *Service) overduePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := s.fcAt(r.Context(), fleet.Computed)
-	pg := OverduePage{Page: s.page(r.Context(), p, fleet, "Overdue", "overdue", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI()}
+	pg := OverduePage{Page: s.page(r.Context(), p, fleet, "Overdue", "overdue", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI(), Retired: retiredFold(fleet, c, q.Customer)}
 	pg.Filter = s.fleetFilter(r, p, "/fleet/overdue", q)
 	var resp adminapi.FleetOverdueResponse
 	page, clamped := q.Page, false
@@ -372,6 +373,10 @@ type UnseenPage struct {
 	AsOf    string
 	Zone    string
 	Live    string // this page's own URL, polled to refresh the live region
+	// CanRetire: an admin gets a Retire link on each device (M3-T6).
+	CanRetire bool
+	Retired   *RetiredFold
+	Notice    *CauseView
 }
 
 const (
@@ -391,7 +396,8 @@ func (s *Service) unseenPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := s.fcAt(r.Context(), fleet.Computed)
-	pg := UnseenPage{Page: s.page(r.Context(), p, fleet, "Devices not seen", "unseen", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI()}
+	pg := UnseenPage{Page: s.page(r.Context(), p, fleet, "Devices not seen", "unseen", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI(),
+		CanRetire: p.Role >= auth.RoleAdmin, Retired: retiredFold(fleet, c, q.Customer), Notice: noticeFrom(r)}
 	pg.Filter = s.fleetFilter(r, p, "/fleet/unseen", q)
 	var resp adminapi.FleetUnseenResponse
 	page, clamped := q.Page, false
@@ -563,6 +569,7 @@ type ActivityPage struct {
 	AsOf    string
 	Zone    string
 	Live    string // this page's own URL, polled to refresh the live region
+	Retired *RetiredFold
 }
 
 // LegendItem explains a block kind; every kind has its own shape.
@@ -671,7 +678,7 @@ func (s *Service) activityPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := s.fcAt(r.Context(), fleet.Computed)
-	pg := ActivityPage{Page: s.page(r.Context(), p, fleet, "Activity", "activity", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI()}
+	pg := ActivityPage{Page: s.page(r.Context(), p, fleet, "Activity", "activity", "/ui/events"), AsOf: c.clock(fleet.Computed), Zone: c.Zone, Live: r.URL.RequestURI(), Retired: retiredFold(fleet, c, q.Customer)}
 	opts, lok := s.filterCustomers(r.Context(), p, nonEmpty1(q.Customer), "All customers")
 	pg.Filter = ActFilter{Customers: opts, Customer: q.Customer, ListErr: !lok, Problems: q.Problems, Size: q.Size}
 	pg.Legend = []LegendItem{{"success", "All succeeded"}, {"failed", "Any failed"}, {"mixed", "Succeeded and failed"}, {"missed", "Expected, none ran"}, {"none", "No runs"}}

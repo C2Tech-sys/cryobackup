@@ -106,8 +106,12 @@ func (p jobProxy) RunOnce(ctx context.Context, name string) (bool, error) {
 // racily) and, in fixtures mode, wires the "show every banner" switch into the
 // evaluator unless something already supplies extra banners.
 func (s *Service) initM3() {
+	// The pages' mutations go through this API, so it wakes, syncs, measures and signals exactly as the real one does.
 	a := &adminapi.Service{Auth: s.Auth, Store: s.Store, Fleet: s.Fleet, Restores: s.Restores, Backend: s.Backend, Clock: s.Clock, Log: s.Log,
-		Loc: s.Loc, Display: s.Display, Jobs: jobProxy{s}}
+		Loc: s.Loc, Display: s.Display, Jobs: jobProxy{s}, SyncGateway: s.SyncGateway, WakeAgent: s.WakeAgent, CheckGatewayLogins: s.CheckGatewayLogins}
+	if s.Hub != nil {
+		a.Events = s.Hub // never a typed nil
+	}
 	mux := http.NewServeMux()
 	a.Register(muxRegistrar{mux})
 	s.m3.api, s.m3.mux = a, mux
@@ -554,6 +558,7 @@ var bannerLabelsM3 = map[string]string{
 	"C00": "SELF-CHECKS NOT WIRED", "C01b": "GATEWAY NOT CHECKED", "C02b": "STORAGE NOT CHECKED", "C03b": "EMAIL NOT CHECKED",
 	"C05b": "CERTIFICATE NOT CHECKED", "C06b": "ALERTING NOT CHECKED", "C07b": "MAINTENANCE WORKER NOT CHECKED", "C12b": "MASTER KEY NOT CHECKED",
 	"C14b": "DIGEST NOT CHECKED", "C15b": "STORAGE QUOTA NOT CHECKED", "C16b": "RELEASE MANIFEST NOT CHECKED",
+	"C17b": "GATEWAY LOGIN NOT CHECKED",
 }
 
 func init() {

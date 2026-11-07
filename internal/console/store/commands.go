@@ -37,6 +37,8 @@ type CommandInput struct {
 	IdempotencyKey string          // 1..128 chars; the same key on the same device returns the same command
 	TTL            time.Duration   // how long the command may wait; 0 = 24 h
 	CreatedBy      string
+	// AuditNote, when set, goes in the audit row's details: path-free, validated by the caller.
+	AuditNote string
 }
 
 const (

@@ -209,6 +209,8 @@ func probeBanners(w World, now time.Time) []Banner {
 			unsupplied("C15b", "Storage quota", "a full quota would go unnoticed")},
 		{p.Release != nil, func() []Banner { return releaseBanners(p.Release, c) },
 			unsupplied("C16b", "Release manifests", "a rejected manifest would go unnoticed")},
+		{p.LoginFile != nil, func() []Banner { return loginFileBanners(p.LoginFile, iv, c) },
+			unsupplied("C17b", "Gateway login removal", loginFileConsequence)},
 	}
 	for _, k := range checks {
 		switch {
@@ -776,4 +778,48 @@ func quotaBanners(q *QuotaFacts, c bannerCtx) []Banner {
 			Text: subject + " not checked: " + unmeasuredWhy + ", so a full quota would go unnoticed."})
 	}
 	return out
+}
+
+// loginFileConsequence is what a C17b warning says goes unwatched.
+const loginFileConsequence = "a retired login left in the gateway file would go unnoticed"
+
+// loginFileBanners is C17: the newest clean read of the gateway's login file found a retired device's
+// login, so the gateway still accepts it. It stands until a clean read finds none, whatever happened in
+// between. C17b: there are retired devices and the file cannot be judged, because it cannot be read,
+// has not been read lately, or a retired device's record is unusable. None of that ever reads as removed.
+func loginFileBanners(f *LoginFileFacts, iv time.Duration, c bannerCtx) []Banner {
+	if f.InFile > 0 {
+		return []Banner{{ID: "C17", Severity: SeverityCritical, Count: f.InFile,
+			Text: "The gateway login of a retired device is still in the gateway file: the gateway may still accept it until the sync succeeds."}}
+	}
+	unchecked := func(why string, n int) []Banner {
+		return []Banner{notChecked("C17b", "Gateway login removal", loginFileConsequence, why, n)}
+	}
+	switch {
+	case f.NotRead != "":
+		return unchecked(f.NotRead, 0)
+	case f.Retired < 0 || f.RetiredGarbled < 0:
+		return unchecked("the count of retired devices is garbled", 0)
+	case f.RetiredGarbled > 0:
+		return unchecked("a retired device has an unusable retire time", f.RetiredGarbled)
+	case f.Retired == 0:
+		return nil
+	case f.MeasuredAt == 0:
+		return unchecked("the gateway file has not been read yet", 0)
+	}
+	at, ok := recorded(f.MeasuredAt, c.now)
+	if !ok {
+		return unchecked("the newest read of the gateway file"+garbledWhy, 0)
+	}
+	if f.ReadFailed != "" {
+		return unchecked("the gateway file cannot be read ("+f.ReadFailed+")", 0)
+	}
+	if f.Interval > 0 {
+		iv = f.Interval
+	}
+	if age := c.now.Sub(at); age > time.Duration(ProbeStaleIntervals)*iv {
+		n := minutesOf(age)
+		return unchecked("the gateway file has not been read for "+strconv.Itoa(n)+" min", n)
+	}
+	return nil
 }

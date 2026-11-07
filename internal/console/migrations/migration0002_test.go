@@ -391,10 +391,10 @@ func TestEmbeddedFilesIncludeEveryMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ms) != 5 || ms[1].Name != "0002_unsupported_file_class" || ms[2].Name != "0003_fleet_start_lease" || ms[3].Name != "0004_m2w1a" || ms[4].Name != "0005_m3t3_view_audience" {
+	if len(ms) != 6 || ms[1].Name != "0002_unsupported_file_class" || ms[2].Name != "0003_fleet_start_lease" || ms[3].Name != "0004_m2w1a" || ms[4].Name != "0005_m3t3_view_audience" || ms[5].Name != "0006_m3t6_token_delete" {
 		t.Fatalf("migrations = %+v", ms)
 	}
-	for _, name := range []string{"0002_unsupported_file_class.sql", "0003_fleet_start_lease.sql", "0004_m2w1a.sql", "0005_m3t3_view_audience.sql"} {
+	for _, name := range []string{"0002_unsupported_file_class.sql", "0003_fleet_start_lease.sql", "0004_m2w1a.sql", "0005_m3t3_view_audience.sql", "0006_m3t6_token_delete.sql"} {
 		b, err := fs.ReadFile(Files(), name)
 		if err != nil || strings.Contains(string(b), "\r") {
 			t.Fatalf("%s unreadable or has CRLF: %v", name, err)

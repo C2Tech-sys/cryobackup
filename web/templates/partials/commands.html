@@ -6,7 +6,8 @@
      M3-T5 (ruling 1): the hint, reason and state note of an item are a tooltip on its button (hover or keyboard focus), not a line under it; the button still names it with aria-describedby. */}}
 {{define "dev_action"}}<span class="act-item" id="{{.ID}}">
 {{- if .Enabled}}
-  {{- if .Pause}}
+  {{- if .Retire}}{{template "retire_dialog" .}}
+  {{- else if .Pause}}
   <span class="tipwrap"><details class="rowmenu act-confirm act-pause"><summary class="btn sm"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</summary>
     <div class="rowmenu-pop pausepop" role="group" aria-label="Park this device">
       <form method="post" action="{{.Pause.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.Pause.CSRF}}">
@@ -54,7 +55,7 @@
         <form method="post" action="{{.Action}}" class="stack"><input type="hidden" name="csrf_token" value="{{.CSRF}}">
           <fieldset class="plain stack"><legend class="h-label">Decision</legend>
             <label class="check"><input type="radio" name="action" value="keep" checked>Keep this identity. The second sighting was a hardware change, or that machine is gone. Nothing is rotated.</label>
-            <label class="check"><input type="radio" name="action" value="retire">Retire this identity. Its credentials are revoked, so neither machine can back up; enroll the real machine again as a new device.</label>
+            <label class="check"><input type="radio" name="action" value="retire">Retire this identity. Its device token is revoked and its gateway login leaves the gateway's file at the next sync, so neither machine can back up; the device page says if the sync fails. Enroll the real machine again as a new device.</label>
           </fieldset>
           <div class="field"><label for="idc-reason">Reason (audited)</label><input class="input" id="idc-reason" name="reason" type="text" maxlength="500" required autocomplete="off"><span class="help">One line. No file paths.</span></div>
           <div class="field"><label for="idc-confirm">To retire, type <b>{{.Host}}</b></label><input class="input" id="idc-confirm" name="confirm" type="text" autocomplete="off" spellcheck="false"></div>

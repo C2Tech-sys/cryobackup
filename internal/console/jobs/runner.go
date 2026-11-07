@@ -22,7 +22,7 @@ import (
 
 // Job names (job_state.name).
 const (
-	NameHtpasswdSync      = "htpasswd-sync"
+	NameHtpasswdSync      = store.JobHtpasswdSync
 	NameHeartbeatRingTrim = "heartbeat-ring-trim"
 	NameRestorePurge      = "restore-purge"
 	NameSessionExpire     = "session-expire"

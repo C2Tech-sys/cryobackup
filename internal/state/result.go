@@ -113,7 +113,7 @@ type CustomerState struct {
 
 // Banner is a console-level condition rendered above every page (§4.6).
 type Banner struct {
-	// ID is the §4.6 id ("C01" to "C16"), or the id with a "b" suffix for a "not checked" warning of
+	// ID is the §4.6 id ("C01" to "C17"), or the id with a "b" suffix for a "not checked" warning of
 	// that condition ("C01b"), the pattern ADR 0013 set with C04b.
 	ID string
 	// Subject names what the banner is about when one id covers several things: C05 is "gateway"

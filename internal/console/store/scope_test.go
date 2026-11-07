@@ -85,8 +85,9 @@ type target struct {
 	command  string
 	snapshot string
 	// fresh rows made by a case's prep hook, so the call under test has something to act on.
-	freshToken string
-	freshRun   string
+	freshToken  string
+	freshRun    string
+	freshDevice string
 }
 
 type kind int
@@ -355,6 +356,7 @@ func matrix() map[string]matrixCase {
 	addW2CMatrix(m)      // M2-W2C: commands and identity conflicts (scope_w2c_test.go)
 	addAuditM2Matrix(m)  // M2-W3A: audit viewer reads and console-wide settings (audit_m2_test.go)
 	addM3T3Matrix(m)     // M3-T3: saved views, pause/resume, run search, heartbeat ring (m3t3_test.go)
+	addM3T6Matrix(m)     // M3-T6: device retire and token delete (m3t6_test.go)
 	return m
 }
 
@@ -378,7 +380,9 @@ var globalMethods = map[string]string{
 	"IntegrityCheck":               "diagnostics (doctor)",
 	"ListExpiredRestores":          "restore-purge job",
 	"ListGatewayLoginsForHtpasswd": "htpasswd-sync job", "MarkHtpasswdSynced": "htpasswd-sync job",
-	"TrimHeartbeats": "heartbeat-ring-trim job", "ExpireCommands": "command-expiry job",
+	"RetiredDeviceIDs":    "login-file check of the global gateway file: device ids only, the logins that must not be in it",
+	"RetiredDeviceCounts": "banner C17: two counts, no customer or device named",
+	"TrimHeartbeats":      "heartbeat-ring-trim job", "ExpireCommands": "command-expiry job",
 	"GetStorageTarget": "global configuration", "SetStorageTargetMaxConcurrentBackups": "global configuration (the fleet cap, ADR 0005)",
 	"DeleteExpiredStartLeases": "heartbeat-ring-trim job (expired start leases)",
 	"ListStartLeases":          "fleet cap of a global storage target (CLI and tests); ids only, no customer data",

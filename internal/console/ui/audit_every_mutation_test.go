@@ -674,7 +674,34 @@ func uiMutationCases() map[string]uiMutation {
 				return func() (*http.Response, string) { return e.post("/ui/devices/"+id+"/override/clear", vals(), false) }
 			},
 		},
+		// ---- device retire (M3-T6) ----
+		"POST /ui/devices/{id}/retire": {
+			audits: 2, // device.retire commits with the retire; device.retire_sync records what the sync did
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.dev["FRONTDESK-01"]
+				return func() (*http.Response, string) {
+					return e.post("/ui/devices/"+id+"/retire", vals("reason", "dead lab machine", "confirm", "FRONTDESK-01"), false)
+				}
+			},
+		},
+		"POST /ui/devices/{id}/retire#final_backup": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.dev["FRONTDESK-01"]
+				return func() (*http.Response, string) {
+					return e.post("/ui/devices/"+id+"/retire", vals("reason", "replaced", "confirm", "FRONTDESK-01", "final_backup", "1"), false)
+				}
+			},
+		},
 		// ---- enrollment ----
+		"POST /ui/enroll/tokens/{id}/delete": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.t6Token(e.customerID(summitName), "delete me", true)
+				return func() (*http.Response, string) { return e.post("/ui/enroll/tokens/"+id+"/delete", vals(), false) }
+			},
+		},
 		"POST /ui/enroll/token": {
 			ok: []int{http.StatusOK},
 			build: func(e *env) func() (*http.Response, string) {

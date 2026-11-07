@@ -152,6 +152,8 @@ func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fle
 		g := groupView(cs, rows, c)
 		if b.Filter.Active {
 			g.Collapsed = false // every matching group is open, so the rows on screen are the count (fresh.js keeps it so)
+		} else {
+			g.Retired = customerFold(cs, c) // M3-T6
 		}
 		b.Groups = append(b.Groups, g)
 	}

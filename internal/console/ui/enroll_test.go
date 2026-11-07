@@ -109,8 +109,9 @@ func TestEnrollPagesRenderInFixturesMode(t *testing.T) {
 		mustContain(t, name, body, `href="/enroll"`, `href="/downloads"`) // the admin sees both nav items
 	}
 	body := e.page("/enroll", 200)
-	mustContain(t, "enroll", body, "Enroll devices", "New enrollment token", `name="customer_id"`, `name="new_customer"`, `name="expires"`, `name="max_uses"`, `name="device_class"`, `name="policy_id"`, "Applied to each device that enrolls with this token, on top of the customer's policy",
-		"summit-eye-care-2026q4", "ACTIVE", "Summit Eye Care", `action="/ui/enroll/token"`, `name="csrf_token"`, "Showing 1-6 of 6")
+	mustContain(t, "enroll", body, "Enroll devices", "New enrollment", `href="/enroll/new"`, "summit-eye-care-2026q4", "ACTIVE", "Summit Eye Care", `name="csrf_token"`, "Showing 1-6 of 6")
+	mustContain(t, "wizard", e.page("/enroll/new", 200), "New enrollment token", `name="customer_id"`, `name="new_customer"`, `name="expires"`, `name="max_uses"`, `name="device_class"`, `name="policy_id"`,
+		"Applied to each device that enrolls with this token, on top of the customer's policy", `action="/ui/enroll/token"`, `name="csrf_token"`)
 	mustContain(t, "enroll empty", e.page("/enroll?status=revoked", 200), "No tokens match these filters", "0 of 6 tokens match")
 	mustContain(t, "enroll bad status", e.page("/enroll?status=bogus", 200), "Unknown token status")
 	mustContain(t, "token detail", e.page("/enroll/tokens/"+tokID, 200), "summit-eye-care-2026q4", "cannot be shown again", "No device has enrolled yet", "Revoke this token", "Usage", "Customer&#39;s policy")

@@ -51,14 +51,15 @@ const (
 
 // m3Patterns lists the patterns registerM3 adds.
 func m3Patterns() []string {
-	return []string{PatternCustomerHealth, PatternDeviceState, PatternDeviceHeartbeats, PatternDeviceTenDay, PatternDevicePause, PatternDeviceResume,
+	return []string{PatternCustomerHealth, PatternDeviceState, PatternDeviceHeartbeats, PatternDeviceTenDay, PatternDevicePause, PatternDeviceResume, PatternDeviceRetire,
 		PatternRuns, PatternRun, PatternStorageTargetProbe, PatternAlarms, PatternViews, PatternViewCreate, PatternViewPatch, PatternViewDelete,
 		PatternFleetSummary, PatternFleetBanners, PatternFleetOverdue, PatternFleetUnseen, PatternFleetTenDay, PatternStatus, PatternEvents,
 		PatternSystemHealth, PatternSystemJobs, PatternSystemJobRun, PatternMetrics}
 }
 
 // registerM3 adds the M3 routes. Reads need read_only; pause and resume
-// operator; the job table, running a job and the storage probe admin.
+// operator; retiring a device, the job table, running a job and the storage
+// probe admin.
 //
 // /status and /metrics are for external monitors and take an API token. The
 // architecture names narrower token scopes for them (status:read, metrics:read);
@@ -81,6 +82,7 @@ func (s *Service) registerM3(r httpx.Registrar) {
 	r.Handle(PatternDeviceTenDay, ro(s.deviceTenDay))
 	r.Handle(PatternDevicePause, op(s.devicePause))
 	r.Handle(PatternDeviceResume, op(s.deviceResume))
+	r.Handle(PatternDeviceRetire, ad(s.deviceRetire)) // M3-T6 (retire.go)
 	r.Handle(PatternRuns, ro(s.searchRuns))
 	r.Handle(PatternRun, ro(s.getRunDetail))
 	r.Handle(PatternViews, ro(s.listViews))

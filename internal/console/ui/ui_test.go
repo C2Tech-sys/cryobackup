@@ -20,6 +20,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/escrow"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
+	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/restores"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -41,6 +42,11 @@ type env struct {
 	csrf string
 	dev  map[string]string // hostname -> id
 	mfa  *uiMFA            // account_test.go: the MFA step of e.login
+	// loginFile is what a read of the gateway's file finds (M3-T6). Nil: a clean read, no retired login in it.
+	loginFile func() jobs.LoginFileCheck
+	// wakes records the devices the pages' private API woke.
+	apiWakeMu sync.Mutex
+	apiWakes  []string
 }
 
 type muxReg struct{ m *http.ServeMux }
@@ -77,7 +83,19 @@ func newEnv(t *testing.T) *env {
 	fleet := &health.Evaluator{Store: st, Clock: clock, MasterLoaded: mk.Loaded, Maintain: maintain}
 	e.hub = NewHub(30*time.Second, nil)
 	svc, err := New(&Service{Auth: am, Store: st, Fleet: fleet, Restores: rest, Backend: e.be, Hub: e.hub, Clock: clock, Loc: loc, Zone: "America/Chicago",
-		Refresh: 30, Fixtures: true, MasterLoaded: mk.Loaded, Maintain: maintain})
+		Refresh: 30, Fixtures: true, MasterLoaded: mk.Loaded, Maintain: maintain,
+		SyncGateway: func() {},
+		CheckGatewayLogins: func(context.Context) jobs.LoginFileCheck {
+			if e.loginFile != nil {
+				return e.loginFile()
+			}
+			return jobs.LoginFileCheck{At: e.now}
+		},
+		WakeAgent: func(id string) {
+			e.apiWakeMu.Lock()
+			defer e.apiWakeMu.Unlock()
+			e.apiWakes = append(e.apiWakes, id)
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

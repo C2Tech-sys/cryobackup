@@ -19,7 +19,8 @@ import (
 )
 
 // The enrollment wizard and token management (B16, S30; architecture §5.3
-// /enroll, §5.2 /enrollment-tokens; ticket M2-W2B).
+// /enroll, §5.2 /enrollment-tokens; tickets M2-W2B and M3-T6). /enroll is the
+// token table; "New enrollment" opens the wizard on its own page, /enroll/new.
 //
 // The secret of a token exists in exactly one response: the page returned by
 // the POST that created it. It is generated after the form validated, handed to
@@ -88,6 +89,11 @@ type EnrollRow struct {
 	Label      string
 	Status     Chip
 	Active     bool
+	// CanRevoke: revoking still changes something (active or used up). CanDelete: the
+	// token is revoked or expired, so it can be hidden from the list.
+	CanRevoke  bool
+	CanDelete  bool
+	Deleted    string // when it was hidden from the list ("" = listed)
 	Uses       string
 	UsesNote   string
 	Expires    string
@@ -109,10 +115,20 @@ type TokenFilter struct {
 	Size      int
 }
 
+// TokenSeg is one status tab over the token table, with its count.
+type TokenSeg struct {
+	Label   string
+	N       int
+	Href    string
+	Current bool
+}
+
 // TokenList is the "Tokens" section of the wizard page.
 type TokenList struct {
 	Rows      []EnrollRow
 	Filter    TokenFilter
+	Segs      []TokenSeg
+	NewHref   string // the wizard, on the customer the list is filtered to
 	Pager     PagerView
 	Chips     []FilterChip
 	ClearHref string
@@ -143,15 +159,22 @@ type CreatedToken struct {
 	MSI         MSIView
 }
 
-// EnrollPage is /enroll: the form and the token list, or (right after a create)
-// the one-time result.
+// EnrollPage is /enroll: the token list, or (right after a create) the one-time
+// result.
 type EnrollPage struct {
 	Page
-	Form    EnrollForm
 	Notes   []Note
 	Saved   string
+	Refused string
 	Created *CreatedToken
 	Tokens  TokenList
+}
+
+// EnrollNewPage is /enroll/new: the wizard's form.
+type EnrollNewPage struct {
+	Page
+	Form  EnrollForm
+	Notes []Note
 }
 
 // tokenQuery is the state of the token list, kept in the query string.
@@ -227,6 +250,7 @@ func usesText(t store.EnrollmentToken) (text, note string) {
 func (s *Service) enrollRow(t store.EnrollTokenRow, c fmtCtx) EnrollRow {
 	status := t.Status(c.Now)
 	r := EnrollRow{ID: t.ID, Customer: t.CustomerName, CustomerID: t.CustomerID, Label: t.Label, Status: tokenStatusChip(status), Active: status == store.TokenActive,
+		CanRevoke: status == store.TokenActive || status == store.TokenUsedUp, CanDelete: t.DeletedAt == nil && (status == store.TokenRevoked || status == store.TokenExpired),
 		Expires: c.dateClock(t.ExpiresAt), ExpiresISO: t.ExpiresAt.UTC().Format(time.RFC3339), ExpiresRel: untilText(t.ExpiresAt.Sub(c.Now)),
 		CreatedBy: t.CreatedByName, Created: c.dateClock(t.CreatedAt), Policy: t.PolicyName, Class: t.DeviceClassDefault, LastUsed: "Never"}
 	if r.CreatedBy == "" {
@@ -241,6 +265,9 @@ func (s *Service) enrollRow(t store.EnrollTokenRow, c fmtCtx) EnrollRow {
 	r.Uses, r.UsesNote = usesText(t.EnrollmentToken)
 	if t.LastUsedAt != nil {
 		r.LastUsed, r.LastRel = c.dateClock(*t.LastUsedAt), ageLong(c.Now.Sub(*t.LastUsedAt))
+	}
+	if t.DeletedAt != nil {
+		r.Deleted = c.dateClock(*t.DeletedAt)
 	}
 	r.Aria = fmt.Sprintf("Token %s for %s, %s", r.Label, r.Customer, strings.ToLower(tokenStatusLabels[status]))
 	return r
@@ -342,8 +369,9 @@ func (s *Service) pageNotes() []Note {
 
 // ---- the page ----
 
-func (s *Service) enrollPageData(r *http.Request, p *auth.Principal, fleet health.Fleet, form EnrollForm, tq tokenQuery, bad []store.FieldError) EnrollPage {
-	pg := EnrollPage{Page: s.page(r.Context(), p, fleet, "Enroll devices", "enroll", ""), Form: form, Notes: s.pageNotes(), Saved: enrollSavedText(r.URL.Query().Get("saved"))}
+func (s *Service) enrollPageData(r *http.Request, p *auth.Principal, fleet health.Fleet, tq tokenQuery, bad []store.FieldError) EnrollPage {
+	code := r.URL.Query().Get("saved")
+	pg := EnrollPage{Page: s.page(r.Context(), p, fleet, "Enroll devices", "enroll", ""), Notes: s.pageNotes(), Saved: enrollSavedText(code), Refused: enrollRefusedText(code)}
 	pg.Tokens = s.tokenList(r.Context(), p, tq, bad)
 	for _, fe := range bad {
 		pg.Notes = append(pg.Notes, Note{Class: "warn", Title: "Filters not valid.", Text: fe.Message + " The list below ignores that filter."})
@@ -357,6 +385,18 @@ func enrollSavedText(code string) string {
 		return "Token revoked. It can no longer enroll devices; devices that already enrolled are unaffected."
 	case "already_revoked":
 		return "That token was already revoked."
+	case "deleted":
+		return "Token deleted. It is gone from this list; the audit log and the devices enrolled with it still point at it."
+	case "already_deleted":
+		return "That token was already deleted."
+	}
+	return ""
+}
+
+// enrollRefusedText says why a delete did not happen.
+func enrollRefusedText(code string) string {
+	if code == "not_deletable" {
+		return "Not deleted. Only a revoked or expired token can be deleted: revoke it first."
 	}
 	return ""
 }
@@ -368,13 +408,23 @@ func (s *Service) enrollPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tq, bad := parseTokenQuery(r.URL.Query())
-	form, err := s.newEnrollForm(r.Context(), p, tq.Customer)
+	s.render(w, r, http.StatusOK, "enroll", "base", s.enrollPageData(r, p, fleet, tq, bad))
+}
+
+// enrollNewPage is GET /enroll/new: the wizard, preselecting ?customer=.
+func (s *Service) enrollNewPage(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	fleet, ok := s.fleetFor(w, r, p, "Enrollment")
+	if !ok {
+		return
+	}
+	form, err := s.newEnrollForm(r.Context(), p, r.URL.Query().Get("customer"))
 	if err != nil {
 		s.log().Error("ui: enroll form failed", logx.Err(err))
 		s.errorPage(w, r, p, http.StatusServiceUnavailable, "Enrollment unavailable", "The customers could not be read. This is an alarm, not an empty list. Try again shortly.")
 		return
 	}
-	s.render(w, r, http.StatusOK, "enroll", "base", s.enrollPageData(r, p, fleet, form, tq, bad))
+	s.render(w, r, http.StatusOK, "enroll_new", "base", EnrollNewPage{Page: s.page(r.Context(), p, fleet, "New enrollment", "enroll", ""), Form: form, Notes: s.pageNotes()})
 }
 
 // tokenList reads and shapes the token list; a read failure is the alarm state.
@@ -382,6 +432,10 @@ func (s *Service) tokenList(ctx context.Context, p *auth.Principal, q tokenQuery
 	c := s.fc(ctx)
 	list := TokenList{Filter: TokenFilter{Size: q.Size}}
 	list.ClearHref = "/enroll#tokens"
+	list.NewHref = "/enroll/new"
+	if q.Customer != "" {
+		list.NewHref += "?customer=" + url.QueryEscape(q.Customer)
+	}
 	custOpts, _, cerr := s.customerOptions(ctx, p, q.Customer, true, "All customers")
 	if cerr != nil {
 		s.log().Error("ui: token list customers failed", logx.Err(cerr))
@@ -400,6 +454,7 @@ func (s *Service) tokenList(ctx context.Context, p *auth.Principal, q tokenQuery
 		return list
 	}
 	list.Total, list.All = res.Page.Total, res.All
+	list.Segs = tokenSegs(q, res.Counts)
 	for _, t := range res.Rows {
 		list.Rows = append(list.Rows, s.enrollRow(t, c))
 	}
@@ -432,11 +487,28 @@ func (s *Service) tokenList(ctx context.Context, p *auth.Principal, q tokenQuery
 		list.Empty = &EmptyView{Kind: "partial", Title: "Filters not valid", Body: bad[0].Message + " Clear the filters to see every token."}
 	case res.All == 0:
 		// First run: no token has ever been made. Neutral, the only neutral no-data case.
-		list.Empty = &EmptyView{Kind: "neutral", Title: "No enrollment tokens yet", Body: "Create the first one above. A token lets installers on a customer's machines enroll without anyone approving each device."}
+		list.Empty = &EmptyView{Kind: "neutral", Title: "No enrollment tokens yet", Body: "A token lets installers on a customer's machines enroll without anyone approving each device.",
+			Link: &Link{Href: list.NewHref, Label: "New enrollment"}}
 	case len(res.Rows) == 0 && q.filtered():
 		list.Empty = &EmptyView{Kind: "neutral", Title: "No tokens match these filters", Body: fmt.Sprintf("0 of %d tokens match. Clear the filters to see them all.", res.All)}
 	}
 	return list
+}
+
+// tokenSegs are the status tabs over the table: every token, then each status.
+func tokenSegs(q tokenQuery, counts map[string]int) []TokenSeg {
+	href := func(status string) string {
+		m := q
+		m.Status, m.Page = status, 1
+		return listURL("/enroll", m.values()) + "#tokens"
+	}
+	total := 0
+	segs := make([]TokenSeg, 0, len(store.TokenStatuses)+1)
+	for _, st := range store.TokenStatuses {
+		total += counts[st]
+		segs = append(segs, TokenSeg{Label: tokenStatusLabels[st], N: counts[st], Href: href(st), Current: q.Status == st})
+	}
+	return append([]TokenSeg{{Label: "All", N: total, Href: href(""), Current: q.Status == ""}}, segs...)
 }
 
 func withoutKey(v url.Values, key string) url.Values {
@@ -594,11 +666,7 @@ func (s *Service) enrollCreate(w http.ResponseWriter, r *http.Request) {
 	created.MSI = s.msiView(msi, msiErr, c)
 	created.Snips = adminapi.GenerateSnippets(adminapi.SnippetInput{PublicURL: s.PublicURL, Token: plain, MSI: msi})
 
-	form, err = s.newEnrollForm(r.Context(), p, custID)
-	if err != nil {
-		form = EnrollForm{CSRF: p.CSRF, Errors: map[string]string{}}
-	}
-	pg := EnrollPage{Page: s.page(r.Context(), p, fleet, "Enrollment token created", "enroll", ""), Form: form, Notes: s.pageNotes(), Created: created}
+	pg := EnrollPage{Page: s.page(r.Context(), p, fleet, "Enrollment token created", "enroll", ""), Notes: s.pageNotes(), Created: created}
 	h := w.Header()
 	h.Set("Pragma", "no-cache")
 	s.render(w, r, http.StatusOK, "enroll", "base", pg)
@@ -612,8 +680,7 @@ func (s *Service) enrollRejected(w http.ResponseWriter, r *http.Request, p *auth
 		return
 	}
 	form.finish()
-	pg := s.enrollPageData(r, p, fleet, form, tokenQuery{Size: store.DefaultPageSize, Page: 1}, nil)
-	s.render(w, r, http.StatusBadRequest, "enroll", "base", pg)
+	s.render(w, r, http.StatusBadRequest, "enroll_new", "base", EnrollNewPage{Page: s.page(r.Context(), p, fleet, "New enrollment", "enroll", ""), Form: form, Notes: s.pageNotes()})
 }
 
 // ---- detail and revoke ----
@@ -623,7 +690,6 @@ type TokenDevice struct {
 	ID       string
 	Hostname string
 	Enrolled string
-	Retired  bool
 }
 
 // EnrollTokenPage is /enroll/tokens/{id}.
@@ -636,6 +702,9 @@ type EnrollTokenPage struct {
 	Devices    []TokenDevice
 	DevicesErr bool
 	CanRevoke  bool
+	CanDelete  bool
+	// Retired are the token's retired devices, collapsed under "Retired (n)".
+	Retired *RetiredFold
 }
 
 func (s *Service) enrollTokenRowFor(w http.ResponseWriter, r *http.Request, p *auth.Principal) (store.EnrollTokenRow, bool) {
@@ -672,7 +741,7 @@ func (s *Service) renderEnrollToken(w http.ResponseWriter, r *http.Request, p *a
 	if row.Label == "" {
 		title = "Enrollment token"
 	}
-	pg := EnrollTokenPage{Page: s.page(r.Context(), p, fleet, title, "enroll", ""), Token: tr, TokenID: row.ID, Saved: enrollSavedText(r.URL.Query().Get("saved")), CanRevoke: tr.Active}
+	pg := EnrollTokenPage{Page: s.page(r.Context(), p, fleet, title, "enroll", ""), Token: tr, TokenID: row.ID, Saved: enrollSavedText(r.URL.Query().Get("saved")), CanRevoke: tr.CanRevoke, CanDelete: tr.CanDelete}
 	chip := tr.Status
 	pg.Facts = []Fact{
 		{Key: "Status", Chip: &chip},
@@ -693,13 +762,24 @@ func (s *Service) renderEnrollToken(w http.ResponseWriter, r *http.Request, p *a
 	if row.RevokedAt != nil {
 		pg.Facts = append(pg.Facts, Fact{Key: "Revoked", Value: c.dateClock(*row.RevokedAt)})
 	}
+	if tr.Deleted != "" {
+		pg.Facts = append(pg.Facts, Fact{Key: "Deleted", Value: tr.Deleted + " (hidden from the token list; kept for the audit trail and the devices below)"})
+	}
 	devs, err := s.Store.ListEnrollmentTokenDevices(r.Context(), p.Scope, row.ID)
 	if err != nil {
 		s.log().Error("ui: token devices failed", logx.Err(err))
 		pg.DevicesErr = true
 	}
+	var retired []RetiredRow
 	for _, d := range devs {
-		pg.Devices = append(pg.Devices, TokenDevice{ID: d.ID, Hostname: d.Hostname, Enrolled: c.dateClock(d.EnrolledAt), Retired: d.Retired})
+		if d.Retired {
+			retired = append(retired, RetiredRow{ID: d.ID, Host: d.Hostname, CustomerID: row.CustomerID})
+			continue
+		}
+		pg.Devices = append(pg.Devices, TokenDevice{ID: d.ID, Hostname: d.Hostname, Enrolled: c.dateClock(d.EnrolledAt)})
+	}
+	if len(retired) > 0 {
+		pg.Retired = &RetiredFold{N: len(retired), Rows: retired, Chip: retiredChip()}
 	}
 	s.render(w, r, status, "enroll_token", "base", pg)
 }
@@ -726,6 +806,33 @@ func (s *Service) enrollRevoke(w http.ResponseWriter, r *http.Request) {
 		dest = "/enroll"
 	}
 	http.Redirect(w, r, dest+"?saved="+code, http.StatusSeeOther)
+}
+
+// enrollDelete hides a revoked or expired token (M3-T6) through POST
+// /api/v1/enrollment-tokens/{id}/delete: the one handler that decides and audits.
+func (s *Service) enrollDelete(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	if err := r.ParseForm(); err != nil {
+		s.errorPage(w, r, p, http.StatusBadRequest, "Form not read", "The form could not be read.")
+		return
+	}
+	id := r.PathValue("id")
+	status, _, err := s.apiSend(r, http.MethodPost, "/api/v1/enrollment-tokens/"+url.PathEscape(id)+"/delete", nil)
+	if s.writeFailed(w, r, p, status, err) {
+		return
+	}
+	switch status {
+	case http.StatusNoContent:
+		http.Redirect(w, r, "/enroll?saved=deleted", http.StatusSeeOther)
+	case http.StatusConflict:
+		http.Redirect(w, r, "/enroll?saved=not_deletable", http.StatusSeeOther)
+	case http.StatusNotFound:
+		s.notFound(w, r, p, "This enrollment token")
+	default:
+		s.log().Error("ui: token delete failed", logx.Class("render"), logx.Int("status", status))
+		s.errorPage(w, r, p, http.StatusInternalServerError, "Not deleted", "The token could not be deleted. Nothing was changed.")
+	}
 }
 
 // tokenPolicyNote says what a policy named on a token does (M2-W3B). It is shown

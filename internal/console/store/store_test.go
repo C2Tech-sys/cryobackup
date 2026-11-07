@@ -94,8 +94,8 @@ func TestOpenAppliesMigrationsAndReopenIsNoop(t *testing.T) {
 	if tables != 35 || indexes != 105 {
 		t.Fatalf("schema has %d tables and %d indexes, want 35 and 105 (same as replica/schema_test.py)", tables, indexes)
 	}
-	if v := must[int](t)(s.SchemaVersion(ctx)); v != 5 {
-		t.Fatalf("SchemaVersion = %d, want 5", v)
+	if v := must[int](t)(s.SchemaVersion(ctx)); v != 6 {
+		t.Fatalf("SchemaVersion = %d, want 6", v)
 	}
 	var name, sum string
 	var created int64
@@ -171,9 +171,9 @@ func TestNewerDatabaseRefusesToOpen(t *testing.T) {
 
 func TestMigrationsListAndChecksum(t *testing.T) {
 	ms := must[[]migrations.Migration](t)(migrations.List())
-	if len(ms) != 5 || ms[0].Version != 1 || ms[0].Name != "0001_initial" || ms[1].Version != 2 || ms[1].Name != "0002_unsupported_file_class" ||
+	if len(ms) != 6 || ms[0].Version != 1 || ms[0].Name != "0001_initial" || ms[1].Version != 2 || ms[1].Name != "0002_unsupported_file_class" ||
 		ms[2].Version != 3 || ms[2].Name != "0003_fleet_start_lease" || ms[3].Version != 4 || ms[3].Name != "0004_m2w1a" ||
-		ms[4].Version != 5 || ms[4].Name != "0005_m3t3_view_audience" {
+		ms[4].Version != 5 || ms[4].Name != "0005_m3t3_view_audience" || ms[5].Version != 6 || ms[5].Name != "0006_m3t6_token_delete" {
 		t.Fatalf("List = %+v", ms)
 	}
 	lf, crlf := migrations.Checksum([]byte("a\nb\n")), migrations.Checksum([]byte("a\r\nb\r\n"))

@@ -455,6 +455,26 @@ type ProbeFacts struct {
 	Quota *QuotaFacts
 	// Release is the release manifest check (C16).
 	Release *ReleaseFacts
+	// LoginFile is the measurement of the gateway's login file against the retired devices (C17).
+	LoginFile *LoginFileFacts
+}
+
+// LoginFileFacts says what a read of the file the gateway reads found, and which devices are retired
+// (C17, ADR 0016). The file is measured, never inferred from when the sync job ran.
+type LoginFileFacts struct {
+	// Retired counts the devices with a retired_at; RetiredGarbled those whose retired_at is not a usable time.
+	Retired, RetiredGarbled int
+	// NotRead says why the retired devices could not be read ("" = they were).
+	NotRead string
+	// MeasuredAt is when the file was last read, or when reading it last failed. Zero means never.
+	MeasuredAt Millis
+	// ReadFailed is the class of the newest read when it failed ("" = it was clean).
+	ReadFailed string
+	// InFile is how many retired devices' logins the newest clean read found. A failed read does not
+	// change it: only a clean read can clear it.
+	InFile int
+	// Interval is the cadence of the measurement; zero means DefaultProberInterval.
+	Interval time.Duration
 }
 
 // World is one complete load of the fleet, handed to Evaluate.

@@ -142,6 +142,7 @@ func (r *proberRig) evaluate() []string {
 	p.Evaluator = &state.JobFacts{LastFinishedAt: now, Period: time.Minute}
 	p.Maintain.Scheduler = &state.JobFacts{LastFinishedAt: now}
 	p.Database.SelfBackup = &state.SelfBackupFacts{NotInBuild: true}
+	p.LoginFile = &state.LoginFileFacts{} // this rig has no sync job; nothing is retired in it
 	p.Digest, p.Quota, p.Release = &state.DigestFacts{NotInBuild: true}, &state.QuotaFacts{NotInBuild: true}, &state.ReleaseFacts{NotInBuild: true}
 	v := state.Evaluate(state.World{Probes: p, LoadComplete: true, PreviousDeviceCount: -1, LoadedAt: r.clk.Now()}, r.clk.Now())
 	var ids []string

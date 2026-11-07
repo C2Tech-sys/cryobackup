@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -57,9 +58,11 @@ func AllBannersIn(now time.Time, loc *time.Location) []state.Banner {
 		}
 	}
 	warn := state.SeverityAlarm
+	out = append(out, state.Banner{ID: "C17", Severity: state.SeverityCritical,
+		Text: "The gateway login of a retired device is still in the gateway file: the gateway may still accept it until the sync succeeds."})
 	out = append(out, state.Banner{ID: "C00", Severity: warn, Text: "Console self-checks are not wired: gateway, storage, e-mail and job health are not being monitored."})
 	for _, b := range []struct{ id, what string }{{"C01b", "Gateway"}, {"C02b", "Storage"}, {"C03b", "Alert e-mail"}, {"C04b", "Agent API"}, {"C05b", "Certificate"},
-		{"C06b", "Alerting"}, {"C07b", "Maintenance worker"}, {"C12b", "Master key"}, {"C14b", "Digest"}, {"C15b", "Storage quota"}, {"C16b", "Release manifest"}} {
+		{"C06b", "Alerting"}, {"C07b", "Maintenance worker"}, {"C12b", "Master key"}, {"C14b", "Digest"}, {"C15b", "Storage quota"}, {"C16b", "Release manifest"}, {"C17b", "Gateway login removal"}} {
 		out = append(out, state.Banner{ID: b.id, Severity: warn, Text: b.what + " has not been checked: a problem here would go unnoticed."})
 	}
 	return out
@@ -105,6 +108,9 @@ const (
 // call fails on the run ids.
 func SeedM3(ctx context.Context, st *store.Store, now time.Time) error {
 	now = now.UTC()
+	if err := seedM3T6Tokens(ctx, st, now); err != nil {
+		return err
+	}
 	devs := map[string]string{}
 	l, err := st.ListDevices(ctx, store.ScopeAll(), store.ListDevicesOptions{IncludeRetired: true, Page: store.Page{Limit: 500}})
 	if err != nil {
@@ -210,4 +216,33 @@ func runID(n int) string {
 		n /= 32
 	}
 	return string(b)
+}
+
+// seedM3T6Tokens adds a used-up, an expired and a revoked enrollment token, so the
+// token table (M3-T6) has every status and something the operator can delete.
+func seedM3T6Tokens(ctx context.Context, st *store.Store, now time.Time) error {
+	return st.Write(ctx, func(tx *store.Tx) error {
+		var cust string
+		if err := tx.QueryRow(`SELECT id FROM customers WHERE name = 'Harbor Family Practice'`).Scan(&cust); err != nil {
+			return err
+		}
+		at := now.UnixMilli()
+		day := int64(24 * time.Hour / time.Millisecond)
+		for _, t := range []struct {
+			id, label, hash  string
+			expires, maxUses int64
+			used             int64
+			revoked          any
+		}{
+			{"01JM3T6TOKEN00000000USEDUP", "harbor-exam-rooms", strings.Repeat("1", 64), at + 20*day, 3, 3, nil},
+			{"01JM3T6TOKEN00000000EXPIRE", "harbor-spring-rollout", strings.Repeat("2", 64), at - 30*day, 25, 12, nil},
+			{"01JM3T6TOKEN00000000REVOKE", "harbor-leaked-in-a-ticket", strings.Repeat("3", 64), at + 40*day, 10, 1, at - 2*day},
+		} {
+			if _, err := tx.Exec(`INSERT INTO enrollment_tokens (id, customer_id, label, token_hash, device_class_default, expires_at, max_uses, used_count, revoked_at, created_at, updated_at)
+				VALUES (?,?,?,?, 'unknown', ?, ?, ?, ?, ?, ?)`, t.id, cust, t.label, t.hash, t.expires, t.maxUses, t.used, t.revoked, at-60*day, at-60*day); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

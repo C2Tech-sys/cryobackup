@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
@@ -57,6 +58,8 @@ type DevFilterForm struct {
 
 // DevTable is everything the table templates need.
 type DevTable struct {
+	// Retired is "Retired (n)" (M3-T6): the retired devices the rows leave out.
+	Retired    *RetiredFold
 	BaseURL    string // the canonical page, "/devices" or "/customers/{id}/devices"
 	PartialURL string // the fragment endpoint
 	// CustomerID is set on the customer page: the table is already that
@@ -202,6 +205,12 @@ func (s *Service) buildDevTable(ctx context.Context, p *auth.Principal, fleet he
 		rows = append(rows, row)
 	}
 	t.Rows = rows
+	if !q.Retired && len(q.States) == 0 { // M3-T6: left out of the rows, so held under "Retired (n)"
+		search := strings.ToLower(strings.TrimSpace(q.Q))
+		t.Retired = foldOf(customerPtrs(fleet), c, spec.CustomerID == "", func(d state.DeviceState) bool {
+			return (q.Customer == "" || d.CustomerID == q.Customer) && strings.Contains(strings.ToLower(d.Hostname), search)
+		})
+	}
 	// pager
 	t.Pager = buildPager(tb.Page, "devices",
 		func(page, size int) string { m := q; m.Page, m.Size = page, size; return spec.hrefFor(m) },

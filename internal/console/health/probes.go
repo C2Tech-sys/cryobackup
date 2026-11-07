@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/maintain"
@@ -61,6 +62,18 @@ func jobFacts(jobs []store.JobState, jerr error, name string, period time.Durati
 	return j
 }
 
+// withRetired adds the retired devices to the prober's measurement of the login file.
+// What cannot be read is NotRead (C17b), never "nothing is retired".
+func (e *Evaluator) withRetired(ctx context.Context, f state.LoginFileFacts) state.LoginFileFacts {
+	total, garbled, err := e.Store.RetiredDeviceCounts(ctx)
+	if err != nil {
+		f.NotRead = "the retired devices could not be read"
+		return f
+	}
+	f.Retired, f.RetiredGarbled = total, garbled
+	return f
+}
+
 // ProbeFacts assembles the World's probe facts. Without a probe source
 // (Evaluator.Probes nil: unit tests, or a caller that does not run the prober)
 // it returns the zero value, which is not wired (C00). page says whether a
@@ -93,6 +106,10 @@ func (e *Evaluator) ProbeFacts(jobs []store.JobState, jerr error, page bool) sta
 	}
 	if p.Release == nil {
 		p.Release = &state.ReleaseFacts{NotInBuild: true}
+	}
+	if p.LoginFile != nil {
+		f := e.withRetired(context.Background(), *p.LoginFile) // two counts; this path takes no request context
+		p.LoginFile = &f
 	}
 	if page && p.View == nil {
 		v := &state.ViewFacts{RefreshInterval: state.DefaultRefreshInterval}
@@ -129,6 +146,7 @@ func FixtureProbes(clock func() time.Time) func() state.ProbeFacts {
 			Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second),
 				FreeBytes: 80 << 30, TotalBytes: 100 << 30, WALBytes: 4 << 20},
 			MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "fixtures"},
+			LoginFile: &state.LoginFileFacts{MeasuredAt: at(20 * time.Second)},
 		}
 	}
 }
