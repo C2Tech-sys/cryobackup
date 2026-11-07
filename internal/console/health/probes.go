@@ -160,6 +160,7 @@ func FixtureProbes(clock func() time.Time) func() state.ProbeFacts {
 			Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second),
 				FreeBytes: 80 << 30, TotalBytes: 100 << 30, WALBytes: 4 << 20},
 			MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "fixtures"},
+			LoginSync: &state.LoginSyncFacts{},
 		}
 	}
 }
