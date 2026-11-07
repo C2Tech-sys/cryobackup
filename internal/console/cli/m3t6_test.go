@@ -413,7 +413,10 @@ func TestAnOldCopyOfTheFilePutBackIsSeenByTheProbersTick(t *testing.T) {
 			t.Fatal(err)
 		}
 		app.Prober.Wait()
-		seen = strings.HasPrefix(w.banner("C17"), "critical: ") && w.inFile(w.dir, ids[0])
+		// The tick's own row says it was the tick that read it, not a run of the job that happened to.
+		row, rerr := app.Store.GetJobState(context.Background(), jobs.ProbeRowLoginFile)
+		seen = rerr == nil && row.LastStatus == "error" && row.LastErrorClass == "retired_login_in_file" &&
+			strings.HasPrefix(w.banner("C17"), "critical: ") && w.inFile(w.dir, ids[0])
 	}
 	if !seen {
 		t.Fatal("the tick never saw the old copy")
