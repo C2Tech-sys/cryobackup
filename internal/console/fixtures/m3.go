@@ -59,7 +59,7 @@ func AllBannersIn(now time.Time, loc *time.Location) []state.Banner {
 	}
 	warn := state.SeverityAlarm
 	out = append(out, state.Banner{ID: "C17", Severity: state.SeverityCritical,
-		Text: "A retired device's gateway login is not removed: the gateway may still accept it until the sync succeeds (the newest login sync failed: io)."})
+		Text: "The gateway login of a retired device is not removed: the gateway may still accept it until the sync succeeds (the newest login sync failed: io)."})
 	out = append(out, state.Banner{ID: "C00", Severity: warn, Text: "Console self-checks are not wired: gateway, storage, e-mail and job health are not being monitored."})
 	for _, b := range []struct{ id, what string }{{"C01b", "Gateway"}, {"C02b", "Storage"}, {"C03b", "Alert e-mail"}, {"C04b", "Agent API"}, {"C05b", "Certificate"},
 		{"C06b", "Alerting"}, {"C07b", "Maintenance worker"}, {"C12b", "Master key"}, {"C14b", "Digest"}, {"C15b", "Storage quota"}, {"C16b", "Release manifest"}, {"C17b", "Gateway login removal"}} {
@@ -109,9 +109,6 @@ const (
 func SeedM3(ctx context.Context, st *store.Store, now time.Time) error {
 	now = now.UTC()
 	if err := seedM3T6Tokens(ctx, st, now); err != nil {
-		return err
-	}
-	if err := RecordLoginSync(ctx, st, now); err != nil {
 		return err
 	}
 	devs := map[string]string{}

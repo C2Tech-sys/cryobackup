@@ -341,17 +341,18 @@ func TestM3T6B_ASyncThatDidNotPassReadsPending(t *testing.T) {
 	e.login()
 	e.syncDown = true
 	e.svc.m3.api.GatewaySyncWait = 60 * time.Millisecond
+	e.now = e.now.Add(time.Minute) // the fixtures' passing run is now from before the retire
 	id := e.dev["FRONTDESK-01"]
 	r := e.postForm("/ui/devices/"+id+"/retire", url.Values{"reason": {"compromised"}, "confirm": {"FRONTDESK-01"}})
-	if !strings.Contains(e.location(r), "cmd=retired_pending") || !strings.Contains(e.location(r), "why=not_checked") {
+	if !strings.Contains(e.location(r), "cmd=retired_pending") || !strings.Contains(e.location(r), "why=no_sync_since_retire") {
 		t.Fatalf("went to %q", e.location(r))
 	}
 	page := e.page(e.location(r), 200)
-	mustContain(t, "pending", page, "Device retired, but its gateway login is not removed.", "the gateway may still accept this device&#39;s login until the sync succeeds", "Reason: not_checked.")
+	mustContain(t, "pending", page, "Device retired, but its gateway login is not removed.", "the gateway may still accept this device&#39;s login until the sync succeeds", "Reason: no_sync_since_retire.")
 	if strings.Contains(page, "Its device token and gateway login are revoked") {
 		t.Error("the page says the login is revoked")
 	}
-	// A pass from before the retire: the page names the class, critical.
+	// A failed run after the retire: the page names its class, critical.
 	e.now = e.now.Add(time.Minute)
 	if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: "error", ErrorClass: "io", StartedAt: e.now, FinishedAt: e.now}); err != nil {
 		t.Fatal(err)

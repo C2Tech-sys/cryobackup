@@ -210,7 +210,7 @@ func probeBanners(w World, now time.Time) []Banner {
 		{p.Release != nil, func() []Banner { return releaseBanners(p.Release, c) },
 			unsupplied("C16b", "Release manifests", "a rejected manifest would go unnoticed")},
 		{p.LoginSync != nil, func() []Banner { return loginSyncBanners(p.LoginSync, c) },
-			unsupplied("C17b", "Gateway login removal", "a retired device's login left in the gateway's file would go unnoticed")},
+			unsupplied("C17b", "Gateway login removal", "a retired login left in the gateway file would go unnoticed")},
 	}
 	for _, k := range checks {
 		switch {
@@ -835,7 +835,7 @@ func JudgeLoginSync(f LoginSyncFacts, now time.Time) LoginSyncVerdict {
 	}
 	started, ok := recorded(f.LastStartedAt, now)
 	if !ok {
-		return unchecked("the login sync's newest run" + garbledWhy)
+		return unchecked("the newest login sync" + garbledWhy)
 	}
 	if started.Before(retired) {
 		return LoginSyncVerdict{Status: LoginPending, Class: LoginNoSyncSinceRetire}
@@ -851,7 +851,7 @@ func JudgeLoginSync(f LoginSyncFacts, now time.Time) LoginSyncVerdict {
 	case "skipped":
 		return LoginSyncVerdict{Status: LoginPending, Class: LoginSyncSkipped}
 	}
-	return unchecked("the login sync's newest status is not one this console knows")
+	return unchecked("the newest login sync has a status this console does not know")
 }
 
 // loginSyncBanners is C17: a retired device's gateway login may still be in the deployed file. It
@@ -865,13 +865,13 @@ func loginSyncBanners(f *LoginSyncFacts, c bannerCtx) []Banner {
 			why = "no login sync has run since the retire"
 		}
 		b := Banner{ID: "C17", Severity: SeverityCritical,
-			Text: "A retired device's gateway login is not removed: the gateway may still accept it until the sync succeeds (" + why + ")."}
+			Text: "The gateway login of a retired device is not removed: the gateway may still accept it until the sync succeeds (" + why + ")."}
 		if t, ok := recorded(f.NewestRetireAt, c.now); ok {
 			b.At = t
 		}
 		return []Banner{b}
 	case LoginUnchecked:
-		return []Banner{notChecked("C17b", "Gateway login removal", "a retired device's login left in the gateway's file would go unnoticed", v.Why, 0)}
+		return []Banner{notChecked("C17b", "Gateway login removal", "a retired login left in the gateway file would go unnoticed", v.Why, 0)}
 	}
 	return nil
 }

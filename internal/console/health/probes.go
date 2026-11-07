@@ -66,7 +66,7 @@ func jobFacts(jobs []store.JobState, jerr error, name string, period time.Durati
 // htpasswd-sync job's newest run. What cannot be read is NotRead (C17b), never ok.
 func (e *Evaluator) loginSyncFacts(ctx context.Context, jobs []store.JobState, jerr error) state.LoginSyncFacts {
 	if jerr != nil {
-		return state.LoginSyncFacts{NotRead: "the login sync's job state could not be read"}
+		return state.LoginSyncFacts{NotRead: "the job state of the login sync could not be read"}
 	}
 	newest, err := e.Store.NewestRetiredAt(ctx)
 	if err != nil {
@@ -124,6 +124,10 @@ func (e *Evaluator) ProbeFacts(jobs []store.JobState, jerr error, page bool) sta
 	}
 	if p.Release == nil {
 		p.Release = &state.ReleaseFacts{NotInBuild: true}
+	}
+	if p.LoginSync == nil && p.Wired {
+		f := e.loginSyncFacts(context.Background(), jobs, jerr) // a read of one time; this path takes no request context
+		p.LoginSync = &f
 	}
 	if page && p.View == nil {
 		v := &state.ViewFacts{RefreshInterval: state.DefaultRefreshInterval}

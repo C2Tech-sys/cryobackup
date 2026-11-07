@@ -483,6 +483,12 @@ func TestRetireAnswersPendingUnlessASyncPassedAfterIt(t *testing.T) {
 	})
 	t.Run("the job never ran", func(t *testing.T) {
 		e := newEnv(t)
+		if err := e.st.Write(context.Background(), func(tx *store.Tx) error { // the fixtures record a passing run
+			_, err := tx.Exec(`DELETE FROM job_state WHERE name = ?`, store.JobHtpasswdSync)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
 		e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, 60*time.Millisecond
 		if got := retireOf(t, e, "FRONTDESK-02"); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != state.LoginNotChecked {
 			t.Fatalf("%+v", got)
