@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -97,7 +100,7 @@ func newR5Rig(t *testing.T, o r5Options) *r5Rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(app.Close)
+	t.Cleanup(func() { closeAndCheck(t, app, cfg.DBPath) })
 	t.Cleanup(app.Prober.Stop)
 	srv := httptest.NewServer(app.Server.AdminRouter)
 	t.Cleanup(srv.Close)
@@ -125,6 +128,35 @@ func (r *r5Rig) tick(start time.Time, d time.Duration) adminapi.SystemHealthResp
 	r.app.Prober.WaitAll()
 	r.app.Endpoint.Once(ctx)
 	return r3Health(r.t, r.base, r.token)
+}
+
+// closeAndCheck is the end of a rig that used a real database file. A Close that
+// gave up is a failure of the test that caused it, not a mystery at TempDir cleanup,
+// and on Windows a handle still open refuses a rename: a holder in this process then
+// shows in the stacks. A file that stays refused with no holder here belongs to
+// another process (an antivirus scan on a CI image).
+func closeAndCheck(t *testing.T, app *App, dbPath string) {
+	t.Helper()
+	app.Admin.BeginShutdown() // the order App.Run closes in
+	app.UI.BeginShutdown()
+	app.Admin.WaitBackground(backgroundShutdownWait)
+	app.UI.WaitBackground(backgroundShutdownWait)
+	app.Close()
+	stacks := func() string {
+		buf := make([]byte, 1<<20)
+		return string(buf[:runtime.Stack(buf, true)])
+	}
+	if errors.Is(app.closeErr, store.ErrCloseAbandoned) {
+		t.Errorf("the database was not closed: work still in flight\n%s", stacks())
+		return
+	}
+	var err error
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if err = os.Rename(dbPath, dbPath+".closed"); err == nil {
+			return
+		}
+	}
+	t.Errorf("the database file is still held after a clean close: %v\n%s", err, stacks())
 }
 
 // post is POST /api/v1/storage-targets/{id}/probe on the real App.

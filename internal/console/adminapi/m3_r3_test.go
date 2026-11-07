@@ -118,14 +118,40 @@ func TestM3EventStreamForgetsDeviceVisibilityWhenTheScopeNarrows(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Two pings: the credential check after the first one ran with the narrowed scope.
-	st.next("ping", 5*time.Second)
-	st.next("ping", 5*time.Second)
-
-	progress(gone.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N2")
-	progress(kept.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N3")
-	if err := json.Unmarshal([]byte(st.next("run.progress", 5*time.Second).Data), &rp); err != nil || rp.DeviceID != kept.ID {
-		t.Fatalf("after the narrowing the first run.progress is %+v (%v); the device that left the scope must not arrive", rp, err)
+	// The narrowing takes effect at the next credential check, which the stream runs after
+	// a ping (15 s in production, 50 ms here); until then the device may still arrive, by
+	// design. Counting pings here cannot show a check has run: pings written before the
+	// narrowing can still be queued in this reader, which failed once under load. So send
+	// the pair until the device that left stops arriving; without the forgetting it never does.
+	next := func() RunProgressJSON {
+		t.Helper()
+		var got RunProgressJSON
+		if err := json.Unmarshal([]byte(st.next("run.progress", 5*time.Second).Data), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		progress(gone.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N2")
+		progress(kept.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N3")
+		got := next()
+		if got.DeviceID == kept.ID {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the device that left the scope still arrives after 10 s of credential checks: %+v", got)
+		}
+		_ = next() // the pair's second half
+		time.Sleep(10 * time.Millisecond)
+	}
+	// From here on it stays out.
+	for i := 0; i < 5; i++ {
+		progress(gone.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N4")
+		progress(kept.ID, "01J9Y4K3A0B1C2D3E4F5G6H7N5")
+		if got := next(); got.DeviceID != kept.ID {
+			t.Fatalf("the device that left the scope arrived again: %+v", got)
+		}
 	}
 }
 
