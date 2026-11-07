@@ -163,8 +163,16 @@
     if (now - last > STALE_AFTER) setStale(true, 'age');
   }, 1000);
   setInterval(function () { if (!live && !forced) poll(); }, refresh * 1000);
-  document.addEventListener('htmx:afterRequest', function (e) {
+  /* A refresh the page makes on its own is not the operator doing anything: the header tells the console so, and the
+     session's idle expiry does not slide on it (auth.IsBackground). A board left open reaches the idle timeout. */
+  document.addEventListener('htmx:configRequest', function (e) {
     var el = e.detail && e.detail.elt;
+    if (el && el.hasAttribute && (el.hasAttribute('data-poll') || el.hasAttribute('data-fast-poll'))) e.detail.headers['X-Cryo-Background'] = '1';
+  });
+  /* The polled element, not detail.elt: a poll that swaps outerHTML has removed its element by now, so htmx fires this on the
+     nearest ancestor still in the page and detail.elt is that ancestor (<main> on the board). */
+  document.addEventListener('htmx:afterRequest', function (e) {
+    var cfg = e.detail && e.detail.requestConfig, el = cfg && cfg.elt;
     if (el && el.hasAttribute && el.hasAttribute('data-poll') && e.detail.successful) markPoll();
   });
   document.addEventListener('htmx:afterSwap', function () { syncStamp(); applyGroups(); renderC10(); markLive(); if (tipOpen && tipOpen.isConnected) placeTip(tipOpen); /* the explain tip changed size */ });
@@ -197,6 +205,9 @@
     ['fleet.state', 'run.progress', 'banner.update'].forEach(function (n) { es.addEventListener(n, function (e) { mark(); swap(e.data); }); });
     es.addEventListener('freshness', function (e) { mark(); onFresh(e.data); });
     es.addEventListener('ping', function () { mark(); });
+    /* The console ended this session (idle timeout, sign-out elsewhere, revoked). The page leaves at once and the sign-in page
+       says why: the fleet must not stay on screen looking current, and nothing on it would work. */
+    es.addEventListener('session.ended', function () { unloading = true; clearTimeout(retry); es.close(); window.location.href = '/login?ended=1'; });
     es.addEventListener('error', function () {
       if (unloading) return; /* the browser errors every open stream when the page is left */
       var now = Date.now();

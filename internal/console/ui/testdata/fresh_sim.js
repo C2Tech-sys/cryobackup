@@ -90,9 +90,15 @@ function run(name, steps, opts) {
     clearInterval: (id) => { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); },
   };
   ctx.window = ctx;
+  ctx.location = { href: '' };
+  // What htmx 2 really fires for a poll that swaps outerHTML (the board): by then the polled element is out of the
+  // page, so the event that reaches the document comes from the nearest ancestor still in it. detail.elt is that
+  // ancestor (<main>); only requestConfig.elt is still the polled element.
+  const mainEl = { hasAttribute: () => false };
+  const firePoll = () => (docListeners['htmx:afterRequest'] || []).forEach((f) => f({ detail: { elt: mainEl, requestConfig: { elt: pollEl }, successful: true } }));
   // htmx stand-in: a poll succeeds (fires htmx:afterRequest) only while sim.pollsOK is set.
   const pollLog = [];
-  ctx.htmx = { trigger: () => { pollLog.push(now); if (sim.pollsOK) (docListeners['htmx:afterRequest'] || []).forEach((f) => f({ detail: { elt: pollEl, successful: true } })); }, process() {} };
+  ctx.htmx = { trigger: () => { pollLog.push(now); if (sim.pollsOK) firePoll(); }, process() {} };
   ctx.cryoTheme = { get: () => 'dark', set() {} };
   ctx.addEventListener = (n, f) => { (winListeners[n] = winListeners[n] || []).push(f); };
   vm.createContext(ctx);
@@ -102,7 +108,12 @@ function run(name, steps, opts) {
     pollsOK: false,
     polls: () => pollLog.length,
     c10: () => !!ctx.document.getElementById('c10'),
-    pollNow: () => (docListeners['htmx:afterRequest'] || []).forEach((f) => f({ detail: { elt: pollEl, successful: true } })),
+    pollNow: () => firePoll(),
+    configRequest: (el) => { const d = { elt: el, headers: {} }; (docListeners['htmx:configRequest'] || []).forEach((f) => f({ detail: d })); return d.headers; },
+    pollEl,
+    fastPollEl: { hasAttribute: (k) => k === 'data-fast-poll' },
+    plainEl: { hasAttribute: () => false },
+    location: () => ctx.location.href,
     es: () => streams[streams.length - 1],
     streams: () => streams.length,
     stale: () => ctx.cryoFresh.isStale(),
@@ -307,6 +318,22 @@ run('stream down but polls succeed: no NO DATA, and the pill does not say Live',
   s.expect(s.state() === 'stale' && s.word() === 'Polling', 'pill says ' + s.word() + '/' + s.state() + ', want Polling');
   open(s);
   s.expect(s.state() === 'fresh', 'the pill must return to Live when the stream is back: ' + s.state());
+});
+
+run('a refresh the page makes on its own is marked; what the operator does is not', (s) => {
+  s.expect(s.configRequest(s.pollEl)['X-Cryo-Background'] === '1', 'a data-poll refresh is not marked');
+  s.expect(s.configRequest(s.fastPollEl)['X-Cryo-Background'] === '1', 'a data-fast-poll refresh is not marked');
+  s.expect(!('X-Cryo-Background' in s.configRequest(s.plainEl)), 'a request the operator made is marked');
+});
+
+run('a session the console ended moves the page to the sign-in page, and the stream stays down', (s) => {
+  open(s);
+  s.es().emit('session.ended');
+  s.expect(s.location() === '/login?ended=1', 'the page stayed: location ' + s.location());
+  const n = s.streams();
+  s.expect(s.es().closed, 'the stream was left open');
+  s.advance(60000);
+  s.expect(s.streams() === n, 'the page reopened the stream after its session ended');
 });
 
 run('stream down, polls worked once then stopped: NO DATA', (s) => {

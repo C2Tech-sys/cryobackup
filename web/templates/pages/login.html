@@ -24,6 +24,7 @@
     <section class="card" aria-labelledby="signin-h">
       <h2 id="signin-h">Sign in to the console</h2>
       {{if .Fixtures}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>Fixtures mode.</b> The fleet is fictional and nothing leaves this machine.</div></div>{{end}}
+      {{if .Ended}}<div class="banner warn dense" role="status" id="signin-ended"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>You were signed out.</b> The session ended: it sat idle past the limit, or it was signed out or revoked elsewhere. What the page showed stopped updating at that point. Sign in to see the current state.</div></div>{{end}}
       {{if .Error}}<div class="banner crit dense" role="alert" id="signin-err"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><span class="sr-only">Error: </span>{{.Error}}</div></div>{{end}}
       <form method="post" action="/login" autocomplete="on">
         {{if .Nonce}}<input type="hidden" name="login_nonce" value="{{.Nonce}}">{{end}}

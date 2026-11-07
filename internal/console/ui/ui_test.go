@@ -36,6 +36,7 @@ type env struct {
 	be   *fixtures.Backend
 	hub  *Hub
 	now  time.Time
+	nowMu sync.Mutex // guards now against a stream reading the clock: e.advance
 	loc  *time.Location
 	cli  *http.Client
 	sess []*http.Cookie
@@ -61,7 +62,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e := &env{t: t, now: fixtures.Now(), loc: loc, dev: map[string]string{}}
-	clock := func() time.Time { return e.now }
+	clock := func() time.Time { e.nowMu.Lock(); defer e.nowMu.Unlock(); return e.now }
 	st, err := store.OpenMemory(ctx, clock)
 	if err != nil {
 		t.Fatal(err)
