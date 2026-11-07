@@ -725,3 +725,36 @@ func TestARepeatedRetireSignalsTheSyncOnlyWhileTheLoginIsThere(t *testing.T) {
 		t.Errorf("a repeat with the login gone signalled %d times", signals.Load()-before)
 	}
 }
+
+// One reading, each way it can come back. A failing sync holds the job's slot, so a page can
+// meet it busy: the newest clean read still answers, and the job's class explains it.
+func TestGatewayLoginNowReadsEveryAnswerAsItIs(t *testing.T) {
+	e := newEnv(t)
+	const id = "01J9Y4K3A0B1C2D3E4F5G6H7AA"
+	ctx := context.Background()
+	check := func(c jobs.LoginFileCheck) GatewayLoginState {
+		e.svc.CheckGatewayLogins = func(context.Context) jobs.LoginFileCheck { return c }
+		return e.svc.GatewayLoginNow(ctx, id)
+	}
+	if got := check(jobs.LoginFileCheck{}); got.Status != GatewayLoginRemoved || got.InFile {
+		t.Errorf("a clean read without it: %+v", got)
+	}
+	if got := check(jobs.LoginFileCheck{InFile: []string{id}}); got.Status != GatewayLoginPending || !got.InFile || got.Reason != gatewayStillInFile {
+		t.Errorf("a clean read with it: %+v", got)
+	}
+	if got := check(jobs.LoginFileCheck{ReadClass: jobs.LoginFileUnreadable}); got.Status != GatewayLoginPending || got.InFile || got.Reason != jobs.LoginFileUnreadable {
+		t.Errorf("a failed read, nothing seen: %+v", got)
+	}
+	if got := check(jobs.LoginFileCheck{ReadClass: jobs.LoginFileUnreadable, InFile: []string{id}}); got.Status != GatewayLoginPending || !got.InFile || got.Reason != jobs.LoginFileUnreadable {
+		t.Errorf("a failed read, seen before: %+v", got)
+	}
+	if got := check(jobs.LoginFileCheck{ReadClass: jobs.LoginFileBusy}); got.Status != GatewayLoginPending || got.InFile || got.Reason != jobs.LoginFileBusy {
+		t.Errorf("busy, nothing seen: %+v", got)
+	}
+	if err := e.st.RecordJobRun(ctx, store.JobHtpasswdSync, store.JobRun{Status: "error", ErrorClass: "io", StartedAt: e.clk.Now(), FinishedAt: e.clk.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := check(jobs.LoginFileCheck{ReadClass: jobs.LoginFileBusy, InFile: []string{id}}); got.Status != GatewayLoginPending || !got.InFile || got.Reason != "io" {
+		t.Errorf("busy, seen before, the job failing: %+v", got)
+	}
+}

@@ -56,6 +56,8 @@ const (
 	gatewayStillInFile = "still_in_file"
 	// gatewayCheckTimedOut is the reason when the read did not finish in its time.
 	gatewayCheckTimedOut = "check_timed_out"
+	// gatewayCheckMargin is how much of a caller's bound is kept back from the read.
+	gatewayCheckMargin = 50 * time.Millisecond
 )
 
 // DeviceRetireRequest is the body of POST /api/v1/devices/{id}/retire.
@@ -120,8 +122,15 @@ func (s *Service) GatewayLoginNow(ctx context.Context, deviceID string) GatewayL
 		return GatewayLoginState{Status: GatewayLoginPending, Reason: gatewayCheckNotWired}
 	}
 	// In its own goroutine: a read of a hung mount cannot be cancelled, and the caller's bound must still hold.
+	// The read gets a little less than that bound, so one that only waited for its turn can still answer with
+	// what the newest clean read found.
+	readCtx, cancel := ctx, context.CancelFunc(func() {})
+	if dl, ok := ctx.Deadline(); ok {
+		readCtx, cancel = context.WithDeadline(ctx, dl.Add(-gatewayCheckMargin))
+	}
+	defer cancel()
 	done := make(chan jobs.LoginFileCheck, 1)
-	go func() { done <- s.CheckGatewayLogins(ctx) }()
+	go func() { done <- s.CheckGatewayLogins(readCtx) }()
 	var c jobs.LoginFileCheck
 	select {
 	case c = <-done:
@@ -129,23 +138,35 @@ func (s *Service) GatewayLoginNow(ctx context.Context, deviceID string) GatewayL
 		return GatewayLoginState{Status: GatewayLoginPending, Reason: gatewayCheckTimedOut}
 	}
 	switch {
-	case c.ReadClass != "":
-		return GatewayLoginState{Status: GatewayLoginPending, Reason: c.ReadClass, InFile: c.Has(deviceID)}
 	case c.Has(deviceID):
-		reason := gatewayStillInFile
-		if j, err := s.Store.GetJobState(ctx, store.JobHtpasswdSync); err == nil && j.LastStatus == "error" && j.LastErrorClass != "" {
-			reason = j.LastErrorClass
-		}
-		return GatewayLoginState{Status: GatewayLoginPending, Reason: reason, InFile: true}
+		return GatewayLoginState{Status: GatewayLoginPending, Reason: s.inFileReason(ctx, c), InFile: true}
+	case c.ReadClass != "":
+		return GatewayLoginState{Status: GatewayLoginPending, Reason: c.ReadClass}
 	}
 	return GatewayLoginState{Status: GatewayLoginRemoved}
 }
 
-// syncFailedSince reports whether the job's newest run began at or after t and failed. It can
-// only end the wait early: a pending answer may be pessimistic, a removed one may not.
-func (s *Service) syncFailedSince(ctx context.Context, t time.Time) bool {
+// inFileReason names why a login is still in the file: the file cannot be read now, or the job's
+// newest run failed, or neither is known.
+func (s *Service) inFileReason(ctx context.Context, c jobs.LoginFileCheck) string {
+	if c.ReadClass != "" && c.ReadClass != jobs.LoginFileBusy {
+		return c.ReadClass
+	}
+	if j, err := s.Store.GetJobState(ctx, store.JobHtpasswdSync); err == nil && j.LastStatus == "error" && j.LastErrorClass != "" {
+		return j.LastErrorClass
+	}
+	return gatewayStillInFile
+}
+
+// syncFailedSince says whether the job's newest run began at or after t and failed, and its class.
+// It can only end the wait early and name the reason: a pending answer may be pessimistic, a removed
+// one may not.
+func (s *Service) syncFailedSince(ctx context.Context, t time.Time) (string, bool) {
 	j, err := s.Store.GetJobState(ctx, store.JobHtpasswdSync)
-	return err == nil && j.LastStatus == "error" && j.LastStartedAt != nil && !j.LastStartedAt.Before(t)
+	if err != nil || j.LastStatus != "error" || j.LastStartedAt == nil || j.LastStartedAt.Before(t) {
+		return "", false
+	}
+	return j.LastErrorClass, true
 }
 
 // awaitLoginRemoved signals the sync and reads the file until the login is gone, the file cannot
@@ -172,8 +193,15 @@ func (s *Service) awaitLoginRemoved(ctx context.Context, deviceID string, retire
 			return v
 		case !v.InFile && v.Reason != jobs.LoginFileBusy && v.Reason != gatewayCheckTimedOut: // the file cannot be read
 			return v
-		case v.InFile && s.syncFailedSince(ctx, retiredAt):
-			return v
+		}
+		if v.InFile {
+			// One read of the job's row decides and names the reason: the run can fail after the read above.
+			if class, failed := s.syncFailedSince(ctx, retiredAt); failed {
+				if class != "" {
+					v.Reason = class
+				}
+				return v
+			}
 		}
 		select {
 		case <-ctx.Done():
