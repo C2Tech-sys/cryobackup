@@ -1323,8 +1323,8 @@ type ProbeResponse struct {
 }
 
 // probeChecks is the gateway, storage and certificates checks of a probe that began at f.Since:
-// the same attempts and the same rule as the health page's rows, so the two cannot disagree. f.Since
-// is the one difference: a result the probe did not produce during this request is not_checked, because it is
+// the same attempts and the same rule as the health page's rows. f.Since is the main difference (openapi lists all three):
+// a result the probe did not produce during this request is not_checked, because it is
 // not evidence of now. The storage check also speaks for the quota, which has its own row on the health page.
 func probeChecks(f healthFacts) []ProbeCheckJSON {
 	_, c00 := worstOf(f.Banners, []string{bannerNotWired})

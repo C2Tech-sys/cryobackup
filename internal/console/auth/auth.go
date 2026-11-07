@@ -123,6 +123,8 @@ type Principal struct {
 	// token (Authorization: Bearer) instead of a session; SessionID is then "".
 	TokenID   string
 	TokenName string
+	// TokenScopes are the scopes the token holds: the gate stops a narrow one at its route.
+	TokenScopes []string
 }
 
 // Enrolled reports whether the account has a TOTP enrollment.

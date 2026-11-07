@@ -72,6 +72,7 @@ func init() {
 		"err_pause_reason": {Class: ClassCrit, Title: "Not parked.", Text: "A reason is required: one line, no file paths."},
 		"err_pause_when":   {Class: ClassCrit, Title: "Not parked.", Text: "Choose for how long: 1, 2, 4, 8 or 24 hours, until a date, or indefinitely."},
 		"err_pause_until":  {Class: ClassCrit, Title: "Not parked.", Text: "The end must be at least a minute from now and at most a year away."},
+		"err_pause_gap":    {Class: ClassCrit, Title: "Not parked.", Text: "That time does not exist on that day: the clocks skip it in the display time zone. Choose a time outside the skipped hour."},
 		"err_pause_fail":   {Class: ClassCrit, Title: "Not parked.", Text: "The console could not park the device. Nothing was changed."},
 		"err_resume_fail":  {Class: ClassCrit, Title: "Not resumed.", Text: "The console could not resume the device. Nothing was changed."},
 	} {
@@ -114,6 +115,12 @@ func (s *Service) devicePausePost(w http.ResponseWriter, r *http.Request) {
 		t, perr := time.ParseInLocation(datetimeLocal, strings.TrimSpace(r.PostFormValue("until")), s.loc(r.Context()))
 		if perr != nil {
 			back(w, r, id, "", "err_pause_until")
+			return
+		}
+		// A time the clocks skip (spring forward) has no instant. Go moves it silently; an hour's
+		// difference in when backups resume is not the console's to choose, so ask again.
+		if t.Format(datetimeLocal) != strings.TrimSpace(r.PostFormValue("until")) {
+			back(w, r, id, "", "err_pause_gap")
 			return
 		}
 		u := t.UTC()

@@ -61,11 +61,9 @@ func m3Patterns() []string {
 // operator; retiring a device, the job table, running a job and the storage
 // probe admin.
 //
-// /status and /metrics are for external monitors and take an API token. The
-// architecture names narrower token scopes for them (status:read, metrics:read);
-// auth.ScopeRead and auth.ScopeFull (read-only role or the account's role) are
-// the only scopes the token store knows today, so both routes accept a session
-// or any live token at read-only level and no more.
+// /status and /metrics are for external monitors and take an API token: a read or
+// full token, or the scope that opens that one route and no other (status:read,
+// metrics:read; the gate enforces it, auth.tokenScopeAllows).
 func (s *Service) registerM3(r httpx.Registrar) {
 	ro := func(h http.HandlerFunc) http.Handler { return s.Auth.Require(auth.RoleReadOnly, auth.ModeAPI, h) }
 	op := func(h http.HandlerFunc) http.Handler { return s.Auth.Require(auth.RoleOperator, auth.ModeAPI, h) }

@@ -135,7 +135,9 @@
         <div class="frow">
           <div class="field"><label for="tok-scope">Scope</label><select class="input" id="tok-scope" name="scope">
             <option value="read"{{if eq .TokenForm.Scope "read"}} selected{{end}}>Read-only</option>
-            <option value="full"{{if eq .TokenForm.Scope "full"}} selected{{end}}>Full: everything your role ({{.Me.Role}}) can do</option></select></div>
+            <option value="full"{{if eq .TokenForm.Scope "full"}} selected{{end}}>Full: everything your role ({{.Me.Role}}) can do</option>
+            <option value="status:read"{{if eq .TokenForm.Scope "status:read"}} selected{{end}}>Status only: GET /api/v1/status, for an uptime monitor</option>
+            <option value="metrics:read"{{if eq .TokenForm.Scope "metrics:read"}} selected{{end}}>Metrics only: GET /metrics, for a metrics scraper</option></select></div>
           <div class="field"><label for="tok-days">Expires after</label><select class="input" id="tok-days" name="days">{{range .Lifetimes}}<option value="{{.}}"{{if eq . $.TokenForm.Days}} selected{{end}}>{{.}} days</option>{{end}}</select></div>
         </div>
         <div class="actions"><button class="btn primary" type="submit">Create token</button></div>

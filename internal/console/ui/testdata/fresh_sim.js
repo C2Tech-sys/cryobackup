@@ -44,6 +44,7 @@ function run(name, steps, opts) {
   const strip = mkEl('section');
   strip.querySelector = (sel) => (sel === 'ul' ? strip.kids.find((k) => k.tag === 'ul') || null : null);
   const pollEl = { hasAttribute: (k) => k === 'data-poll' };
+  const boardFiltered = { value: false };
   const docAttrs = {};
   const docListeners = {};
   const document = {
@@ -52,6 +53,7 @@ function run(name, steps, opts) {
     documentElement: { clientWidth: 1360, clientHeight: 800, setAttribute: (k, v) => { docAttrs[k] = v; }, removeAttribute: (k) => { delete docAttrs[k]; } },
     getElementById: (id) => {
       if (id === 'freshness') return stampEl;
+      if (id === 'board') return { getAttribute: () => (boardFiltered.value ? 'true' : 'false') };
       if (id === 'banners') return strip;
       if (id === 'c10') { const ul = strip.kids.find((k) => k.tag === 'ul'); return (ul && ul.kids.find((k) => k.id === 'c10')) || null; }
       return null;
@@ -72,6 +74,7 @@ function run(name, steps, opts) {
     close() { this.closed = true; this.readyState = 2; }
     emit(n, data) { (this.l[n] || []).forEach((f) => f({ data })); }
   }
+  const stored = {};
   const ctx = {
     document,
     Date: FakeDate,
@@ -82,7 +85,7 @@ function run(name, steps, opts) {
     console,
     Array,
     Object,
-    sessionStorage: { getItem: () => null, setItem() {} },
+    sessionStorage: { getItem: () => null, setItem: (k, v) => { stored[k] = v; } },
     EventSource: FakeES,
     setInterval: (f, ms) => { timers.push({ id: nextId, f, every: ms, due: now + ms }); return nextId++; },
     setTimeout: (f, ms) => { timers.push({ id: nextId, f, every: 0, due: now + ms }); return nextId++; },
@@ -114,6 +117,9 @@ function run(name, steps, opts) {
     fastPollEl: { hasAttribute: (k) => k === 'data-fast-poll' },
     plainEl: { hasAttribute: () => false },
     location: () => ctx.location.href,
+    stored: () => stored,
+    click: (target) => (docListeners.click || []).forEach((f) => f({ target })),
+    setFiltered: (on) => { boardFiltered.value = on; },
     es: () => streams[streams.length - 1],
     streams: () => streams.length,
     stale: () => ctx.cryoFresh.isStale(),
@@ -334,6 +340,28 @@ run('a session the console ended moves the page to the sign-in page, and the str
   s.expect(s.es().closed, 'the stream was left open');
   s.advance(60000);
   s.expect(s.streams() === n, 'the page reopened the stream after its session ended');
+});
+
+// M3-T5 mutants: a "Close" button in a <details> popover closes it and gives focus back; a group collapsed on the
+// unfiltered board is remembered, and one collapsed under a filter is not.
+run('a Close button closes its popover and returns focus to the summary', (s) => {
+  const attrs = { open: '' }; let focused = 0;
+  const details = { removeAttribute: (k) => { delete attrs[k]; }, querySelector: () => ({ focus: () => { focused++; } }) };
+  const closeBtn = { closest: (sel) => (sel === '[data-close]' ? { closest: () => details } : null) };
+  s.click(closeBtn);
+  s.expect(!('open' in attrs), 'the popover stayed open');
+  s.expect(focused === 1, 'focus did not return to the summary');
+});
+
+run('a collapsed group is remembered only when no filter is active', (s) => {
+  const mk = () => { const a = {}; const tb = { id: 'g1', getAttribute: (k) => a[k] || null, setAttribute: (k, v) => { a[k] = v; } };
+    return { closest: (sel) => (sel === '.chev' ? { closest: () => tb, setAttribute() {} } : null) }; };
+  s.setFiltered(true);
+  s.click(mk());
+  s.expect(!('cryo.groups' in s.stored()), 'a collapse under a filter was stored');
+  s.setFiltered(false);
+  s.click(mk());
+  s.expect(JSON.parse(s.stored()['cryo.groups'] || '{}').g1 === true, 'a collapse on the unfiltered board was not stored');
 });
 
 run('stream down, polls worked once then stopped: NO DATA', (s) => {

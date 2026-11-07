@@ -67,7 +67,7 @@ func TestC08WorkerStoreErrorIsNotCheckedNeverC02(t *testing.T) { // M3-INT C3
 // the health-prober's lease and per-probe rows, and keeps every job.
 func TestProbeRowsAreNotJobRows(t *testing.T) { // M3-INT C6
 	for _, row := range []string{ProbeLease, ProbeRowGateway, ProbeRowStorage, ProbeRowSMTP, ProbeRowMaintain, ProbeRowDatabase,
-		ProbeRowIntegrity, ProbeRowMasterKey, ProbeRowEndpoint} {
+		ProbeRowIntegrity, ProbeRowMasterKey, ProbeRowEndpoint, ProbeRowLoginFile} {
 		if store.IsJobRow(row) {
 			t.Errorf("%s is listed as a job", row)
 		}

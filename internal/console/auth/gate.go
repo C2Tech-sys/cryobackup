@@ -105,7 +105,7 @@ func (m *Manager) gate(kind gateKind, min Role, mode Mode, next http.Handler) ht
 				return
 			}
 			httpx.SetActor(r.Context(), "api_token", p.TokenID)
-			if p.Role < min {
+			if p.Role < min || !tokenScopeAllows(p.TokenScopes, r) {
 				httpx.Problem(w, r, api.CodeForbidden, 0)
 				return
 			}

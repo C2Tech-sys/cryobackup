@@ -31,9 +31,10 @@ import (
 // login gone, and pending otherwise. Banner C17 comes from the same read.
 //
 // How long the answer can take after the commit: GatewaySyncWait, at most 5 s, for the
-// reads, plus retireAuditWait, at most 2 s, for the outcome's audit row: 7 s. Before the
-// commit a retire queues for the store's one writer like every other write, so that part
-// is bounded only by the request.
+// reads, plus retireAuditWait, at most 2 s, for the outcome's audit row: 7 s on a working
+// disk. A COMMIT cannot be cancelled, so a disk that hangs inside the audit row's commit holds
+// the answer past that, for as long as it hangs. Before the commit a retire queues for the
+// store's one writer like every other write, so that part is bounded only by the request.
 
 // PatternDeviceRetire retires a device.
 const PatternDeviceRetire = "POST /api/v1/devices/{id}/retire"
@@ -191,8 +192,15 @@ func (s *Service) awaitLoginRemoved(ctx context.Context, deviceID string, retire
 	poll, again := time.NewTicker(25*time.Millisecond), time.NewTicker(time.Second)
 	defer poll.Stop()
 	defer again.Stop()
+	var busy *GatewayLoginState // a read that met a run; it says more than the bound running out afterwards
 	for {
 		v := s.GatewayLoginNow(ctx, deviceID, retiredAt)
+		if v.Reason == jobs.LoginFileBusy {
+			b := v
+			busy = &b
+		} else if v.Reason == gatewayCheckTimedOut && busy != nil {
+			v = *busy // the page reads sync_busy here too: the answer and the page name one cause
+		}
 		switch {
 		case v.Status == GatewayLoginRemoved:
 			return v
