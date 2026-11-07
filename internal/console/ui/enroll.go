@@ -636,6 +636,7 @@ func (s *Service) enrollCreate(w http.ResponseWriter, r *http.Request) {
 		s.storeFailed(w, r, p, err)
 		return
 	}
+	s.changed()
 	row, err := s.Store.GetEnrollmentTokenRow(r.Context(), p.Scope, tok.ID)
 	if err != nil {
 		// The token exists and its secret is lost with this response: say so.
@@ -800,6 +801,8 @@ func (s *Service) enrollRevoke(w http.ResponseWriter, r *http.Request) {
 	code := "revoked"
 	if !changed {
 		code = "already_revoked"
+	} else {
+		s.changed()
 	}
 	dest := "/enroll/tokens/" + url.PathEscape(id)
 	if r.PostFormValue("return") == "list" {

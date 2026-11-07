@@ -28,11 +28,14 @@ func (e *env) t6Device(id string) store.Device {
 }
 
 // t6Token makes a token of a customer straight in the store and returns its id.
+// t6TokenSeq makes token hashes unique: two calls can share a clock tick on Windows.
+var t6TokenSeq atomic.Int64
+
 func (e *env) t6Token(cust, label string, revoked bool) string {
 	e.t.Helper()
 	ctx := context.Background()
 	tok, err := e.st.CreateEnrollmentToken(ctx, store.ScopeAll(), store.EnrollmentToken{CustomerID: cust, Label: label,
-		TokenHash: fmt.Sprintf("%064x", time.Now().UnixNano()), ExpiresAt: e.now.Add(48 * time.Hour)})
+		TokenHash: fmt.Sprintf("%064x", t6TokenSeq.Add(1)), ExpiresAt: e.now.Add(48 * time.Hour)})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -392,11 +395,13 @@ func TestM3T6_EveryPageMutationThroughThePrivateAPISignalsTheRealHub(t *testing.
 	e.login()
 	id := e.dev["FRONTDESK-01"]
 	gone := e.t6Token(e.customerID("Summit Eye Care"), "gone", true)
+	live := e.t6Token(e.customerID("Summit Eye Care"), "live", false)
 	for _, c := range []struct {
 		name, path string
 		form       url.Values
 		wantLoc    string
 	}{
+		{"token revoke", "/ui/enroll/tokens/" + live + "/revoke", url.Values{"return": {"list"}}, "saved=revoked"},
 		{"pause", "/ui/devices/" + id + "/pause", url.Values{"when": {"4"}, "reason": {"patching"}}, "cmd=parked"},
 		{"resume", "/ui/devices/" + id + "/resume", url.Values{}, "cmd=resumed"},
 		{"final backup", "/ui/devices/" + id + "/retire", url.Values{"reason": {"later"}, "confirm": {"FRONTDESK-01"}, "final_backup": {"1"}}, "cmd=final_backup_queued"},
@@ -411,6 +416,14 @@ func TestM3T6_EveryPageMutationThroughThePrivateAPISignalsTheRealHub(t *testing.
 		if after := e.hub.Generation(); after <= before {
 			t.Errorf("%s: the hub's generation stayed at %d: open pages would not re-render", c.name, before)
 		}
+	}
+	// M3-HARDEN A7: creating a token answers with the page itself, not a redirect.
+	before := e.hub.Generation()
+	if res, _ := e.createToken(e.customerID("Summit Eye Care"), nil); res.StatusCode >= 400 {
+		t.Fatalf("token create answered %d", res.StatusCode)
+	}
+	if after := e.hub.Generation(); after <= before {
+		t.Errorf("token create: the hub's generation stayed at %d: open pages would not re-render", before)
 	}
 }
 

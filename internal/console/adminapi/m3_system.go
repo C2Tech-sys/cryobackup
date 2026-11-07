@@ -343,17 +343,26 @@ func (a attempt) judge(now time.Time) (status, detail string) {
 // wired) takes every otherwise-ok row to not_checked.
 func judgeRow(now time.Time, attempts []attempt, worstBanner string, notWired bool) (status, detail string, at *time.Time) {
 	status, detail = statusNotChecked, "no evidence for this row"
+	var lesser []string // what a worse attempt outranks is still flagged, and still named
 	for i, a := range attempts {
 		st, d := a.judge(now)
 		switch {
 		case i == 0 || statusRank[st] > statusRank[status]:
+			if i > 0 && status != statusOK && detail != "" {
+				lesser = append(lesser, detail)
+			}
 			status, detail = st, d
 		case statusRank[st] == statusRank[status] && d != "" && d != detail:
 			detail = strings.TrimPrefix(detail+"; "+d, "; ")
+		case statusRank[st] < statusRank[status] && st != statusOK && d != "":
+			lesser = append(lesser, d)
 		}
 		if a.Result != noAttempt && a.Outside == "" && !a.At.IsZero() && (at == nil || a.At.Before(*at)) {
 			at = ptrTime(a.At)
 		}
+	}
+	if len(lesser) > 0 {
+		detail = strings.TrimPrefix(detail+"; "+strings.Join(lesser, "; "), "; ")
 	}
 	switch {
 	case worstBanner != "" && statusRank[worstBanner] > statusRank[status]:
@@ -1088,7 +1097,13 @@ func jobMaxAge(j store.JobState, now time.Time) time.Duration {
 		return 0
 	}
 	every := j.NextDueAt.Sub(*j.LastFinishedAt)
-	return every + jobs.MaxJitter(every) + overdueMargin
+	age := every + jobs.MaxJitter(every) + overdueMargin
+	// The maintenance scheduler ticks every minute and its alarm, C07, deliberately waits
+	// longer: the table and the jobs row call it late when the banner does, not 28 minutes before.
+	if j.Name == health.SchedulerJob && age < state.MaintenanceSchedulerStale {
+		age = state.MaintenanceSchedulerStale
+	}
+	return age
 }
 
 // jobOverdue: a job later than the runner can make it, for the job table. The jobs row reads the same limit.
