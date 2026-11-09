@@ -46,7 +46,12 @@ WANT=${2,,}
 [[ $WANT =~ ^[0-9a-f]{64}$ ]] || fail 1 "the sha256 must be 64 hex characters"
 
 # --- Discovery: refuse early, before anything changes ---
-[[ -f $SRC && ! -L $SRC ]] || fail 2 "$SRC is not a regular file (symlinks are refused)"
+# The source file is read with the CALLER's rights, never root's: otherwise a sudo rule for
+# this script would let its user read any file on the host (the master key, /etc/shadow) by
+# naming it as the "binary". Root running the script directly reads as root.
+CALLER=${SUDO_USER:-root}
+as_caller() { if [[ $CALLER == root ]]; then "$@"; else runuser -u "$CALLER" -- "$@"; fi; }
+as_caller test -f "$SRC" -a ! -L "$SRC" || fail 2 "$SRC is not a regular file you can read (symlinks are refused)"
 [[ -x $TARGET ]] || fail 2 "$TARGET does not exist; this script upgrades, it does not install"
 [[ -r $CONFIG ]] || fail 2 "$CONFIG is missing"
 [[ -f $DB_PATH ]] || fail 2 "database not found at $DB_PATH (set DB_PATH at the top of this script)"
@@ -56,13 +61,16 @@ for u in "${UNITS_STOP[@]}"; do
 done
 
 # Copy first, then hash the copy: the file checked is the file installed, even if the
-# caller's copy changes underneath us.
+# caller's copy changes underneath us. The copy stays root-only (umask 077 -> 0600) until the
+# hash matches, and is made executable only then.
 STAGE="$TARGET.new"
-rm -f "$STAGE"
-install -o root -g root -m 0755 "$SRC" "$STAGE"
-trap 'rm -f "$STAGE"' EXIT
-GOT=$(sha256sum "$STAGE" | cut -d' ' -f1)
-[[ $GOT == "$WANT" ]] || fail 2 "sha256 mismatch: got $GOT; nothing changed"
+rm -f -- "$STAGE"
+trap 'rm -f -- "$STAGE"' EXIT
+as_caller cat -- "$SRC" >"$STAGE" || fail 2 "cannot read $SRC as $CALLER; nothing changed"
+GOT=$(sha256sum -- "$STAGE" | cut -d' ' -f1)
+[[ $GOT == "$WANT" ]] || fail 2 "sha256 does not match the one given; nothing changed"
+chown root:root -- "$STAGE"
+chmod 0755 -- "$STAGE"
 say "OK    sha256 matches"
 
 as_svc() { runuser -u "$SERVICE_USER" -- "$@"; }
