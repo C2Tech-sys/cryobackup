@@ -151,7 +151,8 @@ while :; do
 		say "        systemctl stop ${UNITS_STOP[*]}"
 		say "        echo '$PREV_SHA  $BACKUP_DIR/cryo-console.prev' | sha256sum -c -"
 		say "        install -o root -g root -m 0755 $BACKUP_DIR/cryo-console.prev $TARGET"
-		for f in "${DB_FILES[@]}"; do say "        cp -p $BACKUP_DIR/$f $(dirname "$DB_PATH")/$f"; done
+		# --remove-destination: never write through a link the service account may have planted.
+		for f in "${DB_FILES[@]}"; do say "        cp -p --remove-destination --no-dereference -- '$BACKUP_DIR/$f' '$(dirname "$DB_PATH")/$f'"; done
 		say "        systemctl start ${UNITS_START[*]}"
 		say "      Restoring the database copy discards anything written since $STAMP."
 		exit 3
