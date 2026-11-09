@@ -152,9 +152,13 @@ sudo cryo-upgrade ~/cryo-console <sha256>           # dry run
 sudo cryo-upgrade --apply ~/cryo-console <sha256>   # upgrade
 ```
 
-Copies go to `/var/lib/cryobackup/upgrade-backups/<UTC time>/`: the database (with its
-`-wal` and `-shm` files) and the old binary. Nothing deletes them, so remove old ones yourself.
-If the new binary does not start, the script prints the rollback commands. The old binary cannot
+Each run saves the database (with its `-wal` and `-shm` files) and the old binary to a new
+folder under `/var/backups/cryobackup/` (root:root, mode 0700). The service account cannot
+write there, so it cannot plant a symlink or swap the rollback binary. The script also reads the
+new binary with the caller's own rights, not root's. Otherwise a sudo rule for it would let the
+caller read any file on the host. Nothing deletes these copies, so remove old ones yourself.
+If the new binary does not start, the script prints the rollback commands. They include a
+sha256 check of the saved binary. The old binary cannot
 open a schema that the new one has migrated, so a rollback restores the database copy as well,
 and anything written after the copy is lost.
 

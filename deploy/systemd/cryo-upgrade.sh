@@ -26,7 +26,7 @@ umask 077
 TARGET=/usr/local/bin/cryo-console
 CONFIG=/etc/cryobackup/config.json
 DB_PATH=/var/lib/cryobackup/cryobackup.db
-BACKUP_ROOT=/var/lib/cryobackup/upgrade-backups   # stays inside the protected data directory
+BACKUP_ROOT=/var/backups/cryobackup               # root:root 0700; the service account cannot write here
 SERVICE_USER=cryobackup
 UNITS_STOP=(cryo-console cryo-maintain)           # stop order
 UNITS_START=(cryo-maintain cryo-console)          # start order
@@ -59,6 +59,18 @@ id "$SERVICE_USER" >/dev/null 2>&1 || fail 2 "user $SERVICE_USER does not exist"
 for u in "${UNITS_STOP[@]}"; do
 	systemctl cat "$u" >/dev/null 2>&1 || fail 2 "unit $u is not installed"
 done
+# The database directory belongs to the service account, so a compromised service could swap a
+# database file for a symlink. Refuse that here and again just before the copy.
+for f in "$DB_PATH" "$DB_PATH-wal" "$DB_PATH-shm"; do
+	[[ ! -L $f ]] || fail 2 "$f is a symlink; refusing"
+done
+# Backups (database and the rollback binary) live where only root can write: a directory the
+# service account controls could be pre-seeded with symlinks, or the rollback binary swapped.
+if [[ -e $BACKUP_ROOT ]]; then
+	[[ -d $BACKUP_ROOT && ! -L $BACKUP_ROOT ]] || fail 2 "$BACKUP_ROOT is not a plain directory"
+	[[ $(stat -c '%u %a' -- "$BACKUP_ROOT") == "0 700" ]] || fail 2 "$BACKUP_ROOT must be owned by root with mode 0700"
+fi
+[[ $(stat -c %u -- "$(dirname "$BACKUP_ROOT")") == 0 && ! -L $(dirname "$BACKUP_ROOT") ]] || fail 2 "$(dirname "$BACKUP_ROOT") must be a root-owned directory"
 
 # Copy first, then hash the copy: the file checked is the file installed, even if the
 # caller's copy changes underneath us. The copy stays root-only (umask 077 -> 0600) until the
@@ -69,13 +81,14 @@ trap 'rm -f -- "$STAGE"' EXIT
 as_caller cat -- "$SRC" >"$STAGE" || fail 2 "cannot read $SRC as $CALLER; nothing changed"
 GOT=$(sha256sum -- "$STAGE" | cut -d' ' -f1)
 [[ $GOT == "$WANT" ]] || fail 2 "sha256 does not match the one given; nothing changed"
+[[ $(head -c4 -- "$STAGE") == $'\x7fELF' ]] || fail 2 "$SRC is not an ELF executable; nothing changed"
 chown root:root -- "$STAGE"
 chmod 0755 -- "$STAGE"
 say "OK    sha256 matches"
 
 as_svc() { runuser -u "$SERVICE_USER" -- "$@"; }
 first_line() { local s=$1; printf '%s' "${s%%$'\n'*}"; }
-NEW_VER=$(as_svc "$STAGE" version 2>&1) || fail 2 "the new binary does not run: $(first_line "$NEW_VER")"
+NEW_VER=$(as_svc "$STAGE" version 2>&1) || fail 2 "the new binary does not run ('version' failed); nothing changed"
 NEW_VER=$(first_line "$NEW_VER")
 OLD_VER=$(as_svc "$TARGET" version 2>&1 || true)
 OLD_VER=$(first_line "$OLD_VER")
@@ -105,17 +118,20 @@ restart_old() {
 
 # --- Act: database copy (services stopped, so the -wal and -shm files are settled) ---
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-BACKUP_DIR="$BACKUP_ROOT/$STAMP"
-install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0750 "$BACKUP_ROOT"
-install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0750 "$BACKUP_DIR"
+install -d -o root -g root -m 0700 "$BACKUP_ROOT"
+BACKUP_DIR=$(mktemp -d "$BACKUP_ROOT/$STAMP.XXXXXX") || { restart_old; fail 3 "cannot create a backup directory; old binary restarted"; }
+DB_FILES=()
 for f in "$DB_PATH" "$DB_PATH-wal" "$DB_PATH-shm"; do
+	[[ -L $f ]] && { restart_old; fail 3 "$f became a symlink; old binary restarted"; }
 	if [[ -f $f ]]; then
-		cp -p "$f" "$BACKUP_DIR/" || { restart_old; fail 3 "database copy failed; old binary restarted"; }
+		cp -p --no-dereference -- "$f" "$BACKUP_DIR/" || { restart_old; fail 3 "database copy failed; old binary restarted"; }
+		DB_FILES+=("$(basename "$f")")
 	fi
 done
-cp -p "$TARGET" "$BACKUP_DIR/cryo-console.prev" || { restart_old; fail 3 "binary copy failed; old binary restarted"; }
-cmp -s "$DB_PATH" "$BACKUP_DIR/$(basename "$DB_PATH")" || { restart_old; fail 3 "database copy does not match; old binary restarted"; }
-say "OK    database and old binary copied to $BACKUP_DIR"
+cp -p -- "$TARGET" "$BACKUP_DIR/cryo-console.prev" || { restart_old; fail 3 "binary copy failed; old binary restarted"; }
+cmp -s -- "$DB_PATH" "$BACKUP_DIR/$(basename "$DB_PATH")" || { restart_old; fail 3 "database copy does not match; old binary restarted"; }
+PREV_SHA=$(sha256sum -- "$BACKUP_DIR/cryo-console.prev" | cut -d' ' -f1)
+say "OK    database and old binary copied to $BACKUP_DIR (root only)"
 
 # --- Act: install (rename is atomic on the same filesystem) ---
 mv -f "$STAGE" "$TARGET"
@@ -133,8 +149,9 @@ while :; do
 		say "FAIL: not running after ${START_WAIT_S}s: ${down[*]} (journalctl -u <unit> -n 50)"
 		say "      Rollback, if the new schema is the cause (the old binary cannot open a newer schema):"
 		say "        systemctl stop ${UNITS_STOP[*]}"
+		say "        echo '$PREV_SHA  $BACKUP_DIR/cryo-console.prev' | sha256sum -c -"
 		say "        install -o root -g root -m 0755 $BACKUP_DIR/cryo-console.prev $TARGET"
-		say "        cp -p $BACKUP_DIR/$(basename "$DB_PATH")* $(dirname "$DB_PATH")/"
+		for f in "${DB_FILES[@]}"; do say "        cp -p $BACKUP_DIR/$f $(dirname "$DB_PATH")/$f"; done
 		say "        systemctl start ${UNITS_START[*]}"
 		say "      Restoring the database copy discards anything written since $STAMP."
 		exit 3
