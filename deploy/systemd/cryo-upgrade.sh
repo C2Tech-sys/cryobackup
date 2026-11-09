@@ -25,7 +25,7 @@ umask 077
 # --- Settings (match deploy/systemd/README.md; edit here if your host differs) ---
 TARGET=/usr/local/bin/cryo-console
 CONFIG=/etc/cryobackup/config.json
-DB_PATH=/var/lib/cryobackup/cryobackup.db
+DB_PATH=                                          # empty: read db_path from $CONFIG (data_dir/console.db if unset)
 BACKUP_ROOT=/var/backups/cryobackup               # root:root 0700; the service account cannot write here
 SERVICE_USER=cryobackup
 UNITS_STOP=(cryo-console cryo-maintain)           # stop order
@@ -54,7 +54,18 @@ as_caller() { if [[ $CALLER == root ]]; then "$@"; else runuser -u "$CALLER" -- 
 as_caller test -f "$SRC" -a ! -L "$SRC" || fail 2 "$SRC is not a regular file you can read (symlinks are refused)"
 [[ -x $TARGET ]] || fail 2 "$TARGET does not exist; this script upgrades, it does not install"
 [[ -r $CONFIG ]] || fail 2 "$CONFIG is missing"
+# The database is wherever the console's own config says, resolved the way the console does it
+# (internal/console/config Resolve): db_path, or data_dir/console.db when db_path is empty.
+if [[ -z $DB_PATH ]]; then
+	command -v python3 >/dev/null || fail 2 "python3 is needed to read db_path from $CONFIG; or set DB_PATH at the top of this script"
+	DB_PATH=$(python3 -I -c 'import json, os, sys
+c = json.load(open(sys.argv[1]))
+print(c.get("db_path") or os.path.join(c.get("data_dir") or "", "console.db"))' "$CONFIG") \
+		|| fail 2 "cannot read db_path from $CONFIG; set DB_PATH at the top of this script"
+fi
+[[ $DB_PATH == /* ]] || fail 2 "database path '$DB_PATH' is not absolute; set DB_PATH at the top of this script"
 [[ -f $DB_PATH ]] || fail 2 "database not found at $DB_PATH (set DB_PATH at the top of this script)"
+say "OK    database $DB_PATH"
 id "$SERVICE_USER" >/dev/null 2>&1 || fail 2 "user $SERVICE_USER does not exist"
 for u in "${UNITS_STOP[@]}"; do
 	systemctl cat "$u" >/dev/null 2>&1 || fail 2 "unit $u is not installed"

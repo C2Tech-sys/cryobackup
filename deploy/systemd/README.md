@@ -109,7 +109,7 @@ no_check_bucket = true
 | key | value |
 | --- | --- |
 | `data_dir` | `/var/lib/cryobackup` |
-| `db_path` | `/var/lib/cryobackup/cryobackup.db` |
+| `db_path` | `/var/lib/cryobackup/console.db` |
 | `artifacts_dir` | `/var/lib/cryobackup/artifacts` |
 | `gateway_auth_dir` | `/var/lib/cryobackup-auth` |
 | `adminpath_socket` | `/run/cryobackup/adminpath.sock` |
