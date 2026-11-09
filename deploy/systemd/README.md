@@ -140,6 +140,36 @@ systemctl status cryo-console cryo-maintain rclone-gateway
   warning at start and falls back to the `config.json` value, then UTC. It does not refuse to start.
 - Storage is UTC everywhere; only display changes.
 
+## Upgrades
+
+`cryo-upgrade.sh` replaces the console binary. First it checks the new file's sha256 and copies
+the database. Then it stops both units, installs the binary, starts the units again and runs
+`doctor` before and after. Without `--apply` it runs every check and changes nothing.
+
+```sh
+install -o root -g root -m 0755 cryo-upgrade.sh /usr/local/sbin/cryo-upgrade
+sudo cryo-upgrade ~/cryo-console <sha256>           # dry run
+sudo cryo-upgrade --apply ~/cryo-console <sha256>   # upgrade
+```
+
+Copies go to `/var/lib/cryobackup/upgrade-backups/<UTC time>/`: the database (with its
+`-wal` and `-shm` files) and the old binary. Nothing deletes them, so remove old ones yourself.
+If the new binary does not start, the script prints the rollback commands. The old binary cannot
+open a schema that the new one has migrated, so a rollback restores the database copy as well,
+and anything written after the copy is lost.
+
+To let a deploy account upgrade without a password, give it this script and nothing else.
+Run `visudo -f /etc/sudoers.d/cryo-upgrade` and add:
+
+```
+deploy ALL=(root) NOPASSWD: /usr/local/sbin/cryo-upgrade
+deploy ALL=(cryobackup) NOPASSWD: /usr/local/bin/cryo-console doctor --config /etc/cryobackup/config.json
+```
+
+The script is owned by root, so that account cannot edit it. It can still install any console
+binary it holds. The hash proves the file is the one the caller named, not that the file is safe
+to run. Grant this only to an account you would trust to build and copy the binary.
+
 ## After every change to a unit
 
 Run L-APPEND-1 against the gateway ([`../rclone/append-only-test.sh`](../rclone/append-only-test.sh)),
