@@ -50,7 +50,9 @@ operator's lab desktop.
 
 Fixed on day 2, after the drills, each blind-verified: L1 and L5 (deploy), L2 (audit "via web"), L6 and L7 (one rule
 for the CHECKED column: the newest attempt that produced evidence), L8 (shutdown log lines). Open: L3 (operator
-procedure; release channel is M5 work), L4 and L9 (design questions for the operator).
+procedure; release channel is M5 work). L4 and L9 were decided by the operator on day 2: yes to both. A retired
+agent must stop polling once the console has answered 401 to its device token repeatedly, and the uplink backoff
+must not keep a fleet away for half an hour after the console is back. Both are agent changes for the v0.3.0 agent.
 
 - **M3-L1** (polish): `cryo-upgrade` runs its "doctor after" in the same second the units start, so a clean upgrade
   reports the two listeners as free and the maintenance worker as unreachable. Wait for the units to be ready, or
