@@ -48,6 +48,10 @@ operator's lab desktop.
 
 ## Findings
 
+Fixed on day 2, after the drills, each blind-verified: L1 and L5 (deploy), L2 (audit "via web"), L6 and L7 (one rule
+for the CHECKED column: the newest attempt that produced evidence), L8 (shutdown log lines). Open: L3 (operator
+procedure; release channel is M5 work), L4 and L9 (design questions for the operator).
+
 - **M3-L1** (polish): `cryo-upgrade` runs its "doctor after" in the same second the units start, so a clean upgrade
   reports the two listeners as free and the maintenance worker as unreachable. Wait for the units to be ready, or
   for the worker socket, before the after-check.
@@ -61,9 +65,11 @@ operator's lab desktop.
   lab VMs enrolled). The console side is right; decide whether a retired agent should back off or stop.
 - **M3-L5** (polish): `systemctl stop rclone-gateway` leaves the unit `failed` (rclone exits 143 on SIGTERM) rather
   than `inactive`. Add `SuccessExitStatus=143` to `rclone-gateway.service`.
-- **M3-L6** (bug, display): the System page's RAISED column for C07 read 11:28 AM local while the unit was stopped at
-  11:29:05 and the first failing probe was logged at 11:29:46. The column seems to show the last good check, not the
-  time the condition was raised. Check C01's value against its journal time too (it read 11:19, which matched).
+- **M3-L6** (polish, corrected): first read as a wrong RAISED time. The RAISED column holds only the condition id;
+  the time beside it is the CHECKED column. For the failed Maintenance worker row CHECKED read 11:28 (the last pass)
+  while failing checks had run at 11:29:46 and 11:30:46. So CHECKED does not mean "newest check": together with
+  M3-L7 the column needs one rule, "the newest attempt that produced evidence, pass or fail; a skipped attempt never
+  moves it".
 - **M3-L7** (polish): while the worker was down, the Storage row's CHECKED time kept advancing (11:31) although no
   storage probe had run since before the stop: a skipped probe should not refresh "checked". The status itself (OK on
   the last real result, ageing into C02b) is as designed.

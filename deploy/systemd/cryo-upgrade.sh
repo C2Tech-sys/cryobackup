@@ -193,14 +193,18 @@ ready() {
 	done
 	[[ -z ${READY[2]:-} || -S ${READY[2]} ]]
 }
-deadline=$((SECONDS + READY_WAIT_S))
-until ready; do
-	if (( SECONDS >= deadline )); then
-		say "WARN  listeners or worker socket not ready after ${READY_WAIT_S}s; doctor below may reflect that"
-		break
-	fi
-	sleep 1
-done
+if [[ ${#READY[@]} -eq 0 ]] || ! command -v ss >/dev/null; then
+	say "WARN  cannot wait for the listeners (python3 or ss missing); doctor below may run before the services are ready"
+else
+	deadline=$((SECONDS + READY_WAIT_S))
+	until ready; do
+		if (( SECONDS >= deadline )); then
+			say "WARN  listeners or worker socket not ready after ${READY_WAIT_S}s; doctor below may reflect that"
+			break
+		fi
+		sleep 1
+	done
+fi
 say "----  doctor after (new binary)"
 if as_svc "$TARGET" doctor --config "$CONFIG"; then
 	say "DONE  $OLD_VER -> $NEW_VER. Copy kept in $BACKUP_DIR (remove old copies yourself)."
