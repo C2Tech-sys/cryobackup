@@ -8,7 +8,7 @@ the operator's concrete addresses live outside the repository. Times are UTC unl
 
 | component | version | where |
 | --- | --- | --- |
-| console | 0.3.0-rc1 (16a6331), upgraded from 0.2.1 (7a2e3bc) with `deploy/systemd/cryo-upgrade.sh` | console host |
+| console | 0.3.0-rc1 (16a6331), upgraded from 0.2.1 (7a2e3bc) with `deploy/systemd/cryo-upgrade.sh`; then 0.3.0-rc2 (e008f3b, the day-2 fixes) on day 2 at 21:46Z the same way | console host |
 | database | schema 4 -> 6 at the upgrade; `quick_check` and `integrity_check` ok before and after | console host |
 | agent MSI | 0.2.1 (tag v0.2.1), signed | lab VMs, operator's lab desktop |
 | restic | 0.19.1, unsigned, byte-identical to upstream | bundled in the MSI |
@@ -97,6 +97,7 @@ must not keep a fleet away for half an hour after the console is back. Both are 
 | 2 | 2026-11-10 | console stopped and started (step 10) | 19:11 | none expected; agents reconnected | - | - | 19:13 | exit 0 |
 | 2 | 2026-11-10 | agent port 8443 rejected (step 5) | 19:17 | C04 "Agent API unreachable: nothing accepts connections on <host>:8443 (connect)" (critical); all devices OFFLINE | 19:25 | 8 min | 19:43 | agents back between 19:47 and 19:50 (uplink backoff) |
 | 2 | 2026-11-10 | agents stopped on both lab VMs (step 3 begins) | 19:53 | none expected (devices OFFLINE) | | | | STALE due day 5, UNSEEN due day 9 |
+| 2 | 2026-11-10 | console upgraded rc1 -> rc2 with the fixed cryo-upgrade (units stopped 21:46:12, started 21:46:22) | 21:46 | none; self-probe passing 1 s after start | - | - | 21:46 | the L1 fix held live: "doctor after" ran 2 s after start and read both listeners as busy and the worker as reachable at the first try. Stopping rc1 took 10 s (its drain grace; rc2 will log what it waited for). |
 | 3 | | | | | | | | |
 | 5 | 2026-11-13 | | | | | | | STALE due for the devices of step 3 (15:33Z and 19:12Z) |
 | 4 | | | | | | | | |
