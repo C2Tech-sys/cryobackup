@@ -295,9 +295,13 @@ func (a *App) Run(parent context.Context) (err error) {
 	// ends or when a listener fails, which it reports as its error. Either way ctx ends
 	// here, so the Hub and the self-probe below stop too.
 	err = a.Server.Serve(ctx)
+	stopBegan := time.Now()
 	if err != nil {
 		a.log.Error("the console is shutting down after a listener failure", logx.Class("listener_failed"))
 		err = fmt.Errorf("cli: a listener failed: %w", err)
+	} else {
+		// A clean stop says so in the console's own log, not only in systemd's (M3 lab, L8).
+		a.log.Info("the console is stopping: shutdown was requested", logx.Class("shutdown"))
 	}
 	cancel()
 	a.Runner.Stop()
@@ -310,6 +314,7 @@ func (a *App) Run(parent context.Context) (err error) {
 	a.Admin.WaitBackground(backgroundShutdownWait)
 	a.UI.WaitBackground(backgroundShutdownWait)
 	wg.Wait()
+	a.log.Info("the console has stopped", logx.Class("shutdown"), logx.Dur("took_ms", time.Since(stopBegan)))
 	return err
 }
 
