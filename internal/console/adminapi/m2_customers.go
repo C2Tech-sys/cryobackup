@@ -216,8 +216,16 @@ func decodeBodyMax(w http.ResponseWriter, r *http.Request, max int64, v any) boo
 	return true
 }
 
+// actorOf names who made the change for the audit row. The transport is "api"
+// for a real admin API call and "web" when a console page made the call in
+// process (ui.Service.apiSend marks the request context); a network client
+// cannot set that marker, so it cannot pass as "web".
 func actorOf(r *http.Request, p *auth.Principal) store.AuditActor {
-	return store.AuditActor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: "api"}
+	method := "api"
+	if httpx.InProcessOrigin(r.Context()) {
+		method = "web"
+	}
+	return store.AuditActor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: method}
 }
 
 func storeContacts(in []ContactJSON) []store.Contact {

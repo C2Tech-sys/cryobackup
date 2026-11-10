@@ -10,6 +10,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/api"
 	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
+	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -290,7 +291,9 @@ func (s *Service) apiSend(r *http.Request, method, target string, body any) (sta
 	} else {
 		rd = bytes.NewReader(nil)
 	}
-	req, rerr := http.NewRequestWithContext(r.Context(), method, target, rd)
+	// The in-process marker makes the admin API audit this write as "web": the
+	// person used a page, not the API. It is a context value so no client can send it.
+	req, rerr := http.NewRequestWithContext(httpx.WithInProcessOrigin(r.Context()), method, target, rd)
 	if rerr != nil {
 		return 0, nil, &apiError{Code: "bad_request"}
 	}
