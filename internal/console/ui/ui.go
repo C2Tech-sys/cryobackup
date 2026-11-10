@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -83,6 +84,11 @@ type Service struct {
 
 	templates map[string]*template.Template
 	assets    map[string]string
+	// fontsCSS is fonts.css with every font URL carrying its content hash (New).
+	// The file is static, so its url() values cannot use the asset func; without
+	// the hash the font files sat on the one-hour cache and the wordmark flashed
+	// in the fallback face on every revalidating reload (M3 polish, login logo).
+	fontsCSS []byte
 	// m3 is the private admin API the M3-T4 pages read through (m3t4.go).
 	m3 m3State
 	// winRL limits the live window validator per session (policy.go, M2-W2A).
@@ -123,6 +129,18 @@ func New(s *Service) (*Service, error) {
 		s.assets[strings.TrimPrefix(p, "static/")] = hex.EncodeToString(sum[:])[:8]
 		return nil
 	})
+	// fonts.css is served with its font URLs versioned, and hashed as served, so a
+	// changed font file changes both URLs (its own and the stylesheet's).
+	if b, rerr := fs.ReadFile(web.Static, "static/fonts.css"); rerr == nil {
+		s.fontsCSS = fontURLRE.ReplaceAllFunc(b, func(m []byte) []byte {
+			if h, ok := s.assets[strings.TrimPrefix(string(m), "/static/")]; ok {
+				return []byte(string(m) + "?v=" + h) // a new slice: m aliases the input
+			}
+			return m
+		})
+		sum := sha256.Sum256(s.fontsCSS)
+		s.assets["fonts.css"] = hex.EncodeToString(sum[:])[:8]
+	}
 	var err error
 	s.templates, err = parseTemplates(s.funcs())
 	if err != nil {
@@ -435,6 +453,9 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 
 // ---- static ----
 
+// fontURLRE matches the font file URLs inside fonts.css (New versions them).
+var fontURLRE = regexp.MustCompile(`/static/fonts/[A-Za-z0-9_./-]+\.woff2`)
+
 func (s *Service) static(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("path")
 	if name == "" || strings.HasSuffix(name, "/") || strings.Contains(name, "..") || strings.ContainsRune(name, '\\') {
@@ -451,6 +472,9 @@ func (s *Service) static(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.NotFound(w, r)
 		return
+	}
+	if full == "static/fonts.css" && s.fontsCSS != nil {
+		b = s.fontsCSS // the font URLs versioned (New)
 	}
 	h := w.Header()
 	h.Set("Content-Type", contentType(name))

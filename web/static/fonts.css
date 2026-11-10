@@ -3,13 +3,17 @@
    IBM Plex Sans is a variable font (wght 100-700). Martian Mono (the data face, --font-mono) is one
    variable file (wght 100-800, wdth 75-112.5); font-stretch: 100% pins the width axis to Standard.
    Orbitron and IBM Plex Sans are subset to Latin, Latin-1, Latin Extended-A and general punctuation
-   (web/README.md); Martian Mono is the unmodified release file (fonts/martianmono/SOURCE.txt). */
+   (web/README.md); Martian Mono is the unmodified release file (fonts/martianmono/SOURCE.txt).
+   The console serves this file with each url() versioned (?v=<content hash>, ui.New), so the
+   font files share the one-year immutable cache of the other assets. */
 @font-face {
   font-family: 'Orbitron';
   src: url('/static/fonts/orbitron/Orbitron-var.woff2') format('woff2');
   font-weight: 400 900;
   font-style: normal;
-  font-display: swap;
+  /* block, not swap: Orbitron draws the wordmark, and a wordmark in the fallback face is a
+     different logo for a moment. The pages preload this file, so the block is rarely seen. */
+  font-display: block;
 }
 @font-face {
   font-family: 'IBM Plex Sans';
