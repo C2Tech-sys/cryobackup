@@ -294,6 +294,7 @@ type attempt struct {
 	Result    result
 	At        time.Time     // when the newest attempt ended
 	LastPass  time.Time     // when it last passed, for a skipped attempt to fall back on
+	FailedAt  time.Time     // when a failure last ran, if a later skip moved At past it; zero otherwise (see evidenceAt)
 	MaxAge    time.Duration // how old a pass may be and still be evidence; 0 is this request's own read
 	NotBefore time.Time     // POST .../probe: a result from before the request is not evidence of it
 	Severe    bool          // a failure here is failed, not warn
@@ -301,6 +302,27 @@ type attempt struct {
 	Why       string        // why it failed, was skipped, or has no attempt
 	Note      string        // what an ok row also says
 	Outside   string        // not_in_build or not_applicable: nothing here to judge, and Why says why
+}
+
+// evidenceAt is when this attempt last produced evidence: a pass or a failure that really ran. It is
+// not At: a skipped attempt's At is the time of the run that could not run, and a failure that a later
+// skip followed keeps the failure's time in FailedAt while At moves to the skip. Zero means no evidence
+// (nothing on record, nothing to judge here, or a skip with no pass behind it). judge reads At for its
+// verdicts and never this; judgeRow reads this for checked_at and never At.
+func (a attempt) evidenceAt() time.Time {
+	switch {
+	case a.Outside != "":
+		return time.Time{}
+	case a.Result == passed:
+		return a.At
+	case a.Result == failed && !a.FailedAt.IsZero():
+		return a.FailedAt
+	case a.Result == failed:
+		return a.At
+	case a.Result == skipped:
+		return a.LastPass
+	}
+	return time.Time{}
 }
 
 // judge is the rule for one attempt:
@@ -341,9 +363,20 @@ func (a attempt) judge(now time.Time) (status, detail string) {
 // judgeRow is the row: its worst attempt, then its banners. It is ok only when every attempt is
 // and no banner is raised. A banner only ever makes a row worse, and C00 (self-checks not
 // wired) takes every otherwise-ok row to not_checked.
+//
+// The row's time (checked_at, the CHECKED column) is one rule, and it never changes a verdict:
+// the time of the newest attempt that produced evidence, a pass or a failure that really ran.
+//   - A skipped attempt produced none. It contributes the time of its last real result (LastPass),
+//     never the time of the run that was skipped, so a worker that is down cannot make the
+//     Storage row look freshly checked every minute (M3 lab L7).
+//   - When any attempt is judged warn or failed, the row speaks for the failure: checked_at is the
+//     newest such failure's time, not an older pass's and not the earliest attempt's (lab L6 read
+//     11:28, an old pass, beside failures at 11:29 and 11:30).
+//   - No evidence at all: nil. The page shows that as never checked.
 func judgeRow(now time.Time, attempts []attempt, worstBanner string, notWired bool) (status, detail string, at *time.Time) {
 	status, detail = statusNotChecked, "no evidence for this row"
-	var lesser []string // what a worse attempt outranks is still flagged, and still named
+	var lesser []string              // what a worse attempt outranks is still flagged, and still named
+	var newest, newestFail time.Time // checked_at: newest evidence of any attempt, and of a failing one
 	for i, a := range attempts {
 		st, d := a.judge(now)
 		switch {
@@ -357,9 +390,20 @@ func judgeRow(now time.Time, attempts []attempt, worstBanner string, notWired bo
 		case statusRank[st] < statusRank[status] && st != statusOK && d != "":
 			lesser = append(lesser, d)
 		}
-		if a.Result != noAttempt && a.Outside == "" && !a.At.IsZero() && (at == nil || a.At.Before(*at)) {
-			at = ptrTime(a.At)
+		if ev := a.evidenceAt(); !ev.IsZero() {
+			if newest.Before(ev) {
+				newest = ev
+			}
+			if (st == statusWarn || st == statusFailed) && newestFail.Before(ev) {
+				newestFail = ev
+			}
 		}
+	}
+	switch {
+	case !newestFail.IsZero():
+		at = ptrTime(newestFail)
+	case !newest.IsZero():
+		at = ptrTime(newest)
 	}
 	if len(lesser) > 0 {
 		detail = strings.TrimPrefix(detail+"; "+strings.Join(lesser, "; "), "; ")
@@ -428,13 +472,15 @@ func (f healthFacts) withRow(a attempt, name string) attempt {
 	if a.Result == passed && a.LastPass.IsZero() {
 		a.LastPass = a.At
 	}
+	was := a.At
 	a.At = *j.LastFinishedAt
 	switch j.LastStatus {
 	case "ok":
 		a.Result, a.LastPass = passed, a.At
 	case "skipped":
-		if a.Result == failed { // a skip is no result: the failure before it stands
+		if a.Result == failed { // a skip is no result: the failure before it stands, at its own time
 			a.Why += "; it could not run since" + jobClassOf(j)
+			a.FailedAt = was
 			break
 		}
 		a.Result, a.Why = skipped, a.What+" could not run"+jobClassOf(j)
