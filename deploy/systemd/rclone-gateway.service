@@ -32,6 +32,8 @@ ExecStart=/usr/local/bin/rclone serve restic \
 # The htpasswd file may not exist until cryo-console has synced it once.
 Restart=always
 RestartSec=5s
+# rclone exits 143 on SIGTERM; without this a plain `systemctl stop` leaves the unit "failed" (M3 lab, L5).
+SuccessExitStatus=143
 UMask=0077
 # No crash dumps (ADR 0008): a core file could hold backup data in flight.
 LimitCORE=0

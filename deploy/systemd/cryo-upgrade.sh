@@ -173,6 +173,34 @@ done
 say "OK    ${UNITS_START[*]} active"
 
 # --- Verify ---
+# "active" means the processes started, not that they are serving. Doctor run in the same
+# second reports the listeners as free (its bind test wins the race) and the worker socket
+# as missing (M3 lab, L1). Wait, bounded, for both listeners to be bound and the worker's
+# socket to exist; then doctor judges a running system. A wait that runs out is reported,
+# and doctor runs anyway so its verdict is still printed.
+READY_WAIT_S=30
+readarray -t READY < <(python3 -I -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+for k in ("agent_listen", "admin_listen", "adminpath_socket"):
+    print(c.get(k) or "")' "$CONFIG" 2>/dev/null || true)
+ready() {
+	local addr port
+	for addr in "${READY[0]:-}" "${READY[1]:-}"; do
+		[[ -n $addr ]] || continue
+		port=${addr##*:}
+		[[ $port =~ ^[0-9]+$ ]] || continue
+		ss -Hltn "sport = :$port" 2>/dev/null | grep -q . || return 1
+	done
+	[[ -z ${READY[2]:-} || -S ${READY[2]} ]]
+}
+deadline=$((SECONDS + READY_WAIT_S))
+until ready; do
+	if (( SECONDS >= deadline )); then
+		say "WARN  listeners or worker socket not ready after ${READY_WAIT_S}s; doctor below may reflect that"
+		break
+	fi
+	sleep 1
+done
 say "----  doctor after (new binary)"
 if as_svc "$TARGET" doctor --config "$CONFIG"; then
 	say "DONE  $OLD_VER -> $NEW_VER. Copy kept in $BACKUP_DIR (remove old copies yourself)."
