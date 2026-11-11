@@ -36,7 +36,8 @@ The M3 lab run found two agent behaviours worth a decision (docs/lab/m3-run.md, 
   queue in the outbox (cap 50 000) until the console accepts the token again.
 - **Why not stop altogether.** A retired device's agent that stops forever cannot recover from the operator's
   mistake or a console restore without hands on the machine, and a silent agent is what this product exists to
-  prevent. One request an hour is the cost.
+  prevent. The cost is one heartbeat an hour, plus the heartbeat a finished run or a resume from sleep kicks
+  (so a retired device on the run ladder sends a few 401s an hour, not one; still nothing like every 3 minutes).
 - **Why not re-enroll by itself.** It has no enrollment token; minting one is an operator act (ADR 0011).
 
 ## Decision 2: the uplink backoff caps at 5 minutes, and one answer wakes every loop

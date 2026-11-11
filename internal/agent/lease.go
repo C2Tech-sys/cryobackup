@@ -29,7 +29,10 @@ import (
 //     RunStats.Lease = bypassed, logged at warn (fail open, loud);
 //   - any other 4xx (401 revoked token, 403, 400, 409): the run does not start,
 //     nothing is journaled, logged at error, and the scheduler waits the
-//     uplink backoff before asking again, like every other refused call.
+//     uplink backoff before asking again, like every other refused call;
+//   - an agent already REFUSED (three heartbeats answered 401, loops.go, ADR
+//     0018) does not ask at all: the run starts with RunStats.Lease = bypassed
+//     and one warn line, and the gateway decides whether it may back up.
 //
 // backup_now (trigger manual) does not ask and records not_required. The call
 // runs on the run's context, so a service stop or a cancel command aborts it at

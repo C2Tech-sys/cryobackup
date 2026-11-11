@@ -472,14 +472,13 @@ func TestRefusedKeyDoesNotSurviveARestart(t *testing.T) {
 	}
 }
 
-// Backups are not stopped by REFUSED: the agent does not touch the schedule, the
-// run ladder or the lease. The scheduled (boot) run comes due after the agent
-// has been refused for a while; it asks the console for its start lease exactly
-// as it would otherwise. The retired token gets a 401 there too, which the
-// lease path has always answered with "the backup does not start" and its own
-// backoff, so the run waits on that and the agent stays REFUSED; when the
-// console accepts the token again the same run goes ahead and its record
-// reaches the console.
+// Backups are not stopped by REFUSED: the agent does not touch the schedule or
+// the run ladder. The scheduled (boot) run comes due after the agent has been
+// refused for a while; it skips the start lease (the console would answer 401
+// there too, and a refused agent does not knock between its probes), runs
+// against the gateway on the last policy, and its record waits in the outbox
+// while the agent stays REFUSED; when the console accepts the token again the
+// record reaches the console with the lease marked bypassed.
 func TestRefusedKeepsBackupSchedule(t *testing.T) {
 	fakerestic.Use(t, "backup_ok")
 	fc := newFakeConsole(t)
