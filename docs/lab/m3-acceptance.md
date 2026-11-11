@@ -8,7 +8,7 @@ table row per step: result PASS/FAIL, evidence).
 The point of M3 is that silence becomes visible, so every drill below breaks something and then looks for the alarm.
 A drill also fails if the board stays green while the thing is broken, whatever the banner text says.
 
-Decisions this procedure checks: ADR 0013 (self-probe), ADR 0015 (banners in the page flow), ADR 0016 (device retire).
+Decisions this procedure checks: ADR 0013 (self-probe), ADR 0015 (banners in the page flow), ADR 0016 (device retire), ADR 0018 (the agent after a retire and after an outage; steps 15 and 16, agent 0.3.0).
 
 Each step is marked **operator** (a person does it on real machines) or **automated** (a test covers it; the step
 says which, and running it again here is optional). **sudo** marks a step that needs root on the console host. The
@@ -169,6 +169,29 @@ each machine's backup count and last restore check.
 - The drill leftovers are gone: the database copy, the `.old` login file, the renamed table, the held lease.
 - Restore `session.idle_h` and any changed `agent_probe` or `public_url` setting.
 
+## Step 15. A retired device's agent stops knocking (operator; agent 0.3.0 or later)
+
+Added after the first run found L4 (a retired agent polled with its dead token for days). ADR 0018, decision 1.
+
+| | |
+| --- | --- |
+| Do | On a lab machine running agent 0.3.0, retire the device from the console (step 12 shape). Leave the agent running. Keep `journalctl -fu cryo-console` open and the machine's `agent.log` and Application Event Log in view. |
+| Expect | The console journal shows three heartbeats answered 401 over about 3 min (1 min, then 2 min of backoff), then nothing from that device except one heartbeat an hour. On the machine, one ERROR line `the console refuses the device token` with `class=token_refused`, one Event Log entry id 1008 (error, source CryoBackup) with the same sentence, and `cryo-agent status` shows the TOKEN REFUSED block with the time and what to do. The next scheduled backup still runs and is deferred locally with class `auth` (the gateway login is gone); nothing is deleted. |
+| Then | Re-enroll the machine with a new enrollment token, or simply watch the hourly probe arrive once in the journal. After a re-enroll the board shows it ONLINE within a heartbeat. |
+| Look | Exactly one ERROR line and one 1008 entry, however long the device stays retired. No URL, path or token in either. |
+| Fail if | The agent keeps its 3-minute cadence after the third 401; a 403 or a network failure counts towards REFUSED; the service stops itself; a second ERROR line or 1008 entry appears; a scheduled backup is skipped rather than deferred. |
+
+## Step 16. The fleet is back within 5 minutes of the console (operator, sudo; agent 0.3.0 or later)
+
+Added after the first run found L9 (the fleet returned over half an hour). ADR 0018, decision 2.
+
+| | |
+| --- | --- |
+| Do | With two or more machines on agent 0.3.0 ONLINE, `systemctl stop cryo-console` for 10 minutes (long enough for every agent's uplink backoff to reach its cap), then `systemctl start cryo-console`. Note the start time. |
+| Expect | Every device is ONLINE on the board within 5 minutes of the start, plus one heartbeat. Each machine's `agent.log` shows one INFO line `console reachable again` naming the loop that got through first (`from=heartbeat`, `policy`, `commands`, `outbox`, `lease` or `snapshots`), and the heartbeat follows within seconds of that line even when another loop was first. |
+| Look | In the console journal, the agents' first requests after the start fall inside the 5-minute window; no device waits longer. One `console reachable again` line per machine per outage. |
+| Fail if | Any device takes more than about 6 minutes to read ONLINE; a machine logs the line more than once for the one outage; the board turns green for a device that has not sent a heartbeat. |
+
 ## Results table (copy into m3-run.md)
 
 | # | step | result | evidence |
@@ -187,3 +210,5 @@ each machine's backup count and last restore check.
 | 12 | retire a dead device, delete an old token | | |
 | 13 | 7-day dogfood: every outage alarmed | | |
 | 14 | sweep | | |
+| 15 | retired agent: REFUSED after three 401s, one line, one 1008, hourly probe, backups defer (agent 0.3.0) | | |
+| 16 | console stopped 10 min: fleet ONLINE within 5 min of the start (agent 0.3.0) | | |
