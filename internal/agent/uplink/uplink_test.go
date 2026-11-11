@@ -519,7 +519,7 @@ func TestBackoff(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		got = append(got, b.Next())
 	}
-	want := []time.Duration{1, 2, 4, 8, 16, 30, 30, 30}
+	want := []time.Duration{1, 2, 4, 5, 5, 5, 5, 5} // capped at 5 min (ADR 0018)
 	for i, w := range want {
 		if got[i] != w*time.Minute {
 			t.Fatalf("step %d = %v, want %v (sequence %v)", i, got[i], w*time.Minute, got)

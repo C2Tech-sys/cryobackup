@@ -18,7 +18,7 @@
 //     class (network, tls, auth) for last_error_class. The problem title and
 //     any other wire text are discarded.
 //   - Retry-After is honoured by Backoff.Delay; otherwise Backoff doubles from
-//     one minute to thirty with 20 % jitter and is reset after a success. Each
+//     one minute to five (ADR 0018) with 20 % jitter and is reset after a success. Each
 //     loop of the agent owns a Backoff; the client itself never sleeps.
 //   - The command long poll is single-flight: a second concurrent PollCommands
 //     returns ErrPollInFlight without a request (§5.5, the console answers 409).

@@ -121,11 +121,15 @@ func (a *Agent) acquireLease(ctx, jctx context.Context, rec *api.RunRecord) (api
 		a.leaseNotBefore, a.leaseCapped = time.Time{}, false
 		a.leaseBO.Reset()
 		a.mu.Unlock()
+		if a.consoleWasDown() {
+			a.consoleBack(callLease) // an answer after a failed call: wake the uplink loops (ADR 0018)
+		}
 		if resp.LeaseUntil == nil {
 			return api.LeaseNotRequired, leaseStart
 		}
 		return api.LeaseGranted, leaseStart
 	}
+	a.uplinkFailed()
 	if failOpen(err) {
 		a.log.Warn("start lease not available; starting without it (fail open, ADR 0005)", "run", rec.ID, "err", err.Error())
 		a.setLeaseWait(time.Time{}, false)

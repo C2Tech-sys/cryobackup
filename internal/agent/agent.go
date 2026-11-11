@@ -160,6 +160,10 @@ type Agent struct {
 	// hbOKAt is the last heartbeat the console answered; consoleReached is
 	// kicked with it (resume_wait.go).
 	hbOKAt time.Time
+	// consoleDown: an uplink call failed since the last time consoleBack ran
+	// (loops.go, ADR 0018 decision 2). It only makes the "console reachable
+	// again" line appear once per recovery.
+	consoleDown bool
 	// gwStalled: the running backup is not moving and the gateway cannot be
 	// reached (gateway_watchdog.go); the heartbeat reports it.
 	gwStalled bool

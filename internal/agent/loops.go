@@ -145,8 +145,12 @@ func (a *Agent) policyLoop(ctx context.Context) {
 		err := a.pullPolicy(ctx)
 		if err != nil {
 			wait = bo.Delay(err)
+			a.uplinkFailed()
 			a.log.Warn("policy pull failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
+		}
+		if bo.Failures() > 0 {
+			a.consoleBack(loopPolicy)
 		}
 		bo.Reset()
 		wait = policySafetyEvery
@@ -336,15 +340,23 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			if !sleepOrKick(ctx, minGap-since, nil) {
 				return
 			}
+			// The heartbeat about to go out answers every kick that came in
+			// while the gap ran: a burst of kicks (one answer waking every
+			// loop, ADR 0018) is one heartbeat, not one per kick.
+			select {
+			case <-a.kickHeartbeat:
+			default:
+			}
 		}
 		err := a.sendHeartbeat(ctx)
 		if err != nil {
 			wait = bo.Delay(err)
+			a.uplinkFailed()
 			a.log.Warn("heartbeat failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
 		if bo.Failures() > 0 {
-			a.sched.Notify(scheduler.TriggerConnectivity) // the console is back: look at the schedule again
+			a.consoleBack(loopHeartbeat) // the console is back: wake the others, look at the schedule again
 		}
 		bo.Reset()
 		wait = every + time.Duration((rand.Float64()*2-1)*float64(heartbeatJitter))
@@ -435,8 +447,12 @@ func (a *Agent) outboxLoop(ctx context.Context) {
 		err := a.deliverOutbox(ctx)
 		if err != nil {
 			wait = bo.Delay(err)
+			a.uplinkFailed()
 			a.log.Warn("run upload failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
+		}
+		if bo.Failures() > 0 {
+			a.consoleBack(loopOutbox)
 		}
 		bo.Reset()
 		wait = outboxIdleEvery
@@ -510,6 +526,7 @@ func (a *Agent) commandsLoop(ctx context.Context) {
 		wait = 0
 		if err := a.postResults(ctx); err != nil {
 			wait = bo.Delay(err)
+			a.uplinkFailed()
 			a.log.Warn("command result post failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
@@ -523,8 +540,12 @@ func (a *Agent) commandsLoop(ctx context.Context) {
 				return
 			}
 			wait = bo.Delay(err)
+			a.uplinkFailed()
 			a.log.Warn("command poll failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
+		}
+		if bo.Failures() > 0 {
+			a.consoleBack(loopCommands)
 		}
 		bo.Reset()
 		for _, cmd := range resp.Commands {
@@ -589,14 +610,72 @@ func (a *Agent) cmdCheckIn(ctx context.Context) error {
 	return a.pullPolicy(ctx)
 }
 
-// backoff returns a fresh bounded backoff (1 min doubling to 30 min); tests
-// shorten the minimum.
+// backoff returns a fresh bounded backoff (1 min doubling to 5 min, ADR 0018);
+// tests shorten the minimum.
 func (a *Agent) backoff() *uplink.Backoff {
 	b := uplink.NewBackoff()
 	if a.o.backoffMin > 0 {
 		b.Min = a.o.backoffMin
 	}
 	return b
+}
+
+// The uplink callers that report a recovery (consoleBack's from).
+const (
+	loopHeartbeat = "heartbeat"
+	loopPolicy    = "policy"
+	loopOutbox    = "outbox"
+	loopCommands  = "commands"
+	callLease     = "lease"
+	callSnapshots = "snapshots"
+)
+
+// uplinkFailed notes that an uplink call failed, so the next success is a
+// recovery worth one log line (consoleBack).
+func (a *Agent) uplinkFailed() {
+	a.mu.Lock()
+	a.consoleDown = true
+	a.mu.Unlock()
+}
+
+// consoleWasDown reports whether an uplink call failed since the last
+// consoleBack. Callers that have no backoff of their own (the start lease, the
+// snapshot upload) ask it before calling consoleBack.
+func (a *Agent) consoleWasDown() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.consoleDown
+}
+
+// consoleBack is called when an uplink call succeeded after failures (ADR 0018
+// decision 2): from names the caller. Any answer proves the console is up, so
+// it wakes the other loops (heartbeat first, since the board turns ONLINE on
+// it, then policy, outbox, commands) and tells the scheduler to look at the
+// schedule again. A kick is a non-blocking send on a one-slot channel and the
+// heartbeat loop keeps its minimum gap, so a burst of successes is not a burst
+// of requests. The caller's own loop is not kicked: it carries on by itself.
+// It logs one line per recovery, however many callers see it: only the first
+// call after a failure finds consoleDown set.
+func (a *Agent) consoleBack(from string) {
+	a.mu.Lock()
+	was := a.consoleDown
+	a.consoleDown = false
+	a.mu.Unlock()
+	if was {
+		a.log.Info("console reachable again", "from", from)
+	}
+	for _, k := range [...]struct {
+		name string
+		ch   chan struct{}
+	}{
+		{loopHeartbeat, a.kickHeartbeat}, {loopPolicy, a.kickPolicy},
+		{loopOutbox, a.kickOutbox}, {loopCommands, a.kickCommands},
+	} {
+		if k.name != from {
+			kick(k.ch)
+		}
+	}
+	a.sched.Notify(scheduler.TriggerConnectivity)
 }
 
 // ---- helpers --------------------------------------------------------------

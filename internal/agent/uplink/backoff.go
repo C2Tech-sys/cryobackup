@@ -6,11 +6,19 @@ import (
 	"time"
 )
 
-// Backoff bounds (architecture §6.1 "uplink"): one minute doubling to thirty,
-// reset on success.
+// Backoff bounds (architecture §6.1 "uplink", as changed by ADR 0018 decision
+// 2): one minute doubling to five, reset on success.
+//
+// The cap was thirty minutes; after a console outage that spread the fleet's
+// return over half an hour (lab finding L9). Five minutes bounds the last
+// agent's return, and a 10 000-agent fleet spread over those minutes is about
+// 35 heartbeats a second at the worst instant. A console that wants a real
+// herd slowed down uses Retry-After, which Delay still honours exactly (up to
+// an hour, whatever the cap): the cap bounds the agent's own guess, never the
+// console's instruction.
 const (
 	BackoffMin = time.Minute
-	BackoffMax = 30 * time.Minute
+	BackoffMax = 5 * time.Minute
 )
 
 // Backoff is a bounded exponential backoff with jitter. Each loop of the agent
@@ -27,7 +35,7 @@ type Backoff struct {
 	failures int
 }
 
-// NewBackoff returns the standard 1 min to 30 min backoff with 20 % jitter.
+// NewBackoff returns the standard 1 min to 5 min backoff with 20 % jitter.
 func NewBackoff() *Backoff {
 	return &Backoff{Min: BackoffMin, Max: BackoffMax, Jitter: 0.2}
 }

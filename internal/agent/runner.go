@@ -647,7 +647,12 @@ func (a *Agent) uploadSnapshots(ctx context.Context, backupSpec supervisor.Spec)
 		return
 	}
 	if _, err := a.up.UploadSnapshots(ctx, req); err != nil {
+		a.uplinkFailed()
 		a.log.Warn("snapshot list upload failed", "err", err.Error())
+		return
+	}
+	if a.consoleWasDown() {
+		a.consoleBack(callSnapshots) // an answer after a failed call: wake the uplink loops (ADR 0018)
 	}
 }
 
