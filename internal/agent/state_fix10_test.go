@@ -138,7 +138,7 @@ func TestPrepareStateRecordsTheVerdictOutsideProgramData(t *testing.T) {
 }
 
 // Item 1: a file at the old marker's path means nothing any more: no refusal,
-// no event (1008 is retired), and it is neither read nor removed.
+// no event (1008 now reports a refused device token, ADR 0018), and it is neither read nor removed.
 func TestPrepareStateIgnoresTheOldMarkerFile(t *testing.T) {
 	acl := stubElevatedACL(t)
 	l := verifiedTree(t, acl)

@@ -31,7 +31,9 @@ The M3 lab run found two agent behaviours worth a decision (docs/lab/m3-run.md, 
   only `cryo-agent uninstall` does that. If the device was retired, its gateway login is gone too, so each run
   defers with class `auth` on the scheduler's own ladder (5 min doubling to 60 min, architecture §1092): bounded,
   local, and the right outcome if the gateway still accepts the login (the console-restore case, where the data
-  keeps landing). Run records queue in the outbox (cap 50 000) until the console accepts the token again.
+  keeps landing). A refused agent skips the start lease (the console would answer it 401 too, and the lease is the
+  fleet cap, not the right to back up: fail open, as for a console that cannot answer, ADR 0005). Run records
+  queue in the outbox (cap 50 000) until the console accepts the token again.
 - **Why not stop altogether.** A retired device's agent that stops forever cannot recover from the operator's
   mistake or a console restore without hands on the machine, and a silent agent is what this product exists to
   prevent. One request an hour is the cost.

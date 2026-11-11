@@ -42,6 +42,11 @@ var PinnedResticSHA256 string
 // that found its own SCM configuration drifted and re-applied it (M1-T4).
 const eventServiceConfigRepaired = 1009
 
+// eventTokenRefused is the Event Log id (error) of the console refusing the
+// device token: three heartbeats in a row answered 401 (loops.go, ADR 0018).
+// The id is reused: 1008 once reported a planted file marker and was retired.
+const eventTokenRefused = 1008
+
 // ensureServiceConfig is service.EnsureConfig (a variable for the tests).
 var ensureServiceConfig = service.EnsureConfig
 
@@ -115,6 +120,8 @@ type Options struct {
 	resumeTimer       func(d time.Duration) (<-chan time.Time, func()) // nil = a real timer; tests drive the resume wait with it
 	gatewayAddr       string                                           // "" = the host:port of the repository URL (gateway_watchdog.go)
 	gatewayProbeEvery time.Duration                                    // 0 = gatewayProbeEvery
+	refusedProbe      time.Duration                                    // 0 = refusedProbeEvery (loops.go)
+	eventHook         func(level string, id uint32, msg string)        // nil in production; tests see every Event Log line through it
 }
 
 // Agent is the endpoint: config, secrets, journal, uplink, scheduler,
@@ -164,6 +171,13 @@ type Agent struct {
 	// (loops.go, ADR 0018 decision 2). It only makes the "console reachable
 	// again" line appear once per recovery.
 	consoleDown bool
+	// The console refuses the device token (loops.go, ADR 0018 decision 1):
+	// tokenRefusals counts the heartbeats in a row answered 401; at three the
+	// agent is refused (refusedSince is the first of them) until a heartbeat
+	// is accepted.
+	refused       bool
+	refusedSince  time.Time
+	tokenRefusals int
 	// gwStalled: the running backup is not moving and the gateway cannot be
 	// reached (gateway_watchdog.go); the heartbeat reports it.
 	gwStalled bool
@@ -453,6 +467,9 @@ func (a *Agent) token() string {
 }
 
 func (a *Agent) eventLog(level string, id uint32, msg string) {
+	if a.o.eventHook != nil {
+		a.o.eventHook(level, id, msg)
+	}
 	if a.events != nil {
 		a.events.Log(level, id, msg)
 	}

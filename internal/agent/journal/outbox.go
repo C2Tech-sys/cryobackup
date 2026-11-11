@@ -177,6 +177,10 @@ const (
 	// jitter, backoff, window, the next slot), deleted while a backup runs,
 	// when it cannot schedule, and on a clean stop.
 	KVPlannedStart = "planned_start"
+	// KVTokenRefusedSince is set to the time of the first of the three 401s
+	// (RFC 3339 UTC) while the console refuses the device token (ADR 0018), and
+	// deleted when a heartbeat is accepted again and on every agent start.
+	KVTokenRefusedSince = "token_refused_since"
 )
 
 // PlannedStart is the value of KVPlannedStart: when the scheduler plans to

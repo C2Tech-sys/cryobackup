@@ -182,8 +182,9 @@
 //     directories are created with their descriptor).
 //
 // Event Log ids: 1004 refused, 1005 lab flag in use, 1006 tampered while
-// running, 1007 quarantined; 1008 (a planted file marker, P1-FIX9) is retired
-// and not reused. "cryo-agent status" shows the verdict
+// running, 1007 quarantined; 1008 once reported a planted file marker (P1-FIX9,
+// retired) and now reports a refused device token (see "Refused token").
+// "cryo-agent status" shows the verdict
 // ("state trust: UNTRUSTED (HKLM verdict since <stamp>: <reason>)") and the
 // quarantines next to the state directory (count and newest
 // "<stamp>-<suffix>", no path).
@@ -242,6 +243,17 @@
 // reuses it and the console issues a fresh device token (DH17); the response
 // that arrives last is the one stored. Enrolling a device that already has a
 // device id is refused.
+//
+// # Refused token (ADR 0018 decision 1)
+//
+// Three heartbeats in a row answered 401 mean the console refuses the device
+// token (a 403, a 429, a 5xx or a transport failure restarts the count). The
+// agent then says so once (one ERROR line, Event Log 1008, the journal key
+// token_refused_since, a block in "cryo-agent status"), the policy, run upload
+// and command loops stop calling the console, and the heartbeat asks once an
+// hour (jittered). Backups go on with the last policy; the agent neither stops
+// nor re-enrolls. The next heartbeat the console accepts ends the state, deletes
+// the key, logs one INFO line and wakes every loop.
 //
 // # M0 limits
 //

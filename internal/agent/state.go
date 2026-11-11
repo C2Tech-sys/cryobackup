@@ -28,8 +28,9 @@ const (
 	eventStateInsecure    = 1005 // warning: running with --insecure-unprotected-state
 	eventStateTampered    = 1006 // error: a layout directory's descriptor changed while the agent ran
 	eventStateQuarantined = 1007 // warning: --repair-acl moved an untrusted state directory aside and created a fresh one
-	// 1008 is retired (ticket P1-FIX10): it reported a planted file marker; the
-	// verdict now lives where an unprivileged account cannot write it. Not reused.
+	// 1008 once reported a planted file marker (ticket P1-FIX10; the verdict
+	// now lives where an unprivileged account cannot write it) and now reports
+	// a refused device token (eventTokenRefused in agent.go, ADR 0018).
 	lineInsecureFlag = "INSECURE: --insecure-unprotected-state is set: the state directory is not verified as SYSTEM + Administrators only; secrets protected by machine-scope DPAPI are readable by any local process that can read the files. Lab use only."
 	// lineRefusedUnprotected ends a refusal of a process that cannot restrict.
 	lineRefusedUnprotected = "refusing the state directory (start elevated: run \"cryo-agent install\" or \"enroll\" from an elevated prompt; in a lab only, pass --insecure-unprotected-state)"

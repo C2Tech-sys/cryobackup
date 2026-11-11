@@ -99,6 +99,11 @@ type Report struct {
 	// NextDue when set (L-STATUS-1).
 	PlannedAt     time.Time
 	PlannedReason string
+
+	// TokenRefusedSince is when the console first refused the device token
+	// (the first of three heartbeats answered 401; journal KVTokenRefusedSince);
+	// zero = the agent does not believe the token is refused (ADR 0018).
+	TokenRefusedSince time.Time
 }
 
 // readVerdict is config.ReadVerdict (replaced by this package's tests: the
@@ -161,6 +166,11 @@ func Status(ctx context.Context, stateDir string, now time.Time) (Report, error)
 	}
 	r.LastErrorClass, _, _ = jr.KVGet(ctx, journal.KVLastErrorClass)
 	r.InsecureState, _, _ = jr.KVGet(ctx, journal.KVInsecureState)
+	if v, ok, _ := jr.KVGet(ctx, journal.KVTokenRefusedSince); ok {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			r.TokenRefusedSince = t
+		}
+	}
 	r.PolicyETag, _, _ = jr.KVGet(ctx, journal.KVPolicyETag)
 	r.QueueDepth, _ = jr.OutboxDepth(ctx)
 	r.OpenRuns, _ = jr.OpenRunCount(ctx)
@@ -232,6 +242,36 @@ func plural(n int, one, many string) string {
 	return many
 }
 
+// renderTokenRefused prints the block for a refused device token, in plain
+// words, with what to do. No URL, no path.
+func (r Report) renderTokenRefused(w io.Writer) {
+	_, _ = fmt.Fprintf(w, "TOKEN REFUSED since %s (%s)\n", r.TokenRefusedSince.UTC().Format("2006-01-02 15:04 MST"), refusedFor(r.ReportedAtDevice.Sub(r.TokenRefusedSince)))
+	for _, l := range []string{
+		"  The console answers 401 to this device's token: the device was retired or",
+		"  revoked, the console was restored from before this enrollment, or this",
+		"  agent points at the wrong console. Backups keep running on the last policy",
+		"  and run records queue locally. The agent asks the console once an hour.",
+		"  To fix: re-enroll this device with a new enrollment token, or uninstall.",
+	} {
+		_, _ = fmt.Fprintln(w, l)
+	}
+}
+
+// refusedFor words a duration in days, hours and minutes ("3 h 12 min"); under
+// a minute, or a clock that ran backwards, is "under 1 min".
+func refusedFor(d time.Duration) string {
+	m := int(d.Round(time.Minute) / time.Minute)
+	switch {
+	case m < 1:
+		return "under 1 min"
+	case m < 60:
+		return fmt.Sprintf("%d min", m)
+	case m < 24*60:
+		return fmt.Sprintf("%d h %d min", m/60, m%60)
+	}
+	return fmt.Sprintf("%d d %d h", m/(24*60), m%(24*60)/60)
+}
+
 // Render writes the report as "key: value" lines.
 func (r Report) Render(w io.Writer) {
 	p := func(k, v string) { _, _ = fmt.Fprintf(w, "%-18s %s\n", k+":", v) }
@@ -271,6 +311,9 @@ func (r Report) Render(w io.Writer) {
 	}
 	if r.InsecureLab {
 		p("mode", "INSECURE LAB (http allowed, TLS not verified)")
+	}
+	if !r.TokenRefusedSince.IsZero() {
+		r.renderTokenRefused(w)
 	}
 	if r.StateVerified {
 		p("state acl", "verified (owner SYSTEM or Administrators, SYSTEM + Administrators only)")

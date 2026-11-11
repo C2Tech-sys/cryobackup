@@ -67,7 +67,7 @@ func fakeOptions(t *testing.T, stateDir string) Options {
 		environment:    func() policy.Environment { return policy.Environment{} },
 		heartbeatEvery: 80 * time.Millisecond, heartbeatMinGap: 10 * time.Millisecond,
 		pollWait: 200 * time.Millisecond, schedTick: 100 * time.Millisecond, progressEvery: 50 * time.Millisecond,
-		cancelGrace: 500 * time.Millisecond, backoffMin: 50 * time.Millisecond,
+		cancelGrace: 500 * time.Millisecond, backoffMin: 50 * time.Millisecond, refusedProbe: 300 * time.Millisecond,
 	}
 }
 

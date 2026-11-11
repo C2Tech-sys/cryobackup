@@ -30,6 +30,16 @@ const (
 	forceNowTTL           = 10 * time.Minute
 )
 
+// A refused device token (ADR 0018 decision 1): after tokenRefusalLimit
+// heartbeats in a row answered 401 the agent is refused and asks the console
+// once per refusedProbeEvery (+-refusedProbeJitter) until a heartbeat is
+// accepted.
+const (
+	tokenRefusalLimit  = 3
+	refusedProbeEvery  = time.Hour
+	refusedProbeJitter = 0.2
+)
+
 // ---- policy ---------------------------------------------------------------
 
 // decodePolicy decodes and validates a stored or received policy response.
@@ -140,7 +150,7 @@ func (a *Agent) policyLoop(ctx context.Context) {
 	bo := a.backoff()
 	wait := time.Duration(0)
 	for {
-		if !sleepOrKick(ctx, wait, a.kickPolicy) {
+		if !a.uplinkWait(ctx, wait, a.kickPolicy) {
 			return
 		}
 		err := a.pullPolicy(ctx)
@@ -328,6 +338,10 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 	}
 	bo := a.backoff()
 	wait := time.Duration(0)
+	// A refusal lives in memory: a journal key left by an earlier process
+	// would say REFUSED after a restart that found the token accepted.
+	// If the token is still refused, three heartbeats say so again.
+	_ = a.jr.KVDelete(ctx, journal.KVTokenRefusedSince)
 	for {
 		if !sleepOrKick(ctx, wait, a.kickHeartbeat) {
 			return
@@ -351,12 +365,20 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		}
 		err := a.sendHeartbeat(ctx)
 		if err != nil {
-			wait = bo.Delay(err)
 			a.uplinkFailed(err)
+			if a.heartbeatRefused(ctx, err) {
+				// Refused: one probe per refusedProbeEvery, nothing else to
+				// say (the backoff is for a console that may answer soon).
+				wait = a.refusedWait()
+				continue
+			}
+			wait = bo.Delay(err)
 			a.log.Warn("heartbeat failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
-		if bo.Failures() > 0 {
+		// The end of REFUSED wakes every loop like a recovery does; the
+		// backoff's failure count (the first two 401s) is the other reason.
+		if a.heartbeatAccepted(ctx) || bo.Failures() > 0 {
 			a.consoleBack(loopHeartbeat) // the console is back: wake the others, look at the schedule again
 		}
 		bo.Reset()
@@ -442,7 +464,7 @@ func (a *Agent) outboxLoop(ctx context.Context) {
 	bo := a.backoff()
 	wait := time.Duration(0)
 	for {
-		if !sleepOrKick(ctx, wait, a.kickOutbox) {
+		if !a.uplinkWait(ctx, wait, a.kickOutbox) {
 			return
 		}
 		err := a.deliverOutbox(ctx)
@@ -521,7 +543,7 @@ func (a *Agent) commandsLoop(ctx context.Context) {
 		pollWait = defaultPollWait
 	}
 	for {
-		if !sleepOrKick(ctx, wait, a.kickCommands) {
+		if !a.uplinkWait(ctx, wait, a.kickCommands) {
 			return
 		}
 		wait = 0
@@ -694,6 +716,120 @@ func (a *Agent) consoleBack(from string) {
 		}
 	}
 	a.sched.Notify(scheduler.TriggerConnectivity)
+}
+
+// ---- refused token ---------------------------------------------------------
+
+// isRefused reports whether the agent has concluded that the console refuses
+// its device token (three heartbeats in a row answered 401).
+func (a *Agent) isRefused() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.refused
+}
+
+// heartbeatRefused is the heartbeat loop's account of a failed heartbeat
+// against the refused-token rule (ADR 0018 decision 1) and reports whether the
+// agent is refused afterwards. A 401 counts; every other failure (a 403, a
+// 429, a 5xx, a transport or TLS failure) restarts the count, because it says
+// nothing about the token. At the third 401 in a row it enters REFUSED, once:
+// one ERROR line, one Event Log entry, the journal key; none of them says more
+// than the class and the time of the first 401 (no URL, no path, no token).
+// While refused, a 401 stays refused and any other failure changes nothing.
+func (a *Agent) heartbeatRefused(ctx context.Context, err error) bool {
+	var ue *uplink.Error
+	is401 := errors.As(err, &ue) && ue.Status == http.StatusUnauthorized
+
+	a.mu.Lock()
+	if a.refused {
+		a.mu.Unlock()
+		if !is401 {
+			// Not a word about the token: only the probe did not get through.
+			a.log.Debug("the refused-token probe failed", "err", err.Error())
+		}
+		return true
+	}
+	if !is401 {
+		a.tokenRefusals = 0
+		a.mu.Unlock()
+		return false
+	}
+	if a.tokenRefusals == 0 {
+		a.refusedSince = a.clock().UTC()
+	}
+	a.tokenRefusals++
+	if a.tokenRefusals < tokenRefusalLimit {
+		a.mu.Unlock()
+		return false
+	}
+	since := a.refusedSince
+	a.mu.Unlock()
+
+	// Only this loop enters REFUSED, so nothing can enter it twice. The state
+	// flips last: whoever sees isRefused has the line, the Event Log entry and
+	// the journal key already.
+	stamp := since.Format(time.RFC3339)
+	a.log.Error("the console refuses the device token", "class", "token_refused", "since", stamp, "action", "re-enroll or uninstall")
+	a.eventLog("error", eventTokenRefused, "the console refuses the device token (the first of three heartbeats answered 401 came at "+stamp+
+		"); re-enroll this device or uninstall it; backups keep running on the last policy; the agent asks the console once an hour")
+	if err := a.jr.KVSet(ctx, journal.KVTokenRefusedSince, stamp); err != nil {
+		a.log.Warn("could not record the refused token in the journal", "err", err.Error())
+	}
+	a.mu.Lock()
+	a.refused = true
+	a.mu.Unlock()
+	return true
+}
+
+// heartbeatAccepted is called when a heartbeat was answered 2xx: the count of
+// 401s starts again, and if the agent was refused the state ends (the journal
+// key is deleted, one INFO line says for how long it lasted). It reports
+// whether it ended REFUSED, so that the caller wakes every loop.
+func (a *Agent) heartbeatAccepted(ctx context.Context) bool {
+	a.mu.Lock()
+	was, since := a.refused, a.refusedSince
+	a.refused, a.refusedSince, a.tokenRefusals = false, time.Time{}, 0
+	a.mu.Unlock()
+	if !was {
+		return false
+	}
+	if err := a.jr.KVDelete(ctx, journal.KVTokenRefusedSince); err != nil {
+		a.log.Warn("could not clear the refused token in the journal", "err", err.Error())
+	}
+	a.log.Info("the console accepts the device token again", "refused_for", a.clock().Sub(since).Round(time.Second).String())
+	return true
+}
+
+// refusedEvery is the period of the heartbeat probe while refused (and the
+// longest sleep of the other loops).
+func (a *Agent) refusedEvery() time.Duration {
+	if a.o.refusedProbe > 0 {
+		return a.o.refusedProbe
+	}
+	return refusedProbeEvery
+}
+
+// refusedWait is refusedEvery with +-20 % jitter, so a fleet that was refused
+// together does not knock together.
+func (a *Agent) refusedWait() time.Duration {
+	return time.Duration(float64(a.refusedEvery()) * (1 - refusedProbeJitter + 2*refusedProbeJitter*rand.Float64()))
+}
+
+// uplinkWait is sleepOrKick for the loops that call the console: after the
+// wait, a refused agent keeps waiting (for a kick or refusedEvery, again and
+// again) instead of calling, and returns when it is no longer refused. It
+// reports false when ctx ended. The heartbeat loop does not use it: its
+// refused cadence is the probe.
+func (a *Agent) uplinkWait(ctx context.Context, d time.Duration, kickCh chan struct{}) bool {
+	if !sleepOrKick(ctx, d, kickCh) {
+		return false
+	}
+	for a.isRefused() {
+		if !sleepOrKick(ctx, a.refusedEvery(), kickCh) {
+			return false
+		}
+	}
+	return true
 }
 
 // ---- helpers --------------------------------------------------------------

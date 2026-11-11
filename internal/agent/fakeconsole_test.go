@@ -60,6 +60,8 @@ type fakeConsole struct {
 	down           atomic.Bool // connections are cut: the console is unreachable
 	dropEnrollOnce atomic.Bool // the first enroll response is lost after the console stored it
 	omitCustomer   atomic.Bool // the enroll response carries no customer id
+	forbid         atomic.Bool // every authenticated route answers 403 (a valid token, wrongly used)
+	retiredToken   string      // the device token revoke() swapped out, for restore() (under mu)
 	rejectRuns     map[string]string
 
 	// Start lease (ADR 0005): leaseMode selects the answer (leaseNotFound, the
@@ -108,6 +110,27 @@ func testPolicy() policy.Policy {
 
 func (f *fakeConsole) URL() string { return f.srv.URL }
 
+// revoke retires the device: its token no longer matches, so every
+// authenticated route answers 401 until restore.
+func (f *fakeConsole) revoke() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.retiredToken == "" {
+		f.retiredToken = f.deviceToken
+	}
+	f.deviceToken = "revoked-token-for-tests"
+}
+
+// restore puts the token revoke swapped out back (the console was restored, or
+// the device row re-created: the same token is valid again).
+func (f *fakeConsole) restore() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.retiredToken != "" {
+		f.deviceToken, f.retiredToken = f.retiredToken, ""
+	}
+}
+
 func (f *fakeConsole) setPolicy(p api.PolicyResponse) {
 	f.mu.Lock()
 	f.policy = p
@@ -144,6 +167,10 @@ func (f *fakeConsole) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 	if r.Header.Get("Authorization") != "Bearer "+tok || tok == "" {
 		f.problem(w, api.CodeUnauthorized)
+		return
+	}
+	if f.forbid.Load() {
+		f.problem(w, api.CodeForbidden)
 		return
 	}
 	switch {

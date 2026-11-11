@@ -18,8 +18,8 @@ const (
 // EventIDs are the Event Log ids the agent writes (internal/agent; README
 // "Event Log"): 1000 started, 1001 restic verification failed, 1002 policy
 // rejected, 1003 stopped, 1004 state directory refused, 1005 lab flag in use,
-// 1006 state directory tampered, 1007 quarantined, 1008 retired (kept so that
-// old events still render), 1009 service configuration repaired, 1010 backup
+// 1006 state directory tampered, 1007 quarantined, 1008 the console refuses the
+// device token (ADR 0018), 1009 service configuration repaired, 1010 backup
 // finished, 1011 backup failed, 1012 backup deferred. Each has the message
 // text "%1" (the agent's own line) in the message table compiled into
 // cryo-agent.exe (deploy/windows/eventlog/messages.mc), which the source names

@@ -167,7 +167,7 @@ Wrapper exit codes:
 | 1005 | warning | running with `--insecure-unprotected-state` (lab only) |
 | 1006 | error | a state directory's owner or DACL changed while the agent ran; backups stop |
 | 1007 | warning | `--repair-acl` quarantined an untrusted state directory and created a fresh one |
-| 1008 | | retired (kept in the table so old events still render) |
+| 1008 | error | the console refuses the device token after three heartbeats answered 401 (device retired or revoked, console restored, or wrong console); backups keep running on the last policy and the agent asks once an hour (ADR 0018) |
 | 1009 | warning | the service's own configuration had drifted and was re-applied |
 | 1010 | information | a backup finished (success or partial) |
 | 1011 | error | a backup failed, with its error class |
