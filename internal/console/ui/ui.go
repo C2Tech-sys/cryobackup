@@ -464,7 +464,7 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 // ---- static ----
 
 // fontURLRE matches the font file URLs inside fonts.css (New versions them).
-var fontURLRE = regexp.MustCompile(`/static/fonts/[A-Za-z0-9_./-]+\.woff2`)
+var fontURLRE = regexp.MustCompile(`/static/fonts/[A-Za-z0-9_./-]+\.woff2?`)
 
 func (s *Service) static(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("path")

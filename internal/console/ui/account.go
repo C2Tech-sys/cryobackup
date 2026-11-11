@@ -262,7 +262,9 @@ func profileNote(err error) (n Note, status int, ok bool) {
 	case errors.Is(err, auth.ErrBadUsername):
 		return Note{"crit", "Profile not saved.", "A username is 1 to 100 letters, digits, dots, dashes, underscores or @, and starts with a letter or digit."}, http.StatusBadRequest, true
 	case errors.Is(err, auth.ErrBadDisplayName):
-		return Note{"crit", "Profile not saved.", "A display name is at most 100 characters, with no line breaks or other control characters."}, http.StatusBadRequest, true
+		return Note{"crit", "Profile not saved.", "A display name is at most 100 characters, with no line breaks, control or invisible characters."}, http.StatusBadRequest, true
+	case errors.Is(err, auth.ErrDisplayNameTaken):
+		return Note{"crit", "Profile not saved.", "That display name is another account's username. Pick one that cannot be mistaken for them."}, http.StatusBadRequest, true
 	case errors.Is(err, store.ErrConflict):
 		return Note{"crit", "Profile not saved.", "That username is taken."}, http.StatusConflict, true
 	}

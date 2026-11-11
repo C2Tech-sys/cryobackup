@@ -287,7 +287,7 @@ func (s *Service) authFail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Problem(w, r, api.CodeForbidden, 0)
 	case errors.Is(err, auth.ErrNoEnrollment), errors.Is(err, auth.ErrAlreadyEnrolled), errors.Is(err, auth.ErrNotEnrolled), errors.Is(err, auth.ErrSelf):
 		httpx.Problem(w, r, api.CodeConflict, 0)
-	case errors.Is(err, auth.ErrPasswordPolicy), errors.Is(err, auth.ErrBadEmail), errors.Is(err, auth.ErrBadUsername), errors.Is(err, auth.ErrBadDisplayName), errors.Is(err, auth.ErrTokenInvalid), errors.Is(err, auth.ErrAccountInvalid):
+	case errors.Is(err, auth.ErrPasswordPolicy), errors.Is(err, auth.ErrBadEmail), errors.Is(err, auth.ErrBadUsername), errors.Is(err, auth.ErrBadDisplayName), errors.Is(err, auth.ErrDisplayNameTaken), errors.Is(err, auth.ErrTokenInvalid), errors.Is(err, auth.ErrAccountInvalid):
 		httpx.Problem(w, r, api.CodeInvalidRequest, 0)
 	case errors.Is(err, auth.ErrResetInvalid):
 		httpx.Problem(w, r, api.CodeNotFound, 0)

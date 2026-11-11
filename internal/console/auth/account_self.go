@@ -31,22 +31,27 @@ var (
 	ErrBadEmail = errors.New("auth: not an e-mail address")
 	// ErrBadUsername: a new username that does not match the username rule.
 	ErrBadUsername = errors.New("auth: the username may use letters, digits, dot, dash, underscore and @, 1 to 100 characters")
-	// ErrBadDisplayName: a display name that is too long or has control characters.
-	ErrBadDisplayName = errors.New("auth: the display name may be at most 100 characters and may not contain control characters")
+	// ErrBadDisplayName: a display name that is too long or has control, format or
+	// line-separator characters.
+	ErrBadDisplayName = errors.New("auth: the display name may be at most 100 characters and may not contain control or invisible characters")
+	// ErrDisplayNameTaken: the display name is another account's username.
+	ErrDisplayNameTaken = errors.New("auth: the display name is another account's username")
 )
 
 // maxDisplayNameRunes bounds a display name.
 const maxDisplayNameRunes = 100
 
 // validDisplayName reports whether s (already trimmed) is a usable display
-// name: empty (cleared), or at most 100 characters of valid UTF-8 without
-// control characters (newlines and tabs included).
+// name: empty (cleared), or at most 100 characters of valid UTF-8 with none of
+// the "other" classes (control, format, surrogate, private use: that keeps out
+// zero-width and bidi-override characters, which would let a name impersonate
+// another one on screen) and no line or paragraph separators.
 func validDisplayName(s string) bool {
 	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > maxDisplayNameRunes {
 		return false
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if unicode.In(r, unicode.C, unicode.Zl, unicode.Zp) {
 			return false
 		}
 	}
@@ -188,6 +193,17 @@ func (m *Manager) UpdateSelf(ctx context.Context, p *Principal, u SelfUpdate, me
 				newDisplay = display
 			}
 			nameChanged, displayChanged := newName != cur.Username, newDisplay != cur.DisplayName
+			if displayChanged && newDisplay != "" {
+				// A display name that is another account's username would read as
+				// that account in the shell. The account's own username is fine.
+				other, err := tx.GetAdminByUsername(newDisplay)
+				switch {
+				case err == nil && other.ID != id:
+					return ErrDisplayNameTaken
+				case err != nil && !errors.Is(err, store.ErrNotFound):
+					return err
+				}
+			}
 			if nameChanged || displayChanged {
 				if err := tx.UpdateAdminProfile(id, newName, newDisplay); err != nil {
 					return err

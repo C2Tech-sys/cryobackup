@@ -74,6 +74,9 @@ var orbitronRoles = map[string]bool{
 // OrbitronAudit fails if the display face is referenced anywhere but the five
 // .t-* roles (and the @font-face rule and the custom property definition), in
 // any stylesheet or template.
+// fontPreloadRE finds <link> tags; OrbitronAudit drops the font preloads among them.
+var fontPreloadRE = regexp.MustCompile(`<link[^>]*>`)
+
 func OrbitronAudit() Check {
 	c := Check{Name: "Orbitron audit", Pass: true}
 	for _, f := range cssFiles() {
@@ -119,16 +122,14 @@ func OrbitronAudit() Check {
 			continue
 		}
 		// A font preload (<link rel="preload" as="font">) names the file so the browser
-		// fetches it early; it is a fetch hint, not a use of the face, so those lines
-		// are left out of the scan.
-		var lines []string
-		for _, l := range strings.Split(strings.ToLower(string(b)), "\n") {
-			if strings.Contains(l, `rel="preload"`) && strings.Contains(l, `as="font"`) {
-				continue
+		// fetches it early: a fetch hint, not a use of the face. Only that tag is left
+		// out of the scan; the rest of its line is still checked.
+		t := fontPreloadRE.ReplaceAllStringFunc(strings.ToLower(string(b)), func(tag string) string {
+			if strings.Contains(tag, `rel="preload"`) && strings.Contains(tag, `as="font"`) {
+				return ""
 			}
-			lines = append(lines, l)
-		}
-		t := strings.Join(lines, "\n")
+			return tag
+		})
 		if strings.Contains(t, "orbitron") || strings.Contains(t, "font-display") {
 			c.Details = append(c.Details, f+": references the display face")
 		}
