@@ -647,7 +647,7 @@ func (a *Agent) uploadSnapshots(ctx context.Context, backupSpec supervisor.Spec)
 		return
 	}
 	if _, err := a.up.UploadSnapshots(ctx, req); err != nil {
-		a.uplinkFailed()
+		a.uplinkFailed(err)
 		a.log.Warn("snapshot list upload failed", "err", err.Error())
 		return
 	}

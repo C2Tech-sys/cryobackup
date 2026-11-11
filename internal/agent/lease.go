@@ -129,7 +129,7 @@ func (a *Agent) acquireLease(ctx, jctx context.Context, rec *api.RunRecord) (api
 		}
 		return api.LeaseGranted, leaseStart
 	}
-	a.uplinkFailed()
+	a.uplinkFailed(err)
 	if failOpen(err) {
 		a.log.Warn("start lease not available; starting without it (fail open, ADR 0005)", "run", rec.ID, "err", err.Error())
 		a.setLeaseWait(time.Time{}, false)

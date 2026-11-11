@@ -2,6 +2,8 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/agent/internal/fakerestic"
+	"github.com/c2tech-sys/cryobackup/internal/agent/uplink"
 	"github.com/c2tech-sys/cryobackup/internal/api"
 )
 
@@ -304,5 +307,35 @@ func TestKickRespectsHeartbeatMinGap(t *testing.T) {
 	time.Sleep(3 * gap / 2) // a second gap passes: the two kicks were one heartbeat
 	if n := g.count("heartbeat", true); n != 2 {
 		t.Errorf("%d heartbeats, want 2 (the first and one for both kicks)", n)
+	}
+}
+
+// Only an outage marks the console down: a transport or TLS failure, a 5xx or
+// a 429. A 4xx (a lease route the console does not have, a refused request) or
+// an answer the agent itself rejects proves the console is up, so it must not
+// make the next success read as "console reachable again".
+func TestOnlyOutageErrorsMarkTheConsoleDown(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"network", &uplink.Error{Network: true}, true},
+		{"tls", &uplink.Error{TLS: true}, true},
+		{"503", &uplink.Error{Status: 503, Code: api.CodeUnavailable}, true},
+		{"500", &uplink.Error{Status: 500, Code: api.CodeInternal}, true},
+		{"429", &uplink.Error{Status: 429, Code: api.CodeRateLimited}, true},
+		{"wrapped 503", fmt.Errorf("start lease: %w", &uplink.Error{Status: 503}), true},
+		{"404 (no such route)", &uplink.Error{Status: 404, Code: api.CodeNotFound}, false},
+		{"401", &uplink.Error{Status: 401, Code: api.CodeUnauthorized}, false},
+		{"403", &uplink.Error{Status: 403, Code: api.CodeForbidden}, false},
+		{"409", &uplink.Error{Status: 409, Code: api.CodeConflict}, false},
+		{"a body the agent rejects", errors.New("policy does not validate"), false},
+		{"nil", nil, false},
+	}
+	for _, c := range cases {
+		if got := outageError(c.err); got != c.want {
+			t.Errorf("%s: outageError = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

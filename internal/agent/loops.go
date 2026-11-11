@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand/v2"
+	"net/http"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/agent/commands"
@@ -145,7 +146,7 @@ func (a *Agent) policyLoop(ctx context.Context) {
 		err := a.pullPolicy(ctx)
 		if err != nil {
 			wait = bo.Delay(err)
-			a.uplinkFailed()
+			a.uplinkFailed(err)
 			a.log.Warn("policy pull failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
@@ -351,7 +352,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		err := a.sendHeartbeat(ctx)
 		if err != nil {
 			wait = bo.Delay(err)
-			a.uplinkFailed()
+			a.uplinkFailed(err)
 			a.log.Warn("heartbeat failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
@@ -447,7 +448,7 @@ func (a *Agent) outboxLoop(ctx context.Context) {
 		err := a.deliverOutbox(ctx)
 		if err != nil {
 			wait = bo.Delay(err)
-			a.uplinkFailed()
+			a.uplinkFailed(err)
 			a.log.Warn("run upload failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
@@ -526,7 +527,7 @@ func (a *Agent) commandsLoop(ctx context.Context) {
 		wait = 0
 		if err := a.postResults(ctx); err != nil {
 			wait = bo.Delay(err)
-			a.uplinkFailed()
+			a.uplinkFailed(err)
 			a.log.Warn("command result post failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
@@ -540,7 +541,7 @@ func (a *Agent) commandsLoop(ctx context.Context) {
 				return
 			}
 			wait = bo.Delay(err)
-			a.uplinkFailed()
+			a.uplinkFailed(err)
 			a.log.Warn("command poll failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
@@ -630,12 +631,29 @@ const (
 	callSnapshots = "snapshots"
 )
 
-// uplinkFailed notes that an uplink call failed, so the next success is a
-// recovery worth one log line (consoleBack).
-func (a *Agent) uplinkFailed() {
+// uplinkFailed notes that an uplink call failed because the console could not
+// be reached or could not answer, so the next success is a recovery worth one
+// log line (consoleBack). Only an outage counts: a 4xx, or an answer whose body
+// does not validate, proves the console is up (a lease route the console does
+// not have, a policy the agent rejects), and must not make the next success
+// read as "reachable again".
+func (a *Agent) uplinkFailed(err error) {
+	if !outageError(err) {
+		return
+	}
 	a.mu.Lock()
 	a.consoleDown = true
 	a.mu.Unlock()
+}
+
+// outageError reports whether err says the console was unreachable or unable
+// to answer: a transport or TLS failure, a 5xx, or a 429.
+func outageError(err error) bool {
+	var ue *uplink.Error
+	if !errors.As(err, &ue) {
+		return false
+	}
+	return ue.Network || ue.TLS || ue.Status >= 500 || ue.Status == http.StatusTooManyRequests
 }
 
 // consoleWasDown reports whether an uplink call failed since the last
