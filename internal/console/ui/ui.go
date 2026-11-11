@@ -336,12 +336,22 @@ func (s *Service) stamp(ctx context.Context, f health.Fleet) Stamp {
 	return st
 }
 
+// userView is the signed-in account as the shell shows it (the sidebar "who"
+// line and the account menu): the display name when one is set, else the username.
+func userView(p *auth.Principal) *UserView {
+	name := p.Admin.DisplayName
+	if name == "" {
+		name = p.Admin.Username
+	}
+	return &UserView{Username: p.Admin.Username, Name: name, Role: p.Role.String()}
+}
+
 // page builds the shell data shared by every authenticated page.
 // The zone, the stamp and the refresh interval all come from the request's one
 // display snapshot (M2-W3E).
 func (s *Service) page(ctx context.Context, p *auth.Principal, f health.Fleet, title, nav, events string) Page {
 	d := s.displayOf(ctx)
-	return Page{Title: title, Nav: nav, User: &UserView{Username: p.Admin.Username, Role: p.Role.String()}, CSRF: p.CSRF,
+	return Page{Title: title, Nav: nav, User: userView(p), CSRF: p.CSRF,
 		Banners: buildBannersIn(f, false, d.Loc).forRole(p.Role), Stamp: s.stamp(ctx, f), Refresh: d.RefreshS, Events: events, Fixtures: s.Fixtures, Sys: s.sysItems(f), Zone: d.Zone}
 }
 
@@ -571,7 +581,7 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) fallbackPage(ctx context.Context, p *auth.Principal) Page {
 	d := s.displayOf(ctx)
-	return Page{Title: "Fleet unavailable", Nav: "fleet", User: &UserView{Username: p.Admin.Username, Role: p.Role.String()}, CSRF: p.CSRF,
+	return Page{Title: "Fleet unavailable", Nav: "fleet", User: userView(p), CSRF: p.CSRF,
 		Stamp: Stamp{State: "unreachable", At: "--:--:--", Zone: d.Zone}, Refresh: d.RefreshS, Events: "/ui/events", Fixtures: s.Fixtures, Sys: s.sysItems(health.Fleet{}), Zone: d.Zone}
 }
 

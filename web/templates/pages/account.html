@@ -3,8 +3,8 @@
      nowhere else. Every form posts to /ui/account/* and returns here. */}}
 {{define "content"}}
 <div class="page-head">
-  <div class="t"><h2>{{.Me.Username}}</h2><span class="st sm info"><i aria-hidden="true"></i>{{upper .Me.Role}}</span></div>
-  <div class="sub"><span>{{.Me.Scope}}</span><span>Last sign-in {{template "acct_when" .Me.LastLogin}}</span></div>
+  <div class="t"><h2>{{if .Me.DisplayName}}{{.Me.DisplayName}}{{else}}{{.Me.Username}}{{end}}</h2><span class="st sm info"><i aria-hidden="true"></i>{{upper .Me.Role}}</span></div>
+  <div class="sub">{{if .Me.DisplayName}}<span>{{.Me.Username}}</span>{{end}}<span>{{.Me.Scope}}</span><span>Last sign-in {{template "acct_when" .Me.LastLogin}}</span></div>
 </div>
 {{template "acct_note" .Notice}}
 {{if .Me.MustChange}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Your password was set by someone else.</b> Change it below so only you know it.</div></div>{{end}}
@@ -76,7 +76,16 @@
 
   <section class="card" aria-labelledby="prof-h">
     <h3 id="prof-h">Profile</h3>
-    <dl class="kv"><dt>Username</dt><dd>{{.Me.Username}}</dd><dt>Role</dt><dd>{{.Me.Role}}</dd><dt>Customers</dt><dd>{{.Me.Scope}}</dd></dl>
+    <dl class="kv"><dt>Role</dt><dd>{{.Me.Role}}</dd><dt>Customers</dt><dd>{{.Me.Scope}}</dd></dl>
+    {{template "acct_note" (index .Errs "profile")}}
+    <form method="post" action="/ui/account/profile" class="stack mt">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div class="frow">
+        <div class="field"><label for="prof-user">Username</label><input class="input" id="prof-user" name="username" type="text" value="{{.Profile.Username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="100"><span class="help">Letters, digits, dot, dash, underscore and @. You sign in with this; your current sessions stay signed in.</span></div>
+        <div class="field"><label for="prof-name">Display name</label><input class="input" id="prof-name" name="display_name" type="text" value="{{.Profile.DisplayName}}" autocomplete="nickname" maxlength="100"><span class="help">Shown in the console instead of your username. Leave empty to show the username.</span></div>
+      </div>
+      <div class="actions"><button class="btn primary" type="submit">Save profile</button></div>
+    </form>
     {{template "acct_note" (index .Errs "email")}}
     <form method="post" action="/ui/account/email" class="inline-form mt">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">

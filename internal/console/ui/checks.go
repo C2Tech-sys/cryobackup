@@ -118,7 +118,17 @@ func OrbitronAudit() Check {
 		if err != nil {
 			continue
 		}
-		t := strings.ToLower(string(b))
+		// A font preload (<link rel="preload" as="font">) names the file so the browser
+		// fetches it early; it is a fetch hint, not a use of the face, so those lines
+		// are left out of the scan.
+		var lines []string
+		for _, l := range strings.Split(strings.ToLower(string(b)), "\n") {
+			if strings.Contains(l, `rel="preload"`) && strings.Contains(l, `as="font"`) {
+				continue
+			}
+			lines = append(lines, l)
+		}
+		t := strings.Join(lines, "\n")
 		if strings.Contains(t, "orbitron") || strings.Contains(t, "font-display") {
 			c.Details = append(c.Details, f+": references the display face")
 		}

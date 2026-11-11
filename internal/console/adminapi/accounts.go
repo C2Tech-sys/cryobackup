@@ -108,6 +108,7 @@ type CodeRequest struct {
 type MeJSON struct {
 	ID                 string     `json:"id"`
 	Username           string     `json:"username"`
+	DisplayName        string     `json:"display_name,omitempty"`
 	Email              string     `json:"email"`
 	Role               string     `json:"role"`
 	EffectiveRole      string     `json:"effective_role"`
@@ -122,12 +123,15 @@ type MeJSON struct {
 	ComputedAt         time.Time  `json:"computed_at"`
 }
 
-// PatchMeRequest is PATCH /api/v1/me: a new e-mail, a new password (with the
-// current one), or both.
+// PatchMeRequest is PATCH /api/v1/me: any of a new e-mail, a new password (with
+// the current one), a new username and a display name (an empty string clears
+// it). A field that is absent or null is left alone.
 type PatchMeRequest struct {
 	Email           *string `json:"email,omitempty"`
 	CurrentPassword string  `json:"current_password,omitempty"`
 	NewPassword     *string `json:"new_password,omitempty"`
+	Username        *string `json:"username,omitempty"`
+	DisplayName     *string `json:"display_name,omitempty"`
 }
 
 // TOTPBeginResponse is POST /api/v1/me/totp/begin. The secret and the URI are
@@ -283,7 +287,7 @@ func (s *Service) authFail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Problem(w, r, api.CodeForbidden, 0)
 	case errors.Is(err, auth.ErrNoEnrollment), errors.Is(err, auth.ErrAlreadyEnrolled), errors.Is(err, auth.ErrNotEnrolled), errors.Is(err, auth.ErrSelf):
 		httpx.Problem(w, r, api.CodeConflict, 0)
-	case errors.Is(err, auth.ErrPasswordPolicy), errors.Is(err, auth.ErrBadEmail), errors.Is(err, auth.ErrTokenInvalid), errors.Is(err, auth.ErrAccountInvalid):
+	case errors.Is(err, auth.ErrPasswordPolicy), errors.Is(err, auth.ErrBadEmail), errors.Is(err, auth.ErrBadUsername), errors.Is(err, auth.ErrBadDisplayName), errors.Is(err, auth.ErrTokenInvalid), errors.Is(err, auth.ErrAccountInvalid):
 		httpx.Problem(w, r, api.CodeInvalidRequest, 0)
 	case errors.Is(err, auth.ErrResetInvalid):
 		httpx.Problem(w, r, api.CodeNotFound, 0)
@@ -381,7 +385,7 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, MeJSON{ID: a.ID, Username: a.Username, Email: a.Email, Role: a.Role, EffectiveRole: p.Role.String(),
+	httpx.WriteJSON(w, http.StatusOK, MeJSON{ID: a.ID, Username: a.Username, DisplayName: a.DisplayName, Email: a.Email, Role: a.Role, EffectiveRole: p.Role.String(),
 		CustomerScope: a.CustomerScope, TOTPEnrolled: st.Enrolled, TOTPEnrolledAt: st.EnrolledAt, RecoveryCodesLeft: st.RecoveryLeft,
 		MustChangePassword: a.MustChangePassword, LastLoginAt: a.LastLoginAt, ViaToken: p.ViaToken(), TokenName: p.TokenName, ComputedAt: s.now()})
 }
@@ -391,13 +395,24 @@ func (s *Service) patchMe(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req, false) {
 		return
 	}
-	if req.Email == nil && req.NewPassword == nil {
+	if req.Email == nil && req.NewPassword == nil && req.Username == nil && req.DisplayName == nil {
 		httpx.Problem(w, r, api.CodeInvalidRequest, 0)
 		return
 	}
 	// All or nothing: auth validates every field before one transaction applies them.
 	if err := s.Auth.UpdateSelf(r.Context(), principalOf(r), auth.SelfUpdate{CurrentPassword: req.CurrentPassword, NewPassword: req.NewPassword,
-		Email: req.Email}, "api", clientIP(r)); err != nil {
+		Email: req.Email, Username: req.Username, DisplayName: req.DisplayName}, "api", clientIP(r)); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			// The only unique field UpdateSelf writes is the username (case-insensitive).
+			e := api.NewError(api.CodeConflict)
+			e.RequestID = httpx.RequestID(r.Context())
+			h := w.Header()
+			h.Set("Content-Type", api.ContentTypeProblem)
+			h.Set("Cache-Control", "no-store")
+			w.WriteHeader(e.Status)
+			_ = json.NewEncoder(w).Encode(conflictProblem{Error: e, Errors: []store.FieldError{{Field: "username", Message: "That username is taken."}}})
+			return
+		}
 		s.authFail(w, r, err)
 		return
 	}

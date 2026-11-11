@@ -320,6 +320,15 @@ func uiMutationCases() map[string]uiMutation {
 				}
 			},
 		},
+		"POST /ui/account/profile": {
+			audits: 2, // a new username and a new display name: one row each
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				return func() (*http.Response, string) {
+					return e.post("/ui/account/profile", vals("username", "owner.renamed", "display_name", "Owner Renamed"), false)
+				}
+			},
+		},
 		"POST /ui/account/password": {
 			build: func(e *env) func() (*http.Response, string) {
 				e.login()

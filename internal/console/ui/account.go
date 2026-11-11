@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"html/template"
 	"net/http"
 	"strconv"
@@ -37,7 +38,8 @@ type AccountPage struct {
 	Sessions  []SessionRow
 	Tokens    []TokenRow
 	Notice    *Note
-	Errs      map[string]*Note // per form: password, email, totp, codes, token
+	Errs      map[string]*Note // per form: password, email, profile, totp, codes, token
+	Profile   ProfileForm
 	Lifetimes []int
 	TokenForm TokenForm
 	MasterOK  bool
@@ -45,11 +47,17 @@ type AccountPage struct {
 	TokErr    bool
 }
 
-// AccountMe is the profile card.
+// AccountMe is the profile card. DisplayName is "" when none is set.
 type AccountMe struct {
-	Username, Email, Role, Scope string
-	LastLogin                    When
-	MustChange                   bool
+	Username, DisplayName, Email, Role, Scope string
+	LastLogin                                 When
+	MustChange                                bool
+}
+
+// ProfileForm is what the username and display-name inputs hold: the stored
+// values, or what was typed when a post failed.
+type ProfileForm struct {
+	Username, DisplayName string
 }
 
 // AccountMFA is the authenticator card.
@@ -145,6 +153,7 @@ func (s *Service) customerNames(r *http.Request, p *auth.Principal) map[string]s
 var accountNotices = map[string]Note{
 	"password":       {"ok", "Password changed.", "Your other sessions were signed out and your API tokens were revoked; this session stays."},
 	"email":          {"ok", "E-mail changed.", ""},
+	"profile":        {"ok", "Profile saved.", ""},
 	"session":        {"ok", "Session signed out.", "It ends on its next request."},
 	"token_revoked":  {"ok", "Token revoked.", "It stopped working at once."},
 	"recovery_login": {"warn", "You signed in with a recovery code.", "That code is used up. If your authenticator is lost, replace it below; if codes are running low, regenerate them."},
@@ -166,8 +175,9 @@ func (s *Service) accountData(r *http.Request, p *auth.Principal) (AccountPage, 
 	if err != nil {
 		return d, false
 	}
-	d.Me = AccountMe{Username: a.Username, Email: a.Email, Role: roleLabel(a.Role), Scope: scopeLabel(a.CustomerScope, s.customerNames(r, p)),
+	d.Me = AccountMe{Username: a.Username, DisplayName: a.DisplayName, Email: a.Email, Role: roleLabel(a.Role), Scope: scopeLabel(a.CustomerScope, s.customerNames(r, p)),
 		LastLogin: s.when(r.Context(), a.LastLoginAt), MustChange: a.MustChangePassword}
+	d.Profile = ProfileForm{Username: a.Username, DisplayName: a.DisplayName}
 	if st, err := s.Auth.MFAStatusOf(r.Context(), a.ID); err == nil {
 		d.MFA = AccountMFA{Enrolled: st.Enrolled, Since: s.when(r.Context(), st.EnrolledAt), Left: st.RecoveryLeft, Total: st.RecoveryTotal, Low: st.Enrolled && st.RecoveryLeft <= 3}
 	} else {
@@ -243,11 +253,37 @@ func (s *Service) accountPage(w http.ResponseWriter, r *http.Request) {
 	s.renderAccount(w, r, http.StatusOK, nil)
 }
 
+// profileNote words the errors the profile form can add to the shared ones in
+// authNote, with the status each answers with. The username conflict says
+// "taken" (authNote's conflict sentence covers token names and disabled
+// accounts too). ok is false for any other error.
+func profileNote(err error) (n Note, status int, ok bool) {
+	switch {
+	case errors.Is(err, auth.ErrBadUsername):
+		return Note{"crit", "Profile not saved.", "A username is 1 to 100 letters, digits, dots, dashes, underscores or @, and starts with a letter or digit."}, http.StatusBadRequest, true
+	case errors.Is(err, auth.ErrBadDisplayName):
+		return Note{"crit", "Profile not saved.", "A display name is at most 100 characters, with no line breaks or other control characters."}, http.StatusBadRequest, true
+	case errors.Is(err, store.ErrConflict):
+		return Note{"crit", "Profile not saved.", "That username is taken."}, http.StatusConflict, true
+	}
+	return Note{}, 0, false
+}
+
 // formErr re-renders /account with a form's error banner.
 func (s *Service) formErr(w http.ResponseWriter, r *http.Request, form string, err error, keep func(*AccountPage)) {
-	s.logUnexpected("account "+form, err)
-	n := authNote(err)
-	s.renderAccount(w, r, noteStatus(err), func(d *AccountPage) {
+	n, status := authNote(err), noteStatus(err)
+	handled := false
+	if form == "profile" {
+		var pn Note
+		var ps int
+		if pn, ps, handled = profileNote(err); handled {
+			n, status = pn, ps
+		}
+	}
+	if !handled {
+		s.logUnexpected("account "+form, err) // a refused input is not an incident; a 500 is
+	}
+	s.renderAccount(w, r, status, func(d *AccountPage) {
 		d.Errs[form] = &n
 		if keep != nil {
 			keep(d)
@@ -277,6 +313,17 @@ func (s *Service) accountEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/account?done=email", http.StatusSeeOther)
+}
+
+// accountProfile sets the account's own username and display name. Sessions
+// and API tokens stay: they belong to the account, not to its name.
+func (s *Service) accountProfile(w http.ResponseWriter, r *http.Request) {
+	username, display := r.PostFormValue("username"), r.PostFormValue("display_name")
+	if err := s.Auth.ChangeProfile(r.Context(), principal(r), username, display, "web", httpx.ClientIP(r)); err != nil {
+		s.formErr(w, r, "profile", err, func(d *AccountPage) { d.Profile = ProfileForm{Username: username, DisplayName: display} })
+		return
+	}
+	http.Redirect(w, r, "/account?done=profile", http.StatusSeeOther)
 }
 
 // accountTOTPBegin shows the enrollment card (a new authenticator for an

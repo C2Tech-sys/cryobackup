@@ -57,7 +57,7 @@
       <button type="button" data-theme-set="system" aria-pressed="true">System</button><button type="button" data-theme-set="dark" aria-pressed="false">Dark</button><button type="button" data-theme-set="light" aria-pressed="false">Light</button>
     </div></div>
     {{if .User}}
-    <div class="who"><svg aria-hidden="true" width="16" height="16"><use href="#i-user"/></svg><span title="{{.User.Role}}">{{.User.Username}} · {{.User.Role}}</span>
+    <div class="who"><svg aria-hidden="true" width="16" height="16"><use href="#i-user"/></svg><span title="{{.User.Role}}">{{.User.Name}} · {{.User.Role}}</span>
       <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="iconbtn sm" type="submit" aria-label="Sign out {{.User.Username}}" title="Sign out"><svg aria-hidden="true"><use href="#i-out"/></svg></button></form>
     </div>
     {{end}}
@@ -69,7 +69,7 @@
       <h1 class="t-page-title" title="{{.Title}}">{{.Title}}</h1>
       {{if .Stamp.At}}{{template "stamp" .Stamp}}{{end}}
       {{if .User}}<details class="usermenu">{{/* M2-W1A: user menu (components 2.10 "user menu", disclosure pattern; no script) */}}
-        <summary class="btn ghost" aria-label="Account menu for {{.User.Username}}"><svg width="16" height="16" aria-hidden="true"><use href="#i-user"/></svg><span class="um-name">{{.User.Username}}</span></summary>
+        <summary class="btn ghost" aria-label="Account menu for {{.User.Username}}"><svg width="16" height="16" aria-hidden="true"><use href="#i-user"/></svg><span class="um-name">{{.User.Name}}</span></summary>
         <nav class="um-pop" aria-label="Account"><ul>
           <li><a href="/account"{{if eq .Nav "account"}} aria-current="page"{{end}}>My account</a></li>
           {{if or (eq .User.Role "admin") (eq .User.Role "owner")}}<li><a href="/settings/accounts"{{if eq .Nav "accounts"}} aria-current="page"{{end}}>Accounts and roles</a></li>{{end}}

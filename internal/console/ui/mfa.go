@@ -37,6 +37,7 @@ func (s *Service) registerAccounts(r httpx.Registrar, self, ad, ow func(http.Han
 	r.Handle("GET /account", self(s.accountPage))
 	r.Handle("POST /ui/account/password", self(s.accountPassword))
 	r.Handle("POST /ui/account/email", self(s.accountEmail))
+	r.Handle("POST /ui/account/profile", self(s.accountProfile))
 	r.Handle("POST /ui/account/totp", self(s.accountTOTPBegin))
 	r.Handle("POST /ui/account/totp/confirm", self(s.accountTOTPConfirm))
 	r.Handle("POST /ui/account/recovery-codes", self(s.accountRecoveryCodes))
@@ -61,7 +62,7 @@ func AccountUIRoutes() map[string]string {
 		"GET /login/mfa": "PENDING", "POST /login/mfa": "PENDING", "POST /login/mfa/recovery": "PENDING",
 		"POST /login/mfa/enroll": "PENDING", "POST /login/mfa/cancel": "PENDING",
 		"GET /login/reset": "ANON", "POST /login/reset": "ANON",
-		"GET /account": "SELF", "POST /ui/account/password": "SELF", "POST /ui/account/email": "SELF", "POST /ui/account/totp": "SELF",
+		"GET /account": "SELF", "POST /ui/account/password": "SELF", "POST /ui/account/email": "SELF", "POST /ui/account/profile": "SELF", "POST /ui/account/totp": "SELF",
 		"POST /ui/account/totp/confirm": "SELF", "POST /ui/account/recovery-codes": "SELF", "POST /ui/account/sessions/{id}/revoke": "SELF",
 		"POST /ui/account/tokens": "SELF", "POST /ui/account/tokens/{id}/revoke": "SELF",
 		"GET /settings/accounts": "AD",

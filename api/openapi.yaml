@@ -2252,6 +2252,7 @@ components:
       properties:
         id: {type: string}
         username: {type: string}
+        display_name: {type: string, description: Shown in the console instead of the username; absent when none is set.}
         email: {type: string}
         role: {type: string}
         effective_role: {type: string, description: The role after an API token's scope is applied.}
@@ -2271,6 +2272,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        username: {type: string, description: 'Letters, digits, dot, dash, underscore and @ (1 to 100 characters); a taken name is 409. Sessions and tokens stay valid.'}
+        display_name: {type: string, description: 'At most 100 characters; an empty string clears it.'}
         email: {type: string}
         current_password: {type: string, format: password}
         new_password: {type: string, format: password}

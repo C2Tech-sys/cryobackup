@@ -13,9 +13,11 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
-// UserView is the signed-in admin in the sidebar.
+// UserView is the signed-in admin in the sidebar. Name is what the shell shows
+// for the person: the display name when one is set, else the username.
 type UserView struct {
 	Username string
+	Name     string
 	Role     string
 }
 

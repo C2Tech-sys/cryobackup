@@ -94,6 +94,22 @@ func (tx *Tx) UpdateAdminEmail(id, email string) error {
 	return requireRow(res)
 }
 
+// UpdateAdminProfile sets the username and display name of an account. The
+// username is required and unique ignoring case; a collision is ErrConflict,
+// raised by the constraint (nothing pre-checks it). An empty displayName
+// stores NULL.
+func (tx *Tx) UpdateAdminProfile(id, username, displayName string) error {
+	if username == "" {
+		return invalidf("username is required")
+	}
+	res, err := tx.Exec(`UPDATE admin_users SET username = ?, display_name = ?, updated_at = ? WHERE id = ?`,
+		username, nullStr(displayName), tx.nowMS(), id)
+	if err != nil {
+		return err
+	}
+	return requireRow(res)
+}
+
 // DisableAdmin disables an account, deletes its sessions and revokes its API
 // tokens. Disabling a disabled account keeps its original disabled_at.
 // Disabling the last enabled owner is ErrLastOwner.

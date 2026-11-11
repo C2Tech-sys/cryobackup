@@ -33,6 +33,7 @@ type AccountsPage struct {
 // AccountRow is one account in the table.
 type AccountRow struct {
 	ID, Username, Email, Role, RoleLabel, Scope string
+	DisplayName                                 string // shown under the username when set
 	MFA                                         StateWord
 	State                                       StateWord
 	LastLogin                                   When
@@ -108,7 +109,7 @@ func (s *Service) accountsData(r *http.Request, p *auth.Principal) AccountsPage 
 	}
 	now := s.now()
 	for _, a := range as {
-		row := AccountRow{ID: a.ID, Username: a.Username, Email: a.Email, Role: a.Role, RoleLabel: roleLabel(a.Role), Scope: scopeLabel(a.CustomerScope, names),
+		row := AccountRow{ID: a.ID, Username: a.Username, DisplayName: a.DisplayName, Email: a.Email, Role: a.Role, RoleLabel: roleLabel(a.Role), Scope: scopeLabel(a.CustomerScope, names),
 			LastLogin: s.when(r.Context(), a.LastLoginAt), Self: a.ID == p.Admin.ID, Disabled: a.DisabledAt != nil, Scoped: a.CustomerScope != nil, Roles: roleOpts(a.Role)}
 		row.MFA = StateWord{"warn", "NOT SET UP"}
 		if a.TOTPEnrolledAt != nil {

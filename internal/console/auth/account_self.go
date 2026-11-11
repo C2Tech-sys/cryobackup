@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/mail"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
@@ -28,7 +29,29 @@ var (
 	ErrBadPassword = errors.New("auth: the current password is not correct")
 	// ErrBadEmail: not an e-mail address.
 	ErrBadEmail = errors.New("auth: not an e-mail address")
+	// ErrBadUsername: a new username that does not match the username rule.
+	ErrBadUsername = errors.New("auth: the username may use letters, digits, dot, dash, underscore and @, 1 to 100 characters")
+	// ErrBadDisplayName: a display name that is too long or has control characters.
+	ErrBadDisplayName = errors.New("auth: the display name may be at most 100 characters and may not contain control characters")
 )
+
+// maxDisplayNameRunes bounds a display name.
+const maxDisplayNameRunes = 100
+
+// validDisplayName reports whether s (already trimmed) is a usable display
+// name: empty (cleared), or at most 100 characters of valid UTF-8 without
+// control characters (newlines and tabs included).
+func validDisplayName(s string) bool {
+	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > maxDisplayNameRunes {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
 
 // ValidatePassword applies the password policy.
 func ValidatePassword(pw string) error {
@@ -45,19 +68,25 @@ func ValidEmail(s string) bool {
 }
 
 // SelfUpdate is a change to the principal's own account: a new password
-// (with the current one) and/or a new e-mail. nil leaves a field alone.
+// (with the current one), a new e-mail, a new username and/or a display name
+// (an empty one clears it). nil leaves a field alone.
 type SelfUpdate struct {
 	CurrentPassword string
 	NewPassword     *string
 	Email           *string
+	Username        *string
+	DisplayName     *string
 }
 
 // UpdateSelf applies a SelfUpdate all or nothing (PATCH /api/v1/me): every
-// field is validated first (e-mail format, password policy, then the current
-// password, where a wrong one counts as a failed login: audit row, failure
-// counter, lockout); only then does one transaction apply them. A new password
-// ends every other session of the account and revokes all its API tokens; the
-// current session stays. Each change writes its own audit row.
+// field is validated first (e-mail format, username rule, display name, password
+// policy, then the current password, where a wrong one counts as a failed
+// login: audit row, failure counter, lockout); only then does one transaction
+// apply them. A new password ends every other session of the account and
+// revokes all its API tokens; the current session stays. A new username ends
+// nothing: sessions and tokens are keyed by the account id, and the old name
+// simply stops signing in. A username already taken (ignoring case) is
+// store.ErrConflict. Each change writes its own audit row.
 func (m *Manager) UpdateSelf(ctx context.Context, p *Principal, u SelfUpdate, method, ip string) error {
 	if p == nil || p.Pending {
 		return ErrNoSession
@@ -65,7 +94,7 @@ func (m *Manager) UpdateSelf(ctx context.Context, p *Principal, u SelfUpdate, me
 	if p.ViaToken() {
 		return ErrSessionRequired
 	}
-	if u.NewPassword == nil && u.Email == nil {
+	if u.NewPassword == nil && u.Email == nil && u.Username == nil && u.DisplayName == nil {
 		return nil
 	}
 	email := ""
@@ -73,6 +102,19 @@ func (m *Manager) UpdateSelf(ctx context.Context, p *Principal, u SelfUpdate, me
 		email = strings.TrimSpace(*u.Email)
 		if !ValidEmail(email) {
 			return ErrBadEmail
+		}
+	}
+	username, display := "", ""
+	if u.Username != nil {
+		username = strings.TrimSpace(*u.Username)
+		if !usernameRE.MatchString(username) {
+			return ErrBadUsername
+		}
+	}
+	if u.DisplayName != nil {
+		display = strings.TrimSpace(*u.DisplayName)
+		if !validDisplayName(display) {
+			return ErrBadDisplayName
 		}
 	}
 	hash := ""
@@ -132,6 +174,38 @@ func (m *Manager) UpdateSelf(ctx context.Context, p *Principal, u SelfUpdate, me
 				return err
 			}
 		}
+		if u.Username != nil || u.DisplayName != nil {
+			// An unset field keeps the stored value, read inside this transaction.
+			cur, err := tx.GetAdmin(id)
+			if err != nil {
+				return err
+			}
+			newName, newDisplay := cur.Username, cur.DisplayName
+			if u.Username != nil {
+				newName = username
+			}
+			if u.DisplayName != nil {
+				newDisplay = display
+			}
+			nameChanged, displayChanged := newName != cur.Username, newDisplay != cur.DisplayName
+			if nameChanged || displayChanged {
+				if err := tx.UpdateAdminProfile(id, newName, newDisplay); err != nil {
+					return err
+				}
+			}
+			// Usernames are not PHI; the display name's text is kept out of the
+			// audit row all the same (it only says whether one is set).
+			if nameChanged {
+				if err := auditTx(tx, ActorOf(p, method, ip), "admin.username_change", "admin", id, "ok", "info", map[string]any{"from": cur.Username, "to": newName}); err != nil {
+					return err
+				}
+			}
+			if displayChanged {
+				if err := auditTx(tx, ActorOf(p, method, ip), "admin.display_name_change", "admin", id, "ok", "info", map[string]any{"set": newDisplay != ""}); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	})
 }
@@ -146,6 +220,12 @@ func (m *Manager) ChangePassword(ctx context.Context, p *Principal, current, nex
 // e-mail only).
 func (m *Manager) ChangeEmail(ctx context.Context, p *Principal, email, method, ip string) error {
 	return m.UpdateSelf(ctx, p, SelfUpdate{Email: &email}, method, ip)
+}
+
+// ChangeProfile sets the principal's own username and display name
+// (UpdateSelf with those two only; an empty display name clears it).
+func (m *Manager) ChangeProfile(ctx context.Context, p *Principal, username, displayName, method, ip string) error {
+	return m.UpdateSelf(ctx, p, SelfUpdate{Username: &username, DisplayName: &displayName}, method, ip)
 }
 
 // ListSessions lists the account's signed-in sessions.
