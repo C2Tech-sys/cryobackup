@@ -8,7 +8,7 @@ the operator's concrete addresses live outside the repository. Times are UTC unl
 
 | component | version | where |
 | --- | --- | --- |
-| console | 0.3.0-rc1 (16a6331), upgraded from 0.2.1 (7a2e3bc) with `deploy/systemd/cryo-upgrade.sh`; then 0.3.0-rc2 (e008f3b, the day-2 fixes) on day 2 at 21:46Z the same way | console host |
+| console | 0.3.0-rc1 (16a6331), upgraded from 0.2.1 (7a2e3bc) with `deploy/systemd/cryo-upgrade.sh`; then 0.3.0-rc2 (e008f3b, the day-2 fixes) on day 2 at 21:46Z the same way; then 0.3.0-rc3 (7c3d34e, the login wordmark fix and self-service username/display name) on day 3 at 15:07Z the same way | console host |
 | database | schema 4 -> 6 at the upgrade; `quick_check` and `integrity_check` ok before and after | console host |
 | agent MSI | 0.2.1 (tag v0.2.1), signed | lab VMs, operator's lab desktop |
 | restic | 0.19.1, unsigned, byte-identical to upstream | bundled in the MSI |
@@ -77,13 +77,16 @@ must not keep a fleet away for half an hour after the console is back. Both are 
   the last real result, ageing into C02b) is as designed.
 - **M3-L8** (polish): a clean stop writes no console log line of its own; only systemd's "Deactivated
   successfully" says it stopped. One line at shutdown (what was drained, how long it took) would help.
+  Done in rc2 and seen live when rc3 replaced it: "the console has stopped", took_ms 5.
 - **M3-L9** (design note): after a 20-minute console outage the agents came back one by one over the following
   half hour, as their uplink backoff (1 min doubling to 30 min) ran out. The board read OFFLINE for them meanwhile,
   which is true, but an operator who has just fixed the console sees the fleet "come back" slowly. A shorter cap, or
   a reset when the console answers again, is worth weighing against the thundering-herd protection the cap gives.
-- Doctor warns that the master key file is readable by group or others (`chmod 0400`); unchanged by this run.
+- Doctor warned that the master key file was readable by group or others; the operator set owner and mode
+  (`chmod 0400`) on day 3 and doctor reads the key as OK since.
 - `config.json` names a display zone that differs from the one saved in the console; the saved one wins (ADR 0012),
   so the display is right and the config line is stale.
+  The operator corrected the config line on day 3; the startup WARN was gone at the rc3 restart.
 
 ## Seven-day log (step 13)
 
@@ -98,7 +101,7 @@ must not keep a fleet away for half an hour after the console is back. Both are 
 | 2 | 2026-11-10 | agent port 8443 rejected (step 5) | 19:17 | C04 "Agent API unreachable: nothing accepts connections on <host>:8443 (connect)" (critical); all devices OFFLINE | 19:25 | 8 min | 19:43 | agents back between 19:47 and 19:50 (uplink backoff) |
 | 2 | 2026-11-10 | agents stopped on both lab VMs (step 3 begins) | 19:53 | none expected (devices OFFLINE) | | | | STALE due day 5, UNSEEN due day 9 |
 | 2 | 2026-11-10 | console upgraded rc1 -> rc2 with the fixed cryo-upgrade (units stopped 21:46:12, started 21:46:22) | 21:46 | none; self-probe passing 1 s after start | - | - | 21:46 | the L1 fix held live: "doctor after" ran 2 s after start and read both listeners as busy and the worker as reachable at the first try. Stopping rc1 took 10 s (its drain grace; rc2 will log what it waited for). |
-| 3 | | | | | | | | |
+| 3 | 2026-11-11 | console upgraded rc2 -> rc3 with cryo-upgrade (units stopped 15:07:11, started 15:07:21); master key file mode and the config display zone corrected by the operator before it | 15:07 | none; self-probe passing at start | - | - | 15:07 | rc2 logged its stop as asked under L8 ("the console has stopped", took_ms 5). The stale-zone startup WARN is gone. One `tls_handshake_failed` (not_tls, count 1) on 8443 at 15:07:54: something spoke plain HTTP to the agent port once; not an agent. |
 | 5 | 2026-11-13 | | | | | | | STALE due for the devices of step 3 (15:33Z and 19:12Z) |
 | 4 | | | | | | | | |
 | 5 | | | | | | | | |
