@@ -31,6 +31,8 @@ the operator's concrete addresses live outside the repository. Times are UTC unl
 | 12 | retire a dead device, delete an old token | PASS | 8 dead lab devices retired from their pages (22:42Z to 22:52Z), each answering within seconds: "token revoked, gateway login gone from the gateway's file". Audit: one `device.retire` and one `device.retire_sync` (result OK) per device, plus the htpasswd sync it triggered; 88 -> 112 rows. 7 tokens (5 expired, 2 revoked) deleted; one `enrollment_token.delete` row each, 112 -> 119. Board after: the retired devices are under "Retired (n)" and raise no alarm; the customer whose last active device went reads MISSING (critical), as §4 says. Journal: no hostnames, no errors. |
 | 13 | 7-day dogfood: every outage alarmed | | |
 | 14 | sweep | | |
+| 15 | retired agent: REFUSED after three 401s, one line, one 1008, hourly probe, backups defer (agent 0.3.0) | PASS, with finding L10 | A lab desktop with 8 runs behind it was upgraded to the signed agent 0.3.0 with the RMM wrapper and retired from its page at 23:41:36Z on day 3 (`retired_ok`, login gone from the gateway file in the same second; its customer read MISSING). Console journal: the command long poll in flight and one re-poll answered 401 at 23:41:36Z, then heartbeats answered 401 at 23:41:45Z, 23:42:45Z and 23:44:52Z (the 1 min and 2 min backoff steps), one policy pull (23:43:21Z) and one command poll (23:43:41Z) answered 401 before the third. At 23:44:52Z the agent logged one ERROR `the console refuses the device token`, `class=token_refused`, `since=2026-11-11T23:41:45Z`, wrote one Event Log entry 1008 with the same sentence, and `cryo-agent status` showed the TOKEN REFUSED block with the time and what to do. Sixteen hours later: still exactly one 1008 entry and one ERROR line; 28 heartbeats answered 401 in the journal over those 16 h (about 1.75 an hour: the hourly probe plus the heartbeat each finished run kicks, as ADR 0018 says). Every scheduled run logged `start lease skipped: the console refuses the device token` and ended `outcome=deferred class=auth exit=1` within a second (the gateway turned it away), first on the 5 to 60 min ladder (23:54Z, 23:59Z, 00:10Z, 00:30Z, 01:11Z), then about hourly. The service kept running; nothing was deleted. Not checked: that no policy, command or run-upload request reached the console after 23:44:52Z (the journal was filtered to heartbeats). |
+| 16 | console stopped 10 min: fleet ONLINE within 5 min of the start (agent 0.3.0) | | |
 
 ## Lab fleet
 
@@ -65,6 +67,8 @@ must not keep a fleet away for half an hour after the console is back. Both are 
 - **M3-L4** (design question): an agent on a retired device keeps polling `GET /api/v1/agent/policy` every 3 min
   with its revoked token and gets 401 each time (seen from one of the devices retired in step 12, from before the
   lab VMs enrolled). The console side is right; decide whether a retired agent should back off or stop.
+- **M3-L4, as built** (agent 0.3.0, ADR 0018): see step 15. Three heartbeats answered 401 put the agent in REFUSED;
+  it says so once and asks once an hour.
 - **M3-L5** (polish): `systemctl stop rclone-gateway` leaves the unit `failed` (rclone exits 143 on SIGTERM) rather
   than `inactive`. Add `SuccessExitStatus=143` to `rclone-gateway.service`.
 - **M3-L6** (polish, corrected): first read as a wrong RAISED time. The RAISED column holds only the condition id;
@@ -87,6 +91,14 @@ must not keep a fleet away for half an hour after the console is back. Both are 
 - `config.json` names a display zone that differs from the one saved in the console; the saved one wins (ADR 0012),
   so the display is right and the config line is stale.
   The operator corrected the config line on day 3; the startup WARN was gone at the rc3 restart.
+- **M3-L10** (design question, from step 15): a retired device's agent starts restic about once an hour for
+  good (the run ladder caps at 60 min), each run turned away by the gateway in under a second and each one
+  kicking a heartbeat that the console answers 401. Bounded and cheap, and what ADR 0018 chose, but a device that
+  is retired for months writes an hourly deferred run. Decide whether class `auth` deferrals while REFUSED should
+  stretch further (for example to the policy interval).
+- **M3-L11** (polish, from step 15): the retired-device page says the agent "keeps trying until you do"
+  (uninstall), which is true of 0.2.1 and no longer of 0.3.0; and neither that page nor the agent's status block
+  says how to re-enroll (uninstall, move the state directory aside, install with a new token).
 
 ## Seven-day log (step 13)
 
@@ -102,6 +114,8 @@ must not keep a fleet away for half an hour after the console is back. Both are 
 | 2 | 2026-11-10 | agents stopped on both lab VMs (step 3 begins) | 19:53 | none expected (devices OFFLINE) | | | | STALE due day 5, UNSEEN due day 9 |
 | 2 | 2026-11-10 | console upgraded rc1 -> rc2 with the fixed cryo-upgrade (units stopped 21:46:12, started 21:46:22) | 21:46 | none; self-probe passing 1 s after start | - | - | 21:46 | the L1 fix held live: "doctor after" ran 2 s after start and read both listeners as busy and the worker as reachable at the first try. Stopping rc1 took 10 s (its drain grace; rc2 will log what it waited for). |
 | 3 | 2026-11-11 | console upgraded rc2 -> rc3 with cryo-upgrade (units stopped 15:07:11, started 15:07:21); master key file mode and the config display zone corrected by the operator before it | 15:07 | none; self-probe passing at start | - | - | 15:07 | rc2 logged its stop as asked under L8 ("the console has stopped", took_ms 5). The stale-zone startup WARN is gone. One `tls_handshake_failed` (not_tls, count 1) on 8443 at 15:07:54: something spoke plain HTTP to the agent port once; not an agent. The operator confirmed at 16:55Z that the login wordmark no longer flashes on reload and changed his own username and display name from the account page. |
+| 3 | 2026-11-11 | lab desktop upgraded to agent 0.3.0, then retired (step 15) | 23:41 | device RETIRED; its customer MISSING (critical): "marked expected but has no active devices" | 23:41 | seconds | - | the agent went REFUSED at 23:44:52Z; true condition, not an outage |
+| 4 | 2026-11-12 | nothing broken; the retired lab desktop left running overnight | - | MISSING customer still shown | - | - | - | one hourly 401 probe plus one per deferred run in the journal; no other alarm |
 | 5 | 2026-11-13 | | | | | | | STALE due for the devices of step 3 (15:33Z and 19:12Z) |
 | 4 | | | | | | | | |
 | 5 | | | | | | | | |
