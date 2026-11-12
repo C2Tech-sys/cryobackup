@@ -115,7 +115,7 @@ func (a *Agent) acquireLease(ctx, jctx context.Context, rec *api.RunRecord) (api
 		// to back up; the gateway decides that. So the run starts without it,
 		// as it does for a console that cannot answer (fail open, ADR 0005):
 		// a retired device is turned away by the gateway and defers with class
-		// auth on the scheduler ladder, a device whose console was restored
+		// auth, next tried at the policy interval (M3-L10), a device whose console was restored
 		// keeps landing its data.
 		a.log.Warn("start lease skipped: the console refuses the device token; starting without it (ADR 0018)", "run", rec.ID)
 		a.setLeaseWait(time.Time{}, false)

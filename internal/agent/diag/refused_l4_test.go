@@ -29,9 +29,9 @@ func TestRenderTokenRefusedBlock(t *testing.T) {
 		"  revoked, the console was restored from before this enrollment, or this\n",
 		"  agent points at the wrong console. Backups keep running on the last policy\n",
 		"  and run records queue locally. The agent asks the console once an hour.\n",
-		"  To fix: uninstall CryoBackup, move the state directory aside (the CryoBackup\n",
-		"  folder under ProgramData), and install again with a new enrollment token.\n",
-		"  If the device is no longer wanted, uninstall it and stop there.\n",
+		"  To fix: uninstall CryoBackup, move the state directory aside (the\n",
+		"  CryoBackup folder under ProgramData), and install again with a new\n",
+		"  enrollment token. If the device is no longer wanted, uninstall it and stop.\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)

@@ -29,7 +29,8 @@ The M3 lab run found two agent behaviours worth a decision (docs/lab/m3-run.md, 
   change nothing: they say nothing about the token.
 - **Backups keep running on the last policy.** The agent never concludes on its own that its data is unwanted;
   only `cryo-agent uninstall` does that. If the device was retired, its gateway login is gone too, so each run
-  defers with class `auth` on the scheduler's own ladder (5 min doubling to 60 min, architecture §1092): bounded,
+  defers with class `auth` on the scheduler's own ladder (5 min doubling to 60 min, architecture §1092; changed
+  by the amendment of 2026-11-12 below): bounded,
   local, and the right outcome if the gateway still accepts the login (the console-restore case, where the data
   keeps landing). A refused agent skips the start lease (the console would answer it 401 too, and the lease is the
   fleet cap, not the right to back up: fail open, as for a console that cannot answer, ADR 0005). Run records
@@ -41,7 +42,8 @@ The M3 lab run found two agent behaviours worth a decision (docs/lab/m3-run.md, 
 - **Amended 2026-11-12 (operator ruling M3-L10, agent 0.3.1).** Lab step 15 showed that the ladder leaves a
   retired device starting restic about once an hour for good. While the agent is REFUSED, a run that ended
   deferred with class `auth` is next attempted one policy interval after that deferral (a fixed-time schedule
-  waits for its next time), not on the ladder: one deferred run and one kicked heartbeat per interval. An `auth`
+  waits for its next time) and never before the ladder gate, so a policy with an interval under an hour keeps
+  the ladder's pace: one deferred run and one kicked heartbeat per interval. An `auth`
   deferral while the console accepts the token keeps the ladder. When REFUSED ends, the ladder applies again from
   the last deferral, so the next run starts at once or at most about 72 min later.
 - **Why not re-enroll by itself.** It has no enrollment token; minting one is an operator act (ADR 0011).

@@ -247,7 +247,7 @@ const retiredPageCheck = time.Second
 
 // retiredAdvice is what the operator still has to do and cannot get from the console.
 const retiredAdvice = "Its repository is kept; restoring from a retired device is not available in the console yet. " +
-	"Uninstall the agent from the machine. An agent 0.3.0 or later goes quiet by itself (one request an hour); an older one keeps trying every few minutes. To bring the machine back, uninstall, move the state folder aside and install with a new token. While an enrollment token is active, a recurring RMM script enrolls the same machine again as a new device, so stop the script or revoke the token."
+	"Uninstall the agent from the machine. An agent 0.3.0 or later goes quiet by itself (about one request an hour); an older one keeps trying every few minutes. To bring the machine back, uninstall, move the state folder aside and install with a new token. While an enrollment token is active, a recurring RMM script enrolls the same machine again as a new device, so stop the script or revoke the token."
 
 // ---- the "Retired (n)" control ----
 

@@ -86,7 +86,8 @@ type Input struct {
 
 	// AuthDeferralsWait: a run that ended deferred with class auth (Retry.
 	// AuthDeferredAt) is not retried on the backoff ladder but at the policy's
-	// normal interval, counted from that deferral. The agent sets it while the
+	// normal interval, counted from that deferral, and never before the ladder
+	// gate. The agent sets it while the
 	// console refuses its device token (ADR 0018, M3-L10): the gateway login of
 	// a retired device is gone too, so the ladder would knock about hourly for
 	// good. With it unset an auth deferral keeps the ladder.
@@ -196,28 +197,33 @@ func Plan(in Input) Output {
 		return out
 	}
 
-	// An auth deferral that waits for the next slot (AuthDeferralsWait) leaves
-	// the ladder: the deferral stands in for a success, so policy.Due counts
-	// the interval from it (a fixed-time schedule needs no stand-in: its slot
-	// is attempted already). Catch-up cannot fire at once for it either.
-	retry, lastSuccess := in.Retry, in.LastSuccess
-	if retry.Pending && in.AuthDeferralsWait && !retry.AuthDeferredAt.IsZero() {
-		retry, lastSuccess = RetryState{}, retry.AuthDeferredAt
+	// An auth deferral that waits for the next slot (AuthDeferralsWait) does
+	// not start at the ladder gate: past it, the deferral stands in for a
+	// success, so policy.Due counts the interval from it (a fixed-time schedule
+	// needs no stand-in: its slot is attempted already) and catch-up cannot
+	// fire at once. The gate itself still holds, so a policy with an interval
+	// shorter than the ladder never tries more often than the ladder would.
+	authWait := in.Retry.Pending && in.AuthDeferralsWait && !in.Retry.AuthDeferredAt.IsZero()
+	lastSuccess := in.LastSuccess
+	if authWait {
+		lastSuccess = in.Retry.AuthDeferredAt
 	}
 
-	if retry.Pending {
-		if now.Before(retry.NotBefore) {
+	if in.Retry.Pending {
+		if now.Before(in.Retry.NotBefore) {
 			out = with(out, ActionNone, "", ReasonRetryWait)
-			out.NextCheck = retry.NotBefore
+			out.NextCheck = in.Retry.NotBefore
 			return out
 		}
-		if open, next := windowOpen(sch.Window, now); !open {
-			out = with(out, ActionNone, "", ReasonWindow)
-			out.NextCheck = next
-			return out
+		if !authWait {
+			if open, next := windowOpen(sch.Window, now); !open {
+				out = with(out, ActionNone, "", ReasonWindow)
+				out.NextCheck = next
+				return out
+			}
+			out.Resume = in.Resume
+			return with(out, ActionStart, api.TriggerRetry, ReasonRetry)
 		}
-		out.Resume = in.Resume
-		return with(out, ActionStart, api.TriggerRetry, ReasonRetry)
 	}
 
 	dec := policy.Due(policy.DueInput{

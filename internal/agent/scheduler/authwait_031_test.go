@@ -198,3 +198,15 @@ func TestFactsMarkAnAuthDeferralOnlyWhenItIsTheNewestRun(t *testing.T) {
 		t.Error("AuthDeferral")
 	}
 }
+
+// The ladder gate still holds while refused: the interval is counted only once
+// the gate has passed, so a policy whose interval is shorter than the ladder
+// never tries more often than the ladder would.
+func TestAuthDeferralWaitKeepsTheLadderGate(t *testing.T) {
+	in, _ := authInput(authPolicy(), restic.ClassAuth, true)
+	in.Now = in.Retry.NotBefore.Add(-time.Second)
+	out := Plan(in)
+	if out.Action != ActionNone || out.Reason != ReasonRetryWait || !out.NextCheck.Equal(in.Retry.NotBefore) {
+		t.Fatalf("%s %q next %v, want the ladder gate %v", out.Action, out.Reason, out.NextCheck, in.Retry.NotBefore)
+	}
+}
