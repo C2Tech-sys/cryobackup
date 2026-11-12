@@ -108,6 +108,10 @@ must not keep a fleet away for half an hour after the console is back. Both are 
   backup once per policy interval instead of about hourly (L10, operator ruling, ADR 0018 amended); the status
   block, the retired-device page and the retire dialog say what a 0.3.0 or later agent does and how to enroll
   the machine again (L11).
+  Drill started on day 4: the lab desktop, upgraded in place to agent 0.3.1 (console 0.3.0-rc4), was retired again;
+  last accepted heartbeat 23:26:04Z, `TOKEN REFUSED since 2026-11-12 23:27 UTC` in `cryo-agent status` with the new
+  three-line `To fix` text, one new Event Log 1008 (two in the log, the other from step 15). Its next run is due
+  2026-11-13 17:56Z; the L10 result (one deferred run, then a day's wait) is read after that.
 - **M3-L13** (polish, from step 15): the console's self-probe shows in its own request log as
   `GET /api/v1/agent/policy` answered 401 every 3 min, with nothing to tell it from an agent holding a dead
   token. On day 4 that cost an hour looking for a machine that did not exist (the cadence re-anchoring to the
