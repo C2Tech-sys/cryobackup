@@ -251,7 +251,9 @@ func (r Report) renderTokenRefused(w io.Writer) {
 		"  revoked, the console was restored from before this enrollment, or this",
 		"  agent points at the wrong console. Backups keep running on the last policy",
 		"  and run records queue locally. The agent asks the console once an hour.",
-		"  To fix: re-enroll this device with a new enrollment token, or uninstall.",
+		"  To fix: uninstall CryoBackup, move the state directory aside (the CryoBackup",
+		"  folder under ProgramData), and install again with a new enrollment token.",
+		"  If the device is no longer wanted, uninstall it and stop there.",
 	} {
 		_, _ = fmt.Fprintln(w, l)
 	}

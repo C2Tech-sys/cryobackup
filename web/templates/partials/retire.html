@@ -9,7 +9,7 @@
           <li>Revokes its device token now, and removes its gateway login from the gateway's file at the next sync, within seconds. If that sync fails, the console says so and a banner stays up until a read of the file finds the login gone.</li>
           <li>Stops its maintenance, and it leaves every alarm and health count. If it is an expected customer's last active device, that customer reads MISSING, or ONBOARDING while its onboarding window is open.</li>
           <li>Deletes nothing: the repository and its snapshots stay in storage. Restoring from a retired device is not available in the console yet.</li>
-          <li>Cannot be undone. Uninstall the agent from the machine: it keeps trying until you do. While an enrollment token is active, a recurring RMM script enrolls the same machine again as a new device, so stop the script or revoke the token.</li>
+          <li>Cannot be undone. Uninstall the agent from the machine: an agent 0.3.0 or later goes quiet by itself (one request an hour), an older one keeps trying every few minutes. While an enrollment token is active, a recurring RMM script enrolls the same machine again as a new device, so stop the script or revoke the token.</li>
         </ul>
         <div class="field"><label for="retire-reason">Reason <span class="muted">(required, kept in the audit log)</span></label>
           <input class="input" id="retire-reason" name="reason" type="text" maxlength="500" required autocomplete="off" aria-describedby="retire-reason-help"><span class="help" id="retire-reason-help">One line. No file paths.</span></div>

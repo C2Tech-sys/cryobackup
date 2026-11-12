@@ -143,6 +143,10 @@ func (a *Agent) plannerInput(ctx context.Context, now time.Time) (scheduler.Inpu
 		Paused: pausedNow(pol, now), Running: running,
 		LastSuccess: f.LastSuccess, LastAttemptStart: f.LastAttemptStart, Retry: f.Retry,
 		BootAt: a.boot, BootPending: bootPending, ForceNow: force,
+		// A refused agent's runs are turned away by the gateway (ADR 0018,
+		// M3-L10): an auth deferral waits for the policy's next slot, not the
+		// ladder. The end of REFUSED re-plans (consoleBack) with this false.
+		AuthDeferralsWait: a.isRefused(),
 	}
 	a.mu.Lock()
 	in.LeaseNotBefore = a.leaseNotBefore

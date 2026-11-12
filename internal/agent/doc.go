@@ -252,8 +252,12 @@
 // token_refused_since, a block in "cryo-agent status"), the policy, run upload
 // and command loops stop calling the console, and the heartbeat asks once an
 // hour (jittered). Backups go on with the last policy; the agent neither stops
-// nor re-enrolls. The next heartbeat the console accepts ends the state, deletes
-// the key, logs one INFO line and wakes every loop.
+// nor re-enrolls, and a run the gateway turns away (deferred, class auth) waits
+// for the policy's next slot instead of the run ladder (scheduler.Input.
+// AuthDeferralsWait, M3-L10), so a retired device writes one deferred run per
+// interval, not one an hour. The next heartbeat the console accepts ends the
+// state, deletes the key, logs one INFO line and wakes every loop; the ladder is
+// back at the re-plan that follows.
 //
 // # M0 limits
 //

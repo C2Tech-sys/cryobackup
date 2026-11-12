@@ -76,6 +76,9 @@ func FactsFromRuns(rows []journal.RunRow, pol policy.Policy) Facts {
 		last := f.Last
 		d := RetryDelay(pol.Schedule.Retries, f.Attempts, last.DeferredReason == restic.DeferredLock, stableFraction(last.ID))
 		f.Retry = RetryState{Pending: true, NotBefore: last.FinishedAt.Add(d)}
+		if AuthDeferral(*last) {
+			f.Retry.AuthDeferredAt = *last.FinishedAt
+		}
 	}
 	return f
 }
@@ -84,6 +87,14 @@ func FactsFromRuns(rows []journal.RunRow, pol policy.Policy) Facts {
 // refused (outcome deferred, reason fleet_cap): not an attempt (ADR 0005).
 func FleetCapDeferral(r journal.RunRow) bool {
 	return r.Outcome == restic.OutcomeDeferred && r.DeferredReason == restic.DeferredFleetCap
+}
+
+// AuthDeferral reports whether a row is a run the gateway turned away: outcome
+// deferred, error class auth (restic's own words for a refused login). Unlike a
+// fleet-cap deferral it is an attempt and climbs the ladder; RetryState.
+// AuthDeferredAt marks it for Input.AuthDeferralsWait.
+func AuthDeferral(r journal.RunRow) bool {
+	return r.Outcome == restic.OutcomeDeferred && r.ErrorClass == restic.ClassAuth
 }
 
 // Completed reports whether a finished row completes its slot: a success, or a

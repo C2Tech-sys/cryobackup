@@ -38,6 +38,12 @@ The M3 lab run found two agent behaviours worth a decision (docs/lab/m3-run.md, 
   mistake or a console restore without hands on the machine, and a silent agent is what this product exists to
   prevent. The cost is one heartbeat an hour, plus the heartbeat a finished run or a resume from sleep kicks
   (so a retired device on the run ladder sends a few 401s an hour, not one; still nothing like every 3 minutes).
+- **Amended 2026-11-12 (operator ruling M3-L10, agent 0.3.1).** Lab step 15 showed that the ladder leaves a
+  retired device starting restic about once an hour for good. While the agent is REFUSED, a run that ended
+  deferred with class `auth` is next attempted one policy interval after that deferral (a fixed-time schedule
+  waits for its next time), not on the ladder: one deferred run and one kicked heartbeat per interval. An `auth`
+  deferral while the console accepts the token keeps the ladder. When REFUSED ends, the ladder applies again from
+  the last deferral, so the next run starts at once or at most about 72 min later.
 - **Why not re-enroll by itself.** It has no enrollment token; minting one is an operator act (ADR 0011).
 
 ## Decision 2: the uplink backoff caps at 5 minutes, and one answer wakes every loop

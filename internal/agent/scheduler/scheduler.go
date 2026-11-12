@@ -59,6 +59,10 @@ type RetryState struct {
 	Pending bool
 	// NotBefore: the earliest retry time (the backoff gate).
 	NotBefore time.Time
+	// AuthDeferredAt is the finish time of the newest run when it ended
+	// deferred with class auth (the gateway turned the device away); zero
+	// otherwise. Input.AuthDeferralsWait reads it.
+	AuthDeferredAt time.Time
 }
 
 // Input is everything Plan reads. There is no clock and no I/O here.
@@ -79,6 +83,14 @@ type Input struct {
 	LastSuccess      time.Time
 	LastAttemptStart time.Time
 	Retry            RetryState
+
+	// AuthDeferralsWait: a run that ended deferred with class auth (Retry.
+	// AuthDeferredAt) is not retried on the backoff ladder but at the policy's
+	// normal interval, counted from that deferral. The agent sets it while the
+	// console refuses its device token (ADR 0018, M3-L10): the gateway login of
+	// a retired device is gone too, so the ladder would knock about hourly for
+	// good. With it unset an auth deferral keeps the ladder.
+	AuthDeferralsWait bool
 
 	// BootAt is when this process started; BootPending is true until the first
 	// run of this process starts (the run is then labelled "boot").
@@ -184,10 +196,19 @@ func Plan(in Input) Output {
 		return out
 	}
 
-	if in.Retry.Pending {
-		if now.Before(in.Retry.NotBefore) {
+	// An auth deferral that waits for the next slot (AuthDeferralsWait) leaves
+	// the ladder: the deferral stands in for a success, so policy.Due counts
+	// the interval from it (a fixed-time schedule needs no stand-in: its slot
+	// is attempted already). Catch-up cannot fire at once for it either.
+	retry, lastSuccess := in.Retry, in.LastSuccess
+	if retry.Pending && in.AuthDeferralsWait && !retry.AuthDeferredAt.IsZero() {
+		retry, lastSuccess = RetryState{}, retry.AuthDeferredAt
+	}
+
+	if retry.Pending {
+		if now.Before(retry.NotBefore) {
 			out = with(out, ActionNone, "", ReasonRetryWait)
-			out.NextCheck = in.Retry.NotBefore
+			out.NextCheck = retry.NotBefore
 			return out
 		}
 		if open, next := windowOpen(sch.Window, now); !open {
@@ -200,7 +221,7 @@ func Plan(in Input) Output {
 	}
 
 	dec := policy.Due(policy.DueInput{
-		Now: now, LastSuccess: in.LastSuccess, LastAttemptStart: in.LastAttemptStart,
+		Now: now, LastSuccess: lastSuccess, LastAttemptStart: in.LastAttemptStart,
 		Schedule: sch, DeviceID: in.DeviceID,
 	})
 	out.Decision = dec

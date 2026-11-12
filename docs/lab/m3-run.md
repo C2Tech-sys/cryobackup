@@ -103,6 +103,11 @@ must not keep a fleet away for half an hour after the console is back. Both are 
   from=outbox` and woke every loop, which then failed again. The run-upload loop counts a pass with nothing due
   (its one record had just been put back with a later retry time) as a success after failures. No request had
   been answered. The line must only follow a request the console answered.
+- **M3-L10, L11, L12, as built** (agent 0.3.1, not yet drilled on a machine): the run-upload loop reports a
+  recovery and resets its backoff only after a request the console answered (L12); a refused agent attempts a
+  backup once per policy interval instead of about hourly (L10, operator ruling, ADR 0018 amended); the status
+  block, the retired-device page and the retire dialog say what a 0.3.0 or later agent does and how to enroll
+  the machine again (L11).
 
 ## Seven-day log (step 13)
 

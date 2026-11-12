@@ -394,14 +394,25 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 
 // ---- outbox ---------------------------------------------------------------
 
-// deliverOutbox sends due run records. A record is delivered only after a
-// created, updated or duplicate answer; rejected is journaled and not retried;
-// any failure schedules a retry with the bounded backoff.
+// deliverOutbox sends due run records (sendOutbox) for the callers that only
+// care whether it worked: the final hand-over at stop and check-in.
 func (a *Agent) deliverOutbox(ctx context.Context) error {
+	_, err := a.sendOutbox(ctx)
+	return err
+}
+
+// sendOutbox sends due run records. A record is delivered only after a
+// created, updated or duplicate answer; rejected is journaled and not retried;
+// any failure schedules a retry with the bounded backoff. answered reports
+// whether the console answered a request: a pass with nothing due, or nothing
+// that validates, sends nothing and answers nothing, and says nothing about
+// the console (M3-L12: the loop took such a pass after a failed upload, whose
+// record had just been put back with a later retry time, for a recovery).
+func (a *Agent) sendOutbox(ctx context.Context) (answered bool, err error) {
 	now := a.clock()
 	items, err := a.jr.OutboxDue(ctx, now, 50)
 	if err != nil || len(items) == 0 {
-		return err
+		return false, err
 	}
 	var batch []journal.OutboxItem
 	var req api.RunsRequest
@@ -417,7 +428,7 @@ func (a *Agent) deliverOutbox(ctx context.Context) error {
 		req.Runs = append(req.Runs, it.Body)
 	}
 	if len(batch) == 0 {
-		return nil
+		return false, nil
 	}
 	resp, err := a.up.UploadRuns(ctx, req)
 	if err != nil {
@@ -430,7 +441,7 @@ func (a *Agent) deliverOutbox(ctx context.Context) error {
 			}
 			_ = a.jr.OutboxFailed(ctx, it.RunID, it.Seq, now.Add(d))
 		}
-		return err
+		return false, err
 	}
 	results := make(map[string]api.RunResult, len(resp.Results))
 	for _, r := range resp.Results {
@@ -449,7 +460,7 @@ func (a *Agent) deliverOutbox(ctx context.Context) error {
 			_ = a.jr.OutboxFailed(ctx, it.RunID, it.Seq, now.Add(bo.DelayFor(it.Attempts)))
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func sanitizeReason(s string) string {
@@ -467,17 +478,22 @@ func (a *Agent) outboxLoop(ctx context.Context) {
 		if !a.uplinkWait(ctx, wait, a.kickOutbox) {
 			return
 		}
-		err := a.deliverOutbox(ctx)
+		answered, err := a.sendOutbox(ctx)
 		if err != nil {
 			wait = bo.Delay(err)
 			a.uplinkFailed(err)
 			a.log.Warn("run upload failed", "err", err.Error(), "retry_in_s", int(wait/time.Second))
 			continue
 		}
-		if bo.Failures() > 0 {
-			a.consoleBack(loopOutbox)
+		// Only an answered request is news about the console. A pass that sent
+		// nothing (the failed record is not due yet) neither reports a recovery
+		// nor resets the backoff; it only waits for the next due record.
+		if answered {
+			if bo.Failures() > 0 {
+				a.consoleBack(loopOutbox)
+			}
+			bo.Reset()
 		}
-		bo.Reset()
 		wait = outboxIdleEvery
 		if next, ok, _ := a.jr.OutboxNext(ctx); ok {
 			if d := next.Sub(a.clock()); d > 0 && d < wait {
