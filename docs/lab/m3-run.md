@@ -121,6 +121,14 @@ must not keep a fleet away for half an hour after the console is back. Both are 
   that way, and the service last started with the 0.3.1 upgrade on day 4. The 4 min between the planned 17:56Z
   and the start is not explained. Not checked: the Event Log 1008 count after the wait, and the end of REFUSED (the ladder resuming
   from the last deferral), which a retired device cannot show.
+  Re-enrolled at 02:30Z on day 6 by the procedure the status block gives (uninstall, state folder renamed,
+  0.3.1 installed with a new token through the RMM wrapper): a new device id, no TOKEN REFUSED block, first
+  heartbeat within a minute, first run planned after the startup delay. On the way, an install with a token
+  the console refused ended as it should: `enrollment failed, error class: auth`, MSI 1603, full rollback,
+  nothing left installed.
+- **M3-L14** (polish, from the re-enroll): that rollback logged `the state directory was not created by this
+  install and is kept` although no state directory existed before or after it. Check which case the line
+  describes and word it for what happened.
 - **M3-L13** (polish, from step 15): the console's self-probe shows in its own request log as
   `GET /api/v1/agent/policy` answered 401 every 3 min, with nothing to tell it from an agent holding a dead
   token. On day 4 that cost an hour looking for a machine that did not exist (the cadence re-anchoring to the
