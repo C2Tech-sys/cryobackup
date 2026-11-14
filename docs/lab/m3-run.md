@@ -103,7 +103,7 @@ must not keep a fleet away for half an hour after the console is back. Both are 
   from=outbox` and woke every loop, which then failed again. The run-upload loop counts a pass with nothing due
   (its one record had just been put back with a later retry time) as a success after failures. No request had
   been answered. The line must only follow a request the console answered.
-- **M3-L10, L11, L12, as built** (agent 0.3.1, not yet drilled on a machine): the run-upload loop reports a
+- **M3-L10, L11, L12, as built** (agent 0.3.1): the run-upload loop reports a
   recovery and resets its backoff only after a request the console answered (L12); a refused agent attempts a
   backup once per policy interval instead of about hourly (L10, operator ruling, ADR 0018 amended); the status
   block, the retired-device page and the retire dialog say what a 0.3.0 or later agent does and how to enroll
@@ -112,6 +112,14 @@ must not keep a fleet away for half an hour after the console is back. Both are 
   last accepted heartbeat 23:26:04Z, `TOKEN REFUSED since 2026-11-12 23:27 UTC` in `cryo-agent status` with the new
   three-line `To fix` text, one new Event Log 1008 (two in the log, the other from step 15). Its next run is due
   2026-11-13 17:56Z; the L10 result (one deferred run, then a day's wait) is read after that.
+  L10 result, read at 01:53Z on day 6 (PASS): one run in the 26 h since the retire. It started at 18:00:38Z on
+  day 5, logged `start lease skipped`, and ended `outcome=deferred class=auth exit=1` in under a second. No
+  second attempt in the 7 h 52 min after it (agent 0.3.0 made five in its first 77 min, step 15). Status:
+  `last run: deferred (auth), attempt 1`, `next due: 2026-11-14T18:52:58Z (not_yet)`, 24 h 52 min after the
+  deferral; one run record queued; still one ERROR line. The service kept running. Not explained: the run is
+  marked `trigger boot` and started 4 min after the planned 17:56Z; whether the machine restarted about then was
+  not checked. Not checked: the Event Log 1008 count after the wait, and the end of REFUSED (the ladder resuming
+  from the last deferral), which a retired device cannot show.
 - **M3-L13** (polish, from step 15): the console's self-probe shows in its own request log as
   `GET /api/v1/agent/policy` answered 401 every 3 min, with nothing to tell it from an agent holding a dead
   token. On day 4 that cost an hour looking for a machine that did not exist (the cadence re-anchoring to the
