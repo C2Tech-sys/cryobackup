@@ -299,6 +299,8 @@ CREATE INDEX idx_enrollment_tokens_expires  ON enrollment_tokens(expires_at) WHE
 -- -----------------------------------------------------------------------------
 -- 13. devices   (recon: Device)  NO status column: state is computed at read time (ADR D10)
 --     Device.last_seen_at lives in device_presence (written every heartbeat).
+--     purge_* (migration 0007, ADR 0019): a purge is requested on a RETIRED device only (CHECK); the row is
+--     deleted when the repository is gone. purge_requested_at NOT NULL = "purging".
 -- -----------------------------------------------------------------------------
 CREATE TABLE devices (
   id                       TEXT    PRIMARY KEY CHECK (length(id) = 26),            -- also the restic --host and the gateway username
@@ -332,7 +334,7 @@ CREATE TABLE devices (
   identity_conflict_at     INTEGER,                                                 -- set when a second machine presents this identity
   notes                    TEXT,
   created_at               INTEGER NOT NULL,
-  updated_at               INTEGER NOT NULL,
+  updated_at               INTEGER NOT NULL, purge_requested_at INTEGER CHECK (purge_requested_at IS NULL OR (retired_at IS NOT NULL AND purge_requested_at >= 1000000000000)), purge_requested_by TEXT REFERENCES admin_users(id) ON DELETE SET NULL CHECK (purge_requested_by IS NULL OR purge_requested_at IS NOT NULL), purge_reason TEXT CHECK (purge_reason IS NULL OR purge_requested_at IS NOT NULL), purge_last_error_class TEXT CHECK (purge_last_error_class IS NULL OR purge_requested_at IS NOT NULL), purge_last_attempt_at INTEGER CHECK (purge_last_attempt_at IS NULL OR purge_requested_at IS NOT NULL),
   CHECK (NOT (retired_at IS NOT NULL AND paused_at IS NOT NULL)),                   -- a device may not be both retired and paused
   CHECK (paused_until IS NULL OR (paused_at IS NOT NULL AND paused_until > paused_at)),
   CHECK (paused_at IS NULL OR (pause_reason IS NOT NULL AND length(pause_reason) > 0)),
@@ -348,6 +350,7 @@ CREATE INDEX idx_devices_paused_by       ON devices(paused_by);
 CREATE INDEX idx_devices_hw_fingerprint  ON devices(hw_fingerprint);
 CREATE INDEX idx_devices_ring_version    ON devices(update_ring, agent_version);
 CREATE INDEX idx_devices_paused          ON devices(paused_until) WHERE paused_at IS NOT NULL;
+CREATE INDEX idx_devices_purge_requested_by ON devices(purge_requested_by);
 
 -- -----------------------------------------------------------------------------
 -- 14. device_tokens   (ADR D5: hashed, rotatable bearer tokens)
