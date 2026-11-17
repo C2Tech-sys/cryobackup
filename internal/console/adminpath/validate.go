@@ -173,6 +173,39 @@ func (r CheckRequest) Validate() error {
 	return nil
 }
 
+// Validate checks the request id and requires DeviceID to be a canonical ULID
+// (validULID): the device id becomes the last segment of the storage prefix
+// that purge_repo deletes, so nothing but a device id may ever reach it.
+func (r PurgeRepoRequest) Validate() error {
+	if err := r.DeviceRequest.Validate(); err != nil {
+		return err
+	}
+	if !validULID(r.DeviceID) {
+		return invalidField("device_id")
+	}
+	return nil
+}
+
+// validULID accepts a canonical ULID, the form devices.id holds: exactly 26
+// characters of upper-case Crockford base32 (0-9 and A-Z without I, L, O and
+// U), the first at most '7' (a 48-bit timestamp). Lower case is refused: the id
+// names an object prefix, and storage keys are case-sensitive.
+func validULID(s string) bool {
+	if len(s) != 26 || s[0] > '7' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'A' && c <= 'Z' && c != 'I' && c != 'L' && c != 'O' && c != 'U':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // validID accepts 1 to 64 characters of [A-Za-z0-9_-] starting with a letter or
 // a digit, so an id can never be read as a flag or contain a separator.
 func validID(s string) bool {

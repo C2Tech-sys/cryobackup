@@ -60,6 +60,7 @@
 //	forget      -                              unavailable, names M5
 //	prune       -                              unavailable, names M5
 //	check       -                              unavailable, names M5
+//	purge_repo  rclone size, purge, lsjson     ADR 0019: deletes a retired device's whole prefix (below); no restic, no key
 //
 // Read-only calls turn a failed run into an *adminpath.Error: exit 10 repo_missing,
 // 12 wrong_password, 11 locked, network, tls and storage classes
@@ -98,6 +99,38 @@
 // is too slow (restores.Service.MinRateBytes / MinRateWindow) or whose first
 // byte does not come (restores.Service.FirstByteTimeout); either cancels the
 // request, which cancels the restic run and frees its slot.
+//
+// # purge_repo: the one delete outside restic (ADR 0019)
+//
+// PurgeRepo (purge_adr19.go, adminpath.RepoPurger) deletes the storage prefix
+// <bucket>/<prefix>/<device id> of a retired device with rclone and the admin
+// credential. The location is built from Config.Remote, Config.Bucket,
+// Config.Prefix and the device id only; the request carries nothing else.
+// Before any process starts, the worker refuses (PurgeRefusedError, nothing run)
+// unless the device id is a canonical ULID, the bucket and the prefix are both
+// non-empty and every segment is clean (no "..", ".", empty segment, wildcard,
+// control character, backslash or colon), the location equals the repository
+// restic.AdminRepository gives restic for the device, the device exists and is
+// retired, and its devices.repo_path is <prefix>/<device id>/ (a mismatch would
+// purge an empty place and report success while the data stays). It then takes
+// the per-device maintenance lease (maintenance_schedule.lease_*) under a holder
+// of its own, so neither the scheduler nor a second purge runs on the device
+// meanwhile (adminpath code locked otherwise), and runs three rclone children
+// through the runner, each under a concurrency slot and a timeout:
+//
+//	rclone size --json -- <loc>                                        measure (exit 3: the prefix does not exist, zeros)
+//	rclone purge -- <loc>                                              only when the measurement found objects
+//	rclone lsjson -R --files-only --no-modtime --no-mimetype -- <loc>  what is left, counted as it streams; no name kept
+//
+// A prefix that does not exist is success with zeros, so the console can retry
+// until it succeeds. Objects still listed after the purge are a result with
+// RemainingObjects above zero and an ErrorClass (logged as a warning), never a
+// quiet success: the console deletes the device record only on zero. A failed
+// rclone run is an *adminpath.Error by its stderr class (storage_unreachable
+// for network, tls and storage, restic_failed otherwise). rclone gets the
+// worker's minimal environment (no RESTIC_* entry, no key: a customer-held
+// device is purged like any other); its command line, the remote, the bucket,
+// the prefix and object names are never logged.
 //
 // # No repository data on disk (ADR 0008)
 //
@@ -207,6 +240,8 @@
 // unlock succeed; a second login gets 403 on the first login's repository), runs
 // deploy/rclone/append-only-test.sh against it (must pass) and against a gateway
 // without --append-only (must fail). TestLiveSmokeGatewayScript runs
-// test/lab/smoke-gateway.sh against a TLS gateway. The race detector needs cgo and
+// test/lab/smoke-gateway.sh against a TLS gateway. TestLivePurgeRepoLocalADR19
+// purges a retired device's repository from a throwaway local directory and
+// proves its siblings untouched. The race detector needs cgo and
 // runs in CI.
 package maintain
