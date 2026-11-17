@@ -1,6 +1,6 @@
 # ADR 0019 - Purging a retired device and deleting a customer move from M10 to the release after M3
 
-**Date:** 2026-11-17 - **Status:** Proposed - **Decider:** the operator (request of 2026-11-16), recorded by the foreman
+**Date:** 2026-11-17 - **Status:** Accepted (operator, 2026-11-17) - **Decider:** the operator (request of 2026-11-16), recorded by the foreman
 
 architecture.md rows 688 (`DELETE /api/v1/customers/{id}`) and 710 (`DELETE /api/v1/devices/{id}`), the dialogs of row
 911 and matrix row r243 put purge in M10. ADR 0016 moved retire to M3 and left purge where it was, so a retired device
@@ -82,10 +82,9 @@ their own milestones.
 - architecture.md rows 688, 710, 911 and r243 move to the release after M3. Archive, suspend and the retention hold
   stay in M10.
 
-## Open questions for the operator
+## Operator rulings (2026-11-17)
 
-1. Typed confirmation: the device's host name, or the word `PURGE`?
-2. Is a cooling-off delay wanted (for example the purge starts 24 h after the request and can be cancelled until
-   then), or does it start at once? This ADR assumes at once.
-3. The lab customer that only holds retired rows is the first user of this. Confirm that deleting its repositories from
-   production storage is intended.
+1. The typed confirmation is the device's host name (for a customer, the customer's name).
+2. A purge starts at once. There is no cooling-off delay and no cancel.
+3. The first use is the retired lab devices of the M3 run: deleting their repositories from production storage is
+   intended.
