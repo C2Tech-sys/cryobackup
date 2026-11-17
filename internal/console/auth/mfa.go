@@ -519,6 +519,12 @@ func (m *Manager) ConfirmTOTP(ctx context.Context, p *Principal, code, current, 
 		if err := tx.SetAdminTOTP(a.ID, wrapped, step); err != nil {
 			return err
 		}
+		if reenroll {
+			// The current code just verified is a fresh MFA check on this session (ADR 0019).
+			if err := tx.MarkSessionMFAAt(a.ID, p.SessionID, m.Now()); err != nil {
+				return err
+			}
+		}
 		if err := tx.ReplaceRecoveryCodes(a.ID, hashes); err != nil {
 			return err
 		}

@@ -1,8 +1,23 @@
 package store
 
+import "time"
+
 // Session management for the account screens and the MFA step (ticket
 // M2-W1A). In-transaction forms, so a session change and its audit row commit
 // together.
+
+// MarkSessionMFAAt is the in-transaction stamp of a fresh MFA check on one completed
+// session of the account (ADR 0019 step-up): mfa_verified_at = at. A pending session
+// (no mark yet), a revoked one, another account's session or an unknown id is
+// ErrNotFound, so a step-up can refresh a login but never create one.
+func (tx *Tx) MarkSessionMFAAt(adminID, id string, at time.Time) error {
+	res, err := tx.Exec(`UPDATE sessions SET mfa_verified_at = ?, updated_at = ?
+		WHERE id = ? AND admin_id = ? AND revoked_at IS NULL AND mfa_verified_at IS NOT NULL`, msOf(at), tx.nowMS(), id, adminID)
+	if err != nil {
+		return err
+	}
+	return requireRow(res)
+}
 
 // InsertSession is the in-transaction form of Store.CreateSession.
 func (tx *Tx) InsertSession(x Session) (Session, error) {
