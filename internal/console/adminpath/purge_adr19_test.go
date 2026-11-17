@@ -1,6 +1,7 @@
 package adminpath
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -123,4 +124,15 @@ func TestPurgeRepoWireADR19(t *testing.T) {
 	if MethodPurgeRepo != "purge_repo" {
 		t.Errorf("method name = %q", MethodPurgeRepo)
 	}
+}
+
+func fixPurge() PurgeRepoResult {
+	return PurgeRepoResult{Elapsed: 3 * time.Second, ObjectsRemoved: 41, BytesRemoved: 1 << 20, RemainingObjects: 2, ErrorClass: restic.ClassAuth}
+}
+
+func (f *fakeBackend) PurgeRepo(ctx context.Context, req PurgeRepoRequest) (PurgeRepoResult, error) {
+	if err := f.enter(ctx, MethodPurgeRepo, req); err != nil {
+		return PurgeRepoResult{}, err
+	}
+	return fixPurge(), nil
 }

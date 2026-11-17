@@ -356,6 +356,7 @@ func TestDefaultTimeoutsAndOptions(t *testing.T) {
 		MethodLs: 2 * time.Minute, MethodFind: 2 * time.Minute, MethodSnapshots: 2 * time.Minute, MethodStats: 2 * time.Minute,
 		MethodInit: 2 * time.Minute, MethodDump: 12 * time.Hour, MethodUnlock: time.Minute,
 		MethodForget: 10 * time.Minute, MethodPrune: 6 * time.Hour, MethodCheck: 6 * time.Hour,
+		MethodPurgeRepo: 2 * time.Hour,
 	}
 	got := DefaultTimeouts()
 	if len(got) != len(Methods()) {

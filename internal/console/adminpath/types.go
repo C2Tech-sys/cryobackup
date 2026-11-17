@@ -33,6 +33,7 @@ func Methods() []string {
 	return []string{
 		MethodPing, MethodInit, MethodCatConfig, MethodLs, MethodFind, MethodSnapshots,
 		MethodDump, MethodStats, MethodUnlock, MethodForget, MethodPrune, MethodCheck,
+		MethodPurgeRepo,
 	}
 }
 
@@ -118,6 +119,9 @@ type Backend interface {
 	Prune(ctx context.Context, req PruneRequest) (PruneResult, error)
 	// Check runs restic check (architecture §7.3 step 6).
 	Check(ctx context.Context, req CheckRequest) (CheckResult, error)
+	// RepoPurger is purge_repo (ADR 0019): delete a retired device's
+	// repository prefix.
+	RepoPurger
 }
 
 // ProbeRepoID is the reserved repository name of the storage probe (banner

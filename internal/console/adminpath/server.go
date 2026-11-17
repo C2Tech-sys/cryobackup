@@ -98,6 +98,7 @@ func Handler(b Backend) http.Handler {
 	add(h, MethodForget, b.Forget)
 	add(h, MethodPrune, b.Prune)
 	add(h, MethodCheck, b.Check)
+	add(h, MethodPurgeRepo, b.PurgeRepo)
 	return h
 }
 

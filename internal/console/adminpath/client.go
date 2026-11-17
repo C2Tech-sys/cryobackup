@@ -37,6 +37,7 @@ func DefaultTimeouts() map[string]time.Duration {
 		MethodForget:    10 * time.Minute,
 		MethodPrune:     6 * time.Hour,
 		MethodCheck:     6 * time.Hour,
+		MethodPurgeRepo: 2 * time.Hour,
 	}
 }
 
@@ -156,6 +157,11 @@ func (c *Client) Prune(ctx context.Context, req PruneRequest) (PruneResult, erro
 // Check calls Backend.Check on the worker.
 func (c *Client) Check(ctx context.Context, req CheckRequest) (CheckResult, error) {
 	return call[CheckResult](c, ctx, MethodCheck, &req)
+}
+
+// PurgeRepo calls RepoPurger.PurgeRepo on the worker (ADR 0019).
+func (c *Client) PurgeRepo(ctx context.Context, req PurgeRepoRequest) (PurgeRepoResult, error) {
+	return call[PurgeRepoResult](c, ctx, MethodPurgeRepo, &req)
 }
 
 // requestPtr is the constraint of a pointer to a request type: it can be
