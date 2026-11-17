@@ -312,7 +312,11 @@ func TestM3T6B_RetiredDevicesCollapseUnderRetiredNOnEveryList(t *testing.T) {
 		"token devices": "/enroll/tokens/" + tok,
 	} {
 		page := e.page(path, 200)
-		mustContain(t, name, page, `class="retired-fold"`, "Retired (1)", `id="retired-`+id+`"`, "RETIRED")
+		fold := "Retired (2)"                                                     // the fixtures' second retired device (ADR 0019, on Northwind Dental) counts on the fleet-wide lists
+		if name == "board" || name == "customer tab" || name == "token devices" { // the board folds per customer
+			fold = "Retired (1)"
+		}
+		mustContain(t, name, page, `class="retired-fold"`, fold, `id="retired-`+id+`"`, "RETIRED")
 		if strings.Contains(page, row) {
 			t.Errorf("%s: the retired device is an ordinary row, not under Retired (n)", name)
 		}

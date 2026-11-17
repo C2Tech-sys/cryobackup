@@ -126,7 +126,7 @@ func TestM2PagesRenderInFixturesMode(t *testing.T) {
 		}
 	}
 	mustContain(t, "customers", e.page("/customers", 200), "Customers", "Summit Eye Care", "Blue Ridge Accounting", "Lakeshore Pediatrics", "MISSING", "ONBOARDING", "EXPECTED", "Add customer",
-		`aria-sort="none"`, "Showing 1-6 of 6", `aria-current="page"`, "Default")
+		`aria-sort="none"`, "Showing 1-7 of 7", `aria-current="page"`, "Default")
 	mustContain(t, "devices", e.page("/devices", 200), "FRONTDESK-01", "LAB-RETINA-02", "Showing 1-25 of 25", `id="devresults"`, `hx-get="/ui/devices/table`, `aria-sort="ascending"`,
 		"Next due", "Windows", `role="search"`)
 	mustContain(t, "fragment", e.page("/ui/devices/table", 200), "FRONTDESK-01", "Showing 1-25 of 25")
@@ -434,17 +434,17 @@ func TestM2DevicesTableFiltersSortsAndPages(t *testing.T) {
 	if got := hostsOf(e.page("/devices?customer="+e.customerID("Pinecrest Legal"), 200)); len(got) != 3 {
 		t.Fatalf("customer filter: %v", got)
 	}
-	// Retired devices are hidden unless asked for; that is one more row, and page 2 at 25 per page.
+	// Retired devices are hidden unless asked for; that is two more rows, and page 2 at 25 per page.
 	r1 := e.page("/devices?retired=1&size=25", 200)
-	mustContain(t, "paged", r1, "Showing 1-25 of 26", `aria-label="Next page"`, `href="/devices?page=2&amp;retired=1&amp;size=25"`, `aria-label="25 per page"`, "Including retired")
+	mustContain(t, "paged", r1, "Showing 1-25 of 27", `aria-label="Next page"`, `href="/devices?page=2&amp;retired=1&amp;size=25"`, `aria-label="25 per page"`, "Including retired")
 	r2 := e.page("/devices?retired=1&size=25&page=2", 200)
-	if got := hostsOf(r2); len(got) != 1 {
+	if got := hostsOf(r2); len(got) != 2 {
 		t.Fatalf("page 2: %v", got)
 	}
-	mustContain(t, "page 2", r2, "Showing 26-26 of 26", `aria-current="page"`, `aria-label="Previous page"`)
+	mustContain(t, "page 2", r2, "Showing 26-27 of 27", `aria-current="page"`, `aria-label="Previous page"`)
 	mustContain(t, "retired row", e.page("/devices?retired=1&q=OLD-RECEPTION", 200), "RETIRED", "OLD-RECEPTION-PC")
 	// A page past the end shows the last page and says so.
-	mustContain(t, "clamped", e.page("/devices?retired=1&size=25&page=9", 200), "past the end", "Showing 26-26 of 26")
+	mustContain(t, "clamped", e.page("/devices?retired=1&size=25&page=9", 200), "past the end", "Showing 26-27 of 27")
 	// Filter-caused empty: neutral, with the denominator and a way out.
 	none := e.page("/devices?q=no-such-host", 200)
 	mustContain(t, "no match", none, "No devices match these filters", "0 of 25 shown.", "Clear filters", `class="panel-state neutral"`)

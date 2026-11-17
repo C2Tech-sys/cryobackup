@@ -25,7 +25,7 @@ func TestFixturesEvaluateToTheIntendedStates(t *testing.T) {
 	if !world.LoadComplete || world.LoadErrors != 0 {
 		t.Fatalf("fixtures did not load completely: complete=%v errors=%d", world.LoadComplete, world.LoadErrors)
 	}
-	if len(world.Customers) != 6 || len(world.Devices) != 26 || !world.FleetEverEnrolled {
+	if len(world.Customers) != 7 || len(world.Devices) != 27 || !world.FleetEverEnrolled {
 		t.Fatalf("%d customers, %d devices, ever enrolled %v", len(world.Customers), len(world.Devices), world.FleetEverEnrolled)
 	}
 
@@ -127,15 +127,15 @@ func TestFixturesRowsAreWhatTheyShouldBe(t *testing.T) {
 	}{
 		{"storage targets", `SELECT count(*) FROM storage_targets`, 1},
 		{"default policy", `SELECT count(*) FROM policies WHERE scope = 'default'`, 1},
-		{"customers", `SELECT count(*) FROM customers`, 6},
+		{"customers", `SELECT count(*) FROM customers`, 7},
 		{"expected customers with no devices", `SELECT count(*) FROM customers c WHERE expected = 1 AND NOT EXISTS (SELECT 1 FROM devices d WHERE d.customer_id = c.id)`, 2},
-		{"devices", `SELECT count(*) FROM devices`, 26},
-		{"device tokens", `SELECT count(*) FROM device_tokens`, 26},
-		{"gateway logins (one per device, retired one revoked)", `SELECT count(*) FROM gateway_logins`, 26},
+		{"devices", `SELECT count(*) FROM devices`, 27},
+		{"device tokens", `SELECT count(*) FROM device_tokens`, 27},
+		{"gateway logins (one per device, retired one revoked)", `SELECT count(*) FROM gateway_logins`, 27},
 		{"active gateway logins", `SELECT count(*) FROM gateway_logins WHERE revoked_at IS NULL`, 25},
-		{"escrow rows", `SELECT count(*) FROM repo_key_escrow`, 26},
+		{"escrow rows", `SELECT count(*) FROM repo_key_escrow`, 27},
 		{"customer-held escrow rows", `SELECT count(*) FROM repo_key_escrow WHERE custody = 'customer_held'`, 3},
-		{"maintenance rows", `SELECT count(*) FROM maintenance_schedule`, 26},
+		{"maintenance rows", `SELECT count(*) FROM maintenance_schedule`, 27},
 		{"admins", `SELECT count(*) FROM admin_users`, 1},
 		{"open backup runs", `SELECT count(*) FROM runs WHERE kind = 'backup' AND outcome IS NULL`, 2},
 		{"deferred gateway runs", `SELECT count(*) FROM runs WHERE deferred_reason = 'gateway'`, 1},
@@ -248,7 +248,7 @@ func TestFixturesAreFictionalAndSecretFree(t *testing.T) {
 		}
 		return tx.QueryRow(`SELECT count(*) FROM gateway_logins WHERE pending_secret_wrapped IS NOT NULL`).Scan(&plainBcrypt)
 	}))
-	if tokenHashes != 26 {
+	if tokenHashes != 27 {
 		t.Errorf("device token hashes are not all distinct random values: %d", tokenHashes)
 	}
 	if plainBcrypt != 0 {
@@ -305,7 +305,7 @@ func TestFixturesCannotBeLoadedTwice(t *testing.T) {
 	}
 	var n int
 	ok(t, s.Read(context.Background(), func(tx *Tx) error { return tx.QueryRow(`SELECT count(*) FROM customers`).Scan(&n) }))
-	if n != 6 {
+	if n != 7 {
 		t.Fatalf("a failed second load changed the data: %d customers", n)
 	}
 }

@@ -18,9 +18,9 @@ func TestC17RetiredDevicesThatCannotBeReadAreNotChecked(t *testing.T) {
 	if f.NotRead == "" {
 		t.Fatalf("a failed read of the retired devices: %+v", f)
 	}
-	// The fixture fleet has one retired device, and a real read says so.
+	// The fixture fleet has two retired devices, and a real read says so.
 	f = e.withRetired(context.Background(), state.LoginFileFacts{})
-	if f.NotRead != "" || f.Retired != 1 || f.RetiredGarbled != 0 {
+	if f.NotRead != "" || f.Retired != 2 || f.RetiredGarbled != 0 {
 		t.Fatalf("a good read: %+v", f)
 	}
 }

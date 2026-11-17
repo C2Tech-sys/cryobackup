@@ -63,8 +63,8 @@ func TestM3T5M1_TheCustomerRingFilterShowsEveryCustomerItCounts(t *testing.T) {
 		}
 	}
 	// the filter is a filter: with no filter every customer shows, and the healthy ones are not in the critical segment
-	if len(all.Groups) != 6 {
-		t.Errorf("the unfiltered board shows %d customers, want 6", len(all.Groups))
+	if len(all.Groups) != 7 {
+		t.Errorf("the unfiltered board shows %d customers, want 7", len(all.Groups))
 	}
 	page := e.page("/?cust=other", 200)
 	if strings.Contains(page, "No devices match these filters") || !strings.Contains(page, "Lakeshore Pediatrics") {

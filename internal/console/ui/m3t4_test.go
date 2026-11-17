@@ -738,7 +738,7 @@ func TestM3T4ActivityGridMatchesTheAPI(t *testing.T) {
 		t.Error("a device with nothing wrong is in the problems view")
 	}
 	// Customer page of the grid: stated totals, complete groups.
-	mustContain(t, "pager", body, "Showing 1-27 of 27 · 6 customers on this page")
+	mustContain(t, "pager", body, "Showing 1-28 of 28 · 7 customers on this page")
 }
 
 // ---- layout, on the rendered page ----
