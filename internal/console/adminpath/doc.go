@@ -78,6 +78,7 @@
 //	forget      10m      ForgetRequest     ForgetResult             never --prune; KeepWithin required; DryRun first (architecture §7.3)
 //	prune       6h       PruneRequest      PruneResult              no JSON from restic: parsed numbers only
 //	check       6h       CheckRequest      CheckResult              num_errors or broken packs make Outcome failed
+//	purge_repo  2h       PurgeRepoRequest  PurgeRepoResult          ADR 0019: deletes a retired device's prefix; ULID only; idempotent; RemainingObjects 0 means gone
 //
 // Idempotency: ping, cat_config, ls, find, snapshots, stats, dump and init are
 // safe to repeat (a dump writes nothing; a second one streams the archive

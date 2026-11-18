@@ -410,5 +410,10 @@ func (b *Backend) Check(ctx context.Context, req adminpath.CheckRequest) (adminp
 	return adminpath.CheckResult{}, b.unavailable(adminpath.MethodCheck, req.DeviceID)
 }
 
+// PurgeRepo implements adminpath.Backend (unavailable in fixtures).
+func (b *Backend) PurgeRepo(ctx context.Context, req adminpath.PurgeRepoRequest) (adminpath.PurgeRepoResult, error) {
+	return adminpath.PurgeRepoResult{}, b.unavailable(adminpath.MethodPurgeRepo, req.DeviceID)
+}
+
 // String describes the Backend without any content.
 func (b *Backend) String() string { return fmt.Sprintf("fixtures.Backend(%d calls)", len(b.Calls())) }

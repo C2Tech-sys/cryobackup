@@ -28,6 +28,7 @@ var validBodies = map[string]string{
 	MethodForget:    `{"device_id":"dev1","keep_within":"30d","rules":{"keep_daily":7}}`,
 	MethodPrune:     `{"device_id":"dev1"}`,
 	MethodCheck:     `{"device_id":"dev1"}`,
+	MethodPurgeRepo: `{"device_id":"01HZY5X8M3K7Q2W9RTV4BN6CDE"}`,
 }
 
 func TestHTTPStatusTable(t *testing.T) {

@@ -172,6 +172,17 @@ func TestRoundTripEveryMethod(t *testing.T) {
 		}
 		recorded(t, MethodCheck, req)
 	})
+	t.Run(MethodPurgeRepo, func(t *testing.T) {
+		req := PurgeRepoRequest{DeviceRequest: DeviceRequest{DeviceID: purgeULID, RequestID: "r-purge"}}
+		got, err := c.PurgeRepo(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fixPurge()
+		want.RequestID = "r-purge"
+		check(t, MethodPurgeRepo, got, want)
+		recorded(t, MethodPurgeRepo, req)
+	})
 
 	var seen []string
 	for m := range fb.calls {

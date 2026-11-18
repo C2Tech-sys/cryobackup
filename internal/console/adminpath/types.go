@@ -22,6 +22,10 @@ const (
 	MethodForget    = "forget"
 	MethodPrune     = "prune"
 	MethodCheck     = "check"
+	// MethodPurgeRepo deletes a retired device's whole repository prefix from
+	// storage (ADR 0019). It is the only admin-path method that deletes outside
+	// restic; see RepoPurger.
+	MethodPurgeRepo = "purge_repo"
 )
 
 // Methods lists every method name in documentation order.
@@ -29,6 +33,7 @@ func Methods() []string {
 	return []string{
 		MethodPing, MethodInit, MethodCatConfig, MethodLs, MethodFind, MethodSnapshots,
 		MethodDump, MethodStats, MethodUnlock, MethodForget, MethodPrune, MethodCheck,
+		MethodPurgeRepo,
 	}
 }
 
@@ -114,6 +119,9 @@ type Backend interface {
 	Prune(ctx context.Context, req PruneRequest) (PruneResult, error)
 	// Check runs restic check (architecture §7.3 step 6).
 	Check(ctx context.Context, req CheckRequest) (CheckResult, error)
+	// RepoPurger is purge_repo (ADR 0019): delete a retired device's
+	// repository prefix.
+	RepoPurger
 }
 
 // ProbeRepoID is the reserved repository name of the storage probe (banner
@@ -338,3 +346,62 @@ type CheckResult struct {
 	ResultMeta
 	Summary restic.CheckSummary `json:"summary"`
 }
+
+// RepoPurger is the admin-path method purge_repo (ADR 0019): it deletes the
+// whole storage prefix of one retired device, <bucket>/<prefix>/<device id>,
+// with `rclone purge` and the worker's admin credential, then lists the prefix
+// again and reports what is left. It is the only admin-path method that deletes
+// anything outside restic.
+//
+// Contract for implementers:
+//
+//   - The location is built from the worker's own configuration and the
+//     validated device id only. The request carries no path, remote, bucket or
+//     prefix, and none may ever be added to it.
+//   - A refusal (an empty bucket or prefix, an id that is not a ULID, a
+//     location that is not exactly one device id under the configured bucket
+//     and prefix) is an *Error and runs nothing.
+//   - A prefix that does not exist is success with every count zero: the call
+//     is idempotent, so the console may retry it until it succeeds.
+//   - A nil error does not by itself mean the prefix is gone:
+//     PurgeRepoResult.RemainingObjects does. Objects that are still listed after
+//     the purge are a result with RemainingObjects above zero and ErrorClass
+//     set, not an error, so the console sees how far the purge got. A caller
+//     that deletes the device record must require RemainingObjects == 0.
+type RepoPurger interface {
+	// PurgeRepo deletes the repository prefix of req.DeviceID.
+	PurgeRepo(ctx context.Context, req PurgeRepoRequest) (PurgeRepoResult, error)
+}
+
+// PurgeRepoRequest names the retired device whose repository prefix is to be
+// deleted. DeviceID must be a canonical ULID (26 upper-case Crockford base32
+// characters, the first at most '7'): unlike the other methods, purge_repo
+// accepts nothing else, not even ProbeRepoID.
+type PurgeRepoRequest struct {
+	DeviceRequest
+}
+
+// PurgeRepoResult is the answer to PurgeRepo. The counts are rclone's object
+// counts and byte sums for the device's prefix (not restic blobs or snapshots).
+type PurgeRepoResult struct {
+	// RequestID echoes the request's RequestID (set by Handler).
+	RequestID string `json:"request_id,omitempty"`
+	// Elapsed is the wall time the backend spent on the call (nanoseconds on
+	// the wire).
+	Elapsed time.Duration `json:"elapsed_ns"`
+	// ObjectsRemoved is the number of objects listed before the purge less the
+	// number still listed after it; zero when the prefix did not exist.
+	ObjectsRemoved int64 `json:"objects_removed"`
+	// BytesRemoved is the size of the objects listed before the purge less the
+	// size of those still listed after it.
+	BytesRemoved int64 `json:"bytes_removed"`
+	// RemainingObjects is the number of objects listed under the prefix after
+	// the purge. Zero, and only zero, means the repository is gone.
+	RemainingObjects int64 `json:"remaining_objects"`
+	// ErrorClass is set when RemainingObjects is above zero: the path-free class
+	// of the purge's failure, or "storage" when the purge reported success and
+	// objects are still listed.
+	ErrorClass restic.ErrorClass `json:"error_class,omitempty"`
+}
+
+func (r *PurgeRepoResult) setRequestID(id string) { r.RequestID = id }

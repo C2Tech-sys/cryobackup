@@ -66,6 +66,8 @@ func shortDuration(s string) string {
 		return "1h"
 	case "10m0s":
 		return "10m"
+	case "2h0m0s":
+		return "2h"
 	case "6h0m0s":
 		return "6h"
 	case "12h0m0s":
