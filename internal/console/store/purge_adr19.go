@@ -199,11 +199,15 @@ func (s *Store) RecordDevicePurgeAttempt(ctx context.Context, scope Scope, devic
 // host name) and deletes the device row, which the foreign keys carry through to everything the
 // device owns: runs, snapshot cache, presence and heartbeats, tokens, gateway login, escrowed key,
 // commands, restores, acknowledgements, notification rules, usage samples, maintenance schedule,
-// start leases, policy overrides and the enrollment tokens that adopt it. Other devices' rows are
-// untouched, except that a device this one replaced loses the link (SET NULL). A failed audit
-// write refuses the whole change (ErrAudit) and the row stays. The scope must be All; a device
-// that does not exist is ErrNotFound; one with no purge request is ErrNotPurging, so no other path
-// deletes a device. Negative counts are ErrInvalid.
+// start leases, policy overrides and the enrollment tokens that adopt it. The lobby rows of the
+// device (enrollment_requests.device_id, which the schema would only SET NULL and so keep the
+// host name and address of a purged machine) are deleted explicitly in the same transaction.
+// Other devices' rows are untouched, with two exceptions the schema decides: a device this one
+// replaced loses the link (devices.replaced_by_device_id, SET NULL), and a relay restore request
+// of another device that targets this one (restore_requests.target_device_id, CASCADE) is
+// deleted. A failed audit write refuses the whole change (ErrAudit) and every row stays. The
+// scope must be All; a device that does not exist is ErrNotFound; one with no purge request is
+// ErrNotPurging, so no other path deletes a device. Negative counts are ErrInvalid.
 func (s *Store) CompleteDevicePurge(ctx context.Context, scope Scope, deviceID string, objects, bytes int64) error {
 	if err := requireAllScope(scope); err != nil {
 		return err
@@ -228,6 +232,9 @@ func (s *Store) CompleteDevicePurge(ctx context.Context, scope Scope, deviceID s
 		if err := audited(tx, ev); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(`DELETE FROM enrollment_requests WHERE device_id = ?`, deviceID); err != nil {
+			return err
+		}
 		res, err := tx.Exec(`DELETE FROM devices WHERE id = ? AND purge_requested_at IS NOT NULL`, deviceID)
 		if err != nil {
 			return err
@@ -242,7 +249,8 @@ func (s *Store) CompleteDevicePurge(ctx context.Context, scope Scope, deviceID s
 // CustomerDeleteResult says what DeleteCustomer removed besides the customer.
 type CustomerDeleteResult struct {
 	CustomerID string
-	// Name is the customer's name as it was; the audit row keeps it because nothing else will.
+	// Name is the customer's name as it was, for the caller's answer. The audit row does not
+	// carry it (ids and counts only, as customer.create): the customer id identifies it there.
 	Name string
 	// Rows deleted with the customer, by table (the foreign keys cascade; see DeleteCustomer).
 	TokensDeleted, PoliciesDeleted, AlarmAcksDeleted, NotificationRulesDeleted, ReportsDeleted, EnrollmentRequestsDeleted int64
@@ -324,7 +332,7 @@ func (s *Store) DeleteCustomer(ctx context.Context, scope Scope, customerID, rea
 			return fmt.Errorf("store: delete of a customer deleted %d rows", n)
 		}
 		ev, err := actor.event("customer.delete", "customer", customerID, customerID, map[string]any{
-			"reason": clean, "name": name, "tokens_deleted": res.TokensDeleted, "policies_deleted": res.PoliciesDeleted,
+			"reason": clean, "tokens_deleted": res.TokensDeleted, "policies_deleted": res.PoliciesDeleted,
 			"alarm_acks_deleted": res.AlarmAcksDeleted, "notification_rules_deleted": res.NotificationRulesDeleted,
 			"reports_deleted": res.ReportsDeleted, "enrollment_requests_deleted": res.EnrollmentRequestsDeleted})
 		if err != nil {
