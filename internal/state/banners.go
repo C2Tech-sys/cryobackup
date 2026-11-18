@@ -334,6 +334,9 @@ func smtpBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
 		}
 		return []Banner{b}
 	}
+	if s.NotRead != "" {
+		return []Banner{notChecked("C03b", "Alert e-mail", "alert e-mail that cannot be delivered would go unnoticed", s.NotRead, 0)}
+	}
 	if v == probeUnchecked && !recent {
 		return []Banner{notChecked("C03b", "Alert e-mail", "alert e-mail that cannot be delivered would go unnoticed", why, n)}
 	}
@@ -616,6 +619,10 @@ func DigestKey(t time.Time, loc *time.Location) string {
 func digestBanners(d *DigestFacts, c bannerCtx) []Banner {
 	if d.NotInBuild || d.Disabled {
 		return nil
+	}
+	if d.NotRead != "" {
+		return []Banner{{ID: "C14b", Severity: SeverityAlarm,
+			Text: "Daily digest not checked: " + d.NotRead + ", so a digest that is never sent would go unnoticed."}}
 	}
 	hh, mm, ok := parseLocalTime(d.LocalTime)
 	if !ok {
