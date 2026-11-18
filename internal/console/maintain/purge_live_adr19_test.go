@@ -66,6 +66,18 @@ func TestLivePurgeRepoLocalADR19(t *testing.T) {
 		t.Fatalf("the retired device's repository was not created where expected: %v", err)
 	}
 
+	// A wrong bucket (ticket P19-F1): the device prefix is "not found" there,
+	// which must not read as "nothing left". The parent listing finds no
+	// <bucket>/<prefix> and the purge stops with a classified error.
+	bucket := e.w.cfg.Bucket
+	e.w.cfg.Bucket = "no-such-bucket"
+	_, err = e.w.PurgeRepo(ctx, purgeReq(retired))
+	wantCode(t, err, adminpath.CodeStorageUnreachable, "storage")
+	e.w.cfg.Bucket = bucket
+	if _, err := os.Stat(filepath.Join(target, "config")); err != nil {
+		t.Fatalf("the repository changed under a purge with a wrong bucket: %v", err)
+	}
+
 	res, err := e.w.PurgeRepo(ctx, purgeReq(retired))
 	if err != nil {
 		t.Fatalf("PurgeRepo: %v", err)

@@ -26,11 +26,14 @@ import (
 const purgeSentinel = "PHI-sentinel-object"
 
 // newPurgeEnv is newTenv with the fake as Config.RcloneProgram and the prefix
-// the fixtures record in devices.repo_path ("fleet/<id>/").
+// the fixtures record in devices.repo_path ("fleet/<id>/"). Unless rules
+// script the parent listing themselves (a rule containing "--dirs-only"), the
+// parent <remote>:<bucket>/<prefix> answers as present (ruleParentOK, put
+// first so that a plain lsjson rule cannot answer it).
 func newPurgeEnv(t *testing.T, rules []fakeRule, mut func(*Config)) *tenv {
 	t.Helper()
 	exe, _ := fakeResticPath(t)
-	return newTenv(t, rules, func(c *Config) {
+	return newTenv(t, withParent(rules), func(c *Config) {
 		c.RcloneProgram = filepath.ToSlash(exe)
 		c.Prefix = "fleet"
 		if mut != nil {
@@ -39,16 +42,52 @@ func newPurgeEnv(t *testing.T, rules []fakeRule, mut func(*Config)) *tenv {
 	})
 }
 
-// retiredID returns a retired fixtures device (one with a maintenance row).
-func (e *tenv) retiredID() string {
+// withParent prepends ruleParentOK unless rules already script the parent
+// listing.
+func withParent(rules []fakeRule) []fakeRule {
+	for _, r := range rules {
+		if r.Cmd == "lsjson" && r.Contains == "--dirs-only" {
+			return rules
+		}
+	}
+	return append([]fakeRule{ruleParentOK}, rules...)
+}
+
+// hostID returns the id of the fixtures device with this host name, retired
+// ones included (deviceID searches the active list only).
+func (e *tenv) hostID(host string) string {
 	e.t.Helper()
 	var id string
-	err := e.st.Read(e.ctx, func(tx *store.Tx) error {
-		return tx.QueryRow(`SELECT d.id FROM devices d JOIN maintenance_schedule m ON m.device_id = d.id
-			WHERE d.retired_at IS NOT NULL ORDER BY d.id LIMIT 1`).Scan(&id)
-	})
-	if err != nil {
-		e.t.Fatalf("no retired device in the fixtures: %v", err)
+	if err := e.st.Read(e.ctx, func(tx *store.Tx) error {
+		return tx.QueryRow(`SELECT id FROM devices WHERE hostname = ?`, host).Scan(&id)
+	}); err != nil {
+		e.t.Fatalf("device %s: %v", host, err)
+	}
+	return id
+}
+
+// retiredID returns the fixtures device that is retired AND marked for purge
+// (SPARE-PC-09: store.LoadFixtures sets its purge_requested_at), with a
+// maintenance row: the only kind of device PurgeRepo acts on.
+func (e *tenv) retiredID() string {
+	e.t.Helper()
+	id := e.hostID("SPARE-PC-09")
+	d, err := e.st.GetDevice(e.ctx, store.ScopeAll(), id)
+	if err != nil || d.RetiredAt == nil || !d.Purging() {
+		e.t.Fatalf("the purging fixtures device is not retired and purging: %+v, %v", d, err)
+	}
+	e.lease(id) // fails the test when it has no maintenance row
+	return id
+}
+
+// unmarkedID returns the fixtures device that is retired and NOT marked for
+// purge (OLD-RECEPTION-PC).
+func (e *tenv) unmarkedID() string {
+	e.t.Helper()
+	id := e.hostID("OLD-RECEPTION-PC")
+	d, err := e.st.GetDevice(e.ctx, store.ScopeAll(), id)
+	if err != nil || d.RetiredAt == nil || d.Purging() {
+		e.t.Fatalf("the unmarked fixtures device is not retired-and-unmarked: %+v, %v", d, err)
 	}
 	return id
 }
@@ -62,6 +101,17 @@ func (e *tenv) rcloneCalls() []fakeCall {
 		}
 	}
 	return out
+}
+
+// callsSince returns every invocation of the fake recorded after the first n,
+// whatever its subcommand (the fake is restic and rclone at once): the "nothing
+// ran" checks take n = len(e.calls()) just before the call they judge.
+func (e *tenv) callsSince(n int) []fakeCall {
+	c := e.calls()
+	if n >= len(c) {
+		return nil
+	}
+	return c[n:]
 }
 
 // lease returns the device's maintenance lease holder ("" when free).
@@ -96,6 +146,10 @@ func (e *tenv) noLeak(t *testing.T, err error) {
 }
 
 var (
+	// ruleParentOK: the parent prefix lists two device directories.
+	ruleParentOK = fakeRule{Cmd: "lsjson", Contains: "--dirs-only", Stdout: `inline:[` + "\n" +
+		`{"Path":"01HZY5X8M3K7Q2W9RTV4BN6CDE","Name":"01HZY5X8M3K7Q2W9RTV4BN6CDE","Size":-1,"IsDir":true},` + "\n" +
+		`{"Path":"` + purgeSentinel + `","Name":"` + purgeSentinel + `","Size":-1,"IsDir":true}` + "\n]\n"}
 	ruleSize5   = fakeRule{Cmd: "size", Stdout: `inline:{"count":5,"bytes":1234,"sizeless":0}` + "\n"}
 	rulePurgeOK = fakeRule{Cmd: "purge"}
 	ruleListNil = fakeRule{Cmd: "lsjson", Stdout: "inline:[\n]\n"}
@@ -108,6 +162,7 @@ var (
 func TestPurgeRepoHappyPathADR19(t *testing.T) {
 	e := newPurgeEnv(t, []fakeRule{ruleSize5, rulePurgeOK, ruleListNil}, nil)
 	id := e.retiredID()
+	mark := len(e.calls())
 	res, err := e.w.PurgeRepo(e.ctx, purgeReq(id))
 	if err != nil {
 		t.Fatalf("PurgeRepo: %v", err)
@@ -115,8 +170,9 @@ func TestPurgeRepoHappyPathADR19(t *testing.T) {
 	if res.ObjectsRemoved != 5 || res.BytesRemoved != 1234 || res.RemainingObjects != 0 || res.ErrorClass != "" {
 		t.Fatalf("result = %+v, want 5 objects, 1234 bytes removed, none left", res)
 	}
-	calls := e.rcloneCalls()
+	calls := e.callsSince(mark) // every invocation, not only rclone's listed subcommands
 	want := [][]string{
+		{"lsjson", "--dirs-only", "--no-modtime", "--no-mimetype", "--", "admin:test-bucket/fleet"},
 		{"size", "--json", "--", "admin:test-bucket/fleet/" + id},
 		{"purge", "--", "admin:test-bucket/fleet/" + id},
 		{"lsjson", "-R", "--files-only", "--no-modtime", "--no-mimetype", "--", "admin:test-bucket/fleet/" + id},
@@ -171,8 +227,8 @@ func TestPurgeRepoAbsentPathIsSuccessADR19(t *testing.T) {
 					t.Fatal("rclone purge ran on a prefix that holds nothing")
 				}
 			}
-			if n := len(e.rcloneCalls()); n != 4 {
-				t.Errorf("rclone calls = %d, want size and lsjson twice", n)
+			if n := len(e.rcloneCalls()); n != 6 {
+				t.Errorf("rclone calls = %d, want the parent listing, size and lsjson twice", n)
 			}
 		})
 	}
@@ -187,7 +243,7 @@ func TestPurgeRepoRcloneFailsADR19(t *testing.T) {
 		id := e.retiredID()
 		_, err := e.w.PurgeRepo(e.ctx, purgeReq(id))
 		wantCode(t, err, adminpath.CodeStorageUnreachable, restic.ClassNetwork)
-		if c := e.rcloneCalls(); len(c) != 1 || c[0].Args[0] != "size" {
+		if c := e.rcloneCalls(); len(c) != 2 || c[0].Args[1] != "--dirs-only" || c[1].Args[0] != "size" {
 			t.Fatalf("calls after a failed measurement = %+v", c)
 		}
 		if e.lease(id) != "" {
@@ -223,8 +279,8 @@ func TestPurgeRepoRcloneFailsADR19(t *testing.T) {
 		e := newPurgeEnv(t, []fakeRule{{Cmd: "size", Stdout: "inline:not json"}, rulePurgeOK, ruleListNil}, nil)
 		_, err := e.w.PurgeRepo(e.ctx, purgeReq(e.retiredID()))
 		wantCode(t, err, adminpath.CodeResticFailed, restic.ClassParse)
-		if c := e.rcloneCalls(); len(c) != 1 {
-			t.Fatalf("calls = %+v, want the measurement only", c)
+		if c := e.rcloneCalls(); len(c) != 2 || c[1].Args[0] != "size" {
+			t.Fatalf("calls = %+v, want the parent listing and the measurement only", c)
 		}
 	})
 	t.Run("unreadable listing after the purge", func(t *testing.T) {
@@ -275,7 +331,7 @@ func TestPurgeRepoContextCancelledADR19(t *testing.T) {
 		t.Errorf("cancel took %v: the child was not stopped", d)
 	}
 	for _, c := range e.rcloneCalls() {
-		if c.Args[0] == "lsjson" {
+		if c.Args[0] == "lsjson" && c.Args[1] == "-R" {
 			t.Error("the listing ran after the call was cancelled")
 		}
 	}
@@ -312,6 +368,7 @@ func TestPurgeRepoRefusalsRunNothingADR19(t *testing.T) {
 		"flag id":            {id: "--config=/etc/x", reason: PurgeRefusedDeviceID, code: adminpath.CodeInvalidRequest},
 		"unknown device":     {id: ulid, reason: PurgeRefusedDeviceUnknown, code: adminpath.CodeNotFound},
 		"active device":      {id: "active", reason: PurgeRefusedNotRetired, code: adminpath.CodeInvalidRequest},
+		"retired, unmarked":  {id: "unmarked", reason: PurgeRefusedNotRequested, code: adminpath.CodeInvalidRequest},
 		"repo_path mismatch": {mut: cfg(func(c *Config) { c.Prefix = "other" }), reason: PurgeRefusedRepoPath, code: adminpath.CodeUnavailable},
 		// configuration
 		"empty prefix":       {mut: cfg(func(c *Config) { c.Prefix = "" }), reason: PurgeRefusedPrefix, code: adminpath.CodeUnavailable},
@@ -359,19 +416,22 @@ func TestPurgeRepoRefusalsRunNothingADR19(t *testing.T) {
 				req.DeviceID = ""
 			case "active":
 				req.DeviceID = e.esc
+			case "unmarked":
+				req.DeviceID = e.unmarkedID()
 			case "reqid":
 				req.RequestID = "../bad id"
 			default:
 				req.DeviceID = c.id
 			}
+			mark := len(e.calls())
 			res, err := e.w.PurgeRepo(e.ctx, req)
 			var r *PurgeRefusedError
 			if !errors.As(err, &r) || r.Reason != c.reason {
 				t.Fatalf("err = %v (result %+v), want refusal %q", err, res, c.reason)
 			}
 			wantCode(t, err, c.code, "")
-			if calls := e.rcloneCalls(); len(calls) != 0 {
-				t.Fatalf("a refused purge started rclone: %+v", calls)
+			if calls := e.callsSince(mark); len(calls) != 0 {
+				t.Fatalf("a refused purge started the fake: %+v", calls)
 			}
 			if res != (adminpath.PurgeRepoResult{}) {
 				t.Errorf("a refusal carries a result: %+v", res)
@@ -424,9 +484,10 @@ func TestPurgeRepoLeaseADR19(t *testing.T) {
 	if got, err := e.w.leaseDevice(e.ctx, id, e.clk.Now()); err != nil || got {
 		t.Fatalf("the scheduler leased a device under purge: %v, %v", got, err)
 	}
+	mark := len(e.calls())
 	_, err = e.w.PurgeRepo(e.ctx, purgeReq(id))
 	wantCode(t, err, adminpath.CodeLocked, restic.ClassLock)
-	if c := e.rcloneCalls(); len(c) != 0 {
+	if c := e.callsSince(mark); len(c) != 0 {
 		t.Fatalf("a purge ran under another purge's lease: %+v", c)
 	}
 	release()
@@ -481,7 +542,8 @@ func TestPurgeRepoCustomerHeldADR19(t *testing.T) {
 	e := newPurgeEnv(t, []fakeRule{ruleSize5, rulePurgeOK, ruleListNil}, nil)
 	if err := e.st.Write(e.ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE devices SET retired_at = ?, retired_reason = 'test', paused_at = NULL, paused_until = NULL,
-			pause_reason = NULL, paused_by = NULL WHERE id = ?`, e.clk.Now().UnixMilli(), e.held)
+			pause_reason = NULL, paused_by = NULL, purge_requested_at = ?, purge_reason = 'test' WHERE id = ?`,
+			e.clk.Now().UnixMilli(), e.clk.Now().UnixMilli(), e.held)
 		return err
 	}); err != nil {
 		t.Fatal(err)

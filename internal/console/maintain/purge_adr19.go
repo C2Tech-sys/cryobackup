@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
@@ -25,14 +26,28 @@ import (
 //
 //  1. refuses, running nothing, unless that location is exactly one canonical
 //     device id under a non-empty configured bucket and prefix (purgeLocation),
-//     the device is known and retired, and its recorded repo_path is the same
-//     prefix (purgeEligible);
-//  2. takes the per-device maintenance lease (maintenance_schedule.lease_*),
-//     the exclusion the scheduler's mutating steps take, under a holder of its
-//     own so that neither the scheduler nor a second purge can share it;
-//  3. measures the prefix (`rclone size --json`), purges it (`rclone purge`)
+//     the device is known, retired and marked for purge (ADR 0019: mark first,
+//     storage second), and its recorded repo_path is the same prefix
+//     (purgeEligible);
+//  2. takes an in-process claim on the device (claimPurge: a second purge of
+//     the same device in this worker is refused at once, whether or not the
+//     device has a maintenance_schedule row) and then the per-device
+//     maintenance lease (maintenance_schedule.lease_*), the exclusion the
+//     scheduler's mutating steps take, under a holder of its own so that
+//     neither the scheduler nor a second purge can share it;
+//  3. lists the parent <remote>:<bucket>/<prefix> (`rclone lsjson
+//     --dirs-only`, not recursive): when the parent itself is not found or
+//     cannot be listed, the purge stops with a classified error, so a wrong
+//     bucket or remote can never read as "nothing left";
+//  4. measures the prefix (`rclone size --json`), purges it (`rclone purge`)
 //     when it holds anything, and lists it again (`rclone lsjson -R
 //     --files-only`) to report what is left.
+//
+// The whole call runs under purgeDeadline, which is shorter than the lease
+// (purgeLeaseTTL) and than the admin-path client's timeout for purge_repo, so
+// neither the lease nor the caller can give up under a running purge; a call
+// that reaches it, waiting for a concurrency slot included, is
+// adminpath.CodeTimeout.
 //
 // rclone runs as a child through the worker's runner, with the same minimal
 // environment as restic (RCLONE_CONFIG, the scratch directories, PATH), under
@@ -42,14 +57,17 @@ import (
 // line, the remote, the bucket, the prefix and object names never reach a log
 // line or an error.
 
-// Per-step deadlines of a purge. Together they stay below the lease, so the
-// lease cannot expire under a running purge.
+// Per-step deadlines of a purge. Together they stay below purgeDeadline, which
+// stays below the lease, so the lease cannot expire under a running purge
+// (TestPurgeDeadlinesADR19 pins the arithmetic).
 const (
+	// purgeParentListTimeout bounds the listing of the parent prefix.
+	purgeParentListTimeout = 2 * time.Minute
 	// purgeListTimeout bounds the measurement before the purge and the listing
 	// after it, each.
 	purgeListTimeout = 10 * time.Minute
 	// purgeRemoveTimeout bounds `rclone purge`.
-	purgeRemoveTimeout = 90 * time.Minute
+	purgeRemoveTimeout = 85 * time.Minute
 	// purgeLeaseTTL is how long the per-device lease of a purge is held at most
 	// (a crashed worker's lease frees itself after it).
 	purgeLeaseTTL = 2 * time.Hour
@@ -61,6 +79,13 @@ const (
 	// purgeStdoutCap bounds what is read of `rclone size --json`.
 	purgeStdoutCap = 1 << 20
 )
+
+// purgeDeadline bounds a whole PurgeRepo call: the waits for concurrency slots,
+// every rclone step and the bookkeeping. It is below purgeLeaseTTL (the lease
+// is taken after the deadline starts, so it outlives the call) and below the
+// admin-path client's two hours for purge_repo, so the worker answers before
+// the console gives up. A variable only so that a test can shorten it.
+var purgeDeadline = 110 * time.Minute
 
 // Reasons of a PurgeRefusedError. Each names the check that failed, never a
 // value.
@@ -74,6 +99,11 @@ const (
 	// PurgeRefusedNotRetired: the device is not retired (ADR 0019: only a
 	// retired device can be purged).
 	PurgeRefusedNotRetired = "not_retired"
+	// PurgeRefusedNotRequested: the device is retired but not marked for purge
+	// (devices.purge_requested_at is NULL). ADR 0019 orders the mark first and
+	// the storage step second, so storage is never touched for a device the
+	// console has not recorded as purging.
+	PurgeRefusedNotRequested = "not_requested"
 	// PurgeRefusedRepoPath: the device's recorded repo_path is not
 	// <prefix>/<device id>/ under the worker's configured prefix, so the worker
 	// would delete somewhere else than where the device wrote.
@@ -99,8 +129,9 @@ const (
 // PurgeRefusedError is the error PurgeRepo returns when it refuses to run: no
 // rclone process was started and nothing was deleted. It unwraps to the
 // *adminpath.Error that goes on the wire: invalid_request for the request or
-// the device's state (device_id, request_id, not_retired), not_found for an unknown
-// device, unavailable for the worker's own configuration (the other reasons).
+// the device's state (device_id, request_id, not_retired, not_requested),
+// not_found for an unknown device, unavailable for the worker's own
+// configuration (the other reasons).
 type PurgeRefusedError struct {
 	// Reason is one of the PurgeRefused constants.
 	Reason string
@@ -116,7 +147,7 @@ func (e *PurgeRefusedError) Unwrap() error { return e.wire }
 func purgeRefused(reason string) *PurgeRefusedError {
 	code := adminpath.CodeUnavailable
 	switch reason {
-	case PurgeRefusedDeviceID, PurgeRefusedRequestID, PurgeRefusedNotRetired:
+	case PurgeRefusedDeviceID, PurgeRefusedRequestID, PurgeRefusedNotRetired, PurgeRefusedNotRequested:
 		code = adminpath.CodeInvalidRequest
 	case PurgeRefusedDeviceUnknown:
 		code = adminpath.CodeNotFound
@@ -132,8 +163,25 @@ var _ adminpath.RepoPurger = (*Worker)(nil)
 // adminpath.RepoPurger for the contract. Refusals are *PurgeRefusedError; a
 // failed rclone run is an *adminpath.Error (storage_unreachable for the network,
 // tls and storage classes, restic_failed with the class otherwise, timeout); a
-// cancelled call returns the context error.
+// call that reaches purgeDeadline is adminpath.CodeTimeout; a cancelled call
+// returns the context error.
 func (w *Worker) PurgeRepo(ctx context.Context, req adminpath.PurgeRepoRequest) (adminpath.PurgeRepoResult, error) {
+	pctx, cancel := context.WithTimeout(ctx, purgeDeadline)
+	defer cancel()
+	res, err := w.purgeRepo(pctx, req)
+	if err != nil && ctx.Err() == nil && errors.Is(pctx.Err(), context.DeadlineExceeded) {
+		attrs := []any{attrMethod(adminpath.MethodPurgeRepo), attrClass(adminpath.CodeTimeout)}
+		if req.Validate() == nil {
+			attrs = append(attrs, attrDevice(req.DeviceID))
+		}
+		w.log.Warn("repository purge stopped at its deadline", attrs...)
+		return adminpath.PurgeRepoResult{}, adminpath.NewError(adminpath.CodeTimeout, "")
+	}
+	return res, err
+}
+
+// purgeRepo is PurgeRepo under the call's deadline.
+func (w *Worker) purgeRepo(ctx context.Context, req adminpath.PurgeRepoRequest) (adminpath.PurgeRepoResult, error) {
 	start := w.clock()
 	if err := req.Validate(); err != nil {
 		reason := PurgeRefusedDeviceID
@@ -159,6 +207,13 @@ func (w *Worker) PurgeRepo(ctx context.Context, req adminpath.PurgeRepoRequest) 
 	if err != nil {
 		return adminpath.PurgeRepoResult{}, w.refuse(id, purgeRefused(PurgeRefusedRcloneProgram))
 	}
+	unclaim, ok := w.claimPurge(id)
+	if !ok {
+		w.log.Warn("repository purge deferred: another purge of the device is running in this worker",
+			attrMethod(adminpath.MethodPurgeRepo), attrDevice(id), attrClass(string(restic.ClassLock)))
+		return adminpath.PurgeRepoResult{}, adminpath.NewError(adminpath.CodeLocked, restic.ClassLock)
+	}
+	defer unclaim()
 	release, err := w.leasePurge(ctx, id)
 	if err != nil {
 		return adminpath.PurgeRepoResult{}, err
@@ -167,15 +222,25 @@ func (w *Worker) PurgeRepo(ctx context.Context, req adminpath.PurgeRepoRequest) 
 	rc := &runner{program: prog, dir: w.tmpDir()}
 	w.log.Info("repository purge started", attrMethod(adminpath.MethodPurgeRepo), attrDevice(id))
 
-	// 1. Measure. A prefix that does not exist is not an error: purge is
-	// idempotent and the console retries it until it succeeds.
+	// 1. The parent <remote>:<bucket>/<prefix> must be there. Without this, a
+	// wrong bucket or remote would make the device prefix "not found" below,
+	// which reads as zeros, and the console would delete the record while the
+	// data stays where it really is.
+	if err := w.rcloneParent(ctx, rc, id, purgeParent(loc, id)); err != nil {
+		w.purgeFailed(id, err)
+		return adminpath.PurgeRepoResult{}, err
+	}
+
+	// 2. Measure. A device prefix that does not exist under a parent that does
+	// is not an error: purge is idempotent and the console retries it until it
+	// succeeds.
 	before, err := w.rcloneSize(ctx, rc, id, loc)
 	if err != nil {
 		w.purgeFailed(id, err)
 		return adminpath.PurgeRepoResult{}, err
 	}
 
-	// 2. Purge, only when there is something to purge.
+	// 3. Purge, only when there is something to purge.
 	var purgeErr error
 	if before.Count > 0 {
 		pr, err := w.rcloneRun(ctx, rc, id, "purge", purgeRemoveTimeout, []string{"purge", "--", loc}, nil)
@@ -193,7 +258,7 @@ func (w *Worker) PurgeRepo(ctx context.Context, req adminpath.PurgeRepoRequest) 
 		}
 	}
 
-	// 3. List again and report what is left.
+	// 4. List again and report what is left.
 	left, err := w.rcloneRemaining(ctx, rc, id, loc)
 	if err != nil {
 		if purgeErr != nil && ctx.Err() == nil {
@@ -353,11 +418,20 @@ func cleanSegment(s string) bool {
 	return true
 }
 
-// purgeEligible checks the device record: it must exist, be retired, and have
-// been enrolled under the prefix the worker purges (devices.repo_path is
-// <prefix>/<device id>/, written at enrollment from the console's storage
-// target). A mismatch would make the purge delete an empty location and report
-// success while the device's data stays where it was written.
+// purgeParent is the parent of a purge location: loc without its last segment,
+// "/<device id>" (<remote>:<bucket>/<prefix>). purgeLocation has already
+// proved that loc ends in exactly that segment.
+func purgeParent(loc, deviceID string) string {
+	return strings.TrimSuffix(loc, "/"+deviceID)
+}
+
+// purgeEligible checks the device record: it must exist, be retired, be marked
+// for purge (store.Device.Purging: devices.purge_requested_at, set by
+// store.RequestDevicePurge with its audit row), and have been enrolled under
+// the prefix the worker purges (devices.repo_path is <prefix>/<device id>/,
+// written at enrollment from the console's storage target). A repo_path
+// mismatch would make the purge delete an empty location and report success
+// while the device's data stays where it was written.
 func (w *Worker) purgeEligible(ctx context.Context, deviceID, prefix string) error {
 	dev, err := w.st.GetDevice(ctx, store.ScopeAll(), deviceID)
 	switch {
@@ -367,10 +441,49 @@ func (w *Worker) purgeEligible(ctx context.Context, deviceID, prefix string) err
 		return w.storeErr(ctx, err)
 	case dev.RetiredAt == nil:
 		return purgeRefused(PurgeRefusedNotRetired)
+	case !dev.Purging():
+		return purgeRefused(PurgeRefusedNotRequested)
 	case dev.RepoPath != prefix+"/"+deviceID+"/":
 		return purgeRefused(PurgeRefusedRepoPath)
 	}
 	return nil
+}
+
+// purgeClaims holds the devices a purge is running on, per worker: the
+// exclusion that does not depend on a maintenance_schedule row.
+var purgeClaims = struct {
+	mu  sync.Mutex
+	ids map[purgeClaimKey]struct{}
+}{ids: map[purgeClaimKey]struct{}{}}
+
+type purgeClaimKey struct {
+	w  *Worker
+	id string
+}
+
+// claimPurge claims deviceID for one purge in this worker; false when another
+// purge of the device holds the claim. The returned release frees it.
+//
+// Why in memory: the database lease (leasePurge) needs a maintenance_schedule
+// row, and a device can lack one (none is created for it outside enrollment).
+// One worker process holds the admin credential and is the only thing that can
+// run rclone against the repositories, so a per-device claim inside it
+// excludes every concurrent purge of that device, row or no row, without
+// writing a schedule row for a retired device. The database lease is still
+// taken after the claim, for the scheduler's sake.
+func (w *Worker) claimPurge(deviceID string) (release func(), ok bool) {
+	k := purgeClaimKey{w: w, id: deviceID}
+	purgeClaims.mu.Lock()
+	defer purgeClaims.mu.Unlock()
+	if _, held := purgeClaims.ids[k]; held {
+		return nil, false
+	}
+	purgeClaims.ids[k] = struct{}{}
+	return func() {
+		purgeClaims.mu.Lock()
+		delete(purgeClaims.ids, k)
+		purgeClaims.mu.Unlock()
+	}, true
 }
 
 // leasePurge takes the per-device lease on maintenance_schedule under a holder
@@ -379,8 +492,9 @@ func (w *Worker) purgeEligible(ctx context.Context, deviceID, prefix string) err
 // purge, and a second purge of the same device cannot either. A lease held by
 // anyone else and not yet expired is adminpath.CodeLocked. A device without a
 // maintenance_schedule row (none is created for it outside enrollment) has no
-// lease to take, and nothing in the scheduler can act on it: the purge then
-// runs without one. The returned release clears the lease if it is still this
+// lease to take, and nothing in the scheduler can act on it; the exclusion of
+// a second purge is then the in-process claim (claimPurge) that PurgeRepo
+// takes first. The returned release clears the lease if it is still this
 // call's; it never fails the call.
 func (w *Worker) leasePurge(ctx context.Context, deviceID string) (func(), error) {
 	var sfx [4]byte
@@ -444,8 +558,57 @@ type rcloneCount struct {
 	Bytes int64
 }
 
+// rcloneParent runs `rclone lsjson --dirs-only -- <parent>` on the parent
+// <remote>:<bucket>/<prefix> of the device prefix, not recursive, and returns
+// nil only when rclone exited 0 with a well-formed JSON list. The entries are
+// read and dropped as they stream past (no name is kept); only the shape of
+// the answer is checked. A parent that is not found (exit
+// rcloneExitDirNotFound) means the configured bucket, prefix or remote does
+// not point at the fleet's repositories: storage_unreachable with class
+// storage, logged with no value. Any other failure is classified like every
+// rclone step (rcloneError); an unreadable list is restic_failed, class parse.
+func (w *Worker) rcloneParent(ctx context.Context, rc *runner, deviceID, parent string) error {
+	args := []string{"lsjson", "--dirs-only", "--no-modtime", "--no-mimetype", "--", parent}
+	pr, err := w.rcloneRun(ctx, rc, deviceID, "list_parent", purgeParentListTimeout, args, func(r io.Reader) error {
+		dec := json.NewDecoder(r)
+		if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+			return errors.New("lsjson: not a list")
+		}
+		for dec.More() {
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				return err
+			}
+		}
+		if tok, err := dec.Token(); err != nil || tok != json.Delim(']') {
+			return errors.New("lsjson: list not closed")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if abort := abortError(ctx, execResult{procResult: pr}); abort != nil {
+		return abort
+	}
+	switch pr.Exit {
+	case 0:
+		if pr.StdoutErr != nil {
+			return adminpath.NewError(adminpath.CodeResticFailed, restic.ClassParse)
+		}
+		return nil
+	case rcloneExitDirNotFound:
+		w.log.Warn("repository purge stopped: the configured bucket and prefix were not found on the remote; nothing was purged",
+			attrMethod(adminpath.MethodPurgeRepo), attrDevice(deviceID), attrClass(string(restic.ClassStorage)))
+		return adminpath.NewError(adminpath.CodeStorageUnreachable, restic.ClassStorage)
+	}
+	return rcloneError(pr)
+}
+
 // rcloneSize runs `rclone size --json -- <loc>`. A prefix that does not exist
-// (exit rcloneExitDirNotFound) is a zero count.
+// (exit rcloneExitDirNotFound) is a zero count; PurgeRepo calls it only after
+// rcloneParent found the parent, so "not found" here is the device prefix
+// alone.
 func (w *Worker) rcloneSize(ctx context.Context, rc *runner, deviceID, loc string) (rcloneCount, error) {
 	var out rcloneCount
 	pr, err := w.rcloneRun(ctx, rc, deviceID, "size", purgeListTimeout, []string{"size", "--json", "--", loc}, func(r io.Reader) error {
