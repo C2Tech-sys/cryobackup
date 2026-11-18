@@ -93,7 +93,8 @@
 //
 // code is the stable part; type, title and status follow from it. HTTPStatus
 // maps a code to its status (invalid_request 400, unauthorized 401, forbidden
-// 403, not_found 404, conflict 409, custody_customer_held 409, rate_limited 429,
+// 403, mfa_step_up_required 403 (admin side only), not_found 404, conflict 409,
+// custody_customer_held 409, rate_limited 429,
 // payload_too_large 413, not_modified 304, master_key_unavailable 503,
 // unavailable 503, internal 500). The title is a fixed sentence per code, never
 // built from a request, a path or an exception text. Error.Error renders the

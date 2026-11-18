@@ -444,9 +444,17 @@ func TestADR19_LayoutAtBothWidthsAndThemes(t *testing.T) {
 			for _, theme := range []string{"dark", "light"} {
 				t.Run(fmt.Sprintf("%s_%d_%s", name, w, theme), func(t *testing.T) {
 					got := e.layout(t, layoutOpts{Path: path, CSS: css, W: w, H: 900, Scripts: []string{"purge.js"},
-						Probe: `document.documentElement.setAttribute('data-theme', '` + theme + `');` + layoutProbe})
+						Probe: `document.documentElement.setAttribute('data-theme', '` + theme + `');` + purgeLayoutProbe})
 					if got["buttons"] == 0 {
 						t.Fatalf("no button measured on %s", path)
+					}
+					// F2: "Authenticator checked ..." is one wrapped sentence beside its dot, not columns.
+					if want := name == "purge_dialog" || name == "delete_dialog" || name == "purge_all" || name == "design"; want && got["mfa"] == 0 {
+						t.Errorf("no visible authenticator-checked line on %s: the sentence check measured nothing", path)
+					}
+					if got["mfaNotBlock"] > 0 || got["mfaTimeNotInline"] > 0 || got["mfaNarrow"] > 0 {
+						t.Errorf("the authenticator-checked line is not one wrapped sentence: %.0f lines not a block, %.0f time elements not inline, %.0f lines whose widest text run is under 60%% of the line's width",
+							got["mfaNotBlock"], got["mfaTimeNotInline"], got["mfaNarrow"])
 					}
 					if got["overflow"] > 0.5 {
 						t.Errorf("the page overflows sideways by %.0f px", got["overflow"])
@@ -467,4 +475,66 @@ func TestADR19_LayoutAtBothWidthsAndThemes(t *testing.T) {
 	if bad["outside"] == 0 && bad["overflow"] <= 0.5 {
 		t.Error("the layout test cannot tell a purge dialog that runs off a phone from one that fits")
 	}
+	// The mutant of F2: the first version of the dialog made the sentence's paragraph a flex row, so the
+	// time element and the text around it became three columns. The sentence probe must see that.
+	const flexRow = ".purgepop .mfa-ok { margin: 0; display: flex; gap: 6px; align-items: baseline; color: var(--text-muted); font: 400 12px/1.4 var(--font-sans); }"
+	j := strings.Index(css, ".purgepop .mfa-ok {")
+	if j < 0 {
+		t.Fatal("the .mfa-ok rule is not where the test expects it")
+	}
+	k := j + strings.Index(css[j:], "\n")
+	broken := css[:j] + flexRow + css[k:]
+	for _, w := range []int{1360, 390} {
+		bad := e.layout(t, layoutOpts{Path: pages["purge_dialog"], CSS: broken, W: w, H: 900, Scripts: []string{"purge.js"}, Probe: purgeLayoutProbe})
+		if bad["mfa"] == 0 || bad["mfaNotBlock"] == 0 && bad["mfaNarrow"] == 0 {
+			t.Errorf("at %d px the sentence probe cannot tell a flex-row paragraph from a wrapped sentence: %v", w, bad)
+		}
+	}
 }
+
+// mfaLineProbe measures every visible "Authenticator checked ..." line (p.mfa-ok): it must be a block (not
+// a flex or grid container, whose children would become columns), its time elements must stay inline, and
+// its text must run the width of the line (when it wraps, its widest run of text is most of the line's
+// width; three ragged columns make every run narrow).
+const mfaLineProbe = `
+var mfa = {mfa: 0, mfaNotBlock: 0, mfaTimeNotInline: 0, mfaNarrow: 0};
+document.querySelectorAll('.mfa-ok').forEach(function (p) {
+  if (!p.checkVisibility()) return;
+  mfa.mfa++;
+  if (getComputedStyle(p).display !== 'block') mfa.mfaNotBlock++;
+  p.querySelectorAll('time').forEach(function (t) { if (getComputedStyle(t).display !== 'inline') mfa.mfaTimeNotInline++; });
+  var rg = document.createRange(); rg.selectNodeContents(p);
+  var widest = 0;
+  Array.prototype.forEach.call(rg.getClientRects(), function (r) { if (r.width > widest) widest = r.width; });
+  if (widest < p.getBoundingClientRect().width * 0.6) mfa.mfaNarrow++;
+});
+`
+
+// F2: when the audit row of the step-up cannot be written, nothing changed, and the page says so
+// ("not saved, nothing was changed"), not "Code incorrect or expired."
+func TestADR19_StepUpAuditFailureSaysNotSavedNotWrongCode(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	id := e.dev[adr19Host]
+	e.advance(auth.FreshMFAWindow + time.Minute)
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`CREATE TRIGGER refuse_audits BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'audit refused by the test'); END`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, body := e.post("/ui/devices/"+id+"/purge", vals("reason", "lab machine decommissioned", "confirm", adr19Host, "code", e.mfa.code("admin")), false)
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("audit failure: %d, want 500", res.StatusCode)
+	}
+	mustContain(t, "not saved", body, "Not saved", "nothing was changed")
+	if strings.Contains(body, "Code incorrect or expired.") {
+		t.Error("an audit failure reads as a wrong code")
+	}
+	if d, _ := e.adr19Device(id); d.Purging() {
+		t.Fatal("a failed step-up purged a device")
+	}
+}
+
+// purgeLayoutProbe is layoutProbe (overflow, buttons) with mfaLineProbe's numbers added to its answer.
+var purgeLayoutProbe = mfaLineProbe + strings.Replace(layoutProbe, "return out;", "for (var k in mfa) out[k] = mfa[k]; return out;", 1)

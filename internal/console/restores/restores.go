@@ -464,10 +464,21 @@ type Result struct {
 // was sent, so the caller can still answer with a problem). started_at is
 // written together with the outcome. The caller must not present a failed
 // stream as complete (the admin API aborts the HTTP response) and checks the
-// token first (VerifyToken, or DownloadWithToken).
+// token first (VerifyToken, or DownloadWithToken). A device that is purging (ADR
+// 0019) refuses the download with ErrNotReady; a device that is only retired does not.
 func (s *Service) Download(ctx context.Context, who Actor, r store.RestoreRequest, w io.Writer) (Result, error) {
 	if !s.Downloadable(r) {
 		return Result{}, s.notDownloadable(r)
+	}
+	// ADR 0019: a device marked for purge is being erased; the backups behind an older restore must
+	// not leave through it (a device that is only retired keeps ADR 0016's behaviour). Checked here,
+	// so DownloadWithToken is covered too. Fails closed: an unreadable device is no download.
+	dev, gerr := s.Store.GetDevice(ctx, store.ScopeAll(), r.DeviceID)
+	if gerr != nil {
+		return Result{}, gerr
+	}
+	if dev.Purging() {
+		return Result{}, ErrNotReady
 	}
 	if !s.Master.Loaded() {
 		return Result{}, ErrMasterKey
