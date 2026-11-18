@@ -1,6 +1,6 @@
 # ADR 0020 - M4: alert e-mail, the daily digest and the test-mail button
 
-**Date:** 2026-11-18 - **Status:** Proposed - **Decider:** the operator, recorded by the foreman
+**Date:** 2026-11-18 - **Status:** Accepted (operator, 2026-11-18) - **Decider:** the operator, recorded by the foreman
 
 architecture.md §9 gives M4 one goal: "Alarms reach a human and resolve themselves". Matrix rows r157 to r165 (all
 `alerting, must`) define it: daily digest, immediate failure, silence, unseen and expected-customer-missing alerts,
@@ -87,9 +87,9 @@ status reports (r174); weekly and grouped-status variants (r181); per-customer t
 - Build order: sender and test mail first (usable by itself), then episodes and alerts, then the digest, then
   acknowledge. Each under fable-foreman with blind verification, then a lab run against a real relay.
 
-## Open questions for the operator
+## Operator rulings (2026-11-18)
 
-1. Immediate mail for every critical state (decision 4), or only the four the matrix names?
-2. Per-customer recipients deferred to M11 (decision 3)?
-3. Digest every day including all-green days (decision 8)?
-4. Heartbeat ping in M4 (decision 12)?
+1. Immediate mail for every critical state (decision 4): yes.
+2. Per-customer recipients deferred to M11 (decision 3): yes.
+3. Digest every day, all-green days included (decision 8): yes.
+4. Heartbeat ping in M4 (decision 12): yes.
