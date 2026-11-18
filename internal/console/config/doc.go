@@ -21,6 +21,13 @@
 // outbound dead-man's-switch ping, sent only while the alarm-evaluator is
 // healthy. No default names an operator, a host or a monitoring service.
 //
+// The smtp block (ADR 0020) names the relay that carries alert and digest mail.
+// security is starttls (default), tls or plain; plain needs smtp.allow_plaintext
+// (CRYO_SMTP_ALLOW_PLAINTEXT) and cannot carry a username, because credentials
+// are never sent in clear. smtp.password_file is a mounted file with the
+// password on one line (a trailing newline is trimmed); on Unix it must not be
+// readable by group or others, and the sender refuses it if it is.
+//
 // Validate enforces the listener rules of architecture §5: the admin listener
 // must bind a loopback or private address unless admin_allow_public is set, the
 // agent listener needs a certificate and key unless insecure_http_for_lab is on,
