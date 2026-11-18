@@ -233,7 +233,7 @@ func r3RealApp(t *testing.T, mod func(*config.Config)) *App {
 	cfg.AgentProbe.CAFile = certPath
 	cfg.GatewayURL = gw.URL
 	cfg.HealthProber.GatewayCAFile = certPath
-	cfg.SMTP = config.SMTP{Host: smtpHost, Port: smtpPort, Security: "plain", From: "cryo@example.invalid"}
+	cfg.SMTP = config.SMTP{Host: smtpHost, Port: smtpPort, Security: "plain", AllowPlaintext: true, From: "cryo@example.invalid"}
 	cfg.AdminpathSocket = filepath.Join(dir, "a.sock")
 	if mod != nil {
 		mod(&cfg)
