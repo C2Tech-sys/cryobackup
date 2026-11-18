@@ -1145,3 +1145,38 @@ table.fleet.unseen td.act .btn { white-space: nowrap; }
   table.fleet.tokens td.act, table.fleet.tokens th:last-child { position: sticky; right: 0; z-index: 1; background: var(--surface); }
   table.fleet.tokens td.act { white-space: nowrap; width: 1%; overflow-wrap: normal; box-shadow: -1px 0 0 var(--border); }
 }
+
+/* ===== ADR 0019 (P19-T5): purge a retired device, purge a customer's retired devices, delete a customer =====
+   The retire dialog's popover and type (retire-lede, retire-does), a little wider for the code field; the purging statement
+   is a banner holding a key-value list; "Retired (n)" says how many of its rows are purging. Tokens only. */
+.purgepop { width: 440px; gap: 10px; }
+.purgepop .purge-err { margin: 0; }
+.purgepop .mfa-ok { margin: 0; color: var(--text-muted); font: 400 12px/1.4 var(--font-sans); }
+.purgepop .mfa-ok .g { margin-right: 4px; vertical-align: 1px; }
+.purgepop .purge-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.purgepop .purge-actions .help { color: var(--text-muted); font: 400 12px/1.3 var(--font-sans); }
+.purgepop .purge-actions .help[hidden] { display: none; }
+.actionbar details.act-purge[open] { z-index: 26; }
+.purge-state { align-items: flex-start; }
+.purge-state .purge-kv { margin-top: 8px; grid-template-columns: 110px minmax(0, 1fr); }
+.purge-state .purge-kv dd .meta-mono { margin-left: 4px; }
+.purge-state .purge-retry { margin: 8px 0 0; color: var(--text-muted); font: 400 12.5px/1.4 var(--font-sans); }
+.retired-fold > summary .purge-n { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; font: 500 11.5px/1 var(--font-mono); color: var(--text-muted); }
+.retired-fold > summary .purge-n.bad { color: var(--danger); }
+.retired-fold > summary .purge-unread { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font: 500 11.5px/1 var(--font-mono); color: var(--warning); }
+.cust-delete { display: grid; gap: 10px; justify-items: start; padding-top: 14px; border-top: 1px solid var(--border); }
+.cust-delete .h-label { margin: 0; }
+.cust-delete p { margin: 0; max-width: 72ch; }
+.d-purge .rowmenu-pop.d-static { position: static; width: auto; max-width: 480px; box-shadow: none; }
+.d-purge .d-purge-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); }
+.d-purge .d-purge-grid > .card { align-content: start; }
+@media (max-width: 639px) {
+  .actionbar details.act-purge, .actionbar .act-item .tipwrap:has(details.act-purge) { position: static; }
+  .actionbar details.act-purge[open] > .purgepop { left: 0; right: 0; width: auto; max-width: none; }
+  .cust-delete { position: relative; }
+  .cust-delete details.act-purge { position: static; }
+  .cust-delete details.act-purge[open] > .purgepop { left: 0; right: 0; width: auto; max-width: none; }
+}
+@media (max-width: 1000px) and (min-width: 640px) {
+  .actionbar details.act-purge[open] > .purgepop { left: auto; right: 0; }
+}

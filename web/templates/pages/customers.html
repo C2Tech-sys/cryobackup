@@ -2,6 +2,7 @@
 {{define "title"}}Customers{{end}}
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Customers</span></nav>
+{{template "m3_notice" .Notice}}
 <section class="stack" aria-label="Customers">
 <div class="toolbar">
   <form class="filters grow" method="get" action="/customers" role="search" aria-label="Filter customers">

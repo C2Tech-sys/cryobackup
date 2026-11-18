@@ -167,6 +167,9 @@ func bannerViewIn(b state.Banner, now time.Time, loc *time.Location) BannerView 
 		v.Text += " Nothing is being backed up."
 	}
 	v.Action = bannerAction(b.ID)
+	if a := purgeBannerAction(b); a != nil { // ADR 0019: "Purge not finished" opens the device it names
+		v.Action = a
+	}
 	return v
 }
 

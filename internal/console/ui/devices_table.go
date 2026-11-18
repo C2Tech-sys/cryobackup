@@ -210,6 +210,7 @@ func (s *Service) buildDevTable(ctx context.Context, p *auth.Principal, fleet he
 		t.Retired = foldOf(customerPtrs(fleet), c, spec.CustomerID == "", func(d state.DeviceState) bool {
 			return (q.Customer == "" || d.CustomerID == q.Customer) && strings.Contains(strings.ToLower(d.Hostname), search)
 		})
+		t.Retired = s.withPurging(ctx, p, t.Retired) // ADR 0019
 	}
 	// pager
 	t.Pager = buildPager(tb.Page, "devices",

@@ -144,6 +144,8 @@ type CustomersPage struct {
 	CanCreate bool
 	AsOf      string
 	Zone      string
+	// Notice is the answer of a customer delete (ADR 0019).
+	Notice *CauseView
 }
 
 var custHeads = []struct{ Key, Label string }{{"name", "Customer"}, {"health", "State"}, {"devices", "Devices"}, {"last_success", "Last success"}, {"expected", "Expected"}}
@@ -226,7 +228,9 @@ func (s *Service) customers(w http.ResponseWriter, r *http.Request) {
 		var tb store.CustomerTable
 		tb, err = store.BuildCustomerTable(rows, fleet.View.Customers, store.CustomerTableQuery{Health: q.Health, Sort: q.Sort, Desc: q.Desc, Page: q.Page, Size: q.Size})
 		if err == nil {
-			s.render(w, r, http.StatusOK, "customers", "base", s.customersPage(r.Context(), p, fleet, c, q, tb))
+			pg := s.customersPage(r.Context(), p, fleet, c, q, tb)
+			pg.Notice = customerDeletedNotice(r) // ADR 0019
+			s.render(w, r, http.StatusOK, "customers", "base", pg)
 			return
 		}
 	}
@@ -380,6 +384,8 @@ type CustomerPage struct {
 	Form     *CustForm
 	Policy   *CustPolicyView // M2-W2A: the Policy tab (policy_customer.go)
 	Saved    string
+	// Delete is the "Delete customer" section of the Overview tab, owner only (ADR 0019, purge_adr19.go).
+	Delete *CustDeleteView
 }
 
 // custTabs lists the customer page's tabs. The Policy tab (S17, admin) is shown
@@ -480,6 +486,7 @@ func (s *Service) customerOverview(w http.ResponseWriter, r *http.Request) {
 	cs := rollupOf(fleet, row.ID)
 	pg := CustomerPage{Page: s.page(r.Context(), p, fleet, row.Name, "customers", "/ui/events"), H: s.custHead(p, row, cs, c, "overview"), Tab: "overview", Saved: savedText(r.URL.Query().Get("saved"))}
 	pg.Overview = s.overview(r.Context(), p, fleet, row, cs, c)
+	pg.Delete = s.custDeleteView(r, p, row) // ADR 0019
 	s.render(w, r, http.StatusOK, "customer", "base", pg)
 }
 

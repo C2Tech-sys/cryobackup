@@ -26,6 +26,7 @@ var designSections = []DesignSection{
 	{"visuals", "Visuals", "step 7 · B01 B07"},
 	{"runs", "Run views", "step 8 · B07 B17"},
 	{"shell", "App shell", "step 9 · every screen"},
+	{"purge", "Purge and delete", "ADR 0019 · B07 B08"},
 }
 
 // DesignSection names a /design section.
@@ -163,6 +164,7 @@ type DesignData struct {
 	Runs      []RunRow
 	Steps     []Step
 	Facts     []Fact
+	Purge     *DesignPurge // ADR 0019 (purge_adr19.go)
 }
 
 func sampleStrip(panel bool, now time.Time) StripView {
@@ -238,6 +240,7 @@ func (s *Service) designData(ctx context.Context, only string) DesignData {
 			cb = append(cb, b)
 		}
 	}
+	cb = append(cb, health.PurgeBanners(health.PurgeFacts{JobErrorClass: "store"}, now)...) // ADR 0019: PURGE NOT FINISHED; its device-naming variant is in the purge section
 	for _, b := range health.SortBanners(cb) {
 		d.CBanners = append(d.CBanners, bannerView(b))
 	}
@@ -310,6 +313,7 @@ func (s *Service) designData(ctx context.Context, only string) DesignData {
 		{ID: "r3", Date: "Thu 2:10 AM", DateISO: now.Format(time.RFC3339), Chip: OutcomeChip("h3", "success", false), Summary: "312 new · 1.1 GB added", Exit: "exit 0", Duration: "14m 40s"},
 	}
 	d.Steps = []Step{{1, "Snapshot", "done"}, {2, "Browse and select", "on"}, {3, "Mode", "todo"}, {4, "Progress", "todo"}}
+	d.Purge = s.designPurge(ctx, now)
 	d.Facts = []Fact{{Key: "Policy", Value: "v12"}, {Key: "Schedule", Value: "every 4 h in Mon-Fri/7-19 · catch-up on", Mono: true}, {Key: "Repository", Value: "61 snapshots · latest 6 h ago", Mono: true}}
 	return d
 }

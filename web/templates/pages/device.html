@@ -2,6 +2,7 @@
 {{define "device_live"}}<div id="device-live" class="stack" data-live>
 <span class="asof" aria-live="polite"></span>
 {{with .Dev}}
+{{with .Purge}}{{template "purge_state" .}}{{end}}
 {{if .Cause}}<div class="banner {{.Cause.Class}} dense"{{if eq .Cause.Class "crit"}} role="alert"{{else}} role="status"{{end}}><i class="g g-{{.Cause.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Cause.Title}}.</b> {{.Cause.Text}}</div></div>{{end}}
 <div class="actions">
   {{if .CanRestore}}<a class="btn primary sm" href="/devices/{{.ID}}/restore"><svg width="12" height="12" aria-hidden="true"><use href="#i-restore"/></svg>Restore files…</a>

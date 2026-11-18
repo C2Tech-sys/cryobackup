@@ -3,6 +3,7 @@
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/customers">Customers</a> / <span>{{.H.Name}}</span></nav>
 {{if .Saved}}<div class="banner ok dense" role="status"><i class="g g-ok" aria-hidden="true"></i><div class="b-text">{{.Saved}}</div></div>{{end}}
+{{with .Delete}}{{template "m3_notice" .Notice}}{{end}}
 <article class="card" aria-labelledby="cust-h">
   <header class="page-head">
     <div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-folder"/></svg><h2 id="cust-h">{{.H.Name}}</h2>
@@ -12,7 +13,7 @@
   </header>
   <div class="mt stack">
   {{with .H.Cause}}<div class="banner {{.Class}} dense" role="alert"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
-  {{if eq .Tab "overview"}}{{template "customer_overview" .Overview}}
+  {{if eq .Tab "overview"}}{{template "customer_overview" .Overview}}{{with .Delete}}{{template "cust_delete" .}}{{end}}
   {{else if eq .Tab "devices"}}{{template "devices_view" .Table}}
   {{else if eq .Tab "settings"}}{{template "customer_form" .Form}}
   {{else if eq .Tab "policy"}}{{template "customer_policy" .Policy}}

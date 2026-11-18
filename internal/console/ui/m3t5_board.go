@@ -139,6 +139,11 @@ func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fle
 		rowsByCustomer[cs.ID] = rows
 	}
 	b.Filter.Shown, b.Filter.Total = shown, total
+	var purging map[string]store.Device // ADR 0019: which retired devices are being purged, read once for every fold
+	purgingOK := true
+	if !b.Filter.Active {
+		purging, purgingOK = s.purgingSet(ctx, p)
+	}
 	for _, cs := range f.View.Customers {
 		rows := rowsByCustomer[cs.ID]
 		// The customer ring counts customers, devices or none: a customer of the chosen segment is shown with
@@ -162,7 +167,7 @@ func (s *Service) boardData(ctx context.Context, p *auth.Principal, f health.Fle
 		if b.Filter.Active {
 			g.Collapsed = false // every matching group is open, so the rows on screen are the count (fresh.js keeps it so)
 		} else {
-			g.Retired = customerFold(cs, c) // M3-T6
+			g.Retired = markPurging(customerFold(cs, c), purging, purgingOK) // M3-T6, ADR 0019
 		}
 		b.Groups = append(b.Groups, g)
 	}

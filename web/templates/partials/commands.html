@@ -7,6 +7,7 @@
 {{define "dev_action"}}<span class="act-item" id="{{.ID}}">
 {{- if .Enabled}}
   {{- if .Retire}}{{template "retire_dialog" .}}
+  {{- else if .Purge}}{{template "purge_dialog" .}}
   {{- else if .Pause}}
   <span class="tipwrap"><details class="rowmenu act-confirm act-pause"><summary class="btn sm"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</summary>
     <div class="rowmenu-pop pausepop" role="group" aria-label="Park this device">

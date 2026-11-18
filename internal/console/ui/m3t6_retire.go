@@ -259,6 +259,8 @@ type RetiredRow struct {
 	Customer   string // "" when the list is one customer's
 	When       string
 	ISO        string
+	// Purge is PURGING (or PURGE FAILING) when the device is being purged (ADR 0019).
+	Purge *Chip
 }
 
 // RetiredFold is "Retired (n)", collapsed: the retired devices a list leaves out of its rows.
@@ -266,6 +268,10 @@ type RetiredFold struct {
 	N    int
 	Rows []RetiredRow
 	Chip Chip
+	// PurgeErr: which of the rows are purging could not be read (ADR 0019). Purging counts the rows
+	// being purged, Failing those whose last attempt failed.
+	PurgeErr         bool
+	Purging, Failing int
 }
 
 func retiredChip() Chip {

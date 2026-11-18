@@ -151,6 +151,8 @@ type ActionItem struct {
 	Pause *PauseForm
 	// Retire, when set, is the Retire dialog (m3t6_retire.go), the same way.
 	Retire *RetireForm
+	// Purge, when set, is the Purge dialog of a retired device (ADR 0019, purge_adr19.go).
+	Purge *PurgeForm
 }
 
 // IdentityPanel is the banner and the resolve form of an identity conflict.
@@ -354,6 +356,7 @@ func (s *Service) actionBar(r *http.Request, p *auth.Principal, f health.Fleet, 
 			bar.Identity.Why = "Resolving an identity conflict needs the admin role."
 		}
 	}
+	s.purgeActions(r, p, dev, &bar) // ADR 0019: Purge on a retired device (owner); nothing on a purging one
 	return bar
 }
 
