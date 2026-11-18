@@ -4,10 +4,17 @@ package auth
 //
 // An owner action that cannot be undone (purge of a retired device, delete of a
 // customer) needs a TOTP check made on THIS session within the last
-// FreshMFAWindow. The mark is sessions.mfa_verified_at: set when the login passes
-// its MFA step (newFullSession), refreshed by a re-enrollment that verified a
-// current code (ConfirmTOTP) and by StepUp. FreshMFA reads it, RequireFreshMFA
-// gates a handler on it, StepUp renews it.
+// FreshMFAWindow. The mark is sessions.mfa_verified_at: set to the login time when
+// the login passes its MFA step with a TOTP code (newFullSession), refreshed by a
+// re-enrollment, whose confirm verifies a code of the new secret (ConfirmTOTP),
+// and by StepUp. FreshMFA reads it, RequireFreshMFA gates a handler on it, StepUp
+// renews it.
+//
+// A recovery code never makes a session fresh. A login completed with one gets
+// mfaMarkNotFresh: the column must not stay NULL, because other readers take NULL
+// to mean "no MFA step yet" (lookupSession: a pending session; MarkSessionMFAAt,
+// which a StepUp needs; ListAdminSessions), so the mark is present but older than
+// any window.
 
 import (
 	"context"
@@ -37,6 +44,11 @@ const (
 
 	stepUpTitle = "A recent MFA check is required. Confirm with a current authenticator code."
 )
+
+// mfaMarkNotFresh is the mfa_verified_at of a session whose login passed MFA with
+// a recovery code: the Unix epoch, a mark that is present (the session is a
+// completed login) and that FreshMFA can never accept, whatever the clock does.
+var mfaMarkNotFresh = time.UnixMilli(0).UTC()
 
 // FreshMFA reports whether p holds a TOTP check made within FreshMFAWindow of now.
 // Only a completed browser session can be fresh: an API token (ViaToken, no

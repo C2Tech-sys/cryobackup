@@ -476,6 +476,48 @@ func TestADR19CompletePurgeDeletesTheDeviceAndEverythingItOwnsAndNothingElse(t *
 	}
 }
 
+// The lobby rows of a purged device (enrollment_requests.device_id is SET NULL in the schema, so
+// they would keep the host name and address) are deleted in the purge's own transaction; another
+// device's and an unattached request stay, and a purge refused for its audit row deletes nothing.
+func TestADR19CompletePurgeDeletesTheDevicesLobbyRows(t *testing.T) {
+	w := seed(t)
+	dev, other := w.devA.ID, w.devB.ID
+	lobby := func(id, d, host string) {
+		adr19Exec(w, `INSERT INTO enrollment_requests (id, request_nonce, hostname, source_ip, status, customer_id, device_id, decided_at, expires_at, created_at, updated_at)
+			VALUES (?, ?, ?, '192.0.2.44', 'approved', (SELECT customer_id FROM devices WHERE id = ?), ?, 1, 1900000000000, 1, 1)`, id, "n-"+id, host, d, d)
+	}
+	lobby("01J9Y4K3A0B1C2D3E4F5G6HQ11", dev, "PURGED-HOST-1")
+	lobby("01J9Y4K3A0B1C2D3E4F5G6HQ12", dev, "PURGED-HOST-2")
+	lobby("01J9Y4K3A0B1C2D3E4F5G6HQ13", other, "KEPT-HOST")
+	adr19Exec(w, `INSERT INTO enrollment_requests (id, request_nonce, hostname, status, expires_at, created_at, updated_at)
+		VALUES ('01J9Y4K3A0B1C2D3E4F5G6HQ14', 'n-14', 'PENDING-HOST', 'pending', 1900000000000, 1, 1)`)
+	purged := func() int {
+		return countWhere(w, `SELECT COUNT(*) FROM enrollment_requests WHERE hostname LIKE 'PURGED-HOST-%'`)
+	}
+	adr19Retire(w, dev)
+	must[PurgeRequestResult](t)(w.s.RequestDevicePurge(w.ctx, ScopeAll(), dev, "decommissioned", adr19Owner(w)))
+
+	refuseAudits(t, w.s)
+	if err := w.s.CompleteDevicePurge(w.ctx, ScopeAll(), dev, 1, 1); !errors.Is(err, ErrAudit) {
+		t.Fatalf("complete without audit: %v, want ErrAudit", err)
+	}
+	if n := purged(); n != 2 {
+		t.Fatalf("a refused purge deleted lobby rows: %d left, want 2", n)
+	}
+	adr19Exec(w, `DROP TRIGGER refuse_audits`)
+
+	ok(t, w.s.CompleteDevicePurge(w.ctx, ScopeAll(), dev, 1, 1))
+	if n := purged(); n != 0 {
+		t.Fatalf("%d lobby rows of the purged device survived it (with their host names)", n)
+	}
+	if n := countWhere(w, `SELECT COUNT(*) FROM enrollment_requests WHERE hostname = 'KEPT-HOST' AND device_id = ?`, other); n != 1 {
+		t.Fatalf("another device's lobby row: %d, want 1", n)
+	}
+	if n := countWhere(w, `SELECT COUNT(*) FROM enrollment_requests WHERE hostname = 'PENDING-HOST'`); n != 1 {
+		t.Fatalf("an unattached lobby row: %d, want 1", n)
+	}
+}
+
 // DeleteCustomer refuses while any device exists, with counts, and touches nothing.
 func TestADR19DeleteCustomerRefusesWhileDevicesExist(t *testing.T) {
 	w := seed(t)
@@ -591,8 +633,12 @@ func TestADR19DeleteCustomerCascadesItsOwnRowsAndNothingElse(t *testing.T) {
 	e := rows[0]
 	body := string(e.Details)
 	if e.Severity != "warning" || e.ActorID != w.admin.ID || e.CustomerID != c.ID || e.ObjectType != "customer" ||
-		!strings.Contains(body, "contract ended") || !strings.Contains(body, "Closing Co") || !strings.Contains(body, `"tokens_deleted":2`) {
+		!strings.Contains(body, "contract ended") || !strings.Contains(body, `"tokens_deleted":2`) {
 		t.Fatalf("audit row %+v details %s", e, body)
+	}
+	// Ids and counts only, as customer.create: the customer's name is not in the details.
+	if strings.Contains(body, "Closing Co") || strings.Contains(body, `"name"`) {
+		t.Fatalf("customer.delete details name the customer: %s", body)
 	}
 	if _, err := w.s.DeleteCustomer(ctx, ScopeAll(), c.ID, "again", adr19Owner(w)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a second delete: %v, want ErrNotFound", err)

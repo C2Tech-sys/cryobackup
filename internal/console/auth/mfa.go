@@ -126,14 +126,22 @@ func (m *Manager) unwrapTOTP(a store.Admin) ([]byte, error) {
 
 // newFullSession creates the session of a completed login inside tx and
 // deletes the pending one: the cookie value changes when the login completes,
-// so a pending cookie never becomes a full session.
-func (m *Manager) newFullSession(tx *store.Tx, p *Principal, ip, userAgent string) (LoginResult, error) {
+// so a pending cookie never becomes a full session. totp says whether the MFA
+// step was a verified TOTP code: then the session's mark is now (fresh for
+// FreshMFAWindow); a login completed with a recovery code gets
+// mfaMarkNotFresh instead, a mark (so the session is a completed login) that
+// FreshMFA never accepts (ADR 0019: only a TOTP check makes a session fresh).
+func (m *Manager) newFullSession(tx *store.Tx, p *Principal, ip, userAgent string, totp bool) (LoginResult, error) {
 	tok, err := newSessionToken()
 	if err != nil {
 		return LoginResult{}, err
 	}
 	now := m.Now()
-	sess, err := tx.InsertSession(store.Session{AdminID: p.Admin.ID, TokenHash: hashToken(tok), MFAVerifiedAt: &now, SourceIP: ip,
+	mark := now
+	if !totp {
+		mark = mfaMarkNotFresh
+	}
+	sess, err := tx.InsertSession(store.Session{AdminID: p.Admin.ID, TokenHash: hashToken(tok), MFAVerifiedAt: &mark, SourceIP: ip,
 		UserAgentHash: uaHashOf(userAgent), LastSeenAt: now, ExpiresAt: now.Add(m.Idle), AbsoluteExpiresAt: now.Add(m.Absolute)})
 	if err != nil {
 		return LoginResult{}, err
@@ -318,7 +326,7 @@ func (m *Manager) VerifyTOTPLogin(ctx context.Context, p *Principal, code, metho
 			return err
 		}
 		var err error
-		res, err = m.newFullSession(tx, p, ip, userAgent)
+		res, err = m.newFullSession(tx, p, ip, userAgent, true)
 		if err != nil {
 			return err
 		}
@@ -337,7 +345,9 @@ func (m *Manager) VerifyTOTPLogin(ctx context.Context, p *Principal, code, metho
 }
 
 // VerifyRecoveryLogin completes a pending login with a single-use recovery
-// code. The audit row is a warning and says how many codes are left.
+// code. The audit row is a warning and says how many codes are left. The new
+// session is a completed login but not fresh (mfaMarkNotFresh): an action
+// behind RequireFreshMFA needs a StepUp with a TOTP code first.
 func (m *Manager) VerifyRecoveryLogin(ctx context.Context, p *Principal, code, method, ip, userAgent string) (LoginResult, int, error) {
 	if p == nil || !p.Pending {
 		return LoginResult{}, 0, ErrNoSession
@@ -357,7 +367,7 @@ func (m *Manager) VerifyRecoveryLogin(ctx context.Context, p *Principal, code, m
 			return err
 		}
 		var err error
-		res, err = m.newFullSession(tx, p, ip, userAgent)
+		res, err = m.newFullSession(tx, p, ip, userAgent, false)
 		if err != nil {
 			return err
 		}
@@ -520,7 +530,10 @@ func (m *Manager) ConfirmTOTP(ctx context.Context, p *Principal, code, current, 
 			return err
 		}
 		if reenroll {
-			// The current code just verified is a fresh MFA check on this session (ADR 0019).
+			// A fresh MFA check on this session (ADR 0019): code was verified above
+			// against the new secret (matchTOTP) and its step recorded as used by
+			// SetAdminTOTP, so this confirm is a verified TOTP code whether the
+			// current factor was a TOTP code or a recovery code.
 			if err := tx.MarkSessionMFAAt(a.ID, p.SessionID, m.Now()); err != nil {
 				return err
 			}
@@ -530,7 +543,7 @@ func (m *Manager) ConfirmTOTP(ctx context.Context, p *Principal, code, current, 
 		}
 		details := map[string]any{"reenroll": reenroll, "recovery_codes": len(codes)}
 		if p.Pending {
-			r, err := m.newFullSession(tx, p, ip, userAgent)
+			r, err := m.newFullSession(tx, p, ip, userAgent, true) // the new secret's code is a verified TOTP code
 			if err != nil {
 				return err
 			}

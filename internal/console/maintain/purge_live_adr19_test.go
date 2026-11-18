@@ -66,6 +66,34 @@ func TestLivePurgeRepoLocalADR19(t *testing.T) {
 		t.Fatalf("the retired device's repository was not created where expected: %v", err)
 	}
 
+	// A wrong bucket (ticket P19-F1): the device prefix is "not found" there,
+	// which must not read as "nothing left". The parent listing finds no
+	// <bucket>/<prefix> and the purge stops with a classified error.
+	bucket := e.w.cfg.Bucket
+	e.w.cfg.Bucket = "no-such-bucket"
+	_, err = e.w.PurgeRepo(ctx, purgeReq(retired))
+	wantCode(t, err, adminpath.CodeStorageUnreachable, "storage")
+	e.w.cfg.Bucket = bucket
+	if _, err := os.Stat(filepath.Join(target, "config")); err != nil {
+		t.Fatalf("the repository changed under a purge with a wrong bucket: %v", err)
+	}
+
+	// The right location without the storage probe repository's directory
+	// (the decoy above stands in for it): no positive evidence that this is
+	// the fleet's location, so the purge stops the same way and deletes nothing.
+	probeDir := filepath.Join(prefixDir, adminpath.ProbeRepoID)
+	if err := os.Rename(probeDir, probeDir+"-away"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.w.PurgeRepo(ctx, purgeReq(retired))
+	wantCode(t, err, adminpath.CodeStorageUnreachable, "storage")
+	if err := os.Rename(probeDir+"-away", probeDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "config")); err != nil {
+		t.Fatalf("the repository changed under a purge without the probe directory: %v", err)
+	}
+
 	res, err := e.w.PurgeRepo(ctx, purgeReq(retired))
 	if err != nil {
 		t.Fatalf("PurgeRepo: %v", err)
