@@ -47,22 +47,37 @@ type Device struct {
 	Notes                string
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	// The purge fields (ADR 0019, migration 0007). PurgeRequestedAt set means the device is
+	// "purging": an owner asked for its repository and record to be removed and the job has
+	// not finished. Only a retired device carries it. PurgeRequestedBy is "" once that account
+	// is deleted; PurgeLastErrorClass is a fixed class word, never a message.
+	PurgeRequestedAt    *time.Time
+	PurgeRequestedBy    string
+	PurgeReason         string
+	PurgeLastErrorClass string
+	PurgeLastAttemptAt  *time.Time
 }
+
+// Purging reports whether a purge was requested and has not finished (ADR 0019). A purging
+// device is retired; nothing may act on it except the device-purge job.
+func (d Device) Purging() bool { return d.PurgeRequestedAt != nil }
 
 const deviceCols = `id, customer_id, source_kind, hostname, friendly_name, os_version, arch, device_class, agent_version,
 	restic_version, update_ring, target_version, enrolled_at, enrolled_via, enrollment_token_id, enroll_nonce,
 	enroll_confirmed_at, first_backup_due_by, policy_version_applied, paused_at, paused_until, pause_reason, paused_by,
 	retired_at, retired_reason, replaced_by_device_id, repo_path, hw_fingerprint, identity_conflict_at, notes,
-	created_at, updated_at`
+	created_at, updated_at, purge_requested_at, purge_requested_by, purge_reason, purge_last_error_class, purge_last_attempt_at`
 
 func scanDevice(sc scanner) (Device, error) {
 	var d Device
 	var friendly, osv, arch, av, rv, tv, tok, nonce, reason, by, rreason, repl, hw, notes sql.NullString
 	var confirmed, due, pva, paused, until, retired, ident sql.NullInt64
+	var purgeAt, purgeTried sql.NullInt64
+	var purgeBy, purgeReason, purgeClass sql.NullString
 	var enrolled, c, u int64
 	err := sc.Scan(&d.ID, &d.CustomerID, &d.SourceKind, &d.Hostname, &friendly, &osv, &arch, &d.DeviceClass, &av, &rv,
 		&d.UpdateRing, &tv, &enrolled, &d.EnrolledVia, &tok, &nonce, &confirmed, &due, &pva, &paused, &until, &reason, &by,
-		&retired, &rreason, &repl, &d.RepoPath, &hw, &ident, &notes, &c, &u)
+		&retired, &rreason, &repl, &d.RepoPath, &hw, &ident, &notes, &c, &u, &purgeAt, &purgeBy, &purgeReason, &purgeClass, &purgeTried)
 	if err != nil {
 		return Device{}, err
 	}
@@ -74,6 +89,8 @@ func scanDevice(sc scanner) (Device, error) {
 	d.EnrollConfirmedAt, d.FirstBackupDueBy, d.PolicyVersionApplied = ptrTime(confirmed), ptrTime(due), ptrInt(pva)
 	d.PausedAt, d.PausedUntil, d.RetiredAt, d.IdentityConflictAt = ptrTime(paused), ptrTime(until), ptrTime(retired), ptrTime(ident)
 	d.CreatedAt, d.UpdatedAt = timeOf(c), timeOf(u)
+	d.PurgeRequestedAt, d.PurgeLastAttemptAt = ptrTime(purgeAt), ptrTime(purgeTried)
+	d.PurgeRequestedBy, d.PurgeReason, d.PurgeLastErrorClass = purgeBy.String, purgeReason.String, purgeClass.String
 	return d, nil
 }
 

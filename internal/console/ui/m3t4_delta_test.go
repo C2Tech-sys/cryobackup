@@ -120,7 +120,7 @@ func TestM3T4UnitWindowPagesByDeviceInsideABigCustomer(t *testing.T) {
 		for _, m := range rowRE.FindAllStringSubmatch(body, -1) {
 			seen[m[1]]++
 		}
-		mustContain(t, "page text", body, "Showing "+map[int]string{1: "1-25", 2: "26-27"}[pageNo]+" of 27")
+		mustContain(t, "page text", body, "Showing "+map[int]string{1: "1-25", 2: "26-28"}[pageNo]+" of 28")
 	}
 	if len(seen) != 25 {
 		t.Errorf("%d devices over two pages, want 25", len(seen))

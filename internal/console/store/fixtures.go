@@ -46,12 +46,13 @@ func FixtureExpectations() []FixtureExpectation {
 // FixtureCustomerExpectations maps each fixture customer to its rollup status.
 func FixtureCustomerExpectations() map[string]state.CustomerStatus {
 	return map[string]state.CustomerStatus{
-		"Summit Eye Care":        state.CustomerAlarm,
-		"Harbor Family Practice": state.CustomerWarn,
-		"Northwind Dental":       state.CustomerOK,
-		"Pinecrest Legal":        state.CustomerOK,
-		"Blue Ridge Accounting":  state.CustomerMissing,
-		"Lakeshore Pediatrics":   state.CustomerOnboarding,
+		"Summit Eye Care":         state.CustomerAlarm,
+		"Harbor Family Practice":  state.CustomerWarn,
+		"Northwind Dental":        state.CustomerOK,
+		"Pinecrest Legal":         state.CustomerOK,
+		"Blue Ridge Accounting":   state.CustomerMissing,
+		"Lakeshore Pediatrics":    state.CustomerOnboarding,
+		"Cedar Valley Veterinary": state.CustomerEmpty,
 	}
 }
 
@@ -95,6 +96,10 @@ type fxDevice struct {
 	appliedPolicy  bool           // policy_version_applied = effective version
 	override       string         // device policy override patch
 	ackSnooze      time.Duration  // snooze for this long from now (adds an alarm_ack)
+	// ADR 0019: a retired device with a purge requested this long ago, and (when set) a failed
+	// attempt of this class this long ago.
+	purgeAgo, purgeTriedAgo time.Duration
+	purgeErrClass           string
 }
 
 func dur(d time.Duration) *time.Duration { return &d }
@@ -131,6 +136,7 @@ var fixtureExpected = []FixtureExpectation{
 	{"Pinecrest Legal", "LEGAL-PC-01", state.StateOK},
 	{"Pinecrest Legal", "LEGAL-PC-02", state.StateOK},
 	{"Pinecrest Legal", "PARTNER-LT-02", state.StateOK},
+	{"Northwind Dental", "SPARE-PC-09", state.StateRetired}, // ADR 0019: retired, purge requested, last attempt failed
 }
 
 // fixtureDevices scripts the devices. Every offset is relative to now, with
@@ -261,6 +267,14 @@ func fixtureDevices() []fxDevice {
 	add(ok("LEGAL-PC-01", "Pinecrest Legal", "desktop", w11, 4*hr))
 	add(ok("LEGAL-PC-02", "Pinecrest Legal", "desktop", w11, 5*hr))
 	add(ok("PARTNER-LT-02", "Pinecrest Legal", "laptop", w11, 8*hr))
+
+	// ---- ADR 0019: a retired device whose purge is requested and whose last storage attempt failed ----
+	x = ok("SPARE-PC-09", "Northwind Dental", "desktop", w10, 31*day)
+	x.seenAgo = nil
+	x.retiredAgo = 30 * day
+	x.enrolledAgo = 200 * day
+	x.purgeAgo, x.purgeTriedAgo, x.purgeErrClass = 40*time.Minute, 5*time.Minute, "storage_unreachable"
+	add(x)
 	return d
 }
 
@@ -285,7 +299,8 @@ var fixtureBcrypt = "$2a$10$" + strings.Repeat("f", 53)
 // (replica/design/concepts-v0.3-orbitron.html: Summit Eye Care, Harbor Family
 // Practice, Northwind Dental, Pinecrest Legal, Blue Ridge Accounting) plus one
 // onboarding customer, so fixtures mode renders the approved screens: one
-// storage target, the default policy, six customers, 26 devices covering every
+// storage target, the default policy, seven customers (one with no devices, ADR 0019), 27
+// devices (one retired, its purge requested and its last storage attempt failed) covering every
 // reachable state of the precedence table, presence and heartbeat rows, run
 // histories, snapshots, escrow, maintenance rows, one acknowledgement and one
 // admin. Every timestamp is relative to now. It writes through the same schema
@@ -373,6 +388,7 @@ func loadFixtures(tx *Tx, now time.Time, cfg fixtureConfig) error {
 		{"Pinecrest Legal", "customer_held", `[{"name":"Priya Raman","email":"priya@pinecrest-legal.example","role":"managing partner"}]`, false, 0},
 		{"Blue Ridge Accounting", "escrowed", `[]`, true, 0},
 		{"Lakeshore Pediatrics", "escrowed", `[]`, true, 7 * day},
+		{"Cedar Valley Veterinary", "escrowed", `[]`, false, 0}, // ADR 0019: no devices at all, so it can be deleted
 	}
 	custID := map[string]string{}
 	custCustody := map[string]string{}
@@ -442,6 +458,14 @@ func loadFixtures(tx *Tx, now time.Time, cfg fixtureConfig) error {
 			VALUES (?,?,?,?, 'amd64', ?,?, '0.19.1', 'stable', ?, ?, 'token', ?,?,?,?, ?,?,?,?, ?,?,?, ?, ?, ?, ?, ?)`,
 			id, cust, x.host, x.os, x.class, x.agent, nullStr(x.target), enrolled, randHex(16), confirmed, due, applied,
 			paused, until, pauseReason, pausedBy, retired, retReason, replaced, "fleet/"+id+"/", randHex(32), ident, enrolled, nowMS)
+		if x.purgeAgo > 0 {
+			var tried any
+			if x.purgeTriedAgo > 0 {
+				tried = ago(x.purgeTriedAgo)
+			}
+			exec(`UPDATE devices SET purge_requested_at = ?, purge_requested_by = ?, purge_reason = ?, purge_last_error_class = ?,
+				purge_last_attempt_at = ? WHERE id = ?`, ago(x.purgeAgo), adminID, "lab machine decommissioned", nullStr(x.purgeErrClass), tried, id)
+		}
 
 		// token, gateway login, escrow, maintenance row
 		var tokRevoked, gwRevoked, tokReason any
@@ -598,6 +622,9 @@ func loadFixtures(tx *Tx, now time.Time, cfg fixtureConfig) error {
 		{ActorType: "admin", ActorID: adminID, ActorLabel: FixtureAdminUsername, Method: "web", Action: "device.pause",
 			ObjectType: "device", ObjectID: devID["XRAY-OLD-01"], CustomerID: custID["Northwind Dental"],
 			Details: json.RawMessage(`{"reason":"awaiting replacement"}`)},
+		{ActorType: "admin", ActorID: adminID, ActorLabel: FixtureAdminUsername, Method: "web", Action: "device.purge.request",
+			ObjectType: "device", ObjectID: devID["SPARE-PC-09"], CustomerID: custID["Northwind Dental"], Severity: "warning",
+			Details: json.RawMessage(`{"reason":"lab machine decommissioned"}`)},
 	} {
 		if ferr != nil {
 			break

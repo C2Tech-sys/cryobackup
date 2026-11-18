@@ -292,7 +292,7 @@ func TestDeviceListFiltersPagesAndScopes(t *testing.T) {
 	if failed.Total != 1 || failed.Devices[0].Hostname != "FRONTDESK-01" || failed.Devices[0].State != "FAILED" {
 		t.Fatalf("state filter: %+v", failed)
 	}
-	if get("?q=legal").Total != 2 || get("?include_retired=true").Total != all.Total+1 {
+	if get("?q=legal").Total != 2 || get("?include_retired=true").Total != all.Total+2 {
 		t.Fatal("search / include_retired")
 	}
 	page1 := get("?limit=5")

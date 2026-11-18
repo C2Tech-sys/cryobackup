@@ -158,7 +158,7 @@ func TestM2CustomerListFiltersSortsAndPages(t *testing.T) {
 		return decode[CustomerListResponse](t, b)
 	}
 	all := list("")
-	if all.Total != 6 || all.Of != 6 || len(all.Customers) != 6 || !all.Complete || all.ComputedAt.IsZero() || all.Truncated {
+	if all.Total != 7 || all.Of != 7 || len(all.Customers) != 7 || !all.Complete || all.ComputedAt.IsZero() || all.Truncated {
 		t.Fatalf("all: total=%d of=%d len=%d", all.Total, all.Of, len(all.Customers))
 	}
 	// The engine's order: the expected customer with no devices comes first.
@@ -177,17 +177,17 @@ func TestM2CustomerListFiltersSortsAndPages(t *testing.T) {
 	if n := list("?expected=true").Total; n != 2 {
 		t.Errorf("expected=true: %d", n)
 	}
-	if n := list("?expected=false").Total; n != 4 {
+	if n := list("?expected=false").Total; n != 5 {
 		t.Errorf("expected=false: %d", n)
 	}
-	if c := list("?health=missing"); c.Total != 1 || c.Of != 6 || c.Customers[0].Name != "Blue Ridge Accounting" {
+	if c := list("?health=missing"); c.Total != 1 || c.Of != 7 || c.Customers[0].Name != "Blue Ridge Accounting" {
 		t.Errorf("health=missing: %+v", c)
 	}
 	if c := list("?q=family"); c.Total != 1 || c.Customers[0].Name != "Harbor Family Practice" {
 		t.Errorf("q: %+v", c)
 	}
-	if c := list("?sort=name"); c.Customers[0].Name != "Blue Ridge Accounting" || c.Customers[5].Name != "Summit Eye Care" {
-		t.Errorf("sort=name: %v / %v", c.Customers[0].Name, c.Customers[5].Name)
+	if c := list("?sort=name"); c.Customers[0].Name != "Blue Ridge Accounting" || c.Customers[6].Name != "Summit Eye Care" {
+		t.Errorf("sort=name: %v / %v", c.Customers[0].Name, c.Customers[6].Name)
 	}
 	if c := list("?sort=name&dir=desc"); c.Customers[0].Name != "Summit Eye Care" {
 		t.Errorf("sort=name desc: %v", c.Customers[0].Name)
@@ -196,7 +196,7 @@ func TestM2CustomerListFiltersSortsAndPages(t *testing.T) {
 	if len(p1.Customers) != 4 || !p1.Truncated || p1.NextCursor != "o4" {
 		t.Fatalf("page 1: %+v", p1)
 	}
-	if p2 := list("?limit=4&sort=name&cursor=" + p1.NextCursor); len(p2.Customers) != 2 || p2.Truncated || p2.Customers[0].Name != "Pinecrest Legal" {
+	if p2 := list("?limit=4&sort=name&cursor=" + p1.NextCursor); len(p2.Customers) != 3 || p2.Truncated || p2.Customers[0].Name != "Northwind Dental" {
 		t.Fatalf("page 2: %d first=%s", len(p2.Customers), p2.Customers[0].Name)
 	}
 	for _, q := range []string{"?limit=0", "?limit=501", "?cursor=zz", "?expected=maybe", "?health=bogus", "?sort=bogus", "?dir=up", "?state=bogus"} {
