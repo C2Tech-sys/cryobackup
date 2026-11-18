@@ -465,3 +465,31 @@ func TestAdr19PurgeRetiredDevicesOfACustomer(t *testing.T) {
 	}
 	pe.noHostNames(t, b)
 }
+
+// F2: a step-up whose audit row cannot be written changed nothing and says so with the internal
+// problem (500), not 400 or 401 (which a client reads as "the code was wrong"). A wrong code stays 401
+// (TestAdr19StaleMFANeedsAStepUpThenTheSameRequestPasses), and the same code works once audit does.
+func TestAdr19StepUpAuditFailureIsInternalNotUnauthorized(t *testing.T) {
+	pe := newPurgeEnv(t)
+	pe.clk.Advance(auth.FreshMFAWindow + time.Minute)
+	if err := pe.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`CREATE TRIGGER refuse_audits BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'audit refused by the test'); END`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code := pe.mfa.code("admin")
+	res, b := pe.req("POST", "/api/v1/auth/step-up", pe.owner, StepUpRequest{Code: code})
+	if res.StatusCode != 500 || problemCode(t, res, b) != api.CodeInternal {
+		t.Fatalf("audit failure: %d %s, want 500 %s", res.StatusCode, b, api.CodeInternal)
+	}
+	if err := pe.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`DROP TRIGGER refuse_audits`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if res, b := pe.req("POST", "/api/v1/auth/step-up", pe.owner, StepUpRequest{Code: code}); res.StatusCode != 204 {
+		t.Fatalf("the same code after audit recovered: %d %s", res.StatusCode, b)
+	}
+}

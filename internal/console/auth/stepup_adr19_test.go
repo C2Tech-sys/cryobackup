@@ -404,3 +404,42 @@ func countReason(rows []store.AuditEvent, reason string) int {
 	}
 	return n
 }
+
+// A step-up whose audit row cannot be written changes nothing (the transaction
+// rolls back, mark and TOTP step included) and is NOT a wrong code: the caller
+// must see a store failure, never ErrBadCode, and the right code stays usable.
+func TestAdr19StepUpAuditFailureIsNotABadCode(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	p, res := adr19Owner(t, e)
+	e.clk.Advance(10 * time.Minute)
+	p, _ = e.m.Authenticate(ctx, res.Token)
+	before := adr19Mark(t, e, res.Token)
+	if err := e.st.Write(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`CREATE TRIGGER refuse_audits BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'audit refused by the test'); END`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code := TOTPCode(e.mfa.secrets["ow"], e.mfa.next())
+	err := e.m.StepUp(ctx, p, code, adr19IP, "")
+	if err == nil || errors.Is(err, ErrBadCode) {
+		t.Fatalf("audit failure: got %v, want a store failure that is not ErrBadCode", err)
+	}
+	if !errors.Is(err, store.ErrAudit) {
+		t.Fatalf("audit failure must be store.ErrAudit, got %v", err)
+	}
+	if got := adr19Mark(t, e, res.Token); got == nil || !got.Equal(*before) || e.m.FreshMFA(p, e.m.Now()) {
+		t.Fatalf("a refused step-up moved the mark: %v -> %v", before, got)
+	}
+	// Nothing was consumed: with the trigger gone the same code works.
+	if err := e.st.Write(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`DROP TRIGGER refuse_audits`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.m.StepUp(ctx, p, code, adr19IP, ""); err != nil {
+		t.Fatalf("the code must still be good after a rolled-back step-up: %v", err)
+	}
+}

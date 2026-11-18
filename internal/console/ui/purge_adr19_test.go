@@ -468,3 +468,29 @@ func TestADR19_LayoutAtBothWidthsAndThemes(t *testing.T) {
 		t.Error("the layout test cannot tell a purge dialog that runs off a phone from one that fits")
 	}
 }
+
+// F2: when the audit row of the step-up cannot be written, nothing changed, and the page says so
+// ("not saved, nothing was changed"), not "Code incorrect or expired."
+func TestADR19_StepUpAuditFailureSaysNotSavedNotWrongCode(t *testing.T) {
+	e := newEnv(t)
+	e.login()
+	id := e.dev[adr19Host]
+	e.advance(auth.FreshMFAWindow + time.Minute)
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`CREATE TRIGGER refuse_audits BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'audit refused by the test'); END`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, body := e.post("/ui/devices/"+id+"/purge", vals("reason", "lab machine decommissioned", "confirm", adr19Host, "code", e.mfa.code("admin")), false)
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("audit failure: %d, want 500", res.StatusCode)
+	}
+	mustContain(t, "not saved", body, "Not saved", "nothing was changed")
+	if strings.Contains(body, "Code incorrect or expired.") {
+		t.Error("an audit failure reads as a wrong code")
+	}
+	if d, _ := e.adr19Device(id); d.Purging() {
+		t.Fatal("a failed step-up purged a device")
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -70,7 +71,8 @@ func (m *Manager) FreshMFA(p *Principal, now time.Time) bool {
 // lockout and the per-IP limiter apply as for every code check). On success the
 // session's mark and p.MFAVerifiedAt are m.Now() and one audit row records it
 // (ActionStepUp, result "ok", written in the same transaction as the mark: no
-// audit row, no mark). A wrong, expired or replayed code is ErrBadCode with one
+// audit row, no mark: when that row cannot be written the call fails with store.ErrAudit, never
+// ErrBadCode, and nothing changed). A wrong, expired or replayed code is ErrBadCode with one
 // audit row (result "denied", reason bad_code, locked_now or replayed_code) that
 // counts toward the lockout; a locked account or a rate-limited source is refused
 // by the shared preflight (one audit row, result "denied", reason locked or
@@ -100,8 +102,14 @@ func (m *Manager) StepUp(ctx context.Context, p *Principal, code, ip, userAgent 
 		if err := tx.MarkSessionMFAAt(a.ID, p.SessionID, now); err != nil {
 			return err
 		}
-		return auditTx(tx, Actor{Type: "admin", ID: a.ID, Label: a.Username, Method: "web", IP: ip}, ActionStepUp, "admin_session", a.ID, "ok", "info",
-			map[string]any{"factor": "totp"})
+		if err := auditTx(tx, Actor{Type: "admin", ID: a.ID, Label: a.Username, Method: "web", IP: ip}, ActionStepUp, "admin_session", a.ID, "ok", "info",
+			map[string]any{"factor": "totp"}); err != nil {
+			// Not a code failure: the mark and the TOTP step roll back with the audit row, so
+			// nothing changed and the code is still good. store.ErrAudit lets the callers say
+			// "not saved" instead of "wrong code" (the raw store error reads as invalid input).
+			return fmt.Errorf("%w: %v", store.ErrAudit, err)
+		}
+		return nil
 	})
 	switch {
 	case isCodeFailure(err):
