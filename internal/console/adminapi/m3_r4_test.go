@@ -58,6 +58,9 @@ var fleetMutationRoutes = map[string]bool{
 	PatternSettingPut:           true,
 	PatternRestoreCreate:        true,
 	PatternStorageTargetProbe:   true,
+	PatternDevicePurge:          true, // ADR 0019
+	PatternCustomerDelete:       true,
+	PatternCustomerPurgeRetired: true,
 }
 
 func TestEveryFleetMutationAdvancesTheChangeGeneration(t *testing.T) { // r4 MEDIUM-1

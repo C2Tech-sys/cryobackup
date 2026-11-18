@@ -703,6 +703,35 @@ func uiMutationCases() map[string]uiMutation {
 				}
 			},
 		},
+		// ---- purge and customer delete (ADR 0019, purge_adr19.go) ----
+		"POST /ui/devices/{id}/purge": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.dev["OLD-RECEPTION-PC"]
+				return func() (*http.Response, string) {
+					return e.post("/ui/devices/"+id+"/purge", vals("reason", "lab machine decommissioned", "confirm", "OLD-RECEPTION-PC"), false)
+				}
+			},
+		},
+		"POST /ui/customers/{id}/delete": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.customerID("Cedar Valley Veterinary")
+				return func() (*http.Response, string) {
+					return e.post("/ui/customers/"+id+"/delete", vals("reason", "never signed", "confirm", "Cedar Valley Veterinary"), false)
+				}
+			},
+		},
+		"POST /ui/customers/{id}/purge-retired": {
+			audits: 3, // one device.purge.request per retired device not already purging
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.adr19RetireAllOf("Northwind Dental")
+				return func() (*http.Response, string) {
+					return e.post("/ui/customers/"+id+"/purge-retired", vals("reason", "customer left", "confirm", "Northwind Dental"), false)
+				}
+			},
+		},
 		// ---- enrollment ----
 		"POST /ui/enroll/tokens/{id}/delete": {
 			build: func(e *env) func() (*http.Response, string) {

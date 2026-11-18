@@ -26,8 +26,8 @@
   </details>{{if .Hint}}<span class="tip" role="tooltip" id="{{.ID}}-hint">{{.Hint}}</span>{{end}}</span>{{end}}
 
 {{/* retired_fold: "Retired (n)", collapsed. The devices it holds raise no alarm and count in no denominator. */}}
-{{define "retired_fold"}}{{with .}}<details class="retired-fold"><summary><svg aria-hidden="true"><use href="#i-chev"/></svg>Retired ({{.N}})</summary>
-  <ul class="retired-list">{{$chip := .Chip}}{{range .Rows}}<li id="retired-{{.ID}}"><a href="/devices/{{.ID}}" class="hostname">{{.Host}}</a>{{template "chip" $chip}}{{if .Customer}}<a class="rl-cust" href="/customers/{{.CustomerID}}">{{.Customer}}</a>{{end}}{{if .When}}<time class="meta-mono" datetime="{{.ISO}}">{{.When}}</time>{{end}}</li>{{end}}</ul>
+{{define "retired_fold"}}{{with .}}<details class="retired-fold"><summary><svg aria-hidden="true"><use href="#i-chev"/></svg>Retired ({{.N}}){{if .Purging}}<span class="purge-n">· {{.Purging}} purging</span>{{end}}{{if .Failing}}<span class="purge-n bad"><i class="g g-crit" aria-hidden="true"></i>{{.Failing}} purge failing</span>{{end}}{{if .PurgeErr}}<span class="purge-unread"><i class="g g-warn" aria-hidden="true"></i>purge state not read</span>{{end}}</summary>
+  <ul class="retired-list">{{$chip := .Chip}}{{range .Rows}}<li id="retired-{{.ID}}"><a href="/devices/{{.ID}}" class="hostname">{{.Host}}</a>{{template "chip" $chip}}{{with .Purge}}{{template "chip" .}}{{end}}{{if .Customer}}<a class="rl-cust" href="/customers/{{.CustomerID}}">{{.Customer}}</a>{{end}}{{if .When}}<time class="meta-mono" datetime="{{.ISO}}">{{.When}}</time>{{end}}</li>{{end}}</ul>
 </details>{{end}}{{end}}
 
 {{/* m3_notice: the result of an action that came back to a list page. */}}

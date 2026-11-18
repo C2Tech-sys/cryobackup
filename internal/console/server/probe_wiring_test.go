@@ -245,8 +245,9 @@ func TestFixturesShowTheEndpointBanner(t *testing.T) {
 	for _, b := range f.View.Banners {
 		ids = append(ids, b.ID)
 	}
-	// M3-T2: fixtures mode is wired with healthy canned probe facts, so only the ADR 0013 banner shows.
-	if strings.Join(ids, ",") != "C05" || f.View.Banners[0].Text != "Agent listener certificate expires in 12 days." {
+	// M3-T2: fixtures mode is wired with healthy canned probe facts, so the ADR 0013 banner shows; ADR 0019
+	// adds the purge banner, because the fixtures hold one retired device whose purge attempt failed.
+	if strings.Join(ids, ",") != "purge_not_finished,C05" || f.View.Banners[1].Text != "Agent listener certificate expires in 12 days." {
 		t.Fatalf("fixtures banners: %v %+v", ids, f.View.Banners)
 	}
 	for id, want := range map[string]string{"C04": "AGENT API UNREACHABLE", "C05": "CERTIFICATE EXPIRING", "C04b": "AGENT API NOT CHECKED"} {

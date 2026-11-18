@@ -56,6 +56,7 @@ func Patterns() []string {
 	p = append(p, auditPatterns()...)      // M2-W3A: audit trail (audit.go)
 	p = append(p, settingsPatterns()...)   // M2-W3A: console settings (settings.go)
 	p = append(p, m3Patterns()...)         // M3-T3: state, fleet, runs, views, system, status, events, metrics (m3*.go)
+	p = append(p, purgePatterns()...)      // ADR 0019: step-up, device purge, customer delete (purge_adr19.go)
 	return p
 }
 
@@ -163,6 +164,7 @@ func (s *Service) Register(r httpx.Registrar) {
 	s.registerAudit(r)    // M2-W3A (audit.go)
 	s.registerSettings(r) // M2-W3A (settings.go)
 	s.registerM3(r)       // M3-T3 (m3.go)
+	s.registerPurge(r)    // ADR 0019 (purge_adr19.go)
 }
 
 // display is one consistent reading of the display zone (the live preference,
@@ -227,6 +229,8 @@ type DeviceJSON struct {
 	LastSuccessAt *time.Time `json:"last_success_at,omitempty"`
 	LastSeenAt    *time.Time `json:"last_seen_at,omitempty"`
 	Acknowledged  bool       `json:"acknowledged"`
+	// Purge is the purge state of a purging device (ADR 0019); absent otherwise.
+	Purge *DevicePurgeJSON `json:"purge,omitempty"`
 }
 
 // DeviceListResponse is GET /api/v1/devices.
@@ -402,7 +406,7 @@ func deviceJSON(d state.DeviceState, custName string, meta store.Device) DeviceJ
 		ID: d.ID, CustomerID: d.CustomerID, Customer: custName, Hostname: d.Hostname, DeviceClass: meta.DeviceClass, OSVersion: meta.OSVersion,
 		AgentVersion: d.Detail.AgentVersion, State: string(d.Primary), Flags: strs(d.Flags), Severity: d.Alarm.String(), Reason: string(d.Reason),
 		Since: ptrTime(d.Since), Attributes: strs(d.Attrs), LastSuccessAt: ptrTime(d.Detail.LastSuccess), LastSeenAt: ptrTime(d.Detail.LastSeen),
-		Acknowledged: d.Ack != nil,
+		Acknowledged: d.Ack != nil, Purge: purgeJSON(meta),
 	}
 }
 

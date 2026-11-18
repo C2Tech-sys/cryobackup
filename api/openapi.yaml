@@ -285,6 +285,30 @@ paths:
         '204': {description: Signed out. The cookies are cleared.}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/auth/step-up:
+    post:
+      operationId: authStepUp
+      tags: [auth]
+      summary: Renew the session's fresh-MFA mark (ADR 0019)
+      description: |
+        Checks a current TOTP code (not a recovery code) and marks this session as having passed MFA now. The owner routes that cannot be undone (purge of a retired device, delete of a customer, purge of a customer's retired devices) need a mark younger than five minutes and answer 403 `mfa_step_up_required` otherwise; the client calls this route and repeats the request. A code that already served a login or a step-up is refused (replay guard), and a wrong code counts toward the account lockout. Session only: an API token is refused with `forbidden`. One audit row `auth.stepup`, result ok or denied.
+      x-min-role: SELF
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CodeRequest'}
+      responses:
+        '204': {description: The session's MFA mark is now.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {description: 'The code is wrong, expired or already used, or the account is locked (`unauthorized`).', content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: 'The account has no TOTP enrollment (`conflict`).', content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+        '429': {$ref: '#/components/responses/RateLimited'}
   /api/v1/auth/mfa/totp:
     post:
       operationId: authMFATOTP
@@ -813,6 +837,65 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '413': {$ref: '#/components/responses/PayloadTooLarge'}
+    delete:
+      operationId: deleteCustomer
+      tags: [customers]
+      summary: Delete a customer that has no devices (ADR 0019)
+      description: |
+        Deletes a customer that has no devices at all, active or retired; otherwise 409 with `reason` customer_has_devices and the `active` and `retired` counts, and nothing changes. The path for a customer with history is: retire its devices, purge them (`POST /api/v1/customers/{id}/purge-retired-devices`), then delete it. `confirm_name` must equal the customer's name exactly (400 naming the field otherwise; neither name is echoed). The customer's enrollment tokens are deleted with it; the audit rows that name them stay. One audit row `customer.delete`. Owner role, session only, and a fresh MFA check (403 `mfa_step_up_required`: call `POST /api/v1/auth/step-up` and repeat).
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CustomerConfirmRequest'}
+      responses:
+        '204': {description: The customer is deleted.}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/StepUpOrForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The customer still has devices.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/schemas/CustomerHasDevicesProblem'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/customers/{id}/purge-retired-devices:
+    post:
+      operationId: purgeCustomerRetiredDevices
+      tags: [customers]
+      summary: Purge every retired device of a customer (ADR 0019)
+      description: |
+        Queues one purge request per retired device of the customer that is not purging yet, each with its own audit row `device.purge.request`, exactly as `DELETE /api/v1/devices/{id}` would; there is no single cascading delete. Active devices are not touched and are counted in `active_untouched`; devices already purging are counted in `already_purging`. `confirm_name` must equal the customer's name exactly. The device-purge job starts at once. Owner role, session only, and a fresh MFA check (403 `mfa_step_up_required`).
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CustomerConfirmRequest'}
+      responses:
+        '202':
+          description: The counts of what this call requested and what it left alone.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CustomerPurgeRetiredResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/StepUpOrForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/CommandConflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
   /api/v1/customers/{id}/devices:
     get:
       operationId: listCustomerDevices
@@ -902,6 +985,35 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+    delete:
+      operationId: purgeDevice
+      tags: [devices]
+      summary: Purge a retired device (ADR 0019)
+      description: |
+        One-way. Marks a retired device for purge (one audit row `device.purge.request`) and starts the device-purge job, which asks the maintenance worker to remove the device's repository from storage and, only when the worker reports the prefix empty, deletes the device row with everything it owns (one audit row `device.purge.done` with the counts and no host name). The backups and the escrowed key are gone for good; storage with versioning, object lock or a minimum storage duration may keep or bill the removed objects until the provider's own window ends. Until the row is deleted the device shows `purge` in every device JSON; a failed attempt leaves it purging, raises the critical banner `purge_not_finished`, and the job retries. There is no cancel and no "forget anyway". Only a retired device can be purged: an active one answers 409 with `reason` device_not_retired. `confirm_host_name` must equal the device's host name exactly (400 naming the field otherwise; neither name is echoed). A device already purging answers 202 with `changed` false and writes nothing. Owner role, session only (an API token is `forbidden`), and a fresh MFA check (403 `mfa_step_up_required`: call `POST /api/v1/auth/step-up` and repeat).
+      x-min-role: OW
+      security:
+        - sessionCookie: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DevicePurgeRequest'}
+      responses:
+        '202':
+          description: The device is purging, with `changed` false when it already was.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DevicePurgeResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/StepUpOrForbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/CommandConflict'}
         '413': {$ref: '#/components/responses/PayloadTooLarge'}
   /api/v1/devices/{id}/runs:
     get:
@@ -2135,6 +2247,11 @@ components:
       content:
         application/problem+json:
           schema: {$ref: '#/components/schemas/Problem'}
+    StepUpOrForbidden:
+      description: The credential does not permit this request, the role is too low, the CSRF check failed, or an API token was used (`forbidden`); or the session's last MFA check is older than five minutes (`mfa_step_up_required`, ADR 0019).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
     CommandConflict:
       description: A state conflict with a machine-readable `reason`.
       content:
@@ -2178,7 +2295,7 @@ components:
         status: {type: integer}
         code:
           type: string
-          enum: [invalid_request, unauthorized, forbidden, not_found, conflict, custody_customer_held, rate_limited, payload_too_large, not_modified, master_key_unavailable, unavailable, internal]
+          enum: [invalid_request, unauthorized, forbidden, not_found, conflict, custody_customer_held, rate_limited, payload_too_large, not_modified, master_key_unavailable, unavailable, internal, mfa_step_up_required]
         retry_after_s: {type: integer}
         request_id: {type: string}
     FieldError:
@@ -2437,6 +2554,57 @@ components:
         last_success_at: {$ref: '#/components/schemas/Timestamp'}
         last_seen_at: {$ref: '#/components/schemas/Timestamp'}
         acknowledged: {type: boolean}
+        purge: {$ref: '#/components/schemas/DevicePurge'}
+    DevicePurge:
+      type: object
+      description: The purge state of a purging device (ADR 0019). Present only while the device is purging; it never carries a host name.
+      required: [requested_at]
+      properties:
+        requested_at: {$ref: '#/components/schemas/Timestamp'}
+        last_attempt_at: {$ref: '#/components/schemas/Timestamp'}
+        last_error_class: {type: string, description: 'Class of the last failed attempt (for example storage_unreachable, worker_unreachable, objects_remaining); absent when none is outstanding.'}
+    DevicePurgeRequest:
+      type: object
+      required: [confirm_host_name]
+      properties:
+        confirm_host_name: {type: string, description: The device's host name, typed exactly.}
+        reason: {type: string, maxLength: 200, description: 'Required on the first request: one line, no file paths.'}
+    DevicePurgeResponse:
+      type: object
+      required: [computed_at, id, customer_id, state, changed, purge]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        id: {type: string}
+        customer_id: {type: string}
+        state: {type: string, description: RETIRED.}
+        changed: {type: boolean, description: False when the device was already purging; nothing was written.}
+        purge: {$ref: '#/components/schemas/DevicePurge'}
+    CustomerConfirmRequest:
+      type: object
+      required: [confirm_name, reason]
+      properties:
+        confirm_name: {type: string, description: The customer's name, typed exactly.}
+        reason: {type: string, maxLength: 200, description: 'One line, no file paths.'}
+    CustomerPurgeRetiredResponse:
+      type: object
+      required: [computed_at, customer_id, requested, requested_ids, already_purging, active_untouched]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        customer_id: {type: string}
+        requested: {type: integer, description: Retired devices this call marked for purge (one audit row each).}
+        requested_ids:
+          type: array
+          items: {type: string}
+        already_purging: {type: integer}
+        active_untouched: {type: integer}
+    CustomerHasDevicesProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            reason: {type: string, enum: [customer_has_devices]}
+            active: {type: integer}
+            retired: {type: integer}
     DeviceListResponse:
       type: object
       required: [computed_at, loaded_at, complete, total, truncated, devices]

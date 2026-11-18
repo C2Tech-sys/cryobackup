@@ -207,6 +207,8 @@ type DeviceView struct {
 	CanRestore  bool
 	RestoreNote string
 	AsOf        string
+	// Purge is the statement about a purging device (ADR 0019, purge_adr19.go); it replaces Cause.
+	Purge *PurgingView
 }
 
 func scheduleText(s policy.Schedule) string {
@@ -386,6 +388,7 @@ func (s *Service) deviceView(ctx context.Context, p *auth.Principal, f health.Fl
 	case s.MasterLoaded == nil || !s.MasterLoaded():
 		v.CanRestore, v.RestoreNote = false, "The master key is unavailable (banner C12)."
 	}
+	s.purgeView(ctx, p, dev, c, &v) // ADR 0019
 	return v, true
 }
 

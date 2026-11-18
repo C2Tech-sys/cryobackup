@@ -627,6 +627,42 @@ func auditMutationCases() map[string]mutation {
 				}
 			},
 		},
+		// ---- ADR 0019: step-up, device purge, customer delete ----
+		PatternStepUp: {
+			status: 204, // auth.stepup commits with the session's new mark
+			build: func(e *env, s *session) func() call {
+				return func() call {
+					return call{method: "POST", path: "/api/v1/auth/step-up", body: StepUpRequest{Code: e.mfa.code("admin")}}
+				}
+			},
+		},
+		PatternDevicePurge: {
+			status: 202, // device.purge.request commits with the mark; the row goes later, in the job
+			build: func(e *env, s *session) func() call {
+				d := e.deviceNamed("OLD-RECEPTION-PC")
+				return func() call {
+					return call{method: "DELETE", path: "/api/v1/devices/" + d.ID, body: DevicePurgeRequest{ConfirmHostName: d.Hostname, Reason: "audit test"}}
+				}
+			},
+		},
+		PatternCustomerDelete: {
+			status: 204,
+			build: func(e *env, s *session) func() call {
+				c := e.customerNamed("Cedar Valley Veterinary")
+				return func() call {
+					return call{method: "DELETE", path: "/api/v1/customers/" + c.ID, body: CustomerConfirmRequest{ConfirmName: c.Name, Reason: "audit test"}}
+				}
+			},
+		},
+		PatternCustomerPurgeRetired: {
+			status: 202, // one device.purge.request per retired device: Summit Eye Care has one (OLD-RECEPTION-PC)
+			build: func(e *env, s *session) func() call {
+				c := e.customerNamed("Summit Eye Care")
+				return func() call {
+					return call{method: "POST", path: "/api/v1/customers/" + c.ID + "/purge-retired-devices", body: CustomerConfirmRequest{ConfirmName: c.Name, Reason: "audit test"}}
+				}
+			},
+		},
 		// ---- enrollment tokens ----
 		PatternEnrollTokenDelete: {
 			status: 204,

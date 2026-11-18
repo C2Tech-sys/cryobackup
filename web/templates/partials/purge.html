@@ -1,0 +1,99 @@
+{{/* purge.html - ADR 0019: purge a retired device, purge every retired device of a customer, delete a customer with no devices.
+     The retire dialog's shape (retire.html): a details popover holding a plain form, so it works with script off; purge.js only
+     holds the destructive button until the name matches, shows the submitting state and closes on Esc. The server checks
+     everything again. Path-free: names, reasons, times, counts and fixed classes only. */}}
+
+{{/* purge_dialog: the Purge entry of a retired device's action bar (an ActionItem with .Purge). */}}
+{{define "purge_dialog"}}<span class="tipwrap"><details class="rowmenu act-confirm act-purge"{{if .Purge.Open}} open{{end}}><summary class="btn sm danger"{{if .Hint}} aria-describedby="{{.ID}}-hint"{{end}}>{{.Label}}</summary>
+    <div class="rowmenu-pop purgepop" role="group" aria-label="Purge {{.Purge.Name}} permanently">{{template "purge_form" .Purge}}</div>
+  </details>{{if .Hint}}<span class="tip" role="tooltip" id="{{.ID}}-hint">{{.Hint}}</span>{{end}}</span>{{end}}
+
+{{/* purge_form: the body of every ADR 0019 dialog. The statements come before the confirm field. */}}
+{{define "purge_form"}}<form method="post" action="{{.Action}}" class="stack" data-purge{{if .Busy}} data-busy="1"{{end}} aria-describedby="{{.ID}}-lede"><input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  {{with .Err}}<div class="banner {{.Class}} dense purge-err" role="alert" tabindex="-1"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+  {{if eq .Kind "device"}}
+  <p class="retire-lede" id="{{.ID}}-lede"><b>Purge <span class="mono">{{.Name}}</span> permanently?</b> Purge is one-way.</p>
+  <ul class="retire-does purge-does">
+    <li>Deletes this device's backups from storage, and its escrowed repository key with them. They cannot be recovered or restored afterwards, by anyone.</li>
+    <li>A storage provider with versioning, object lock or a minimum storage duration may keep, and bill, the deleted data until its own window ends. The console cannot shorten that.</li>
+    <li>An agent still installed on the machine stays REFUSED: uninstall it there.</li>
+    <li>Starts at once and cannot be cancelled. The device shows as purging until storage reports its repository gone; then its record is deleted. Its audit rows stay.</li>
+  </ul>
+  {{else if eq .Kind "retired"}}
+  <p class="retire-lede" id="{{.ID}}-lede"><b>Purge {{if .CountUnsure}}up to {{end}}{{.Count}} retired {{if eq .Count 1}}device{{else}}devices{{end}} of {{.Customer}} permanently?</b> Purge is one-way.</p>
+  <ul class="retire-does purge-does">
+    <li>Deletes the backups of {{if eq .Count 1}}this device{{else}}these {{.Count}} devices{{end}} from storage, and {{if eq .Count 1}}its escrowed repository key{{else}}their escrowed repository keys{{end}} with them. They cannot be recovered or restored afterwards, by anyone.</li>
+    <li>A storage provider with versioning, object lock or a minimum storage duration may keep, and bill, the deleted data until its own window ends. The console cannot shorten that.</li>
+    <li>An agent still installed on any of these machines stays REFUSED: uninstall it there.</li>
+    <li>Each device is purged on its own, with its own audit rows, starting at once; there is no cancel. Active devices are not touched, and the customer stays until you delete it.</li>
+  </ul>
+  {{if .CountUnsure}}<p class="help" role="status"><i class="g g-warn" aria-hidden="true"></i> Which devices are already purging could not be read, so the count may include some. Those are left as they are.</p>{{end}}
+  {{else}}
+  <p class="retire-lede" id="{{.ID}}-lede"><b>Delete {{.Name}}?</b> This cannot be undone.</p>
+  <ul class="retire-does purge-does">
+    <li>Deletes the customer and what belongs only to it: its enrollment tokens and its own policies, with its notification rules and reports.</li>
+    <li>It has no devices, so no backups are touched.</li>
+    <li>The audit rows that name the customer and its tokens stay.</li>
+  </ul>
+  {{end}}
+  {{if .MFA.Need}}<div class="field"><label for="{{.ID}}-code">Authenticator code</label>
+    <input class="input mono" id="{{.ID}}-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required spellcheck="false" aria-describedby="{{.ID}}-code-help{{if .CodeErr}} {{.ID}}-code-err{{end}}"{{if .CodeErr}} aria-invalid="true"{{end}}{{if .Busy}} readonly{{end}}>
+    <span class="help" id="{{.ID}}-code-help">This session's last authenticator check is older than {{.MFA.Window}} minutes. Enter the current code from your authenticator app. A recovery code is not accepted here, and a sign-in with one does not count as a check.</span>
+    {{if .CodeErr}}<span class="err" id="{{.ID}}-code-err">{{.CodeErr}}</span>{{end}}</div>
+  {{else}}<p class="help mfa-ok"><i class="g g-ok" aria-hidden="true"></i> Authenticator checked {{.MFA.Since}}: no code is needed until <time datetime="{{.MFA.UntilISO}}">{{.MFA.Until}}</time> ({{.MFA.Zone}}). After that the dialog asks for one and keeps what you typed.</p>{{end}}
+  <div class="field"><label for="{{.ID}}-reason">Reason <span class="muted">(required, kept in the audit log)</span></label>
+    <input class="input" id="{{.ID}}-reason" name="reason" type="text" maxlength="500" required autocomplete="off" value="{{.Reason}}" aria-describedby="{{.ID}}-reason-help{{if .ReasonErr}} {{.ID}}-reason-err{{end}}"{{if .ReasonErr}} aria-invalid="true"{{end}}{{if .Busy}} readonly{{end}}>
+    <span class="help" id="{{.ID}}-reason-help">One line. No file paths.</span>{{if .ReasonErr}}<span class="err" id="{{.ID}}-reason-err">{{.ReasonErr}}</span>{{end}}</div>
+  <div class="field"><label for="{{.ID}}-confirm">To confirm, type <b class="mono">{{.Name}}</b></label>
+    <input class="input mono" id="{{.ID}}-confirm" name="confirm" type="text" required autocomplete="off" spellcheck="false" autocapitalize="off" value="{{.Typed}}" data-purge-name="{{.Name}}"{{if .ConfirmErr}} aria-invalid="true" aria-describedby="{{.ID}}-confirm-err"{{end}}{{if .Busy}} readonly{{end}}>
+    {{if .ConfirmErr}}<span class="err" id="{{.ID}}-confirm-err">{{.ConfirmErr}}</span>{{end}}</div>
+  <div class="actions purge-actions"><button class="btn sm danger-solid" type="submit" data-purge-submit data-busy-label="{{.BusyLabel}}" aria-describedby="{{.ID}}-why"{{if .Busy}} aria-busy="true"{{end}}>{{if .Busy}}{{.BusyLabel}}{{else}}{{.Button}}{{end}}</button>
+    <span class="help" id="{{.ID}}-why" data-purge-why{{if or .Busy (eq .Typed .Name)}} hidden{{end}}>Type the {{.What}} name to continue.</span></div>
+</form>{{end}}
+
+{{/* purge_state: the device page's statement about a purging device (replaces the retired statement; live-updated with the page). */}}
+{{define "purge_state"}}<section class="banner {{.Class}} purge-state"{{if eq .Class "crit"}} role="alert"{{else}} role="status"{{end}}><i class="g g-{{.Class}}" aria-hidden="true"></i>
+  <div class="b-text"><b>{{.Title}}.</b> {{.Lede}}
+    <dl class="kv compact purge-kv">
+      <dt>Requested</dt><dd><time datetime="{{.RequestedISO}}">{{.Requested}}</time> by {{.By}}</dd>
+      {{if .Reason}}<dt>Reason</dt><dd>{{.Reason}}</dd>{{end}}
+      <dt>Last attempt</dt><dd>{{if .Attempt}}<time datetime="{{.AttemptISO}}">{{.Attempt}}</time>{{else}}None finished yet.{{end}}</dd>
+      {{if .ErrorText}}<dt>Last error</dt><dd>{{.ErrorText}} <span class="meta-mono">{{.ErrorClass}}</span></dd>{{end}}
+    </dl>
+    <p class="purge-retry">{{.Retry}}</p></div>
+</section>{{end}}
+
+{{/* cust_delete: "Delete customer" on the customer page's Overview (owner only). */}}
+{{define "cust_delete"}}<section class="cust-delete" aria-label="Delete customer">
+  <h3 class="h-label">Delete customer</h3>
+  {{if eq .State "has_active"}}
+  <p class="ui" id="cdel-why-{{.State}}">Not available while {{.Name}} has devices: <b>{{.Active}} active</b> and <b>{{.Retired}} retired</b>. Retire the active devices, purge the retired ones, then delete the customer.</p>
+  <span class="tipwrap"><span class="btn sm" role="link" tabindex="0" aria-disabled="true" aria-describedby="cdel-why-{{.State}}">Delete customer…</span></span>
+  {{else if eq .State "only_retired"}}
+  <p class="ui">Not available yet: {{.Name}} has <b>{{.Retired}} retired {{if eq .Retired 1}}device{{else}}devices{{end}}</b> and no active ones{{if .Purging}}; {{.Purging}} {{if eq .Purging 1}}is{{else}}are{{end}} already being purged{{end}}. Purge {{if eq .Retired 1}}it{{else}}them{{end}}, then delete the customer once {{if eq .Retired 1}}it is{{else}}they are{{end}} gone.</p>
+  {{with .Form}}<details class="rowmenu act-confirm act-purge"{{if .Open}} open{{end}}><summary class="btn sm danger">Purge all retired devices of this customer…</summary>
+    <div class="rowmenu-pop purgepop" role="group" aria-label="Purge the retired devices of {{.Customer}}">{{template "purge_form" .}}</div>
+  </details>{{end}}
+  {{else if eq .State "all_purging"}}
+  <p class="ui">Not available yet: {{if eq .Retired 1}}the retired device{{else}}all {{.Retired}} retired devices{{end}} of {{.Name}} {{if eq .Retired 1}}is{{else}}are{{end}} being purged. Delete the customer once {{if eq .Retired 1}}it is{{else}}they are{{end}} gone; a purge that does not finish raises PURGE NOT FINISHED.</p>
+  {{else}}
+  <p class="ui">{{.Name}} has no devices, active or retired.</p>
+  {{with .Form}}<details class="rowmenu act-confirm act-purge"{{if .Open}} open{{end}}><summary class="btn sm danger">Delete customer…</summary>
+    <div class="rowmenu-pop purgepop" role="group" aria-label="Delete {{.Name}}">{{template "purge_form" .}}</div>
+  </details>{{end}}
+  {{end}}
+  {{if .PurgeErr}}<p class="help" role="status"><i class="g g-warn" aria-hidden="true"></i> Which retired devices are already being purged could not be read.</p>{{end}}
+</section>{{end}}
+
+{{/* design_purge: the /design section of ADR 0019, every state. */}}
+{{define "design_purge"}}<section class="d-section d-purge" id="purge" aria-labelledby="d-purge"><header><h2 id="d-purge">Purge and delete</h2><span class="used">ADR 0019: the purge dialog of a retired device, fresh MFA, the purging state, PURGE NOT FINISHED, the customer delete</span></header>
+<div class="card stack"><h3 class="h-label">Action bar: a retired device for an owner, and a purging device (no action)</h3>
+  <div class="actionbar" role="group" aria-label="Sample actions">{{template "dev_action" .Bar.Idle}}{{template "dev_action" .Bar.Purging}}</div></div>
+<div class="d-grid d-purge-grid">{{range .Dialogs}}<div class="card stack"><h3 class="h-label">{{.Name}}</h3><div class="rowmenu-pop purgepop d-static" role="group" aria-label="{{.Name}}">{{template "purge_form" .Form}}</div></div>{{end}}</div>
+<div class="card stack"><h3 class="h-label">After the request: the answer, then the device page while it purges</h3>
+  {{range .Notices}}<div><p class="meta-mono">{{.Name}}</p>{{template "m3_notice" .Notice}}</div>{{end}}
+  {{range .Purging}}<div><p class="meta-mono">{{.Name}}</p>{{template "purge_state" .View}}</div>{{end}}</div>
+<div class="card stack"><h3 class="h-label">PURGE NOT FINISHED, linking to the device it names</h3><ul class="banners">{{range .Banners}}{{template "banner_item" .}}{{end}}</ul></div>
+<div class="card stack"><h3 class="h-label">"Retired (n)" with purging rows, and with the purge state unread (open them)</h3>{{template "retired_fold" .Fold}}{{template "retired_fold" .FoldErr}}</div>
+<div class="card stack"><h3 class="h-label">Customer page: Delete customer</h3>{{range .Customer}}<div class="stack"><p class="meta-mono">{{.Name}}</p>{{template "cust_delete" .View}}</div>{{end}}</div>
+</section>{{end}}

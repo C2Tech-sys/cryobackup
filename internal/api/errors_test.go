@@ -22,6 +22,7 @@ func TestHTTPStatusTable(t *testing.T) {
 		"master_key_unavailable": 503,
 		"unavailable":            503,
 		"internal":               500,
+		"mfa_step_up_required":   403, // ADR 0019: admin-side step-up
 	}
 	codes := ErrorCodes()
 	if len(codes) != len(want) {

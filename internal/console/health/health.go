@@ -59,6 +59,9 @@ type Evaluator struct {
 	Refresh func() time.Duration
 	// SystemDrive is passed to the facts loader (default "C").
 	SystemDrive string
+	// PurgeBanner raises "Purge not finished" (ADR 0019, purge_adr19.go) from the store on every
+	// evaluation. serve and fixtures mode set it; false (unit tests of other banners) raises nothing.
+	PurgeBanner bool
 }
 
 // Fleet is one evaluated view of the fleet inside a Scope.
@@ -147,6 +150,10 @@ func (e *Evaluator) fleet(ctx context.Context, scope store.Scope, page bool) (Fl
 	if !wired && (e.MasterLoaded == nil || !e.MasterLoaded()) {
 		extra = append(extra, state.Banner{ID: "C12", Severity: state.SeverityCritical,
 			Text: "Master key unavailable: enrollment, escrow reveal and server-side retention are disabled."})
+	}
+	// ADR 0019: "Purge not finished", from the store on every evaluation (purge_adr19.go).
+	if e.PurgeBanner {
+		extra = append(extra, PurgeBanners(e.purgeFacts(ctx, scope, jobs, jerr), now)...)
 	}
 	if e.Extra != nil {
 		extra = append(extra, e.Extra(now)...)

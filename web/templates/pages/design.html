@@ -117,5 +117,7 @@
 <div class="card"><p class="ui">This page is the shell: landmarks <code>header</code>, <code>nav</code> (Console navigation) and <code>main</code>, a skip link as the first focusable element, the freshness stamp in the topbar, the condition strip under it, a 224 px sidebar from 1200 px, a 56 px rail from 900 px and a drawer below that. Use the width presets above and the Tab key to check them.</p></div>
 </section>{{end}}
 
+{{if or (not $o) (eq $o "purge")}}{{with .Purge}}{{template "design_purge" .}}{{end}}{{end}}
+
 </div>
 {{end}}

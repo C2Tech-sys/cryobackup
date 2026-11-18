@@ -61,6 +61,7 @@ var fleetNeutral = map[string]string{
 	PatternRestoreMint:     "mints a download token for a finished restore",
 	PatternRestoreDownload: "streams a finished restore's archive and counts the download (a GET: never wrapped)",
 	PatternSystemJobRun:    "only accepts the run (202); the job writes its facts later, and the hub's refresh tick re-evaluates them",
+	PatternStepUp:          "renews the caller's own session's MFA mark (ADR 0019)",
 }
 
 // fleetRegistrar wraps the mutating routes it registers in fleetSignal.
