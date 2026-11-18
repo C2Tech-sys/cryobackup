@@ -192,7 +192,8 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		a.Probe = NewProbe(nil, a.clock, true)
 	}
 	fleet := &health.Evaluator{Store: a.Store, Clock: a.clock, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status, Endpoint: a.Endpoint.Status,
-		Probes: a.probeSource(fix), Refresh: func() time.Duration { return time.Duration(disp.RefreshS()) * time.Second }}
+		Probes: a.probeSource(fix), Refresh: func() time.Duration { return time.Duration(disp.RefreshS()) * time.Second },
+		PurgeBanner: true} // ADR 0019: "Purge not finished", in serve and in fixtures mode
 	idle := time.Duration(cfg.Session.IdleH) * time.Hour
 	abs := time.Duration(cfg.Session.AbsoluteH) * time.Hour
 	a.Auth = auth.NewManager(a.Store, idle, abs, cfg.RateLimits.LoginPerMinPerIP, cfg.RateLimits.LoginLockAfter,
@@ -257,6 +258,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		a.Runner.Add((&jobs.RestorePurge{Svc: a.Restores}).Job())
 		a.Runner.Add((&jobs.SessionExpire{Store: a.Store}).Job())
 		a.Runner.Add((&jobs.CommandExpiry{Store: a.Store}).Job())
+		a.Runner.Add((&jobs.DevicePurge{Store: a.Store, Purger: a.Backend, ArtifactsDir: artifacts, Log: a.log}).Job()) // ADR 0019
 		a.addMonitorJobs(cfg, fleet)
 	}
 	return a, nil
