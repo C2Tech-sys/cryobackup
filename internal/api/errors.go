@@ -16,6 +16,10 @@ const (
 	CodeMasterKeyUnavailable = "master_key_unavailable" // 503: the console cannot unwrap an escrowed secret right now
 	CodeUnavailable          = "unavailable"            // 503: temporary; carries Retry-After
 	CodeInternal             = "internal"               // 500: a bug on the console; never details
+	// CodeMFAStepUpRequired is admin-side only (ADR 0019): the session is valid but its last
+	// TOTP check is older than the fresh-MFA window; the client asks for a code, calls
+	// POST /api/v1/auth/step-up, and retries. auth.CodeStepUpRequired writes the same document.
+	CodeMFAStepUpRequired = "mfa_step_up_required" // 403
 )
 
 // errorTable is the one place that maps a code to its HTTP status and its
@@ -38,6 +42,7 @@ var errorTable = []struct {
 	{CodeMasterKeyUnavailable, 503, "The console cannot use its master key right now."},
 	{CodeUnavailable, 503, "The service is temporarily unavailable."},
 	{CodeInternal, 500, "Internal error."},
+	{CodeMFAStepUpRequired, 403, "A recent MFA check is required. Confirm with a current authenticator code."},
 }
 
 const (
