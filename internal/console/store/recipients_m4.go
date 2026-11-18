@@ -63,6 +63,9 @@ type RecipientInput struct {
 // at most 254 characters and a local part of at most 64. It is the check recipients and the test
 // mail use, so an address that passes here cannot inject a header or a second recipient.
 func CleanMailAddress(s string) (string, bool) {
+	if strings.ContainsAny(s, "\r\n") {
+		return s, false // never trimmed away: a line break in an address is an attempt, not a typo
+	}
 	s = strings.TrimSpace(s)
 	if s == "" || len(s) > maxMailAddress {
 		return s, false
