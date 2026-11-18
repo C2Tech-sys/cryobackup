@@ -36,9 +36,11 @@ import (
 //     scheduler's mutating steps take, under a holder of its own so that
 //     neither the scheduler nor a second purge can share it;
 //  3. lists the parent <remote>:<bucket>/<prefix> (`rclone lsjson
-//     --dirs-only`, not recursive): when the parent itself is not found or
-//     cannot be listed, the purge stops with a classified error, so a wrong
-//     bucket or remote can never read as "nothing left";
+//     --dirs-only`, not recursive) and requires the storage probe
+//     repository's directory in it: when the parent is not found, cannot be
+//     listed, or lists no probe directory (an empty listing included), the
+//     purge stops with a classified error, so a wrong bucket, prefix or
+//     remote can never read as "nothing left";
 //  4. measures the prefix (`rclone size --json`), purges it (`rclone purge`)
 //     when it holds anything, and lists it again (`rclone lsjson -R
 //     --files-only`) to report what is left.
@@ -560,25 +562,39 @@ type rcloneCount struct {
 
 // rcloneParent runs `rclone lsjson --dirs-only -- <parent>` on the parent
 // <remote>:<bucket>/<prefix> of the device prefix, not recursive, and returns
-// nil only when rclone exited 0 with a well-formed JSON list. The entries are
-// read and dropped as they stream past (no name is kept); only the shape of
-// the answer is checked. A parent that is not found (exit
-// rcloneExitDirNotFound) means the configured bucket, prefix or remote does
-// not point at the fleet's repositories: storage_unreachable with class
-// storage, logged with no value. Any other failure is classified like every
-// rclone step (rcloneError); an unreadable list is restic_failed, class parse.
+// nil only when rclone exited 0 with a well-formed JSON list that holds the
+// directory of the storage probe repository (adminpath.ProbeRepoID, ADR 0017:
+// restic.AdminRepository puts it under the same <bucket>/<prefix> as every
+// device). That entry is positive evidence that the location is the fleet's:
+// a bucket store may list a prefix that does not exist as empty with exit 0,
+// and a listing that merely succeeds proves nothing. The entries are compared
+// as they stream past and dropped (no name is kept or logged).
+//
+// A parent that is not found (exit rcloneExitDirNotFound), or that lists no
+// probe directory (empty, or only other entries), means the configured bucket,
+// prefix or remote does not point at the fleet's repositories, or the storage
+// probe has never created its repository there: storage_unreachable with class
+// storage, logged with the entry count and no name. Any other failure is
+// classified like every rclone step (rcloneError); an unreadable list is
+// restic_failed, class parse.
 func (w *Worker) rcloneParent(ctx context.Context, rc *runner, deviceID, parent string) error {
 	args := []string{"lsjson", "--dirs-only", "--no-modtime", "--no-mimetype", "--", parent}
+	entries, probe := 0, false
 	pr, err := w.rcloneRun(ctx, rc, deviceID, "list_parent", purgeParentListTimeout, args, func(r io.Reader) error {
 		dec := json.NewDecoder(r)
 		if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
 			return errors.New("lsjson: not a list")
 		}
 		for dec.More() {
-			var skip json.RawMessage
-			if err := dec.Decode(&skip); err != nil {
+			var item struct {
+				Name  string `json:"Name"`
+				IsDir bool   `json:"IsDir"`
+			}
+			if err := dec.Decode(&item); err != nil {
 				return err
 			}
+			entries++
+			probe = probe || (item.IsDir && item.Name == adminpath.ProbeRepoID) // compared, never kept
 		}
 		if tok, err := dec.Token(); err != nil || tok != json.Delim(']') {
 			return errors.New("lsjson: list not closed")
@@ -595,6 +611,12 @@ func (w *Worker) rcloneParent(ctx context.Context, rc *runner, deviceID, parent 
 	case 0:
 		if pr.StdoutErr != nil {
 			return adminpath.NewError(adminpath.CodeResticFailed, restic.ClassParse)
+		}
+		if !probe {
+			w.log.Warn("repository purge stopped: the configured bucket and prefix do not list the storage probe repository; nothing was purged",
+				attrMethod(adminpath.MethodPurgeRepo), attrDevice(deviceID), attrClass(string(restic.ClassStorage)),
+				logx.Count("entries", entries))
+			return adminpath.NewError(adminpath.CodeStorageUnreachable, restic.ClassStorage)
 		}
 		return nil
 	case rcloneExitDirNotFound:

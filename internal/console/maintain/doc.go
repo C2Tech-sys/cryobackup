@@ -123,17 +123,23 @@
 // locked otherwise), and runs four rclone children through the runner, each
 // under a concurrency slot and a timeout:
 //
-//	rclone lsjson --dirs-only --no-modtime --no-mimetype -- <parent>  the parent <remote>:<bucket>/<prefix> must exist
+//	rclone lsjson --dirs-only --no-modtime --no-mimetype -- <parent>  the parent <remote>:<bucket>/<prefix> must list the probe directory
 //	rclone size --json -- <loc>                                        measure (exit 3: the prefix does not exist, zeros)
 //	rclone purge -- <loc>                                              only when the measurement found objects
 //	rclone lsjson -R --files-only --no-modtime --no-mimetype -- <loc>  what is left, counted as it streams; no name kept
 //
-// A parent that is not found (exit 3: a wrong bucket, prefix or remote) is
-// storage_unreachable with class storage, and a parent listing that fails is
-// classified like any rclone step; in both cases nothing else runs, because
-// under a wrong parent the device prefix would be "not found" too and read as
-// zeros while the data stays elsewhere. Only under a parent that was listed is
-// a device prefix that does not exist success with zeros, so the console can
+// The parent listing must show positive evidence that the location is the
+// fleet's: the directory of the storage probe repository (adminpath.ProbeRepoID,
+// ADR 0017), which lives under the same <bucket>/<prefix> as every device. A
+// parent that is not found (exit 3), lists as empty (a bucket store may answer
+// a prefix that does not exist that way, with exit 0) or lists no probe
+// directory is storage_unreachable with class storage, logged with the entry
+// count and no name; a parent listing that fails is classified like any rclone
+// step. In every such case nothing else runs, because under a wrong parent the
+// device prefix would be "not found" too and read as zeros while the data stays
+// elsewhere. A console whose storage probe has never created its repository
+// therefore cannot purge until it has. Only under a parent that lists the probe
+// is a device prefix that does not exist success with zeros, so the console can
 // retry until it succeeds. The whole call, waits for a slot included, runs
 // under a deadline (purgeDeadline, 110 minutes) below the lease (2 hours) and
 // below the admin-path client's timeout; reaching it is adminpath code

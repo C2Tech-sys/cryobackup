@@ -146,9 +146,12 @@ func (e *tenv) noLeak(t *testing.T, err error) {
 }
 
 var (
-	// ruleParentOK: the parent prefix lists two device directories.
+	// ruleParentOK: the parent prefix lists a device directory, the storage
+	// probe repository's directory (the evidence PurgeRepo requires) and a
+	// directory whose name must never reach the log.
 	ruleParentOK = fakeRule{Cmd: "lsjson", Contains: "--dirs-only", Stdout: `inline:[` + "\n" +
 		`{"Path":"01HZY5X8M3K7Q2W9RTV4BN6CDE","Name":"01HZY5X8M3K7Q2W9RTV4BN6CDE","Size":-1,"IsDir":true},` + "\n" +
+		`{"Path":"` + adminpath.ProbeRepoID + `","Name":"` + adminpath.ProbeRepoID + `","Size":-1,"IsDir":true},` + "\n" +
 		`{"Path":"` + purgeSentinel + `","Name":"` + purgeSentinel + `","Size":-1,"IsDir":true}` + "\n]\n"}
 	ruleSize5   = fakeRule{Cmd: "size", Stdout: `inline:{"count":5,"bytes":1234,"sizeless":0}` + "\n"}
 	rulePurgeOK = fakeRule{Cmd: "purge"}

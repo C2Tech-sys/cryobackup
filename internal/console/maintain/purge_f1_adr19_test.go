@@ -97,9 +97,12 @@ func TestPurgeRepoNeedsThePurgeMarkADR19(t *testing.T) {
 }
 
 // TestPurgeRepoParentMustExistADR19 (item 2): the device prefix's "not found"
-// counts as zeros only when the parent <remote>:<bucket>/<prefix> was listed.
-// A parent that is missing (a wrong bucket or remote) or cannot be listed is a
-// classified error, and nothing after the parent listing runs.
+// counts as zeros only when the parent <remote>:<bucket>/<prefix> was listed
+// AND lists the storage probe repository's directory (positive evidence that
+// the location is the fleet's). A parent that is missing, lists as empty, lists
+// no probe directory or cannot be listed is a classified error, and nothing
+// after the parent listing runs. "{ID}" in a scripted listing stands for the
+// device being purged.
 func TestPurgeRepoParentMustExistADR19(t *testing.T) {
 	parent := func(r fakeRule) fakeRule { r.Cmd, r.Contains = "lsjson", "--dirs-only"; return r }
 	for name, c := range map[string]struct {
@@ -107,7 +110,16 @@ func TestPurgeRepoParentMustExistADR19(t *testing.T) {
 		code   string
 		class  restic.ErrorClass
 	}{
-		"parent not found":          {parent(fakeRule{Exit: 3, Stdout: "inline:[\n", Stderr: notFound}), adminpath.CodeStorageUnreachable, restic.ClassStorage},
+		"parent not found": {parent(fakeRule{Exit: 3, Stdout: "inline:[\n", Stderr: notFound}), adminpath.CodeStorageUnreachable, restic.ClassStorage},
+		// A bucket store may answer a prefix that does not exist with an empty list and exit 0.
+		"parent lists empty": {parent(fakeRule{Stdout: "inline:[\n]\n"}), adminpath.CodeStorageUnreachable, restic.ClassStorage},
+		// The device's own directory is not evidence: the probe repository's is.
+		"parent lists only the device, no probe": {parent(fakeRule{Stdout: `inline:[{"Path":"{ID}","Name":"{ID}","Size":-1,"IsDir":true}]`}),
+			adminpath.CodeStorageUnreachable, restic.ClassStorage},
+		"probe is a file, not a directory": {parent(fakeRule{Stdout: `inline:[{"Path":"{ID}","Name":"{ID}","IsDir":true},{"Path":"` +
+			adminpath.ProbeRepoID + `","Name":"` + adminpath.ProbeRepoID + `","Size":3,"IsDir":false}]`}), adminpath.CodeStorageUnreachable, restic.ClassStorage},
+		"probe only in a longer name": {parent(fakeRule{Stdout: `inline:[{"Path":"` + adminpath.ProbeRepoID + `-old","Name":"` +
+			adminpath.ProbeRepoID + `-old","IsDir":true}]`}), adminpath.CodeStorageUnreachable, restic.ClassStorage},
 		"parent listing fails":      {parent(fakeRule{Exit: 1, Stderr: f1DNS}), adminpath.CodeStorageUnreachable, restic.ClassNetwork},
 		"parent listing denied":     {parent(fakeRule{Exit: 1, Stderr: f1Denied}), adminpath.CodeResticFailed, restic.ClassAuth},
 		"parent listing unreadable": {parent(fakeRule{Stdout: "inline:{}"}), adminpath.CodeResticFailed, restic.ClassParse},
@@ -122,6 +134,11 @@ func TestPurgeRepoParentMustExistADR19(t *testing.T) {
 			// zeros and reported the repository gone.
 			e := newPurgeEnv(t, []fakeRule{c.parent, f1SizeMissing, rulePurgeOK, f1ListMissing}, nil)
 			id := e.retiredID()
+			if strings.Contains(c.parent.Stdout, "{ID}") {
+				p := c.parent
+				p.Stdout = strings.ReplaceAll(p.Stdout, "{ID}", id)
+				e.scenario([]fakeRule{p, f1SizeMissing, rulePurgeOK, f1ListMissing})
+			}
 			mark := len(e.calls())
 			res, err := e.w.PurgeRepo(e.ctx, purgeReq(id))
 			wantCode(t, err, c.code, c.class)
@@ -139,7 +156,7 @@ func TestPurgeRepoParentMustExistADR19(t *testing.T) {
 		})
 	}
 
-	t.Run("parent present, device prefix absent: zeros", func(t *testing.T) {
+	t.Run("parent lists the probe, device prefix absent: zeros", func(t *testing.T) {
 		e := newPurgeEnv(t, []fakeRule{ruleParentOK, f1SizeMissing, rulePurgeOK, f1ListMissing}, nil)
 		id := e.retiredID()
 		mark := len(e.calls())
