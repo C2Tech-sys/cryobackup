@@ -301,8 +301,25 @@ func foldOf(cs []*state.CustomerState, c fmtCtx, showCustomer bool, keep func(st
 	if len(rows) == 0 {
 		return nil
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Host < rows[j].Host })
+	// By host name; a name retired more than once (a machine enrolled again) reads newest first.
+	// ISO is RFC 3339 in UTC, so it orders as text.
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Host != rows[j].Host {
+			return rows[i].Host < rows[j].Host
+		}
+		return rows[i].ISO > rows[j].ISO
+	})
 	return &RetiredFold{N: len(rows), Rows: rows, Chip: retiredChip()}
+}
+
+// ShowCustomer says whether the list has a customer column: true when any row names its customer.
+func (f RetiredFold) ShowCustomer() bool {
+	for _, r := range f.Rows {
+		if r.Customer != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // retiredFold is the control of a list over the whole fleet view, or one customer.
