@@ -291,7 +291,7 @@ paths:
       tags: [auth]
       summary: Renew the session's fresh-MFA mark (ADR 0019)
       description: |
-        Checks a current TOTP code (not a recovery code) and marks this session as having passed MFA now. The owner routes that cannot be undone (purge of a retired device, delete of a customer, purge of a customer's retired devices) need a mark younger than five minutes and answer 403 `mfa_step_up_required` otherwise; the client calls this route and repeats the request. A code that already served a login or a step-up is refused (replay guard), and a wrong code counts toward the account lockout. Session only: an API token is refused with `forbidden`. One audit row `auth.stepup`, result ok or denied.
+        Checks a current TOTP code (not a recovery code) and marks this session as having passed MFA now. The owner routes that cannot be undone (purge of a retired device, delete of a customer, purge of a customer's retired devices) need a mark younger than five minutes and answer 403 `mfa_step_up_required` otherwise; the client calls this route and repeats the request. A code that already served a login or a step-up is refused (replay guard), and a wrong code counts toward the account lockout. Session only: an API token is refused with `forbidden`. 503 `master_key_unavailable` while the console master key is not loaded (a code cannot be checked without it); `Retry-After` says when to retry. An audit row that cannot be written answers 500 `internal`, nothing changes and the code is still good. One audit row `auth.stepup`, result ok or denied.
       x-min-role: SELF
       security:
         - sessionCookie: []
@@ -309,6 +309,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {description: 'The account has no TOTP enrollment (`conflict`).', content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
         '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /api/v1/auth/mfa/totp:
     post:
       operationId: authMFATOTP
@@ -2568,7 +2569,7 @@ components:
       required: [confirm_host_name]
       properties:
         confirm_host_name: {type: string, description: The device's host name, typed exactly.}
-        reason: {type: string, maxLength: 200, description: 'Required on the first request: one line, no file paths.'}
+        reason: {type: string, maxLength: 500, description: 'Required on the first request: one line, no file paths.'}
     DevicePurgeResponse:
       type: object
       required: [computed_at, id, customer_id, state, changed, purge]
@@ -2584,7 +2585,7 @@ components:
       required: [confirm_name, reason]
       properties:
         confirm_name: {type: string, description: The customer's name, typed exactly.}
-        reason: {type: string, maxLength: 200, description: 'One line, no file paths.'}
+        reason: {type: string, maxLength: 500, description: 'One line, no file paths.'}
     CustomerPurgeRetiredResponse:
       type: object
       required: [computed_at, customer_id, requested, requested_ids, already_purging, active_untouched]
@@ -3863,7 +3864,7 @@ components:
       type: object
       required: [reason]
       properties:
-        reason: {type: string, description: 'Required unless the device is already retired: one line, no file paths. Kept on the device and in the audit row.'}
+        reason: {type: string, maxLength: 500, description: 'Required unless the device is already retired: one line, no file paths. Kept on the device and in the audit row.'}
         final_backup: {type: boolean, description: Queue a last backup and do not retire yet.}
         replaced_by: {type: string, description: 'The device that takes over: active, and of the same customer.'}
     DeviceRetireResponse:
