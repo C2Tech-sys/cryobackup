@@ -59,7 +59,7 @@ type RecipientInput struct {
 
 // CleanMailAddress trims s and reports whether it is exactly one plain address: a local part that
 // is a dot-atom of RFC 5322 atext (no quoting, no comment, no display name, no angle brackets) of
-// at most 64 octets, "@", and a domain of at least two dot-separated labels of letters, digits and
+// at most 64 octets, "@", and a domain of at least two dot-separated labels of 1 to 63 letters, digits and
 // hyphens (no label starts or ends with a hyphen, no address literal), at most 254 octets in all,
 // ASCII only. It is the check recipients and the test mail use, so an address that passes here
 // cannot inject a header or a second recipient.
@@ -107,9 +107,12 @@ func validDotAtom(s string) bool {
 	return true
 }
 
-// validLDHLabel reports whether s is a non-empty run of letters, digits and hyphens that neither starts nor ends with a hyphen.
+// maxMailLabel is the longest domain label (RFC 1035); the mail sender applies the same cap.
+const maxMailLabel = 63
+
+// validLDHLabel reports whether s is a run of 1 to 63 letters, digits and hyphens that neither starts nor ends with a hyphen.
 func validLDHLabel(s string) bool {
-	if s == "" || s[0] == '-' || s[len(s)-1] == '-' {
+	if s == "" || len(s) > maxMailLabel || s[0] == '-' || s[len(s)-1] == '-' {
 		return false
 	}
 	for i := 0; i < len(s); i++ {

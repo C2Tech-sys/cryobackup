@@ -121,6 +121,10 @@ func TestM4RecipientValidation(t *testing.T) {
 		"a(b)@example.test", "a,b@example.test", "a:b@example.test", "a\\b@example.test", "a[b]@example.test", "a@exa_mple.test",
 		"a@exa!mple.test", "a@exa+mple.test", "a@example.te$t", "a@@",
 	}
+	// P20-T2F batch 2 item 1: a domain label is at most 63 octets (RFC 1035), as in the mail sender.
+	b64, b63 := strings.Repeat("b", 64), strings.Repeat("b", 63)
+	bad = append(bad, "a@"+b64+".test", "a@example."+b64, "a@"+b64+"."+b64, strings.Repeat("a", 58)+"@"+strings.Repeat("b", 190)+".test",
+		strings.Repeat("a", 60)+"@"+strings.Repeat("b", 188)+".test") // 254 octets, one 188-octet label
 	for _, a := range bad {
 		_, err := w.s.CreateRecipient(w.ctx, all, RecipientInput{Name: "X", Address: a}, actor)
 		fe := FieldErrors(err)
@@ -132,11 +136,11 @@ func TestM4RecipientValidation(t *testing.T) {
 			t.Errorf("address %q: the error echoes the input: %v", a, err)
 		}
 	}
-	long := strings.Repeat("a", 60) + "@" + strings.Repeat("b", 188) + ".test" // exactly 254
+	long := strings.Repeat("a", 60) + "@" + b63 + "." + b63 + "." + b63 + ".x" // exactly 254, every label within 63
 	if len(long) != 254 {
 		t.Fatalf("test address is %d long", len(long))
 	}
-	good := []string{"ops@example.test", "a.b+tag@sub.example.test", "O'Brien@example.test", "x@y.z", "a-b.c_d!#$%&'*+/=?^`{|}~@a-b.c1.example.test", "A@B.C", long}
+	good := []string{"ops@example.test", "a.b+tag@sub.example.test", "O'Brien@example.test", "x@y.z", "a-b.c_d!#$%&'*+/=?^`{|}~@a-b.c1.example.test", "A@B.C", "a@" + b63 + ".test", long}
 	for _, a := range good {
 		if _, err := w.s.CreateRecipient(w.ctx, all, RecipientInput{Name: "G " + a[:3], Address: a}, actor); err != nil {
 			t.Errorf("address %q refused: %v", a, err)
