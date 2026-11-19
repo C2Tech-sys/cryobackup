@@ -9,9 +9,10 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
-// P20-W2B item 7: an open episode still marked at the batch id leaves the batch; a closed one, one
-// marked at another time, and an id outside scope are left alone.
-func TestM4W2BUnmarkEpisodesNotified(t *testing.T) {
+// P20-W2B item 7 and P20-W2BF item 6: leaving an alert batch is one transaction. An open episode
+// still marked at the batch id is released (unmarked); one that closed meanwhile is settled
+// (recovery done, no message); one marked at another time, and an id outside scope, are left alone.
+func TestM4W2BLeaveAlertBatch(t *testing.T) {
 	w := seed(t)
 	all := ScopeAll()
 	sync := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{epKey(w.devA.ID, "FAILED"), epKey(w.devA.ID, "STALE"), epKey(w.devB.ID, "FAILED")}, t0))
@@ -19,31 +20,31 @@ func TestM4W2BUnmarkEpisodesNotified(t *testing.T) {
 		t.Fatalf("opened %d", len(sync.Opened))
 	}
 	aFailed, aStale, bFailed := sync.Opened[0].ID, sync.Opened[1].ID, sync.Opened[2].ID
-	batch, other := t0.Add(time.Second), t0.Add(2*time.Second)
+	batch, other, settle := t0.Add(time.Second), t0.Add(2*time.Second), t0.Add(3*time.Second)
 	must[int](t)(w.s.MarkEpisodesNotified(w.ctx, all, []string{aFailed, bFailed}, batch))
 	must[int](t)(w.s.MarkEpisodesNotified(w.ctx, all, []string{aStale}, other))
 
-	if _, err := w.s.UnmarkEpisodesNotified(w.ctx, ScopeOf(w.custA.ID), []string{aFailed, bFailed}, batch); !errors.Is(err, ErrNotFound) {
+	if _, _, err := w.s.LeaveAlertBatch(w.ctx, ScopeOf(w.custA.ID), []string{aFailed, bFailed}, batch, settle); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an id outside scope: %v", err)
 	}
 	if got := must[[]Episode](t)(w.s.ListEpisodesNotifiedAt(w.ctx, all, batch)); len(got) != 2 {
 		t.Fatalf("a refused call changed the batch: %+v", got)
 	}
-	if n := must[int](t)(w.s.UnmarkEpisodesNotified(w.ctx, all, []string{aFailed, aStale}, batch)); n != 1 {
-		t.Fatalf("changed %d, want 1 (the other is marked at another time)", n)
-	}
-	un := must[[]Episode](t)(w.s.ListUnnotifiedEpisodes(w.ctx, all))
-	if len(un) != 1 || un[0].ID != aFailed {
-		t.Fatalf("unnotified = %+v", un)
-	}
-	// Closed: left alone, so its recovery stays owed.
+	// bFailed closes before the call (the race of item 6); aStale is marked at another time.
 	w.clk.Advance(time.Minute)
 	must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{epKey(w.devA.ID, "FAILED"), epKey(w.devA.ID, "STALE")}, w.clk.Now()))
-	if n := must[int](t)(w.s.UnmarkEpisodesNotified(w.ctx, all, []string{bFailed}, batch)); n != 0 {
-		t.Fatalf("a closed episode was unmarked: %d", n)
+	released, settled, err := w.s.LeaveAlertBatch(w.ctx, all, []string{aFailed, aStale, bFailed}, batch, settle)
+	if err != nil || released != 1 || settled != 1 {
+		t.Fatalf("released %d settled %d (%v), want 1 and 1", released, settled, err)
 	}
-	if due := must[[]Episode](t)(w.s.ListRecoveryDueEpisodes(w.ctx, all)); len(due) != 1 || due[0].ID != bFailed {
-		t.Fatalf("recovery due = %+v", due)
+	if un := must[[]Episode](t)(w.s.ListUnnotifiedEpisodes(w.ctx, all)); len(un) != 1 || un[0].ID != aFailed {
+		t.Fatalf("unnotified = %+v", un)
+	}
+	if due := must[[]Episode](t)(w.s.ListRecoveryDueEpisodes(w.ctx, all)); len(due) != 0 {
+		t.Fatalf("a settled episode still owes a recovery: %+v", due)
+	}
+	if got := must[[]Episode](t)(w.s.ListEpisodesRecoveryNotifiedAt(w.ctx, all, settle)); len(got) != 1 || got[0].ID != bFailed {
+		t.Fatalf("settled = %+v", got)
 	}
 }
 
@@ -51,7 +52,7 @@ func TestM4W2BUnmarkEpisodesNotified(t *testing.T) {
 // (scope_test.go), next to addW2AMatrix: addW2BMatrix(m).
 func addW2BMatrix(m map[string]matrixCase) {
 	batch := time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)
-	m["UnmarkEpisodesNotified"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
+	m["LeaveAlertBatch"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
 		open, err := w.s.ListOpenEpisodes(w.ctx, ScopeAll())
 		if err != nil {
 			return nil, err
@@ -78,7 +79,7 @@ func addW2BMatrix(m map[string]matrixCase) {
 		if _, err := w.s.MarkEpisodesNotified(w.ctx, ScopeAll(), []string{id}, batch); err != nil {
 			return nil, err
 		}
-		_, err = w.s.UnmarkEpisodesNotified(w.ctx, sc, []string{id}, batch)
+		_, _, err = w.s.LeaveAlertBatch(w.ctx, sc, []string{id}, batch, batch.Add(time.Second))
 		return nil, err
 	}}
 }

@@ -71,6 +71,9 @@ type Retrier struct {
 	// afterSettle, when set, runs after a re-render took episodes out of their batch and before the
 	// send (the tests inject a crash there).
 	afterSettle func() error
+	// beforeLeave, when set, runs after a re-render read its batch and before the episodes leave it
+	// (the tests close an episode there).
+	beforeLeave func()
 }
 
 // RetryResult counts what one run did.
@@ -306,13 +309,14 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 // leaveBatch takes the episodes a re-rendered alert of batch at leaves out out of the batch,
 // unless a delivery of that batch was already sent (then someone saw them in the full alert, and
 // what follows is owed as usual). It runs before the send: from here on no message of the batch
-// can name them, so nothing may follow from it either.
+// can name them, so nothing may follow from it either. One store transaction
+// (store.LeaveAlertBatch) handles each episode as it stands at that moment, so one that closes
+// between this run's read and the release cannot stay behind:
 //
-//   - closed: their recovery is settled without a message (RetryResult.RecoveryUnsent). The mark
-//     takes a free batch id, like Notifier's silent marks.
-//   - muted (open, but acknowledged, snoozed or of a suspended customer): their alert mark is taken
-//     back (store.UnmarkEpisodesNotified; RetryResult.Released), so each is mailed normally if it
-//     becomes mailable while still open, and owes no recovery if it closes first.
+//   - open (muted: acknowledged, snoozed or of a suspended customer): its alert mark is taken back
+//     (RetryResult.Released), so it is mailed normally if it becomes mailable while still open;
+//   - closed: its recovery is settled without a message (RetryResult.RecoveryUnsent), under a
+//     free batch id like Notifier's silent marks.
 func (r *Retrier) leaveBatch(ctx context.Context, at time.Time, closed, muted []store.Episode, res *RetryResult) error {
 	if len(closed) == 0 && len(muted) == 0 {
 		return nil
@@ -326,24 +330,19 @@ func (r *Retrier) leaveBatch(ctx context.Context, at time.Time, closed, muted []
 			return nil
 		}
 	}
-	if len(muted) > 0 {
-		n, err := r.Store.UnmarkEpisodesNotified(ctx, store.ScopeAll(), episodeIDs(muted), at)
-		if err != nil {
-			return err
-		}
-		res.Released += n
+	id, err := r.batchID(ctx)
+	if err != nil {
+		return err
 	}
-	if len(closed) > 0 {
-		id, err := r.batchID(ctx)
-		if err != nil {
-			return err
-		}
-		n, err := r.Store.MarkRecoveryNotified(ctx, store.ScopeAll(), episodeIDs(closed), time.UnixMilli(id).UTC())
-		if err != nil {
-			return err
-		}
-		res.RecoveryUnsent += n
+	if r.beforeLeave != nil {
+		r.beforeLeave()
 	}
+	released, settled, err := r.Store.LeaveAlertBatch(ctx, store.ScopeAll(), append(episodeIDs(muted), episodeIDs(closed)...), at, time.UnixMilli(id).UTC())
+	if err != nil {
+		return err
+	}
+	res.Released += released
+	res.RecoveryUnsent += settled
 	if r.afterSettle != nil {
 		return r.afterSettle()
 	}

@@ -208,3 +208,30 @@ func TestNotifyAckMidPassLeavingNothingSaysSo(t *testing.T) {
 		t.Fatalf("log:\n%s", logs)
 	}
 }
+
+// P20-W2BF item 6: a muted episode that closes between the retry's read of its batch and the
+// release is settled in the same step (recovery done with no message), never left in the batch
+// owing a recovery for an alert it was not in.
+func TestRetryReleaseRaceWithAClose(t *testing.T) {
+	w := newWorld(t)
+	w.recipient("ops@example.test", true, true)
+	site := w.twoDeviceFailedBatch("ops@example.test")
+	w.ackDevice(site[0])
+	w.clk.Advance(time.Minute)
+	w.r.beforeLeave = func() {
+		w.r.beforeLeave = nil
+		w.set(state.StateOK, site[0]) // dev0 closes between the read and the release
+		w.n.Configured = false
+		defer func() { w.n.Configured = true }()
+		w.pass()
+	}
+	if rr := w.retry(); rr.Sent != 1 {
+		t.Fatalf("retry %+v", rr)
+	}
+	w.clk.Advance(time.Minute)
+	w.pass()
+	h0 := w.host[site[0]]
+	if w.mentions(mail.KindAlert, h0) != 0 || w.mentions(mail.KindRecovery, h0) != 0 || w.recoveryOwed() != 0 {
+		t.Fatalf("dev0 alert %d recovery %d, owed %d", w.mentions(mail.KindAlert, h0), w.mentions(mail.KindRecovery, h0), w.recoveryOwed())
+	}
+}
