@@ -45,6 +45,14 @@ const (
 	DeliverySuppressed = "suppressed"
 )
 
+// SettingSMTPConsecutiveFailures is the settings key that counts failed send attempts since the
+// last delivered message (test sends excluded). It is kept by MarkDeliveryFailed and
+// MarkDeliverySent in the transaction of the row change, because the log holds one row per
+// message and cannot say how failures and deliveries of different messages interleaved. It is not
+// a registered setting (settingDefs): the settings page does not list it and SetSettingsAudited
+// refuses it as an unknown key.
+const SettingSMTPConsecutiveFailures = "smtp_consecutive_failures"
+
 // Suppress reasons (the schema's CHECK).
 var deliverySuppressReasons = []string{"acknowledged", "snoozed", "paused", "deduped", "customer_suspended", "below_threshold"}
 
@@ -201,7 +209,9 @@ func (s *Store) EnqueueDelivery(ctx context.Context, scope Scope, in DeliveryInp
 }
 
 // MarkDeliverySent records that the message was delivered: result 'sent', sent_at now, no error
-// class, no retry. A row that failed before counts the retry (attempt + 1). A row that is already
+// class, no retry. A row that failed before counts the retry (attempt + 1). Unless it is a test
+// send, the consecutive-failure counter (SettingSMTPConsecutiveFailures) is set to zero in the
+// same transaction. A row that is already
 // sent is returned unchanged; a suppressed row is ErrInvalid (it was never to be sent).
 func (s *Store) MarkDeliverySent(ctx context.Context, scope Scope, id string) (Delivery, error) {
 	return s.finishDelivery(ctx, scope, id, DeliverySent, "", nil)
@@ -212,12 +222,27 @@ func (s *Store) MarkDeliverySent(ctx context.Context, scope Scope, id string) (D
 // next attempt is due, or nil when the row gives up. A row that failed before counts the retry
 // (attempt + 1). The store enforces the schedule of DeliveryRetryDelays: the failure of attempt 4
 // (the first try plus retries after 1, 5 and 15 minutes) stores no next_retry_at whatever the
-// caller passed, and the row is final. A row that is already sent is ErrConflict; a suppressed row is ErrInvalid.
+// caller passed, and the row is final. Unless it is a test send, the consecutive-failure counter
+// (SettingSMTPConsecutiveFailures) grows by one in the same transaction. A row that is already sent is ErrConflict; a suppressed row is ErrInvalid.
 func (s *Store) MarkDeliveryFailed(ctx context.Context, scope Scope, id, errorClass string, nextRetryAt *time.Time) (Delivery, error) {
 	if !errClassRE.MatchString(errorClass) {
 		return Delivery{}, validation([]FieldError{fieldf("error_class", "Use a class word of lower-case letters, digits and underscores.")})
 	}
 	return s.finishDelivery(ctx, scope, id, DeliveryFailed, errorClass, nextRetryAt)
+}
+
+// bumpFailureCount adds one failed attempt to the consecutive-failure counter (a missing row counts as zero).
+func bumpFailureCount(tx *Tx, now int64) error {
+	_, err := tx.Exec(`INSERT INTO settings (key, value, updated_by, created_at, updated_at) VALUES (?, '1', NULL, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = excluded.updated_at`,
+		SettingSMTPConsecutiveFailures, now, now)
+	return err
+}
+
+// resetFailureCount sets the counter to zero after a delivery; it writes nothing when it is already zero or absent.
+func resetFailureCount(tx *Tx, now int64) error {
+	_, err := tx.Exec(`UPDATE settings SET value = '0', updated_at = ? WHERE key = ? AND value <> '0'`, now, SettingSMTPConsecutiveFailures)
+	return err
 }
 
 func (s *Store) finishDelivery(ctx context.Context, scope Scope, id, result, class string, next *time.Time) (Delivery, error) {
@@ -250,6 +275,18 @@ func (s *Store) finishDelivery(ctx context.Context, scope Scope, id, result, cla
 		if _, err := tx.Exec(`UPDATE notification_log SET result = ?, error_class = ?, attempt = ?, next_retry_at = ?, sent_at = ?, updated_at = ? WHERE id = ?`,
 			result, nullStr(class), attempt, nullTime(next), now, now, id); err != nil {
 			return err
+		}
+		if cur.Kind != DeliveryTest { // a test to a mistyped address says nothing about alert delivery
+			switch result {
+			case DeliveryFailed:
+				if err := bumpFailureCount(tx, now); err != nil {
+					return err
+				}
+			case DeliverySent:
+				if err := resetFailureCount(tx, now); err != nil {
+					return err
+				}
+			}
 		}
 		out, err = one(tx, `SELECT `+deliveryCols+` FROM notification_log WHERE id = ?`, []any{id}, scanDelivery)
 		return err

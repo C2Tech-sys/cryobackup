@@ -419,3 +419,83 @@ func TestM4AckAlarmTypeMapping(t *testing.T) {
 		}
 	}
 }
+
+// P20-T2F item 3: the log keeps one row per message, so "failed attempts since the last delivery"
+// is counted where it happens, not derived from rows. A fails twice, B is delivered, A fails once:
+// one failed attempt since the last delivery.
+func TestM4ConsecutiveFailuresSurviveInterleavedDeliveries(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	soon := func() *time.Time { n := w.clk.Now().Add(time.Minute); return &n }
+	a := enqueueM4(t, w, DeliveryAlert, "alert:A")
+	b := enqueueM4(t, w, DeliveryAlert, "alert:B")
+	count := func() int { return must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, all)).ConsecutiveFailures }
+	for i := 0; i < 2; i++ {
+		w.clk.Advance(time.Second)
+		must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, a.ID, "connect", soon()))
+	}
+	if n := count(); n != 2 {
+		t.Fatalf("after A failed twice: %d, want 2", n)
+	}
+	w.clk.Advance(time.Second)
+	must[Delivery](t)(w.s.MarkDeliverySent(w.ctx, all, b.ID))
+	if n := count(); n != 0 {
+		t.Fatalf("after B was delivered: %d, want 0", n)
+	}
+	w.clk.Advance(time.Second)
+	must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, a.ID, "connect", soon()))
+	if n := count(); n != 1 {
+		t.Fatalf("A failed once more after B was delivered: %d, want 1", n)
+	}
+}
+
+// Test sends neither add to the count nor reset it; marking a delivered row sent again changes nothing.
+func TestM4TestSendsDoNotMoveTheFailureCount(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	count := func() int { return must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, all)).ConsecutiveFailures }
+	sendM4(t, w, DeliveryAlert, "alert:1", 2, false)
+	sendM4(t, w, DeliveryTest, "test:1", 1, false)
+	if n := count(); n != 2 {
+		t.Fatalf("a failed test moved the count to %d, want 2", n)
+	}
+	sendM4(t, w, DeliveryTest, "test:2", 0, true)
+	if n := count(); n != 2 {
+		t.Fatalf("a delivered test moved the count to %d, want 2", n)
+	}
+	d := sendM4(t, w, DeliveryAlert, "alert:2", 0, true)
+	sendM4(t, w, DeliveryAlert, "alert:3", 1, false)
+	must[Delivery](t)(w.s.MarkDeliverySent(w.ctx, all, d.ID)) // already delivered: a no-op
+	if n := count(); n != 1 {
+		t.Fatalf("re-marking a delivered row moved the count to %d, want 1", n)
+	}
+}
+
+// The counter is a settings row the settings page does not know: it is not listed, and the console
+// cannot be told to change it. A value that is not a non-negative integer is an error, never a zero.
+func TestM4FailureCounterIsHiddenAndReadStrictly(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	sendM4(t, w, DeliveryAlert, "alert:1", 2, false)
+	if g, err := w.s.GetSetting(w.ctx, SettingSMTPConsecutiveFailures); err != nil || string(g.Value) != "2" {
+		t.Fatalf("stored counter = %q, %v, want 2", g.Value, err)
+	}
+	for _, v := range must[[]SettingValue](t)(w.s.ListSettingValues(w.ctx, all)) {
+		if v.Key == SettingSMTPConsecutiveFailures {
+			t.Fatal("the failure counter is listed on the settings page")
+		}
+	}
+	_, err := w.s.SetSettingsAudited(w.ctx, all, []SettingInput{{Key: SettingSMTPConsecutiveFailures, Value: json.RawMessage(`0`)}}, m4Actor(w))
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("changing the counter through the settings path = %v, want ErrNotFound", err)
+	}
+	for _, bad := range []string{`"x"`, `-1`, `1.5`, `null`, `[1]`} {
+		ok(t, w.s.PutSetting(w.ctx, SettingSMTPConsecutiveFailures, json.RawMessage(bad), ""))
+		if _, err := w.s.LoadSendFacts(w.ctx, all); !errors.Is(err, ErrInvalid) {
+			t.Errorf("counter %s: LoadSendFacts = %v, want ErrInvalid", bad, err)
+		}
+		if smtp, _, err := w.s.MailFacts(w.ctx, all, state.ProbeRun{}); err != nil || smtp.NotRead == "" {
+			t.Errorf("counter %s: MailFacts = %+v, %v, want a NotRead reason", bad, smtp, err)
+		}
+	}
+}
