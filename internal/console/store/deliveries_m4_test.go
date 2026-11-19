@@ -122,8 +122,8 @@ func TestM4RetryBookkeepingCountsAttempts(t *testing.T) {
 	if sent.Result != DeliverySent || sent.Attempt != 3 || sent.ErrorClass != "" || sent.NextRetryAt != nil {
 		t.Fatalf("delivered after retries = %+v", sent)
 	}
-	if again := must[Delivery](t)(w.s.MarkDeliverySent(w.ctx, all, e.ID)); again.Attempt != 3 || again.Result != DeliverySent {
-		t.Fatalf("marking sent twice changed the row: %+v", again)
+	if _, err := w.s.MarkDeliverySent(w.ctx, all, e.ID); !errors.Is(err, ErrConflict) { // P20-T2F batch 2: a delivered row is final
+		t.Fatalf("marking sent twice = %v, want ErrConflict", err)
 	}
 	if _, err := w.s.MarkDeliveryFailed(w.ctx, all, e.ID, "tls", nil); !errors.Is(err, ErrConflict) {
 		t.Fatalf("failing a delivered row = %v, want ErrConflict", err)
@@ -173,7 +173,8 @@ func TestM4HasDeliveredIsTrueOnlyForSent(t *testing.T) {
 	if has() {
 		t.Fatal("queued counts as delivered")
 	}
-	must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, d.ID, "connect", nil))
+	retry := w.clk.Now().Add(time.Minute)
+	must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, d.ID, "connect", &retry)) // a retry is still scheduled: not final
 	if has() {
 		t.Fatal("failed counts as delivered")
 	}
@@ -287,4 +288,63 @@ func TestM4TheStoreCapsRetriesAtTheSchedule(t *testing.T) {
 	if f := must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, all)); f.PendingAlerts != 0 {
 		t.Fatalf("a row past its retry cap is pending: %+v", f)
 	}
+}
+
+// P20-T2F batch 2 item 5: a final row (delivered, or failed with no retry left) accepts no further
+// mark: attempt, result and the failure counter stay where they were, and the caller gets ErrConflict.
+func TestM4AFinalDeliveryRowAcceptsNoFurtherMarks(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	counter := func() int { return must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, all)).ConsecutiveFailures }
+	soon := func() *time.Time { n := w.clk.Now().Add(time.Minute); return &n }
+
+	// Failed for good (the cap): failures 5 and 6, then a "sent", change nothing.
+	d := enqueueM4(t, w, DeliveryAlert, "alert:final1")
+	for att := 1; att <= 4; att++ {
+		w.clk.Advance(time.Second)
+		d = must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, d.ID, "connect", soon()))
+	}
+	if d.Attempt != 4 || d.NextRetryAt != nil || counter() != 4 {
+		t.Fatalf("setup: %+v counter %d", d, counter())
+	}
+	w.clk.Advance(time.Second)
+	for i := 5; i <= 6; i++ {
+		if _, err := w.s.MarkDeliveryFailed(w.ctx, all, d.ID, "connect", soon()); !errors.Is(err, ErrConflict) {
+			t.Fatalf("failure %d on a final row = %v, want ErrConflict", i, err)
+		}
+	}
+	if _, err := w.s.MarkDeliverySent(w.ctx, all, d.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("sent after a final failure = %v, want ErrConflict", err)
+	}
+	after := must[Listing[Delivery]](t)(w.s.ListRecentDeliveries(w.ctx, all, DeliveryFilter{Result: DeliveryFailed}, Page{})).Items
+	if len(after) != 1 || after[0].Attempt != 4 || after[0].Result != DeliveryFailed || after[0].NextRetryAt != nil || !after[0].SentAt.Equal(d.SentAt) || counter() != 4 {
+		t.Fatalf("a refused mark changed the row or the counter: %+v counter %d", after, counter())
+	}
+
+	// A message that gave up early (no retry passed) is final too.
+	e := enqueueM4(t, w, DeliveryAlert, "alert:final2")
+	must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, e.ID, "sender_refused", nil))
+	if _, err := w.s.MarkDeliveryFailed(w.ctx, all, e.ID, "sender_refused", nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("failure on a row that gave up = %v, want ErrConflict", err)
+	}
+	if n := counter(); n != 5 {
+		t.Fatalf("counter = %d, want 5", n)
+	}
+
+	// Delivered: a second "sent" is a conflict too, and changes nothing; a failure after a delivery was already one.
+	f := enqueueM4(t, w, DeliveryAlert, "alert:final3")
+	sent := must[Delivery](t)(w.s.MarkDeliverySent(w.ctx, all, f.ID))
+	w.clk.Advance(time.Second)
+	if _, err := w.s.MarkDeliverySent(w.ctx, all, f.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second sent = %v, want ErrConflict", err)
+	}
+	g := must[Listing[Delivery]](t)(w.s.ListRecentDeliveries(w.ctx, all, DeliveryFilter{Result: DeliverySent}, Page{})).Items
+	if len(g) != 1 || !g[0].SentAt.Equal(sent.SentAt) || g[0].Attempt != sent.Attempt || counter() != 0 {
+		t.Fatalf("second sent changed the row: %+v counter %d", g, counter())
+	}
+	// A retry that is still scheduled is not final: it can fail again or be delivered.
+	h := enqueueM4(t, w, DeliveryAlert, "alert:open")
+	must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, h.ID, "connect", soon()))
+	must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, h.ID, "connect", soon()))
+	must[Delivery](t)(w.s.MarkDeliverySent(w.ctx, all, h.ID))
 }

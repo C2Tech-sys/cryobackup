@@ -209,7 +209,8 @@ func (s *Store) EnqueueDelivery(ctx context.Context, scope Scope, in DeliveryInp
 }
 
 // MarkDeliverySent records that the message was delivered: result 'sent', sent_at now, no error
-// class, no retry. A row that failed before counts the retry (attempt + 1). Unless it is a test
+// class, no retry. A row that failed before counts the retry (attempt + 1). A final row (delivered,
+// or failed with no retry left) accepts no further mark: ErrConflict, nothing changes. Unless it is a test
 // send, the consecutive-failure counter (SettingSMTPConsecutiveFailures) is set to zero in the
 // same transaction. A row that is already
 // sent is returned unchanged; a suppressed row is ErrInvalid (it was never to be sent).
@@ -220,7 +221,8 @@ func (s *Store) MarkDeliverySent(ctx context.Context, scope Scope, id string) (D
 // MarkDeliveryFailed records a failed attempt: result 'failed', the class word of the failure
 // (lower-case letters, digits and underscores, at most 40; never the server's text) and when the
 // next attempt is due, or nil when the row gives up. A row that failed before counts the retry
-// (attempt + 1). The store enforces the schedule of DeliveryRetryDelays: the failure of attempt 4
+// (attempt + 1). A final row (delivered, or failed with no retry left) is ErrConflict and nothing,
+// the counter included, changes; a suppressed row is ErrInvalid. The store enforces the schedule of DeliveryRetryDelays: the failure of attempt 4
 // (the first try plus retries after 1, 5 and 15 minutes) stores no next_retry_at whatever the
 // caller passed, and the row is final. Unless it is a test send, the consecutive-failure counter
 // (SettingSMTPConsecutiveFailures) grows by one in the same transaction. A row that is already sent is ErrConflict; a suppressed row is ErrInvalid.
@@ -261,11 +263,10 @@ func (s *Store) finishDelivery(ctx context.Context, scope Scope, id, result, cla
 		switch {
 		case cur.Result == DeliverySuppressed:
 			return invalidf("a suppressed message is never sent")
-		case cur.Result == DeliverySent && result == DeliverySent:
-			out = cur
-			return nil
 		case cur.Result == DeliverySent:
 			return conflictf("the message was already delivered")
+		case cur.Result == DeliveryFailed && cur.NextRetryAt == nil:
+			return conflictf("the message gave up and accepts no further attempt")
 		}
 		attempt := cur.Attempt
 		if cur.Result == DeliveryFailed {

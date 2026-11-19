@@ -469,7 +469,9 @@ func TestM4TestSendsDoNotMoveTheFailureCount(t *testing.T) {
 	}
 	d := sendM4(t, w, DeliveryAlert, "alert:2", 0, true)
 	sendM4(t, w, DeliveryAlert, "alert:3", 1, false)
-	must[Delivery](t)(w.s.MarkDeliverySent(w.ctx, all, d.ID)) // already delivered: a no-op
+	if _, err := w.s.MarkDeliverySent(w.ctx, all, d.ID); !errors.Is(err, ErrConflict) { // already delivered: final
+		t.Fatalf("re-marking a delivered row = %v, want ErrConflict", err)
+	}
 	if n := count(); n != 1 {
 		t.Fatalf("re-marking a delivered row moved the count to %d, want 1", n)
 	}
