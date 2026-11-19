@@ -73,7 +73,7 @@ func runDoctor(args []string, io IO) int {
 		if level == "FAIL" {
 			failed = true
 		}
-		fmt.Fprintf(io.Stdout, "%-5s %-22s %s\n", level, name, detail)
+		fmt.Fprintf(io.Stdout, "%-11s %-22s %s\n", level, name, detail) // 11 fits "NOT CHECKED"
 	}
 	cfg, err := config.Read(*cfgPath, nil)
 	if err != nil {

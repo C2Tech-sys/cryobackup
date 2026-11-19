@@ -99,7 +99,7 @@ func TestDoctorDoesNotMigrateAnOlderDatabase(t *testing.T) {
 			t.Errorf("doctor lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "OK    database") {
+	if strings.Contains(out, doctorLine("OK", "database")) {
 		t.Errorf("an unmigrated database reads OK:\n%s", out)
 	}
 }
@@ -123,13 +123,13 @@ func TestDoctorNewerOrMissingDatabaseFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	if code, out, _ := run(t, "", "doctor", "--config", cfgPath); code != ExitFailed || !strings.Contains(out, "FAIL  database") {
+	if code, out, _ := run(t, "", "doctor", "--config", cfgPath); code != ExitFailed || !strings.Contains(out, doctorLine("FAIL", "database")) {
 		t.Fatalf("a newer database: %d\n%s", code, out)
 	}
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		_ = os.Remove(cfg.DBPath + suffix)
 	}
-	if code, out, _ := run(t, "", "doctor", "--config", cfgPath); code != ExitFailed || !strings.Contains(out, "FAIL  database") {
+	if code, out, _ := run(t, "", "doctor", "--config", cfgPath); code != ExitFailed || !strings.Contains(out, doctorLine("FAIL", "database")) {
 		t.Fatalf("a missing database: %d\n%s", code, out)
 	}
 	if _, err := os.Stat(cfg.DBPath); err == nil {
@@ -211,7 +211,7 @@ func TestDoctorLeavesAnUncleanWALAsItIs(t *testing.T) {
 	if fileHash(t, db+"-wal") != walBefore {
 		t.Fatalf("doctor changed the WAL:\n%s", out)
 	}
-	if !strings.Contains(out, "OK    database") {
+	if !strings.Contains(out, doctorLine("OK", "database")) {
 		t.Fatalf("doctor did not read the database:\n%s", out)
 	}
 }
@@ -242,3 +242,37 @@ func TestDoctorBesideALiveWriter(t *testing.T) {
 		t.Fatalf("writer rows %d (%v)", n, err)
 	}
 }
+
+// P20-W2BF B5: the status column is wide enough for NOT CHECKED: every check name starts in the
+// same column.
+func TestDoctorStatusColumnFitsNotChecked(t *testing.T) {
+	cfgPath, db := doctorRig(t)
+	ms, err := migrations.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(db + suffix)
+	}
+	olderDatabase(t, db, len(ms)-2)
+	_, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	col := -1
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		for _, name := range []string{"database", "default policy", "master key", "config"} {
+			if i := strings.Index(line, " "+name+" "); i >= 0 && i < 14 {
+				if col < 0 {
+					col = i
+				}
+				if i != col {
+					t.Fatalf("the check name %q starts in column %d, not %d:\n%s", name, i+1, col+1, out)
+				}
+			}
+		}
+	}
+	if col < 0 || !strings.Contains(out, doctorLine("NOT CHECKED", "default policy")) {
+		t.Fatalf("output:\n%s", out)
+	}
+}
+
+// doctorLine is the start of one doctor line: the status, padded to its column, and the check name.
+func doctorLine(level, name string) string { return fmt.Sprintf("%-11s %s", level, name) }

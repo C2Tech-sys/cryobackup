@@ -88,7 +88,7 @@ func TestDoctorPrintsTheAdminTLSLine(t *testing.T) {
 		t.Fatal(e)
 	}
 	_, out, _ := run(t, "", "doctor", "--config", filepath.Join(dir, "config.json"))
-	if !strings.Contains(out, "OK    admin tls") || !strings.Contains(out, "off (admin_listen is loopback)") {
+	if !strings.Contains(out, doctorLine("OK", "admin tls")) || !strings.Contains(out, "off (admin_listen is loopback)") {
 		t.Fatalf("doctor lacks the admin tls line:\n%s", out)
 	}
 }
