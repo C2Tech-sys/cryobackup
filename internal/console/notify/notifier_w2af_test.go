@@ -784,3 +784,61 @@ func TestRetryCrashBetweenSettleAndSend(t *testing.T) {
 		t.Fatalf("sent %d", len(w.fake.Sent()))
 	}
 }
+
+// Batch 2 item 2. A pass that marks only part of its batch (another pass marked the rest first)
+// sends only the episodes it marked, read back by its batch id.
+func TestNotifyPartialOverlapSendsOnlyWhatItMarked(t *testing.T) {
+	w := newWorld(t)
+	alpha := w.site("Alpha Clinic", 1)
+	summit := w.site("Summit Eye Care", 1)
+	w.recipient("ops@example.test", true, true)
+	w.set(state.StateFailed, alpha[0], summit[0])
+	w.n.beforeMark = func(string) error {
+		w.n.beforeMark = nil
+		w.muted[w.cust["Summit Eye Care"]] = true // the other pass sees Summit suspended: it mails Alpha only
+		defer func() { w.muted[w.cust["Summit Eye Care"]] = false }()
+		_, err := w.n.Pass(w.ctx, w.view())
+		return err
+	}
+	w.pass()
+	ha, hs := w.host[alpha[0]], w.host[summit[0]]
+	if w.mentions(mail.KindAlert, ha) != 1 || w.mentions(mail.KindAlert, hs) != 1 || w.fake.Calls() != 2 {
+		t.Fatalf("alpha mailed %d, summit mailed %d, %d messages", w.mentions(mail.KindAlert, ha), w.mentions(mail.KindAlert, hs), w.fake.Calls())
+	}
+	if len(w.unnotified()) != 0 {
+		t.Fatal("episodes left unnotified")
+	}
+}
+
+// Batch 2 item 2, the verifier's case. An acknowledgement lands mid-pass and another pass mails
+// e0: e0 is mailed once in total, and no message lists the acknowledged e1. When the
+// acknowledgement is cleared, e1 goes out.
+func TestNotifyAckMidPassIsNotMailed(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 2)
+	w.recipient("ops@example.test", true, true)
+	w.set(state.StateFailed, site...)
+	var ack store.Ack
+	w.n.beforeMark = func(string) error {
+		w.n.beforeMark = nil
+		var err error
+		if ack, err = w.st.CreateAck(w.ctx, store.ScopeAll(), store.AckInput{SubjectType: store.EpisodeDevice, SubjectID: site[1], AlarmType: "failed"}, w.actor); err != nil {
+			return err
+		}
+		_, err = w.n.Pass(w.ctx, w.view())
+		return err
+	}
+	w.pass()
+	h0, h1 := w.host[site[0]], w.host[site[1]]
+	if w.mentions(mail.KindAlert, h0) != 1 || w.mentions(mail.KindAlert, h1) != 0 {
+		t.Fatalf("e0 mailed %d, acknowledged e1 mailed %d", w.mentions(mail.KindAlert, h0), w.mentions(mail.KindAlert, h1))
+	}
+	if _, err := w.st.ClearAck(w.ctx, store.ScopeAll(), ack.ID, w.actor); err != nil {
+		t.Fatal(err)
+	}
+	w.clk.Advance(time.Minute)
+	w.pass()
+	if w.mentions(mail.KindAlert, h0) != 1 || w.mentions(mail.KindAlert, h1) != 1 {
+		t.Fatalf("after the ack cleared: e0 %d, e1 %d", w.mentions(mail.KindAlert, h0), w.mentions(mail.KindAlert, h1))
+	}
+}

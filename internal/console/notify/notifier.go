@@ -272,14 +272,41 @@ func (n *Notifier) alertBatch(ctx context.Context, v state.FleetView, to []store
 			return nil, err
 		}
 	}
-	marked, err := n.Store.MarkEpisodesNotified(ctx, all, episodeIDs(batch), at)
-	if err != nil {
+	// An acknowledgement may have landed since the batch was chosen: mark only what may still be
+	// mailed. What is left out stays unnotified and goes out when the mute ends.
+	if m, err = loadMutes(ctx, n.Store, v); err != nil {
 		return nil, err
+	}
+	var markable []store.Episode
+	for _, e := range batch {
+		if m.reason(e) == "" {
+			markable = append(markable, e)
+		}
+	}
+	marked := 0
+	if len(markable) > 0 {
+		if marked, err = n.Store.MarkEpisodesNotified(ctx, all, episodeIDs(markable), at); err != nil {
+			return nil, err
+		}
 	}
 	if marked == 0 {
 		// An overlapping pass marked them first: its rows carry this alert, these would mail it twice.
 		res.Messages -= len(outs)
 		return nil, n.suppressAll(ctx, outs, "overlap")
+	}
+	if marked < len(batch) {
+		// Part of the batch is muted now or was marked by an overlapping pass: send only what this
+		// pass marked, read back by its batch id (what a retry of these rows renders too).
+		if batch, err = n.Store.ListEpisodesNotifiedAt(ctx, all, at); err != nil {
+			return nil, err
+		}
+		content, err := RenderAlert(v, batch, n.options())
+		if err != nil {
+			return nil, err
+		}
+		for i := range outs {
+			outs[i].msg = content.Message(outs[i].msg.To[0])
+		}
 	}
 	res.Alerted = len(batch)
 	return outs, nil
