@@ -182,18 +182,49 @@ func TestM4SyncEpisodesIsConfinedToScope(t *testing.T) {
 	if len(open) != 1 || open[0].CustomerID != w.custB.ID {
 		t.Fatalf("open after the scoped close = %+v", open)
 	}
-	// Naming a device outside scope is refused and changes nothing.
-	if _, err := w.s.SyncEpisodes(w.ctx, ScopeOf(w.custA.ID), []EpisodeKey{epKey(w.devB.ID, "STALE")}, t0); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("out-of-scope key = %v, want ErrNotFound", err)
+	// P20-T2F item 6: naming a subject outside scope, or one that does not exist, skips that key; it neither
+	// opens an episode nor fails the pass.
+	outside := epKey(w.devB.ID, "STALE")
+	r = must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeOf(w.custA.ID), []EpisodeKey{outside, epKey(w.devA.ID, "UNSEEN")}, t0.Add(2*time.Minute)))
+	if len(r.Opened) != 1 || r.Opened[0].AlarmType != "UNSEEN" || len(r.Skipped) != 1 || r.Skipped[0] != outside {
+		t.Fatalf("out-of-scope key: opened %+v skipped %+v, want A's episode opened and the key skipped", r.Opened, r.Skipped)
 	}
-	if _, err := w.s.SyncEpisodes(w.ctx, ScopeOf(w.custA.ID), []EpisodeKey{{SubjectType: EpisodeCustomer, SubjectID: w.custB.ID, AlarmType: AlarmMissing}}, t0); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("out-of-scope customer key = %v, want ErrNotFound", err)
+	missing := EpisodeKey{SubjectType: EpisodeCustomer, SubjectID: w.custB.ID, AlarmType: AlarmMissing}
+	if r = must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeOf(w.custA.ID), []EpisodeKey{epKey(w.devA.ID, "UNSEEN"), missing}, t0.Add(3*time.Minute))); len(r.Opened) != 0 || len(r.Skipped) != 1 || r.Skipped[0] != missing {
+		t.Fatalf("out-of-scope customer key = %+v", r)
 	}
-	if _, err := w.s.SyncEpisodes(w.ctx, ScopeAll(), []EpisodeKey{epKey("01JNOSUCHDEVICE0000000000", "STALE")}, t0); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("unknown device = %v, want ErrNotFound", err)
+	ghost := epKey("01JNOSUCHDEVICE0000000000", "STALE")
+	if r = must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeAll(), []EpisodeKey{ghost, epKey(w.devB.ID, "FAILED")}, t0.Add(4*time.Minute))); len(r.Opened) != 0 || len(r.Closed) != 1 || r.Closed[0].AlarmType != "UNSEEN" || len(r.Skipped) != 1 || r.Skipped[0] != ghost {
+		t.Fatalf("unknown device = %+v, want it skipped and A's UNSEEN episode (absent from the input) closed", r)
 	}
-	if open := must[[]Episode](t)(w.s.ListOpenEpisodes(w.ctx, ScopeAll())); len(open) != 1 {
-		t.Fatalf("a refused sync changed the episodes: %+v", open)
+	if open := must[[]Episode](t)(w.s.ListOpenEpisodes(w.ctx, ScopeAll())); len(open) != 1 || open[0].AlarmType != "FAILED" || open[0].CustomerID != w.custB.ID {
+		t.Fatalf("the skipped keys opened episodes: %+v", open)
+	}
+}
+
+// P20-T2F item 6: a device deleted between the read of the fleet and the sync does not fail the
+// pass: the rest of it is applied and the key is reported back.
+func TestM4SyncEpisodesSkipsASubjectThatVanished(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{epKey(w.devA.ID, "FAILED")}, t0))
+	gone := epKey(w.devB.ID, "STALE")
+	ok(t, w.s.Write(w.ctx, func(tx *Tx) error {
+		_, err := tx.Exec(`DELETE FROM devices WHERE id = ?`, w.devB.ID)
+		return err
+	}))
+	cust := EpisodeKey{SubjectType: EpisodeCustomer, SubjectID: w.custA.ID, AlarmType: AlarmMissing}
+	r := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{gone, cust}, t0.Add(time.Minute)))
+	if len(r.Skipped) != 1 || r.Skipped[0] != gone {
+		t.Fatalf("skipped = %+v, want the vanished device", r.Skipped)
+	}
+	if len(r.Opened) != 1 || r.Opened[0].SubjectType != EpisodeCustomer || len(r.Closed) != 1 || r.Closed[0].SubjectID != w.devA.ID {
+		t.Fatalf("the rest of the pass was not applied: opened %+v closed %+v", r.Opened, r.Closed)
+	}
+	// Idempotent: the same input again opens and closes nothing and reports the same skip.
+	again := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{gone, cust}, t0.Add(2*time.Minute)))
+	if len(again.Opened) != 0 || len(again.Closed) != 0 || len(again.Skipped) != 1 {
+		t.Fatalf("second pass = %+v", again)
 	}
 }
 

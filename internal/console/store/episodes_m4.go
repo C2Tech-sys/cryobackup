@@ -129,8 +129,13 @@ type EpisodeSync struct {
 	// Opened are the episodes that began in this call, Closed those that ended in it (both with their
 	// final values), in the order they opened.
 	Opened, Closed []Episode
-	// ClearedAcks counts acknowledgements and snoozes cleared because the alarm they covered ended.
+	// ClearedAcks counts acknowledgements and snoozes cleared by this call: those whose alarm ended
+	// and those found already in place when their alarm opened (see SyncEpisodes).
 	ClearedAcks int
+	// Skipped are the keys of subjects that do not exist or lie outside scope: a device deleted
+	// between the evaluator's read of the fleet and this call, for one. They opened nothing; the rest
+	// of the pass was applied. The caller counts them and says so, never silently.
+	Skipped []EpisodeKey
 }
 
 // SyncEpisodes makes the open episodes inside scope match current, the alarms that exist right
@@ -146,8 +151,10 @@ type EpisodeSync struct {
 // fleet must not call SyncEpisodes with what it did load: every episode missing from the input
 // closes and sends a recovery notice.
 //
-// A key that names a subject outside scope or one that does not exist is ErrNotFound and nothing
-// is changed; an unknown alarm type or subject type is a *ValidationError.
+// A key that names a subject outside scope or one that does not exist (a device deleted since the
+// evaluator read the fleet) is skipped, not an error: it is returned in EpisodeSync.Skipped and
+// the rest of the pass is applied. An unknown alarm type or subject type is a *ValidationError
+// and nothing is changed.
 func (s *Store) SyncEpisodes(ctx context.Context, scope Scope, current []EpisodeKey, now time.Time) (EpisodeSync, error) {
 	if err := scope.check(); err != nil {
 		return EpisodeSync{}, err
@@ -180,27 +187,18 @@ func (s *Store) SyncEpisodes(ctx context.Context, scope Scope, current []Episode
 	err := s.Write(ctx, func(tx *Tx) error {
 		out = EpisodeSync{}
 		owners := map[episodeRef]string{}
+		var live []episodeRef // the keys whose subject exists inside scope, in input order
 		for _, r := range order {
-			switch r.subjectType {
-			case EpisodeDevice:
-				d, err := getDevice(tx, scope, r.subjectID)
-				if err != nil {
-					return err
-				}
-				owners[r] = d.CustomerID
-			default:
-				if !scope.Allows(r.subjectID) {
-					return ErrNotFound
-				}
-				var one int
-				if err := tx.QueryRow(`SELECT 1 FROM customers WHERE id = ?`, r.subjectID).Scan(&one); err != nil {
-					if errors.Is(err, sql.ErrNoRows) {
-						return ErrNotFound
-					}
-					return err
-				}
-				owners[r] = r.subjectID
+			owner, err := episodeSubjectOwner(tx, scope, r)
+			switch {
+			case errors.Is(err, ErrNotFound):
+				out.Skipped = append(out.Skipped, want[r])
+				continue
+			case err != nil:
+				return err
 			}
+			owners[r] = owner
+			live = append(live, r)
 		}
 		clause, args := scope.clause(episodeOwner)
 		open, err := collect(tx, episodeSelect+` WHERE e.closed_at IS NULL AND `+clause+` ORDER BY e.opened_at, e.id`, args, scanEpisode)
@@ -211,7 +209,7 @@ func (s *Store) SyncEpisodes(ctx context.Context, scope Scope, current []Episode
 		for _, e := range open {
 			have[e.ref()] = true
 		}
-		for _, r := range order {
+		for _, r := range live {
 			if have[r] {
 				continue
 			}
@@ -244,7 +242,7 @@ func (s *Store) SyncEpisodes(ctx context.Context, scope Scope, current []Episode
 			c := timeOf(at)
 			e.ClosedAt = &c
 			out.Closed = append(out.Closed, e)
-			n, err := clearAcksOfEpisode(tx, e, at)
+			n, err := clearAcksOfEpisode(tx, e, at, ackClearResolved)
 			if err != nil {
 				return err
 			}
@@ -258,9 +256,38 @@ func (s *Store) SyncEpisodes(ctx context.Context, scope Scope, current []Episode
 	return out, nil
 }
 
-// clearAcksOfEpisode clears the active acknowledgement that covers the closed episode e, if any,
-// and audits it as the system.
-func clearAcksOfEpisode(tx *Tx, e Episode, at int64) (int, error) {
+// episodeSubjectOwner returns the customer that owns the subject of r. A subject that does not
+// exist or lies outside scope is ErrNotFound (the two are indistinguishable by design).
+func episodeSubjectOwner(tx *Tx, scope Scope, r episodeRef) (string, error) {
+	if r.subjectType == EpisodeDevice {
+		d, err := getDevice(tx, scope, r.subjectID)
+		if err != nil {
+			return "", err
+		}
+		return d.CustomerID, nil
+	}
+	if !scope.Allows(r.subjectID) {
+		return "", ErrNotFound
+	}
+	var one int
+	if err := tx.QueryRow(`SELECT 1 FROM customers WHERE id = ?`, r.subjectID).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return r.subjectID, nil
+}
+
+// Reasons recorded in the audit row of an acknowledgement SyncEpisodes clears.
+const (
+	ackClearResolved = "alarm_resolved"     // the alarm it covered ended
+	ackClearStale    = "stale_before_alarm" // it was already in place when the alarm opened: it belongs to an earlier one
+)
+
+// clearAcksOfEpisode clears the active acknowledgement that covers episode e, if any, and audits
+// it as the system with the given reason.
+func clearAcksOfEpisode(tx *Tx, e Episode, at int64, reason string) (int, error) {
 	kind, ok := AckAlarmType(e.AlarmType)
 	if !ok {
 		return 0, nil
@@ -280,7 +307,7 @@ func clearAcksOfEpisode(tx *Tx, e Episode, at int64) (int, error) {
 		return 0, err
 	}
 	ev := AuditEvent{ActorType: "system", Method: "system", Action: "alarm_ack.clear", ObjectType: "alarm_ack", ObjectID: id, CustomerID: e.CustomerID,
-		Details: jsonBytes(map[string]any{"reason": "alarm_resolved", "alarm_type": kind, "episode_id": e.ID})}
+		Details: jsonBytes(map[string]any{"reason": reason, "alarm_type": kind, "episode_id": e.ID})}
 	if err := audited(tx, ev); err != nil {
 		return 0, err
 	}
