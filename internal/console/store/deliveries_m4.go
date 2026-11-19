@@ -210,7 +210,9 @@ func (s *Store) MarkDeliverySent(ctx context.Context, scope Scope, id string) (D
 // MarkDeliveryFailed records a failed attempt: result 'failed', the class word of the failure
 // (lower-case letters, digits and underscores, at most 40; never the server's text) and when the
 // next attempt is due, or nil when the row gives up. A row that failed before counts the retry
-// (attempt + 1). A row that is already sent is ErrConflict; a suppressed row is ErrInvalid.
+// (attempt + 1). The store enforces the schedule of DeliveryRetryDelays: the failure of attempt 4
+// (the first try plus retries after 1, 5 and 15 minutes) stores no next_retry_at whatever the
+// caller passed, and the row is final. A row that is already sent is ErrConflict; a suppressed row is ErrInvalid.
 func (s *Store) MarkDeliveryFailed(ctx context.Context, scope Scope, id, errorClass string, nextRetryAt *time.Time) (Delivery, error) {
 	if !errClassRE.MatchString(errorClass) {
 		return Delivery{}, validation([]FieldError{fieldf("error_class", "Use a class word of lower-case letters, digits and underscores.")})
@@ -240,6 +242,9 @@ func (s *Store) finishDelivery(ctx context.Context, scope Scope, id, result, cla
 		attempt := cur.Attempt
 		if cur.Result == DeliveryFailed {
 			attempt++ // this outcome belongs to a retry
+		}
+		if result == DeliveryFailed && attempt > len(DeliveryRetryDelays) {
+			next = nil // the schedule is spent: the row is final whatever the caller asked for
 		}
 		now := tx.nowMS()
 		if _, err := tx.Exec(`UPDATE notification_log SET result = ?, error_class = ?, attempt = ?, next_retry_at = ?, sent_at = ?, updated_at = ? WHERE id = ?`,

@@ -260,3 +260,31 @@ func TestM4ListRecentDeliveriesPagesNewestFirst(t *testing.T) {
 		t.Fatalf("bad cursor = %v", err)
 	}
 }
+
+// P20-T2F item 4: the store enforces the retry schedule. After the third retry (attempt 4) the row
+// is final whatever next_retry_at the caller passes, and ListDueRetries never returns it.
+func TestM4TheStoreCapsRetriesAtTheSchedule(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	d := enqueueM4(t, w, DeliveryAlert, "alert:cap")
+	soon := func() *time.Time { at := w.clk.Now().Add(time.Minute); return &at }
+	for att := 1; att <= 3; att++ {
+		w.clk.Advance(time.Minute)
+		d = must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, d.ID, "connect", soon()))
+		if d.Attempt != att || d.NextRetryAt == nil {
+			t.Fatalf("failure %d: %+v, want the retry the caller asked for", att, d)
+		}
+	}
+	w.clk.Advance(time.Minute)
+	d = must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, d.ID, "connect", soon())) // the caller asks for a fifth try
+	if d.Attempt != 4 || d.Result != DeliveryFailed || d.NextRetryAt != nil {
+		t.Fatalf("the fourth attempt kept a retry: %+v", d)
+	}
+	w.clk.Advance(24 * time.Hour)
+	if due := must[[]Delivery](t)(w.s.ListDueRetries(w.ctx, all, w.clk.Now(), 0)); len(due) != 0 {
+		t.Fatalf("a row past its retry cap is due: %+v", due)
+	}
+	if f := must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, all)); f.PendingAlerts != 0 {
+		t.Fatalf("a row past its retry cap is pending: %+v", f)
+	}
+}
