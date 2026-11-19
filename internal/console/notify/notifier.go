@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,7 +125,11 @@ func (n *Notifier) Pass(ctx context.Context, v state.FleetView) (PassResult, err
 	if err != nil {
 		return res, err
 	}
-	if res.Sync, err = n.Store.SyncEpisodes(ctx, all, episodeKeys(v, open), v.ComputedAt); err != nil {
+	keys, err := episodeKeys(v, open)
+	if err != nil {
+		return res, err
+	}
+	if res.Sync, err = n.Store.SyncEpisodes(ctx, all, keys, v.ComputedAt); err != nil {
 		return res, err
 	}
 	if k := len(res.Sync.Skipped); k > 0 {
@@ -316,14 +321,55 @@ func spent(ctx context.Context) bool {
 	return ok && !time.Now().Before(dl)
 }
 
-// episodeKeys is the input of SyncEpisodes: every alarm of v that can be acknowledged. A device
-// whose facts could not be read (UNKNOWN among its alarm flags) also keeps the episodes it has open:
-// the evaluator cannot see them, and closing them would mail a recovery nobody observed.
-func episodeKeys(v state.FleetView, open []store.Episode) []store.EpisodeKey {
-	deviceTypes := map[string]bool{}
-	for _, t := range store.EpisodeAlarmTypes(store.EpisodeDevice) {
-		deviceTypes[t] = true
-	}
+// stateClass is what the notifier does with a device state (ADR 0020 decision 4).
+type stateClass int
+
+const (
+	// classNoEpisode: no alarm (OK, PENDING_FIRST, MISSED, DEFERRED) or one suppressed by its device
+	// (RETIRED, PAUSED); nothing to acknowledge, nothing to mail.
+	classNoEpisode stateClass = iota + 1
+	// classEpisodeOnly: an alarm-level state. It opens an episode, so it can be acknowledged, and is
+	// never mailed here: it belongs to the digest.
+	classEpisodeOnly
+	// classMails: a critical state. It opens an episode and mails at once.
+	classMails
+)
+
+// stateClasses lists every state of the engine (state.Precedence). A state missing from it fails
+// the pass (episodeKeys): a new state is never dropped silently. A test holds it equal to the
+// engine's list, to criticalAlarms and to store.EpisodeAlarmTypes.
+var stateClasses = map[state.State]stateClass{
+	state.StateRetired:          classNoEpisode,
+	state.StatePaused:           classNoEpisode,
+	state.StateUnknown:          classMails,
+	state.StateIdentityConflict: classMails,
+	state.StatePendingFirst:     classNoEpisode,
+	state.StateBlank:            classMails,
+	state.StateStuck:            classMails,
+	state.StateFailed:           classMails,
+	state.StatePartial:          classEpisodeOnly,
+	state.StateUnseen:           classMails,
+	state.StateStale:            classMails,
+	state.StateEscrowUnverified: classEpisodeOnly,
+	state.StateMaintFailed:      classEpisodeOnly,
+	state.StateMissed:           classNoEpisode,
+	state.StateDeferred:         classNoEpisode,
+	state.StateOutdated:         classEpisodeOnly,
+	state.StateOK:               classNoEpisode,
+}
+
+// classOf is the class of s; false for a state this package does not know.
+func classOf(s state.State) (stateClass, bool) {
+	c, ok := stateClasses[s]
+	return c, ok
+}
+
+// episodeKeys is the input of SyncEpisodes: every alarm of v that can be acknowledged (classMails
+// and classEpisodeOnly). A device whose facts could not be read (UNKNOWN among its alarm flags)
+// also keeps the episodes it has open: the evaluator cannot see them, and closing them would mail a
+// recovery nobody observed. A state of v that stateClasses does not list is an error naming the
+// state word, and nothing is synced.
+func episodeKeys(v state.FleetView, open []store.Episode) ([]store.EpisodeKey, error) {
 	openOf := map[string][]store.Episode{}
 	for _, e := range open {
 		if e.SubjectType == store.EpisodeDevice {
@@ -333,13 +379,18 @@ func episodeKeys(v state.FleetView, open []store.Episode) []store.EpisodeKey {
 	var keys []store.EpisodeKey
 	for i := range v.Devices {
 		d := &v.Devices[i]
+		for _, s := range append(append([]state.State{d.Primary}, d.Flags...), d.AlarmFlags...) {
+			if _, ok := classOf(s); !ok {
+				return nil, fmt.Errorf("notify: the engine reported a state the notifier does not classify: %q", string(s))
+			}
+		}
 		if d.Primary == state.StateRetired {
 			continue
 		}
 		unknown := false
 		for _, s := range d.AlarmFlags {
 			unknown = unknown || s == state.StateUnknown
-			if !deviceTypes[string(s)] {
+			if c, _ := classOf(s); c == classNoEpisode {
 				continue
 			}
 			k := store.EpisodeKey{SubjectType: store.EpisodeDevice, SubjectID: d.ID, AlarmType: string(s)}
@@ -359,7 +410,7 @@ func episodeKeys(v state.FleetView, open []store.Episode) []store.EpisodeKey {
 			keys = append(keys, store.EpisodeKey{SubjectType: store.EpisodeCustomer, SubjectID: c.ID, AlarmType: store.AlarmMissing})
 		}
 	}
-	return keys
+	return keys, nil
 }
 
 // mutes says why an episode is held back from mail now: acknowledged or snoozed (an active
