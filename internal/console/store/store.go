@@ -82,11 +82,30 @@ const (
 // The write connection is opened and migrated first, so by the time the read
 // pool opens its connections the file is already in WAL mode.
 func Open(ctx context.Context, o Options) (*Store, error) {
+	s, _, err := open(ctx, o, false)
+	return s, err
+}
+
+// OpenNoMigrate opens an existing database for checking only (cryo-console doctor): every
+// connection is query_only, no migration is applied and nothing is written, so a check never
+// changes what it checks. It runs PRAGMA quick_check like Open and returns, in version order, the
+// names of the embedded migrations the database does not have yet: what Open will apply at the
+// next start. A database newer than the binary is ErrMigrationAhead and an edited applied
+// migration ErrMigrationChanged, as with Open; a missing file is ErrNotFound (it is not created).
+// The returned Store reads; any Write fails.
+func OpenNoMigrate(ctx context.Context, o Options) (*Store, []string, error) {
+	if fi, err := os.Stat(o.Path); err != nil || fi.IsDir() {
+		return nil, nil, ErrNotFound
+	}
+	return open(ctx, o, true)
+}
+
+func open(ctx context.Context, o Options, noMigrate bool) (*Store, []string, error) {
 	if o.Path == "" {
-		return nil, invalidf("Options.Path is required")
+		return nil, nil, invalidf("Options.Path is required")
 	}
 	if strings.ContainsAny(o.Path, "?#") || strings.HasPrefix(o.Path, "file:") {
-		return nil, invalidf("Options.Path must be a plain file path")
+		return nil, nil, invalidf("Options.Path must be a plain file path")
 	}
 	if o.Clock == nil {
 		o.Clock = time.Now
@@ -105,24 +124,25 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 		wsem:  make(chan struct{}, 1),
 	}
 
-	wdb, err := sql.Open("sqlite", dsn(o.Path, o.BusyTimeout, false))
+	wdb, err := sql.Open("sqlite", dsn(o.Path, o.BusyTimeout, noMigrate))
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, nil, mapErr(err)
 	}
 	wdb.SetMaxOpenConns(1)
 	wdb.SetMaxIdleConns(1)
 	wdb.SetConnMaxLifetime(0)
 	s.wdb = wdb
 
-	if err := s.prepare(ctx); err != nil {
+	pending, err := s.prepare(ctx, noMigrate)
+	if err != nil {
 		_ = wdb.Close()
-		return nil, err
+		return nil, nil, err
 	}
 
 	rdb, err := sql.Open("sqlite", dsn(o.Path, o.BusyTimeout, true))
 	if err != nil {
 		_ = wdb.Close()
-		return nil, mapErr(err)
+		return nil, nil, mapErr(err)
 	}
 	rdb.SetMaxOpenConns(o.ReadPool)
 	rdb.SetMaxIdleConns(o.ReadPool)
@@ -130,10 +150,10 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	if err := rdb.PingContext(ctx); err != nil {
 		_ = rdb.Close()
 		_ = wdb.Close()
-		return nil, mapErr(err)
+		return nil, nil, mapErr(err)
 	}
 	s.rdb = rdb
-	return s, nil
+	return s, pending, nil
 }
 
 // dsn builds the modernc.org/sqlite connection string. Every pragma here runs
@@ -152,24 +172,25 @@ func dsn(path string, busy time.Duration, readOnly bool) string {
 	return path + "?" + q.Encode()
 }
 
-// prepare runs quick_check and the migrations on the write connection.
-func (s *Store) prepare(ctx context.Context) error {
+// prepare runs quick_check and the migrations on the write connection. With noMigrate it applies
+// nothing and returns the migrations still to apply instead (pendingMigrations).
+func (s *Store) prepare(ctx context.Context, noMigrate bool) ([]string, error) {
 	conn, err := s.wdb.Conn(ctx)
 	if err != nil {
-		return mapErr(err)
+		return nil, mapErr(err)
 	}
 	defer conn.Close()
 
 	rows, err := conn.QueryContext(ctx, "PRAGMA quick_check")
 	if err != nil {
-		return mapErr(err)
+		return nil, mapErr(err)
 	}
 	var problems []string
 	for rows.Next() {
 		var line string
 		if err := rows.Scan(&line); err != nil {
 			rows.Close()
-			return mapErr(err)
+			return nil, mapErr(err)
 		}
 		if line != "ok" {
 			problems = append(problems, line)
@@ -177,17 +198,72 @@ func (s *Store) prepare(ctx context.Context) error {
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return mapErr(err)
+		return nil, mapErr(err)
 	}
 	if len(problems) > 0 {
 		// quick_check lines name pages and tables, never row content.
-		return fmt.Errorf("%w: quick_check: %s", ErrCorrupt, strings.Join(problems[:min(len(problems), 3)], "; "))
+		return nil, fmt.Errorf("%w: quick_check: %s", ErrCorrupt, strings.Join(problems[:min(len(problems), 3)], "; "))
 	}
 
-	if _, err := migrations.Apply(ctx, conn, s.clock); err != nil {
-		return mapErr(err)
+	if noMigrate {
+		return pendingMigrations(ctx, conn)
 	}
-	return nil
+	if _, err := migrations.Apply(ctx, conn, s.clock); err != nil {
+		return nil, mapErr(err)
+	}
+	return nil, nil
+}
+
+// pendingMigrations compares what the database records in schema_migrations with the embedded
+// migrations, reading only: the names of those not yet applied, ErrMigrationAhead for a recorded
+// version this binary does not know and ErrMigrationChanged for an applied one whose file differs
+// (the checks migrations.Apply makes before it writes).
+func pendingMigrations(ctx context.Context, conn *sql.Conn) ([]string, error) {
+	ms, err := migrations.List()
+	if err != nil {
+		return nil, err
+	}
+	recorded := map[int]string{}
+	var n int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&n); err != nil {
+		return nil, mapErr(err)
+	}
+	if n > 0 {
+		rows, err := conn.QueryContext(ctx, `SELECT version, checksum FROM schema_migrations`)
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		for rows.Next() {
+			var v int
+			var sum string
+			if err := rows.Scan(&v, &sum); err != nil {
+				rows.Close()
+				return nil, mapErr(err)
+			}
+			recorded[v] = sum
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, mapErr(err)
+		}
+	}
+	known := map[int]bool{}
+	var pending []string
+	for _, m := range ms {
+		known[m.Version] = true
+		switch sum, ok := recorded[m.Version]; {
+		case !ok:
+			pending = append(pending, m.Name)
+		case sum != m.Checksum:
+			return nil, fmt.Errorf("%w: version %d (%s)", ErrMigrationChanged, m.Version, m.Name)
+		}
+	}
+	for v := range recorded {
+		if !known[v] {
+			return nil, fmt.Errorf("%w: database records version %d", ErrMigrationAhead, v)
+		}
+	}
+	return pending, nil
 }
 
 // OpenMemory opens a private database for tests and --fixtures mode. It is a

@@ -4,15 +4,24 @@ What an operator must check before replacing the console binary with a newer rel
 names the release line it applies to; read every section between the version you run and the one
 you install. Run `cryo-console doctor` with the new binary and your current config.json before you
 apply the upgrade: it reports every configuration problem the new console would refuse to start
-with, without starting it.
+with, without starting it. Doctor is safe to run before the upgrade: it opens the database without
+applying migrations and writes nothing. On a database older than the binary it prints the recorded
+schema version, the version the first start will migrate it to and the pending migrations, and
+reports the checks that need the new schema as NOT CHECKED.
 
 ## M4: alert e-mail, the daily digest and the heartbeat ping (ADR 0020)
 
 ### Schema v8
 
-The console database moves to schema version 8 (migration `0008`, the `alarm_episodes` table). The
-migration runs by itself at the first start of the new binary. Take the usual backup of the
-database file first.
+The console database moves to schema version 8. From v0.3.0 (schema version 6) the first start of
+the new binary applies two migrations: `0007_adr19_purge` (device purge and customer delete) and
+`0008_m4_alerts` (the `alarm_episodes` table and the digest switch). They run by themselves.
+
+A database that has been migrated cannot be opened by the old binary: it refuses to start with
+"database is newer than this binary". Take the backup before the first start of the new binary.
+On a systemd host, `cryo-upgrade.sh` does it (deploy/systemd/README.md, "Upgrades"): it copies the
+database with its `-wal` and `-shm` files to a new folder under `/var/backups/cryobackup/` before
+it installs the new binary, and a rollback restores that copy.
 
 ### `smtp.security: "plain"` needs `smtp.allow_plaintext: true`
 

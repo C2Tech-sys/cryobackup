@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
@@ -55,7 +57,9 @@ func isLoopbackBind(addr string) bool {
 // runDoctor checks what a stranger would get wrong first: the configuration,
 // the database, the master key, the listener binds, the host's swap (ADR 0008)
 // and the maintenance worker.
-// It prints OK, WARN or FAIL per check and exits 1 on any FAIL.
+// It prints OK, WARN, FAIL or NOT CHECKED per check and exits 1 on any FAIL.
+// It changes nothing it checks: the database is opened without migrations
+// (checkDatabase), so doctor is safe to run before an upgrade.
 func runDoctor(args []string, io IO) int {
 	fs := newFlags("doctor", io)
 	cfgPath := fs.String("config", "config.json", "path of config.json")
@@ -80,28 +84,7 @@ func runDoctor(args []string, io IO) int {
 		report("OK", "config", "valid")
 	}
 
-	if st, err := store.Open(context.Background(), store.Options{Path: cfg.DBPath}); err != nil {
-		report("FAIL", "database", fmt.Sprint(sanitize(err)))
-	} else {
-		ctx := context.Background()
-		v, verr := st.SchemaVersion(ctx)
-		integrity, _ := st.IntegrityCheck(ctx)
-		switch {
-		case verr != nil:
-			report("FAIL", "database", "cannot read the schema version")
-		case integrity != "ok":
-			report("FAIL", "database", "integrity_check did not return ok")
-		default:
-			report("OK", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok", v))
-		}
-		if _, err := st.DefaultPolicy(ctx); err != nil {
-			report("FAIL", "default policy", "none: run cryo-console init")
-		}
-		if _, err := st.DefaultStorageTarget(ctx); err != nil {
-			report("WARN", "storage target", "no default storage target")
-		}
-		_ = st.Close()
-	}
+	checkDatabase(cfg.DBPath, report)
 
 	if mk, err := escrow.LoadMasterKey(cfg.MasterKeyPath); err != nil {
 		report("FAIL", "master key", err.Error()+" (banner C12: enrollment is disabled)")
@@ -153,4 +136,50 @@ func runDoctor(args []string, io IO) int {
 		return ExitFailed
 	}
 	return ExitOK
+}
+
+// checkDatabase opens the database without applying migrations or writing anything
+// (store.OpenNoMigrate). A database older than this binary is not a failure: doctor
+// says which version it records, which version the first start of this binary will
+// migrate it to and the migrations that will run, and the checks that read the
+// current schema (the default policy and storage target) are NOT CHECKED until
+// then, never passed. A database newer than the binary fails, as the console would.
+func checkDatabase(path string, report func(level, name, detail string)) {
+	ctx := context.Background()
+	st, pending, err := store.OpenNoMigrate(ctx, store.Options{Path: path})
+	if errors.Is(err, store.ErrNotFound) {
+		report("FAIL", "database", "missing: run cryo-console init")
+		return
+	}
+	if err != nil {
+		report("FAIL", "database", fmt.Sprint(sanitize(err)))
+		return
+	}
+	defer func() { _ = st.Close() }()
+	v, verr := st.SchemaVersion(ctx)
+	integrity, _ := st.IntegrityCheck(ctx)
+	switch {
+	case verr != nil:
+		report("FAIL", "database", "cannot read the schema version")
+		return
+	case integrity != "ok":
+		report("FAIL", "database", "integrity_check did not return ok")
+		return
+	}
+	if len(pending) > 0 {
+		target := v + len(pending)
+		report("WARN", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok; the first start of this binary migrates it to schema version %d (pending: %s). Doctor changed nothing; take the backup before you start the new binary",
+			v, target, strings.Join(pending, ", ")))
+		why := fmt.Sprintf("the database is at schema version %d and this binary reads schema version %d: checked after the upgrade", v, target)
+		report("NOT CHECKED", "default policy", why)
+		report("NOT CHECKED", "storage target", why)
+		return
+	}
+	report("OK", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok", v))
+	if _, err := st.DefaultPolicy(ctx); err != nil {
+		report("FAIL", "default policy", "none: run cryo-console init")
+	}
+	if _, err := st.DefaultStorageTarget(ctx); err != nil {
+		report("WARN", "storage target", "no default storage target")
+	}
 }
