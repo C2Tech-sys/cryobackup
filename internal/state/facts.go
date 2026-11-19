@@ -293,6 +293,10 @@ type SMTPFacts struct {
 	// path-free. Such a check is "not checked" with this reason (C03b), never healthy; a probe that
 	// is itself failing still raises C03.
 	NotRead string
+	// NoAlertRecipient is true when a relay is configured and no recipient has the alerts switch
+	// (ADR 0020 decision 10): the warning C18. It is not judged while the probe says SMTP is not
+	// configured (C03b already says so).
+	NoAlertRecipient bool
 }
 
 // MaintainFacts is the maintenance worker (C07).
