@@ -76,9 +76,15 @@ type DigestView struct {
 	Banners []Banner
 	// Lines are the exceptions in DigestKind order, then customer name, then hostname.
 	Lines []DigestLine
-	// AllClear is FleetView.AllClear: the digest says "all clear" only on evidence.
+	// AllClear is FleetView.AllClear: the digest says "all clear" only on evidence. It is judged on
+	// the whole fleet, excluded devices included, so an excluded alarm still keeps it false.
 	AllClear   bool
 	ComputedAt time.Time
+	// ExcludedCustomers counts the customers left out by policy (digest_include off on every one of
+	// their non-retired devices); ExcludedDevices the excluded devices of customers that are still
+	// listed. The digest names both, so a day never reads as all clear without saying what it
+	// left out. Banners are never excluded.
+	ExcludedCustomers, ExcludedDevices int
 }
 
 // digestKindOf maps a device to its section: by its primary state, or, when the
@@ -136,7 +142,8 @@ func digestKindOfState(s State, d *DeviceState, now time.Time) (DigestKind, bool
 
 // DigestOf lists the exceptions of v for the daily digest: every MISSING
 // customer and every device in a listed state, even when everything else is
-// green (C22). Devices are taken from v.Devices, so a device whose customer was
+// green (C22), except the devices whose policy leaves them out of the digest
+// (DeviceState.DigestExcluded), which it counts instead. Devices are taken from v.Devices, so a device whose customer was
 // not loaded (UNKNOWN, orphan) is still listed.
 func DigestOf(v FleetView, now time.Time) DigestView {
 	now = now.UTC()
@@ -150,8 +157,30 @@ func DigestOf(v FleetView, now time.Time) DigestView {
 			out.Lines = append(out.Lines, DigestLine{Kind: DigestMissing, CustomerID: c.ID, CustomerName: c.Name, Muted: c.Muted})
 		}
 	}
+	excluded, included := map[string]int{}, map[string]bool{}
 	for i := range v.Devices {
 		d := &v.Devices[i]
+		if d.Primary == StateRetired {
+			continue
+		}
+		if d.DigestExcluded {
+			excluded[d.CustomerID]++
+		} else {
+			included[d.CustomerID] = true
+		}
+	}
+	for c, n := range excluded {
+		if included[c] {
+			out.ExcludedDevices += n
+		} else {
+			out.ExcludedCustomers++
+		}
+	}
+	for i := range v.Devices {
+		d := &v.Devices[i]
+		if d.DigestExcluded {
+			continue
+		}
 		k, ok := digestKindOf(d, now)
 		if !ok {
 			continue

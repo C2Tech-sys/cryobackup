@@ -59,3 +59,44 @@ func TestC25NeverConfiguredMailAfterTheUpgrade(t *testing.T) {
 		t.Fatalf("banners:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// P20-W2BF item 3: devices whose policy has digest_include off are left out of the digest's
+// exception lists, and the view counts them: a customer all of whose devices are excluded is an
+// excluded customer, a lone excluded device of an included customer an excluded device. Console
+// banners are never excluded.
+func TestC22DigestLeavesOutWhatThePolicyExcludes(t *testing.T) {
+	w := healthyFleet(3, 2)
+	for _, i := range []int{0, 1, 2} { // customer 1 entirely, and one device of customer 2
+		w.Devices[i].Thresholds = DefaultThresholds()
+		w.Devices[i].Thresholds.DigestExcluded = true
+		w.Devices[i].LastBackup, w.Devices[i].ConsecutiveFailures = failedRun(hour, "network"), 1
+	}
+	w.Devices[3].LastBackup, w.Devices[3].ConsecutiveFailures = failedRun(hour, "network"), 1 // customer 2, included
+	w.Devices[4].Complete, w.Devices[4].LoadErrorClass = false, "timeout"                     // a banner (C09)
+	v := Evaluate(w, t0)
+	d := DigestOf(v, t0)
+	var hosts []string
+	for _, l := range d.Lines {
+		hosts = append(hosts, l.Hostname)
+	}
+	if len(d.Lines) != 2 || d.Lines[0].Hostname != w.Devices[4].Hostname && d.Lines[1].Hostname != w.Devices[4].Hostname {
+		t.Fatalf("lines %v, want the included failing device and the UNKNOWN one", hosts)
+	}
+	for _, l := range d.Lines {
+		if l.DeviceID == w.Devices[0].ID || l.DeviceID == w.Devices[1].ID || l.DeviceID == w.Devices[2].ID {
+			t.Fatalf("an excluded device is listed: %v", hosts)
+		}
+	}
+	if d.ExcludedCustomers != 1 || d.ExcludedDevices != 1 {
+		t.Fatalf("excluded customers %d devices %d, want 1 and 1", d.ExcludedCustomers, d.ExcludedDevices)
+	}
+	if len(d.Banners) == 0 {
+		t.Fatal("the console banners were dropped")
+	}
+	for _, ds := range v.Devices {
+		want := ds.ID == w.Devices[0].ID || ds.ID == w.Devices[1].ID || ds.ID == w.Devices[2].ID
+		if ds.DigestExcluded != want {
+			t.Fatalf("device %s DigestExcluded = %v, want %v", ds.ID, ds.DigestExcluded, want)
+		}
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/c2tech-sys/cryobackup/internal/policy"
 )
 
 // P20-W2B item 7: an open episode still marked at the batch id leaves the batch; a closed one, one
@@ -78,4 +80,20 @@ func addW2BMatrix(m map[string]matrixCase) {
 		_, err = w.s.UnmarkEpisodesNotified(w.ctx, sc, []string{id}, batch)
 		return nil, err
 	}}
+}
+
+// P20-W2BF item 3: notification_overrides.digest_include reaches the engine. Off excludes the
+// device from the digest; on and inherit (nil) do not.
+func TestM4W2BFThresholdsCarryDigestInclude(t *testing.T) {
+	off, on := false, true
+	for _, tc := range []struct {
+		include *bool
+		want    bool
+	}{{nil, false}, {&on, false}, {&off, true}} {
+		p := policy.Default(policy.ClassUnknown)
+		p.NotificationOverrides.DigestInclude = tc.include
+		if got := ThresholdsFromPolicy(p).DigestExcluded; got != tc.want {
+			t.Errorf("digest_include %v: excluded %v, want %v", tc.include, got, tc.want)
+		}
+	}
 }

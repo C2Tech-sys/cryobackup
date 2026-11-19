@@ -87,6 +87,9 @@ type DeviceState struct {
 	Ack *AckView
 	// Detail carries counts and labels for the UI.
 	Detail Detail
+	// DigestExcluded is Thresholds.DigestExcluded: the policy leaves the device out of the daily
+	// digest's lists (DigestOf counts it instead). It is not a state and changes none.
+	DigestExcluded bool
 }
 
 // CustomerState is the §4.5 rollup of one customer.

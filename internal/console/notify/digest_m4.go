@@ -86,15 +86,55 @@ type digestPage struct {
 	ConsoleURL string
 }
 
-// digestDevices counts the devices a digest speaks for: every device of the view that is not retired.
+// digestDevices counts the devices a digest speaks for: every device of the view that is neither
+// retired nor left out by its policy.
 func digestDevices(v state.FleetView) int {
 	n := 0
-	for i := range v.Devices {
-		if v.Devices[i].Primary != state.StateRetired {
-			n++
-		}
+	for _, c := range digestByState(v) {
+		n += c
 	}
 	return n
+}
+
+// digestByState counts the devices a digest speaks for by their primary state.
+func digestByState(v state.FleetView) map[state.State]int {
+	m := map[state.State]int{}
+	for i := range v.Devices {
+		if d := &v.Devices[i]; d.Primary != state.StateRetired && !d.DigestExcluded {
+			m[d.Primary]++
+		}
+	}
+	return m
+}
+
+// stateWords is how a count of devices in a state reads ("1 paused", "3 awaiting first backup").
+func stateWords(s state.State) string {
+	switch s {
+	case state.StatePaused:
+		return "paused"
+	case state.StatePendingFirst:
+		return "awaiting first backup"
+	case state.StateMissed:
+		return "missed a scheduled run"
+	case state.StateDeferred:
+		return "deferred"
+	case state.StateOutdated:
+		return "on an outdated agent"
+	case state.StateIdentityConflict:
+		return "in identity conflict"
+	case state.StateEscrowUnverified:
+		return "with an unverified escrow"
+	case state.StateMaintFailed:
+		return "with failed maintenance"
+	}
+	return strings.ToLower(string(s))
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // ackMarks maps "subject type/subject id/ack alarm type" to ACKNOWLEDGED or SNOOZED for the active
@@ -166,7 +206,11 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	}
 	d := state.DigestOf(v, v.ComputedAt)
 	marks := ackMarks(acks)
-	p := digestPage{Date: v.ComputedAt.In(loc).Format("Mon 2 Jan"), Polled: when(v.ComputedAt, loc), Checked: digestDevices(v),
+	date := v.ComputedAt.In(loc)
+	if t, err := time.ParseInLocation("2006-01-02", o.DigestDate, loc); err == nil {
+		date = t
+	}
+	p := digestPage{Date: date.Format("Mon 2 Jan"), Polled: when(v.ComputedAt, loc), Checked: digestDevices(v),
 		ConsoleURL: consoleURL(o.ConsoleURL)}
 	for _, b := range d.Banners {
 		db := digestBanner{Word: "WARNING", Glyph: "&#9650;", Colour: "warning", Text: b.Text}
@@ -232,19 +276,41 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 		}
 	}
 	p.CheckedAs = count(p.Checked, "device", "devices")
-	crit, warn, other := p.Sections[sectionCritical].Count, p.Sections[sectionWarning].Count, p.Sections[sectionOther].Count
+	critDevices, warn, other := p.Sections[sectionCritical].Count-missing, p.Sections[sectionWarning].Count, p.Sections[sectionOther].Count
+	byState := digestByState(v)
+	backedUp := byState[state.StateOK]
+	var rest []string // the devices that are not backed up, by state: never inside the backed-up number
+	for _, st := range state.Precedence() {
+		if n := byState[st]; n > 0 && st != state.StateOK {
+			rest = append(rest, strconv.Itoa(n)+" "+stateWords(st))
+		}
+	}
+	var left []string // what the policy leaves out: always said, so it cannot hide in an all-clear
+	if d.ExcludedCustomers > 0 {
+		left = append(left, count(d.ExcludedCustomers, "customer", "customers")+" not included by policy")
+	}
+	if d.ExcludedDevices > 0 {
+		left = append(left, count(d.ExcludedDevices, "device", "devices")+" not included by policy")
+	}
 	var summary string
 	switch {
-	case d.AllClear && p.Checked == 0:
+	case d.AllClear && p.Checked == 0 && len(left) == 0:
 		summary, p.Title = "all clear, no devices enrolled yet", "No devices enrolled yet: nothing is being backed up."
-	case d.AllClear:
-		summary = "all clear, " + count(p.Checked, "device", "devices")
+	case d.AllClear && len(rest) == 0 && p.Checked > 0:
+		summary = "all clear, " + count(p.Checked, "device", "devices") + " backed up"
 		p.Title = "All " + strconv.Itoa(p.Checked) + " devices backed up."
 		if p.Checked == 1 {
 			p.Title = "The 1 device is backed up."
 		}
+	case d.AllClear:
+		summary = "all clear, " + strconv.Itoa(backedUp) + " of " + count(p.Checked, "device", "devices") + " backed up"
+		p.Title = "All clear: " + strconv.Itoa(backedUp) + " of " + count(p.Checked, "device", "devices") + " backed up."
+		if len(rest) > 0 {
+			summary += ", " + strings.Join(rest, ", ")
+			p.Title += " " + upperFirst(strings.Join(rest, ", ")) + "."
+		}
 	default:
-		parts := []string{strconv.Itoa(crit) + " critical", count(warn, "warning", "warnings")}
+		parts := []string{strconv.Itoa(critDevices) + " critical", count(warn, "warning", "warnings")}
 		if missing > 0 {
 			parts = append(parts, count(missing, "customer missing", "customers missing"))
 		}
@@ -257,13 +323,18 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 		summary = strings.Join(parts, ", ")
 		p.Title = "Not all clear: " + summary + "."
 	}
-	fine := p.Checked - deviceLines
-	if fine < 0 {
-		fine = 0
+	if len(left) > 0 {
+		summary += ", " + strings.Join(left, ", ")
+		p.Title += " " + upperFirst(strings.Join(left, ", ")) + "."
 	}
-	p.Totals = count(p.Checked, "device", "devices") + ": " + strconv.Itoa(crit-missing) + " critical, " + count(warn, "warning", "warnings") +
-		", " + strconv.Itoa(other) + " parked or deferred, " + strconv.Itoa(fine) + " fine. " +
+	parts := []string{strconv.Itoa(backedUp) + " backed up"}
+	parts = append(parts, rest...)
+	p.Totals = count(p.Checked, "device", "devices") + ": " + strings.Join(parts, ", ") + ". Exceptions: " + strconv.Itoa(critDevices) + " critical, " +
+		count(warn, "warning", "warnings") + ", " + strconv.Itoa(other) + " parked or deferred. " +
 		count(len(v.Customers), "customer", "customers") + ", " + strconv.Itoa(missing) + " missing."
+	if len(left) > 0 {
+		p.Totals += " " + upperFirst(strings.Join(left, ", ")) + "."
+	}
 	var text, html bytes.Buffer
 	if err := digestTextTmpl.Execute(&text, p); err != nil {
 		return Content{}, err

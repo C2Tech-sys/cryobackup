@@ -1,5 +1,5 @@
 CryoBackup daily digest, Tue 17 Nov
-Not all clear: 3 critical, 2 warnings, 1 customer missing.
+Not all clear: 2 critical, 2 warnings, 1 customer missing.
 Polled Tue 17 Nov 2026, 3:04 PM CST
 
 Console
@@ -25,7 +25,7 @@ Parked and long-deferred devices
     [PAUSED] SPARE-LAPTOP since Sun 8 Nov 2026, 3:04 PM CST
         paused with no end date
 
-Totals: 6 devices: 2 critical, 2 warnings, 1 parked or deferred, 1 fine. 3 customers, 1 missing.
+Totals: 6 devices: 1 backed up, 1 paused, 1 failed, 1 partial, 1 stale, 1 on an outdated agent. Exceptions: 2 critical, 2 warnings, 1 parked or deferred. 3 customers, 1 missing.
 
 Open the console: https://console.example.com/
 

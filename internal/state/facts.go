@@ -133,6 +133,10 @@ type Thresholds struct {
 	WindowSlack time.Duration
 	// OutdatedIsAlarm makes OUTDATED an alarm (notification_overrides.outdated_alarm).
 	OutdatedIsAlarm bool
+	// DigestExcluded leaves the device out of the daily digest's exception lists
+	// (notification_overrides.digest_include set to false). It changes no state and no banner:
+	// the digest counts what it left out (DigestView.ExcludedCustomers, ExcludedDevices).
+	DigestExcluded bool
 }
 
 // DefaultThresholds returns the §3.6 sla defaults: stale 72 h, unseen 168 h,

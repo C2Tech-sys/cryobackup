@@ -70,7 +70,7 @@ func TestGoldenDigestAllGreen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Kind != mail.KindDigest || c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: all clear, 3 devices" {
+	if c.Kind != mail.KindDigest || c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: all clear, 3 devices backed up" {
 		t.Fatalf("kind %q subject %q", c.Kind, c.Subject)
 	}
 	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "All 3 devices backed up." {
@@ -91,7 +91,7 @@ func TestGoldenDigestMixed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: 3 critical, 2 warnings, 1 customer missing" {
+	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: 2 critical, 2 warnings, 1 customer missing" /* P20-W2BF: the missing customer once */ {
 		t.Fatalf("subject %q", c.Subject)
 	}
 	golden(t, "digest_mixed.txt", c.Text)
@@ -287,7 +287,7 @@ func TestDigestOncePerRecipientAtTheTime(t *testing.T) {
 	if len(got) != 2 || len(got["a@example.test"]) != 1 || len(got["b@example.test"]) != 1 {
 		t.Fatalf("digests %v", got)
 	}
-	if s := got["a@example.test"][0].Subject; !strings.Contains(s, "all clear, 2 devices") {
+	if s := got["a@example.test"][0].Subject; !strings.Contains(s, "all clear, 2 devices backed up") {
 		t.Fatalf("an all-green day: subject %q", s)
 	}
 	keys := map[string]bool{}

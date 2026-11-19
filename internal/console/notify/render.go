@@ -26,6 +26,10 @@ type Options struct {
 	// ConsoleURL is the console's public URL (config public_url). A message links to it when it is
 	// an http or https URL; otherwise, or when empty, the message carries no link.
 	ConsoleURL string
+	// DigestDate is the local date ("2006-01-02") a digest is for, shown in its subject and header;
+	// empty means the date of the view. A retried digest keeps the date of its key. The alert and
+	// recovery renderers do not read it.
+	DigestDate string
 }
 
 // Content is one rendered message: the same for every recipient of a batch.

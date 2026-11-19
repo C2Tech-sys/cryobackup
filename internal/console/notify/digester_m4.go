@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
@@ -123,10 +124,9 @@ func (g *Digester) loc() *time.Location {
 	return time.UTC
 }
 
-func (g *Digester) options() Options { return Options{Loc: g.loc(), ConsoleURL: g.ConsoleURL} }
-
-// render is the digest as the fleet is now.
-func (g *Digester) render(ctx context.Context) (Content, error) {
+// render is the digest as the fleet is now, for the local date date ("2006-01-02"; empty: the
+// date of the view).
+func (g *Digester) render(ctx context.Context, date string) (Content, error) {
 	if g.View == nil {
 		return Content{}, errors.New("notify: the digest has no view")
 	}
@@ -138,13 +138,13 @@ func (g *Digester) render(ctx context.Context) (Content, error) {
 	if err != nil {
 		return Content{}, err
 	}
-	return RenderDigest(v, acks, g.options())
+	return RenderDigest(v, acks, Options{Loc: g.loc(), ConsoleURL: g.ConsoleURL, DigestDate: date})
 }
 
 // PreviewDigest renders the digest as it would go out now, for the console's preview. Nothing is
 // written and nothing is sent; it works whether or not mail is set up or the digest is on.
 func (g *Digester) PreviewDigest(ctx context.Context) (Content, error) {
-	return g.render(ctx)
+	return g.render(ctx, "")
 }
 
 // digestRecipients are the recipients with the digest switch, by name.
@@ -238,7 +238,7 @@ func (g *Digester) Run(ctx context.Context) (DigestResult, error) {
 		res.Skipped = DigestSkippedAlreadySent // the common case all day: no view is loaded
 		return res, nil
 	}
-	err = g.send(ctx, missing, func(r store.Recipient) string { return keys[r.ID] }, &res)
+	err = g.send(ctx, missing, func(r store.Recipient) string { return keys[r.ID] }, today, &res)
 	g.logResult("daily digest", res)
 	return res, err
 }
@@ -300,7 +300,7 @@ func (g *Digester) SendDigestNow(ctx context.Context, force bool) (DigestResult,
 			return res, nil
 		}
 	}
-	err = g.send(ctx, send, keyOf, &res)
+	err = g.send(ctx, send, keyOf, res.Date, &res)
 	g.logResult("digest send-now", res)
 	return res, err
 }
@@ -308,8 +308,8 @@ func (g *Digester) SendDigestNow(ctx context.Context, force bool) (DigestResult,
 // send renders the digest once and sends it to each recipient under its key, under the send
 // budget. One recipient failing does not stop the others; a temporary failure is retried alone by
 // notification-retry (Rerender).
-func (g *Digester) send(ctx context.Context, to []store.Recipient, keyOf func(store.Recipient) string, res *DigestResult) error {
-	content, err := g.render(ctx)
+func (g *Digester) send(ctx context.Context, to []store.Recipient, keyOf func(store.Recipient) string, date string, res *DigestResult) error {
+	content, err := g.render(ctx, date)
 	if err != nil {
 		return err
 	}
@@ -360,17 +360,39 @@ func (g *Digester) logResult(what string, res DigestResult) {
 }
 
 // Rerender is the digest's RerenderFunc for the retry job: a digest row that failed is sent again
-// as the fleet is at retry time, to the row's recipient (a forced send-now's row too). A recipient
-// who switched the digest off meanwhile is a decision not to send (recorded as deduped, logged as
-// why recipient_switched_off). The digest's on/off switch is not read: the row exists because a
-// digest was decided, and the retry finishes that decision.
-func (g *Digester) Rerender(ctx context.Context, _ store.Delivery, to store.Recipient) (mail.Message, string, error) {
+// as the fleet is at retry time, to the row's recipient, under the date of its key (a daily row
+// "digest:<date>:<rule>" keeps its date in the subject; a forced row takes the date of the view).
+// It is a decision not to send when the recipient switched the digest off meanwhile (why
+// recipient_switched_off) or the digest was turned off meanwhile (why digest_disabled); both are
+// recorded with the schema's reason deduped. A send-now ignores the switch when it is made, but a
+// retry still pending once the digest is off is not sent.
+func (g *Digester) Rerender(ctx context.Context, d store.Delivery, to store.Recipient) (mail.Message, string, error) {
 	if !to.Digest {
 		return mail.Message{}, "recipient_switched_off", nil
 	}
-	c, err := g.render(ctx)
+	set, err := g.Store.ReadDigestSettings(ctx, store.ScopeAll())
+	if err != nil {
+		return mail.Message{}, "", err
+	}
+	if !set.Enabled {
+		return mail.Message{}, "digest_disabled", nil
+	}
+	c, err := g.render(ctx, digestKeyDate(d.DedupeKey))
 	if err != nil {
 		return mail.Message{}, "", err
 	}
 	return c.Message(to.Address), "", nil
+}
+
+// digestKeyDate is the local date of a daily digest key ("digest:2006-01-02:<rule>"), or "".
+func digestKeyDate(key string) string {
+	rest, ok := strings.CutPrefix(key, "digest:")
+	if !ok {
+		return ""
+	}
+	date, _, ok := strings.Cut(rest, ":")
+	if _, err := time.Parse("2006-01-02", date); !ok || err != nil {
+		return ""
+	}
+	return date
 }

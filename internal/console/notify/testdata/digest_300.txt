@@ -1,5 +1,5 @@
 CryoBackup daily digest, Tue 17 Nov
-Not all clear: 93 critical, 60 warnings, 3 customers missing.
+Not all clear: 90 critical, 60 warnings, 3 customers missing.
 Polled Tue 17 Nov 2026, 3:04 PM CST
 
 Console
@@ -284,7 +284,7 @@ Parked and long-deferred devices
   Customer 30 Family Practice
     [PAUSED] C30-WS-10 since Mon 16 Nov 2026, 12:04 AM CST
 
-Totals: 300 devices: 90 critical, 60 warnings, 30 parked or deferred, 120 fine. 30 customers, 3 missing.
+Totals: 300 devices: 120 backed up, 30 paused, 30 failed, 30 partial, 30 unseen, 30 stale, 30 with failed maintenance. Exceptions: 90 critical, 60 warnings, 30 parked or deferred. 30 customers, 3 missing.
 
 Open the console: https://console.example.com/
 

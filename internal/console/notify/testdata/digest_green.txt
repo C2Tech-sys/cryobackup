@@ -14,7 +14,7 @@ Warnings
 Parked and long-deferred devices
   None. 3 devices checked.
 
-Totals: 3 devices: 0 critical, 0 warnings, 0 parked or deferred, 3 fine. 1 customer, 0 missing.
+Totals: 3 devices: 3 backed up. Exceptions: 0 critical, 0 warnings, 0 parked or deferred. 1 customer, 0 missing.
 
 Open the console: https://console.example.com/
 
