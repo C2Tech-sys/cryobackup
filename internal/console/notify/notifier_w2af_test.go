@@ -369,12 +369,12 @@ func TestNotifyNoRecoveryAfterAFailedThenSuppressedAlert(t *testing.T) {
 		t.Fatalf("recovery while the alert is in retry %+v, owed %d", res, w.recoveryOwed())
 	}
 	w.clk.Advance(time.Minute)
-	if rr := w.retry(); rr.Suppressed != 1 {
+	if rr := w.retry(); rr.Suppressed != 1 || rr.RecoveryUnsent != 1 { // P20-W2BF C1: the retry settles the closed episode it leaves out
 		t.Fatalf("retry %+v", rr)
 	}
 	w.clk.Advance(time.Minute)
 	res := w.pass()
-	if len(w.fake.Sent()) != 0 || res.Recovered != 0 || res.RecoveryUnsent != 1 || w.recoveryOwed() != 0 {
+	if len(w.fake.Sent()) != 0 || res.Recovered != 0 || res.RecoveryUnsent != 0 || w.recoveryOwed() != 0 {
 		t.Fatalf("pass after the suppressed alert %+v, sent %d, owed %d", res, len(w.fake.Sent()), w.recoveryOwed())
 	}
 	w.clk.Advance(time.Minute)
@@ -479,11 +479,6 @@ func TestRetrySuppressReasons(t *testing.T) {
 		}},
 		{"recipient deleted", "deduped", "recipient_deleted", func(w *world, r store.Recipient, _ string) {
 			if err := w.st.DeleteRecipient(w.ctx, store.ScopeAll(), r.ID, w.actor); err != nil {
-				w.t.Fatal(err)
-			}
-		}},
-		{"acknowledged", "acknowledged", "acknowledged", func(w *world, _ store.Recipient, dev string) {
-			if _, err := w.st.CreateAck(w.ctx, store.ScopeAll(), store.AckInput{SubjectType: store.EpisodeDevice, SubjectID: dev, AlarmType: "failed"}, w.actor); err != nil {
 				w.t.Fatal(err)
 			}
 		}},

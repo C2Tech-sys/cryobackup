@@ -24,12 +24,18 @@
 // A recovery notice follows only an alert that reached someone: an episode closes owing one when a
 // delivery row of its alert batch was sent. When every row of the batch failed for good or was
 // suppressed, the recovery is settled without a message; while a row is still in retry, it waits.
-// A retry that re-renders the alert without the episodes that closed meanwhile settles their
-// recovery the same way before it sends, unless a row of the batch was already delivered. The
-// episodes it leaves out because they are now acknowledged, snoozed or of a suspended customer
-// leave the batch under the same condition: their alert mark is taken back, so they are mailed
-// normally when the mute ends while they are still open, and owe no recovery if they close first.
 //
+// A retried alert is the original notification, delayed: it carries every episode of its batch
+// that is still open, whether or not it has been acknowledged, snoozed or its customer suspended
+// since (the mute rules apply when a batch is formed, never to a retry). Closing is the only reason
+// an episode is left out of a retry, and its recovery is then settled without a message, unless
+// another row of the batch is sent or still in flight from the pass that formed it.
+//
+// One residual case is accepted. A send held in flight past another recipient's retry that then
+// fails, plus a close inside that window, can produce a recovery notice for an alarm that recipient
+// was not mailed. It is a spurious "resolved", never a lost alert, and telling it apart would need
+// the delivery log to record which episodes each message carried.
+
 // # Batches and crash safety
 //
 // A batch is the episodes one pass mails together. Its id is the time the pass marks them

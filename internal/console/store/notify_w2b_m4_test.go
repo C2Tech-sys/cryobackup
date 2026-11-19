@@ -10,67 +10,40 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
-// P20-W2B item 7 and P20-W2BF item 6: leaving an alert batch is one transaction. An open episode
-// still marked at the batch id is released (unmarked); one that closed meanwhile is settled
-// (recovery done, no message); one marked at another time, and an id outside scope, are left alone.
-func TestM4W2BLeaveAlertBatch(t *testing.T) {
+// P20-W2BF C1: a closed episode left out of a retried alert is settled in one transaction with the
+// check of its batch's rows: not while another row of the batch is sent or queued and never
+// attempted; a sibling that failed with a retry scheduled does not count, nor does the retried row
+// itself. An open episode, one marked at another time, and an id outside scope are left alone.
+func TestM4W2BFSettleClosedLeftOut(t *testing.T) {
 	w := seed(t)
 	all := ScopeAll()
 	sync := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{epKey(w.devA.ID, "FAILED"), epKey(w.devA.ID, "STALE"), epKey(w.devB.ID, "FAILED")}, t0))
-	if len(sync.Opened) != 3 {
-		t.Fatalf("opened %d", len(sync.Opened))
-	}
-	aFailed, aStale, bFailed := sync.Opened[0].ID, sync.Opened[1].ID, sync.Opened[2].ID
-	batch, other, settle := t0.Add(time.Second), t0.Add(2*time.Second), t0.Add(3*time.Second)
-	must[int](t)(w.s.MarkEpisodesNotified(w.ctx, all, []string{aFailed, bFailed}, batch))
-	must[int](t)(w.s.MarkEpisodesNotified(w.ctx, all, []string{aStale}, other))
-
-	if _, _, err := w.s.LeaveAlertBatch(w.ctx, ScopeOf(w.custA.ID), []string{aFailed, bFailed}, batch, settle, ""); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("an id outside scope: %v", err)
-	}
-	if got := must[[]Episode](t)(w.s.ListEpisodesNotifiedAt(w.ctx, all, batch)); len(got) != 2 {
-		t.Fatalf("a refused call changed the batch: %+v", got)
-	}
-	// bFailed closes before the call (the race of item 6); aStale is marked at another time.
+	open, other, closed := sync.Opened[0].ID, sync.Opened[1].ID, sync.Opened[2].ID
+	batch, elsewhere := t0.Add(time.Second), t0.Add(2*time.Second)
+	must[int](t)(w.s.MarkEpisodesNotified(w.ctx, all, []string{open, closed}, batch))
+	must[int](t)(w.s.MarkEpisodesNotified(w.ctx, all, []string{other}, elsewhere))
 	w.clk.Advance(time.Minute)
 	must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{epKey(w.devA.ID, "FAILED"), epKey(w.devA.ID, "STALE")}, w.clk.Now()))
-	released, settled, err := w.s.LeaveAlertBatch(w.ctx, all, []string{aFailed, aStale, bFailed}, batch, settle, "")
-	if err != nil || released != 1 || settled != 1 {
-		t.Fatalf("released %d settled %d (%v), want 1 and 1", released, settled, err)
-	}
-	if un := must[[]Episode](t)(w.s.ListUnnotifiedEpisodes(w.ctx, all)); len(un) != 1 || un[0].ID != aFailed {
-		t.Fatalf("unnotified = %+v", un)
-	}
-	if due := must[[]Episode](t)(w.s.ListRecoveryDueEpisodes(w.ctx, all)); len(due) != 0 {
-		t.Fatalf("a settled episode still owes a recovery: %+v", due)
-	}
-	if got := must[[]Episode](t)(w.s.ListEpisodesRecoveryNotifiedAt(w.ctx, all, settle)); len(got) != 1 || got[0].ID != bFailed {
-		t.Fatalf("settled = %+v", got)
-	}
-}
-
-// P20-W2BF B3: the delivery rows of the batch are read in the same transaction. A sibling row that
-// is not final keeps an open episode in the batch (a closed one is still settled); a sent row keeps
-// both; the retried row itself does not count.
-func TestM4W2BFLeaveAlertBatchReadsTheSiblings(t *testing.T) {
-	w := seed(t)
-	all := ScopeAll()
-	sync := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{epKey(w.devA.ID, "FAILED"), epKey(w.devB.ID, "FAILED")}, t0))
-	open, closed := sync.Opened[0].ID, sync.Opened[1].ID
-	batch := t0.Add(time.Second)
-	must[int](t)(w.s.MarkEpisodesNotified(w.ctx, all, []string{open, closed}, batch))
-	w.clk.Advance(time.Minute)
-	must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, all, []EpisodeKey{epKey(w.devA.ID, "FAILED")}, w.clk.Now()))
 	key := "alert:" + strconv.FormatInt(batch.UnixMilli(), 10) + ":"
 	mine := enqueueM4(t, w, DeliveryAlert, key+"a")
-	sibling := enqueueM4(t, w, DeliveryAlert, key+"b") // queued: not final
-	released, settled, err := w.s.LeaveAlertBatch(w.ctx, all, []string{open, closed}, batch, t0.Add(2*time.Second), mine.ID)
-	if err != nil || released != 0 || settled != 1 {
-		t.Fatalf("sibling in flight: released %d settled %d (%v), want 0 and 1", released, settled, err)
+	sibling := enqueueM4(t, w, DeliveryAlert, key+"b") // queued, never attempted: in flight
+	settle := t0.Add(3 * time.Second)
+	if _, err := w.s.SettleClosedLeftOut(w.ctx, ScopeOf(w.custA.ID), []string{closed}, batch, settle, mine.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an id outside scope: %v", err)
 	}
-	must[Delivery](t)(w.s.SuppressDelivery(w.ctx, all, sibling.ID, "deduped"))
-	if released, _, err = w.s.LeaveAlertBatch(w.ctx, all, []string{open}, batch, t0.Add(3*time.Second), mine.ID); err != nil || released != 1 {
-		t.Fatalf("sibling final unsent: released %d (%v), want 1", released, err)
+	if n := must[int](t)(w.s.SettleClosedLeftOut(w.ctx, all, []string{open, closed}, batch, settle, mine.ID)); n != 0 {
+		t.Fatalf("settled %d while a sibling is in flight", n)
+	}
+	retry := w.clk.Now().Add(time.Minute)
+	must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, sibling.ID, "timeout", &retry)) // failed, retry scheduled: cannot carry it
+	if n := must[int](t)(w.s.SettleClosedLeftOut(w.ctx, all, []string{open, other, closed}, batch, settle, mine.ID)); n != 1 {
+		t.Fatalf("settled %d, want 1 (only the closed episode of the batch)", n)
+	}
+	if un := must[[]Episode](t)(w.s.ListUnnotifiedEpisodes(w.ctx, all)); len(un) != 0 {
+		t.Fatalf("an episode left its batch: %+v", un)
+	}
+	if got := must[[]Episode](t)(w.s.ListEpisodesRecoveryNotifiedAt(w.ctx, all, settle)); len(got) != 1 || got[0].ID != closed {
+		t.Fatalf("settled = %+v", got)
 	}
 }
 
@@ -78,7 +51,7 @@ func TestM4W2BFLeaveAlertBatchReadsTheSiblings(t *testing.T) {
 // (scope_test.go), next to addW2AMatrix: addW2BMatrix(m).
 func addW2BMatrix(m map[string]matrixCase) {
 	batch := time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)
-	m["LeaveAlertBatch"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
+	m["SettleClosedLeftOut"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
 		open, err := w.s.ListOpenEpisodes(w.ctx, ScopeAll())
 		if err != nil {
 			return nil, err
@@ -105,7 +78,7 @@ func addW2BMatrix(m map[string]matrixCase) {
 		if _, err := w.s.MarkEpisodesNotified(w.ctx, ScopeAll(), []string{id}, batch); err != nil {
 			return nil, err
 		}
-		_, _, err = w.s.LeaveAlertBatch(w.ctx, sc, []string{id}, batch, batch.Add(time.Second), "")
+		_, err = w.s.SettleClosedLeftOut(w.ctx, sc, []string{id}, batch, batch.Add(time.Second), "")
 		return nil, err
 	}}
 }

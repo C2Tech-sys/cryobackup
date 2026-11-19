@@ -29,7 +29,6 @@ const RetryBatch = 100
 //	dedupe key that is not a batch key           deduped           bad_key
 //	a test send left queued                      deduped           test_not_retried
 //	the whole batch muted while the pass ran     deduped           muted_mid_pass
-//	acknowledged, snoozed, customer suspended    the same word     the same word
 //
 // "paused" is not used: the rest of the product means the PAUSED device state by it.
 const (
@@ -47,9 +46,10 @@ type RerenderFunc func(ctx context.Context, d store.Delivery, to store.Recipient
 
 // Retrier is the work of the notification-retry job (ADR 0020 decision 9): every minute it takes the
 // delivery rows that are due (failed with a retry time that has come, or left queued by a sender
-// that stopped) and sends each again, re-rendered from the state as it is now. An alert whose
-// episodes have all closed, or are now acknowledged or of a suspended customer, is not sent: the
-// row is suppressed. The schedule (three retries, at 1, 5 and 15 minutes) is the store's and the
+// that stopped) and sends each again, re-rendered from the state as it is now. A retried alert is
+// the original notification, delayed: it carries every episode of its batch that is still open,
+// acknowledged, snoozed or suspended since or not; an alert whose episodes have all closed is not
+// sent: the row is suppressed. The schedule (three retries, at 1, 5 and 15 minutes) is the store's and the
 // dispatcher's.
 type Retrier struct {
 	Store    *store.Store
@@ -67,12 +67,9 @@ type Retrier struct {
 	Rerender map[string]RerenderFunc
 	Log      *logx.Logger
 
-	// afterSettle, when set, runs after a re-render took episodes out of their batch and before the
-	// send (the tests inject a crash there).
+	// afterSettle, when set, runs after a re-render settled the recovery of closed episodes and
+	// before the send (the tests inject a crash there).
 	afterSettle func() error
-	// beforeLeave, when set, runs after a re-render read its batch and before the episodes leave it
-	// (the tests close an episode there).
-	beforeLeave func()
 }
 
 // RetryResult counts what one run did.
@@ -81,10 +78,6 @@ type RetryResult struct {
 	// RecoveryUnsent counts the closed episodes whose recovery a re-rendered alert settled without a
 	// message: the retry left them out and no alert of their batch had been delivered.
 	RecoveryUnsent int
-	// Released counts the open episodes a re-rendered alert left out (acknowledged, snoozed, or of a
-	// suspended customer) while no alert of their batch had been delivered: their alert mark was
-	// taken back, so they leave the batch (leaveBatch).
-	Released int
 }
 
 // batchID is a free batch id from the process-wide source (shared with every Notifier).
@@ -117,25 +110,20 @@ func (r *Retrier) kinds() []string {
 type retryView struct {
 	load func(ctx context.Context) (state.FleetView, error)
 	v    *state.FleetView
-	m    *mutes
 }
 
-func (rv *retryView) get(ctx context.Context, st *store.Store) (state.FleetView, mutes, error) {
+func (rv *retryView) get(ctx context.Context) (state.FleetView, error) {
 	if rv.v == nil {
 		if rv.load == nil {
-			return state.FleetView{}, mutes{}, errors.New("notify: the retry job has no view")
+			return state.FleetView{}, errors.New("notify: the retry job has no view")
 		}
 		v, err := rv.load(ctx)
 		if err != nil {
-			return state.FleetView{}, mutes{}, err
+			return state.FleetView{}, err
 		}
-		m, err := loadMutes(ctx, st, v)
-		if err != nil {
-			return state.FleetView{}, mutes{}, err
-		}
-		rv.v, rv.m = &v, &m
+		rv.v = &v
 	}
-	return *rv.v, *rv.m, nil
+	return *rv.v, nil
 }
 
 // Run is one retry run. The error is a store (or view) error; send failures are in the log rows.
@@ -207,7 +195,7 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 	}
 	r.log().Info("notification retry", logx.Count("due", res.Due), logx.Count("sent", res.Sent), logx.Count("failed", res.Failed),
 		logx.Count("suppressed", res.Suppressed), logx.Count("settled", res.Settled), logx.Count("deferred", res.Deferred),
-		logx.Count("recovery_unsent", res.RecoveryUnsent), logx.Count("released", res.Released))
+		logx.Count("recovery_unsent", res.RecoveryUnsent))
 	return res, first
 }
 
@@ -261,40 +249,32 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	if len(eps) == 0 {
 		return nil, skip{reasonDeduped, "orphan"}, nil // an orphan of a pass that stopped before it marked: the next pass mailed them
 	}
-	v, m, err := rv.get(ctx, r.Store)
+	v, err := rv.get(ctx)
 	if err != nil {
 		return nil, skip{}, err
 	}
 	var c Content
 	if d.Kind == store.DeliveryAlert {
-		var still, closed, muted []store.Episode
-		sk := skip{reasonResolved, "alarm_resolved"} // every episode closed; no recovery follows an alert nobody received
+		// The retried alert is the original notification, delayed: it carries every episode of its
+		// batch that is still open, whether or not it has been acknowledged, snoozed or its customer
+		// suspended since (the mute rules form batches; they never thin a retry). Only a closed episode
+		// is left out, and its recovery is settled unless another row of the batch may carry it.
+		var open, closed []store.Episode
 		for _, e := range eps {
-			if !e.Open() {
-				if e.RecoveryNotifiedAt == nil {
-					closed = append(closed, e)
-				}
-				continue
+			switch {
+			case e.Open():
+				open = append(open, e)
+			case e.RecoveryNotifiedAt == nil:
+				closed = append(closed, e)
 			}
-			if why := m.reason(e); why != "" {
-				sk = skip{why, why}
-				muted = append(muted, e)
-				continue
-			}
-			still = append(still, e)
 		}
-		if len(still) == 0 {
-			// Nothing goes out: the muted episodes leave the batch now; the pass settles the
-			// recoveries of the closed ones (owedRecoveries).
-			if err := r.leaveBatch(ctx, at, d.ID, nil, muted, res); err != nil {
-				return nil, skip{}, err
-			}
-			return nil, sk, nil
-		}
-		if err := r.leaveBatch(ctx, at, d.ID, closed, muted, res); err != nil {
+		if err := r.settleClosed(ctx, at, d.ID, closed, res); err != nil {
 			return nil, skip{}, err
 		}
-		c, err = RenderAlert(v, still, o)
+		if len(open) == 0 {
+			return nil, skip{reasonResolved, "alarm_resolved"}, nil // every alarm of the alert is over
+		}
+		c, err = RenderAlert(v, open, o)
 	} else {
 		c, err = RenderRecovery(v, eps, o)
 	}
@@ -305,37 +285,24 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	return &msg, skip{}, nil
 }
 
-// leaveBatch takes the episodes the re-rendered alert row retried of batch at leaves out out of
-// the batch, in one store transaction that reads the batch's delivery rows itself
-// (store.LeaveAlertBatch), before the send:
-//
-//   - muted (open, but acknowledged, snoozed or of a suspended customer): released, so it is
-//     mailed normally if it becomes mailable while still open (RetryResult.Released), only when
-//     every other row of the batch is final without having been sent. While a sibling row is sent
-//     or still in flight it may carry the episode, so the episode stays in the batch and the
-//     batch's recovery rule applies. The rule is per batch, not per message: if that sibling then
-//     fails for good while this row was delivered without the episode, the batch still counts as
-//     delivered, so the episode owes a recovery when it closes and is not mailed again when its
-//     mute ends (TestRetryMutedEpisodeStaysWhenTheSiblingThenFailsForGood).
-//   - closed: its recovery is settled without a message (RetryResult.RecoveryUnsent) when no row of
-//     the batch was sent, under a free batch id like Notifier's silent marks.
-func (r *Retrier) leaveBatch(ctx context.Context, at time.Time, retried string, closed, muted []store.Episode, res *RetryResult) error {
-	if len(closed) == 0 && len(muted) == 0 {
+// settleClosed settles, without a message, the recovery of the closed episodes the retried alert
+// row retried of batch at leaves out (store.SettleClosedLeftOut, one transaction with the check of
+// the batch's rows): unless another row of the batch is sent, or queued and never attempted (still
+// in flight from the pass, with them in it). It runs before the send; the mark takes a free batch
+// id, like Notifier's silent marks.
+func (r *Retrier) settleClosed(ctx context.Context, at time.Time, retried string, closed []store.Episode, res *RetryResult) error {
+	if len(closed) == 0 {
 		return nil
 	}
 	id, err := r.batchID(ctx)
 	if err != nil {
 		return err
 	}
-	if r.beforeLeave != nil {
-		r.beforeLeave()
-	}
-	released, settled, err := r.Store.LeaveAlertBatch(ctx, store.ScopeAll(), append(episodeIDs(muted), episodeIDs(closed)...), at, time.UnixMilli(id).UTC(), retried)
+	n, err := r.Store.SettleClosedLeftOut(ctx, store.ScopeAll(), episodeIDs(closed), at, time.UnixMilli(id).UTC(), retried)
 	if err != nil {
 		return err
 	}
-	res.Released += released
-	res.RecoveryUnsent += settled
+	res.RecoveryUnsent += n
 	if r.afterSettle != nil {
 		return r.afterSettle()
 	}
