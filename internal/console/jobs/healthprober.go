@@ -1061,8 +1061,17 @@ func (h *HealthProber) mirrorEndpoint(context.Context) result {
 // zero value, which the engine never reads as healthy; MasterKey is nil (C12b)
 // until a current generation comparison exists. The job-derived checks
 // (alarm-evaluator, maintenance scheduler) and the later-milestone markers are
-// added by internal/console/health, which assembles the World.
+// added by internal/console/health, which assembles the World. The SMTP check
+// carries the send-side facts of the delivery log and the recipients
+// (mailFacts, ADR 0020 decision 9 and 10), read outside the prober's lock.
 func (h *HealthProber) Facts() state.ProbeFacts {
+	p := h.probeFacts()
+	p.SMTP, p.Digest = h.mailFacts(p.SMTP.Probe)
+	return p
+}
+
+// probeFacts is Facts without the delivery-log reads: the probes' own results.
+func (h *HealthProber) probeFacts() state.ProbeFacts {
 	now := h.now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
