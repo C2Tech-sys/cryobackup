@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -148,4 +149,46 @@ func (s *Store) SuppressDelivery(ctx context.Context, scope Scope, id, reason st
 		return Delivery{}, err
 	}
 	return out, nil
+}
+
+// ListDueRetriesOfKinds is ListDueRetries narrowed to the listed delivery kinds: the rows that
+// need another attempt at now, oldest due first, limit clamped the same way. A retrier asks only
+// for the kinds it can render, so rows of another kind cannot fill its window and starve its own
+// (P20-W2AF). No kind returns nothing; a kind outside the schema's list is a *ValidationError.
+func (s *Store) ListDueRetriesOfKinds(ctx context.Context, scope Scope, now time.Time, kinds []string, limit int) ([]Delivery, error) {
+	if err := s.needAll(scope); err != nil {
+		return nil, err
+	}
+	for _, k := range kinds {
+		if (DeliveryInput{Kind: k, DedupeKey: "k", SubjectType: "console"}).validate() != nil {
+			return nil, validation([]FieldError{fieldf("kind", "Use alert, recovery, nag, digest, report, test or event.")})
+		}
+	}
+	out := []Delivery{}
+	if len(kinds) == 0 {
+		return out, nil
+	}
+	switch {
+	case limit <= 0:
+		limit = defaultPageLimit
+	case limit > maxPageLimit:
+		limit = maxPageLimit
+	}
+	at := msOf(now)
+	args := []any{at, at - QueuedStaleAfter.Milliseconds()}
+	marks := make([]string, len(kinds))
+	for i, k := range kinds {
+		marks[i] = "?"
+		args = append(args, k)
+	}
+	err := s.Read(ctx, func(tx *Tx) error {
+		rows, err := collect(tx, `SELECT `+deliveryCols+` FROM notification_log
+			WHERE ((result = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
+			    OR (result = 'queued' AND created_at <= ?))
+			  AND kind IN (`+strings.Join(marks, ",")+`)
+			ORDER BY COALESCE(next_retry_at, created_at), id LIMIT ?`, append(args, limit), scanDelivery)
+		out = append(out, rows...)
+		return err
+	})
+	return out, err
 }

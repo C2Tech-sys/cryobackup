@@ -675,7 +675,8 @@ func TestRetryForAGoneRecipientIsSuppressed(t *testing.T) {
 	}
 }
 
-// A test send and a kind with no renderer: the test is suppressed, the other left for its owner.
+// A test send and a kind with no renderer: the test is suppressed, the other is not even read
+// (ListDueRetriesOfKinds): it is left for its owner.
 func TestRetryOtherKinds(t *testing.T) {
 	w := newWorld(t)
 	for _, in := range []store.DeliveryInput{
@@ -688,7 +689,7 @@ func TestRetryOtherKinds(t *testing.T) {
 	}
 	w.clk.Advance(store.QueuedStaleAfter)
 	rr := w.retry()
-	if rr.Due != 2 || rr.Suppressed != 1 || rr.Left != 1 {
+	if rr.Due != 1 || rr.Suppressed != 1 || rr.Left != 0 {
 		t.Fatalf("retry %+v", rr)
 	}
 	// With a renderer for the digest kind, it is sent to the row's recipient.

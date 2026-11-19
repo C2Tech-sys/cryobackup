@@ -193,6 +193,45 @@ func TestM4W2ASuppressDelivery(t *testing.T) {
 	}
 }
 
+// ListDueRetriesOfKinds returns only the due rows of the kinds asked for, oldest due first, so
+// rows of a kind nobody retries cannot fill the window (P20-W2AF item 2).
+func TestM4W2AFDueRetriesOfKinds(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	for i := 0; i < 5; i++ {
+		enqueueM4(t, w, DeliveryNag, "nag:"+string(rune('a'+i)))
+	}
+	w.clk.Advance(time.Minute)
+	a := enqueueM4(t, w, DeliveryAlert, "alert:1:a")
+	next := w.clk.Now().Add(time.Minute)
+	must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, a.ID, "timeout", &next))
+	w.clk.Advance(time.Minute)
+	q := enqueueM4(t, w, DeliveryRecovery, "recovery:1:q")
+	w.clk.Advance(QueuedStaleAfter)
+
+	got := must[[]Delivery](t)(w.s.ListDueRetriesOfKinds(w.ctx, all, w.clk.Now(), []string{DeliveryAlert, DeliveryRecovery}, 1))
+	if len(got) != 1 || got[0].ID != a.ID {
+		t.Fatalf("limit 1 = %+v, want the failed alert", got)
+	}
+	got = must[[]Delivery](t)(w.s.ListDueRetriesOfKinds(w.ctx, all, w.clk.Now(), []string{DeliveryAlert, DeliveryRecovery}, 0))
+	if len(got) != 2 || got[0].ID != a.ID || got[1].ID != q.ID {
+		t.Fatalf("alert and recovery = %+v", got)
+	}
+	if got := must[[]Delivery](t)(w.s.ListDueRetriesOfKinds(w.ctx, all, w.clk.Now(), nil, 0)); len(got) != 0 {
+		t.Fatalf("no kinds = %+v", got)
+	}
+	if got := must[[]Delivery](t)(w.s.ListDueRetriesOfKinds(w.ctx, all, w.clk.Now(), []string{DeliveryNag}, 0)); len(got) != 5 {
+		t.Fatalf("nag = %d rows", len(got))
+	}
+	var ve *ValidationError
+	if _, err := w.s.ListDueRetriesOfKinds(w.ctx, all, w.clk.Now(), []string{"pager"}, 0); !errors.As(err, &ve) {
+		t.Fatalf("unknown kind: %v", err)
+	}
+	if _, err := w.s.ListDueRetriesOfKinds(w.ctx, ScopeOf(w.custA.ID), w.clk.Now(), []string{DeliveryAlert}, 0); !errors.Is(err, ErrScope) {
+		t.Fatalf("customer scope: %v", err)
+	}
+}
+
 // addW2AMatrix adds the P20-W2A methods to the §3.5 scope matrix. It needs one line in matrix()
 // (scope_test.go), next to addM4Matrix: addW2AMatrix(m).
 func addW2AMatrix(m map[string]matrixCase) {
@@ -302,6 +341,10 @@ func addW2AMatrix(m map[string]matrixCase) {
 			}
 		}
 		return customers(rearmed), err
+	}}
+	m["ListDueRetriesOfKinds"] = matrixCase{kind: globalWrite, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		_, err := w.s.ListDueRetriesOfKinds(w.ctx, sc, t0, []string{DeliveryAlert}, 10)
+		return nil, err
 	}}
 	m["SuppressDelivery"] = matrixCase{kind: globalWrite, call: func(w *world, sc Scope, t *target) ([]string, error) {
 		d, _, err := w.s.EnqueueDelivery(w.ctx, ScopeAll(), DeliveryInput{Kind: DeliveryAlert, DedupeKey: uniq("alert:matrix-suppress"), SubjectType: "console"})

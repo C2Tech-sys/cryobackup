@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
@@ -45,7 +46,7 @@ type Retrier struct {
 	// SendBudget bounds the sends of one run; zero means DefaultSendBudget.
 	SendBudget time.Duration
 	// Rerender renders a retry of another kind, by store delivery kind. A due row of a kind with
-	// neither a renderer here nor an entry is left alone (and logged): its owner retries it.
+	// neither a renderer here nor an entry is not read (kinds): its owner retries it.
 	Rerender map[string]RerenderFunc
 	Log      *logx.Logger
 }
@@ -60,6 +61,20 @@ func (r *Retrier) log() *logx.Logger {
 		return r.Log
 	}
 	return logx.Default()
+}
+
+// kinds are the delivery kinds this retrier decides about: alert, recovery and test here, and every
+// kind of Rerender. Only their due rows are read, so rows of another kind (whose owner retries
+// them) cannot fill the window of RetryBatch rows and starve these.
+func (r *Retrier) kinds() []string {
+	ks := []string{store.DeliveryAlert, store.DeliveryRecovery, store.DeliveryTest}
+	for k, f := range r.Rerender {
+		if f != nil && k != store.DeliveryAlert && k != store.DeliveryRecovery && k != store.DeliveryTest {
+			ks = append(ks, k)
+		}
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 // retryView loads the fleet view at most once per run.
@@ -90,7 +105,7 @@ func (rv *retryView) get(ctx context.Context, st *store.Store) (state.FleetView,
 // Run is one retry run. The error is a store (or view) error; send failures are in the log rows.
 func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 	var res RetryResult
-	due, err := r.Store.ListDueRetries(ctx, store.ScopeAll(), r.Store.Now(), RetryBatch)
+	due, err := r.Store.ListDueRetriesOfKinds(ctx, store.ScopeAll(), r.Store.Now(), r.kinds(), RetryBatch)
 	if err != nil || len(due) == 0 {
 		return res, err
 	}

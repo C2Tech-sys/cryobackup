@@ -1,10 +1,13 @@
 package notify
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/mail"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
@@ -83,6 +86,35 @@ func TestNotifyUnclassifiedStateFailsThePass(t *testing.T) {
 		}
 		if w.fake.Calls() != 0 || len(w.open()) != 0 {
 			t.Fatalf("%s: a pass over an unclassified state synced or mailed", where)
+		}
+	}
+}
+
+// Item 2. 150 due rows of a kind nobody renders here do not keep a failed alert from its retry.
+func TestRetryRowsOfAnotherKindDoNotStarveTheWindow(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	w.recipient("ops@example.test", true, false)
+	for i := 0; i < 150; i++ {
+		if _, _, err := w.st.EnqueueDelivery(w.ctx, store.ScopeAll(), store.DeliveryInput{Kind: store.DeliveryNag,
+			DedupeKey: fmt.Sprintf("nag:%d", i), SubjectType: "console"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.clk.Advance(10 * time.Minute)
+	w.fake.FailNext(1, &mail.SendError{Stage: mail.StageConnect, Class: mail.ClassTimeout, Temporary: true})
+	w.set(state.StateFailed, site...)
+	if res := w.pass(); res.Failed != 1 {
+		t.Fatalf("pass %+v", res)
+	}
+	w.clk.Advance(time.Minute)
+	rr := w.retry()
+	if rr.Sent != 1 || w.fake.Calls() != 2 || len(w.fake.Sent()) != 1 {
+		t.Fatalf("retry %+v, calls %d", rr, w.fake.Calls())
+	}
+	for _, d := range w.deliveries() {
+		if d.Kind == store.DeliveryNag && d.Result != store.DeliveryQueued {
+			t.Fatalf("a nag row was touched: %+v", d)
 		}
 	}
 }
