@@ -259,17 +259,10 @@ func TestNotifyBatchIDCollisionIsBounded(t *testing.T) {
 	if w.fake.Calls() != 0 || len(w.unnotified()) != 1 {
 		t.Fatalf("after the failed pass: %d sent, %d unnotified", w.fake.Calls(), len(w.unnotified()))
 	}
-	abandoned := 0
 	for _, d := range w.deliveries() {
 		if d.RuleID == free.ID {
-			if d.Result != store.DeliverySuppressed {
-				t.Fatalf("a row of an abandoned batch id is waiting: %+v", d)
-			}
-			abandoned++
+			t.Fatalf("a row was written under a taken batch id: %+v", d) // batchIDs.next sees the ids are taken first
 		}
-	}
-	if abandoned != 5 {
-		t.Fatalf("%d abandoned rows suppressed, want one per try", abandoned)
 	}
 	w.clk.Advance(time.Minute)
 	if res := w.pass(); res.Alerted != 1 || res.Sent != 2 {
@@ -588,5 +581,70 @@ func TestRetryUnknownSuppressWordFromARerenderFunc(t *testing.T) {
 	}
 	if strings.Contains(logs, "../") || strings.Contains(logs, "Bad Word") {
 		t.Fatalf("the raw word reached the log:\n%s", logs)
+	}
+}
+
+// Batch 2 item 3. A SENT row at the pass's millisecond for a recipient that does not receive alerts
+// takes the id: the pass uses another, so that row cannot make a recovery look owed.
+func TestNotifyBatchIDTakenByAnotherRecipientsSentRow(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	w.recipient("ops@example.test", true, true)
+	off := w.recipient("digest-only@example.test", false, false)
+	row, _, err := w.st.EnqueueDelivery(w.ctx, store.ScopeAll(), store.DeliveryInput{Kind: store.DeliveryAlert, RuleID: off.ID,
+		DedupeKey: batchKey(keyAlert, w.clk.Now().UnixMilli(), off.ID), SubjectType: "console"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.st.MarkDeliverySent(w.ctx, store.ScopeAll(), row.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.fake.FailNext(1, &mail.SendError{Stage: mail.StageRecipient, Class: mail.ClassRecipientRejected})
+	w.set(state.StateFailed, site...)
+	if res := w.pass(); res.Failed != 1 {
+		t.Fatalf("pass %+v", res)
+	}
+	if eps, _ := w.st.ListEpisodesNotifiedAt(w.ctx, store.ScopeAll(), w.clk.Now()); len(eps) != 0 {
+		t.Fatalf("the batch took a millisecond another row holds: %+v", eps)
+	}
+	w.clk.Advance(time.Minute)
+	w.set(state.StateOK, site...)
+	if res := w.pass(); res.Recovered != 0 || len(w.fake.Sent()) != 0 {
+		t.Fatalf("recovery pass %+v, sent %d", res, len(w.fake.Sent()))
+	}
+}
+
+// Batch 2 item 3. A silent recovery mark holds its millisecond: a real recovery batch of a second
+// Notifier (no memory of the first's ids) in the same millisecond takes another, so its retry
+// never mails the silently settled episode.
+func TestNotifySilentRecoveryMarkHoldsItsBatchID(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 2)
+	w.recipient("ops@example.test", true, true)
+	w.set(state.StateFailed, site[1])
+	w.pass() // dev1's alert is delivered
+	w.clk.Advance(time.Minute)
+	w.fake.FailNext(1, &mail.SendError{Stage: mail.StageRecipient, Class: mail.ClassRecipientRejected})
+	w.set(state.StateFailed, site[0])
+	w.pass() // dev0's alert fails for good
+	w.clk.Advance(time.Minute)
+	w.set(state.StateOK, site[0])
+	if res := w.pass(); res.RecoveryUnsent != 1 {
+		t.Fatalf("dev0 settled silently? %+v", res)
+	}
+	// A second Notifier in the same millisecond mails dev1's recovery; the send fails and is retried.
+	w.n = &Notifier{Store: w.st, Dispatch: w.n.Dispatch, Configured: true, Log: w.n.Log}
+	w.set(state.StateOK, site[1])
+	w.fake.FailNext(1, &mail.SendError{Stage: mail.StageConnect, Class: mail.ClassTimeout, Temporary: true})
+	if res := w.pass(); res.Recovered != 1 || res.Failed != 1 {
+		t.Fatalf("dev1 recovery pass %+v", res)
+	}
+	w.clk.Advance(time.Minute)
+	if rr := w.retry(); rr.Sent != 1 {
+		t.Fatalf("retry %+v", rr)
+	}
+	last := w.fake.Sent()[len(w.fake.Sent())-1]
+	if last.Kind != mail.KindRecovery || strings.Contains(last.Text, w.host[site[0]]) || !strings.Contains(last.Text, w.host[site[1]]) {
+		t.Fatalf("the recovery retry lists the silently settled device:\n%s", last.Text)
 	}
 }

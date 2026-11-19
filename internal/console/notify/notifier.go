@@ -44,8 +44,7 @@ type Notifier struct {
 	// Log receives a summary line per pass that did something (counts only); nil means logx.Default().
 	Log *logx.Logger
 
-	mu        sync.Mutex
-	lastBatch int64
+	ids batchIDs
 	// beforeMark, when set, runs after a batch's delivery rows are written and before its episodes
 	// are marked: the tests inject a crash there.
 	beforeMark func(kind string) error
@@ -100,17 +99,57 @@ func (n *Notifier) options() Options {
 	return o
 }
 
-// batchID is a fresh batch id: the store clock in milliseconds, strictly increasing within this
-// process so that two batches can never share one (a frozen clock, two passes in one millisecond).
-func (n *Notifier) batchID() int64 {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	id := n.Store.Now().UnixMilli()
-	if id <= n.lastBatch {
-		id = n.lastBatch + 1
+// batchIDs hands out batch ids. One process keeps one per Notifier or Retrier.
+type batchIDs struct {
+	mu   sync.Mutex
+	last int64
+}
+
+// next returns a free batch id: starting at the store clock in milliseconds (and after the last id
+// it looked at, so a frozen clock never repeats one), the first millisecond that no batch uses: no
+// delivery row with the prefix "alert:<ms>:" or "recovery:<ms>:" (any recipient, any result) and
+// no episode marked at it (notified_at or recovery_notified_at). Alert batches, recovery batches
+// and the silent recovery marks all take their id here. It looks at maxBatchTries milliseconds at
+// most, then fails with errBatchCollision. The check and the use are two store calls, so two
+// processes (or a Notifier and a Retrier) that pick in the same instant can still meet; enqueue
+// catches that for delivery rows.
+func (b *batchIDs) next(ctx context.Context, st *store.Store) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	id := st.Now().UnixMilli()
+	if id <= b.last {
+		id = b.last + 1
 	}
-	n.lastBatch = id
-	return id
+	for try := 0; try < maxBatchTries; try, id = try+1, id+1 {
+		used, err := batchIDUsed(ctx, st, id)
+		if err != nil {
+			return 0, err
+		}
+		b.last = id
+		if !used {
+			return id, nil
+		}
+	}
+	return 0, errBatchCollision
+}
+
+// batchIDUsed reports whether a delivery row or an episode carries the batch id.
+func batchIDUsed(ctx context.Context, st *store.Store, id int64) (bool, error) {
+	all, ms := store.ScopeAll(), strconv.FormatInt(id, 10)
+	for _, prefix := range []string{keyAlert, keyRecovery} {
+		rows, err := st.ListDeliveriesByKeyPrefix(ctx, all, prefix+":"+ms+":")
+		if err != nil || len(rows) > 0 {
+			return len(rows) > 0, err
+		}
+	}
+	at := time.UnixMilli(id).UTC()
+	for _, list := range []func(context.Context, store.Scope, time.Time) ([]store.Episode, error){st.ListEpisodesNotifiedAt, st.ListEpisodesRecoveryNotifiedAt} {
+		eps, err := list(ctx, all, at)
+		if err != nil || len(eps) > 0 {
+			return len(eps) > 0, err
+		}
+	}
+	return false, nil
 }
 
 // Pass is the alerting step of one evaluator pass over the view v:
@@ -354,10 +393,14 @@ func (n *Notifier) owedRecoveries(ctx context.Context, due []store.Episode) (owe
 	return owed, unsent, nil
 }
 
-// markWithoutNotice settles the recovery of eps with no message. The mark takes a fresh batch id,
+// markWithoutNotice settles the recovery of eps with no message. The mark takes a free batch id,
 // so a retry of a real recovery batch, which finds its episodes by their mark, never picks them up.
 func (n *Notifier) markWithoutNotice(ctx context.Context, eps []store.Episode) error {
-	_, err := n.Store.MarkRecoveryNotified(ctx, store.ScopeAll(), episodeIDs(eps), time.UnixMilli(n.batchID()).UTC())
+	id, err := n.ids.next(ctx, n.Store)
+	if err != nil {
+		return err
+	}
+	_, err = n.Store.MarkRecoveryNotified(ctx, store.ScopeAll(), episodeIDs(eps), time.UnixMilli(id).UTC())
 	return err
 }
 
@@ -372,13 +415,16 @@ var errBatchCollision = errors.New("notify: no free batch id")
 // by this call. A recipient deleted since the pass read the list is skipped and counted
 // (PassResult.RecipientsGone); with no row written the caller marks nothing.
 //
-// A batch id that already has a row (an earlier process used the same millisecond, or left a
-// suppressed orphan there) is a collision: the rows this try wrote are suppressed and the next
-// free millisecond is tried, at most maxBatchTries times, then the pass fails (errBatchCollision).
-// An alert is never sent under, nor its episodes marked with, an id another batch holds.
+// The batch id is a free one (batchIDs.next). A row found under it anyway (another process took
+// the same millisecond meanwhile) is a collision: the rows this try wrote are suppressed and a new
+// id is taken, at most maxBatchTries times, then the pass fails (errBatchCollision). An alert is
+// never sent under, nor its episodes marked with, an id another batch holds.
 func (n *Notifier) enqueue(ctx context.Context, prefix, kind string, c Content, to []store.Recipient, res *PassResult) ([]outgoing, time.Time, error) {
 	for try := 0; try < maxBatchTries; try++ {
-		id := n.batchID()
+		id, err := n.ids.next(ctx, n.Store)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
 		outs := make([]outgoing, 0, len(to))
 		gone, collided := 0, false
 		for _, r := range to {
