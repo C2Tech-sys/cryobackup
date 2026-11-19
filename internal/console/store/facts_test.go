@@ -289,11 +289,29 @@ func TestFactsEscrowMaintenanceAckAndVersions(t *testing.T) {
 	}
 
 	// Active acknowledgement and snooze.
+	// M4 (ADR 0020): an ack covers the device only for an alarm type it has, so the ack names one of the
+	// device's own alarm states (here the unverified escrow set up above).
 	snooze := t0.Add(24 * time.Hour).UnixMilli()
 	ingest(t, w, w.devA.ID, runInput(runID1, t0.Add(-5*time.Hour)))
+	var ackType string
+	for _, st := range state.Classify(facts(t, w, w.devA.ID), t0).Flags {
+		if k, ok := AckAlarmType(string(st)); ok {
+			ackType = k
+		}
+	}
+	if ackType == "" {
+		t.Fatal("the device has no alarm state an acknowledgement could name")
+	}
 	ok(t, w.s.Write(ctx, func(tx *Tx) error {
 		_, err := tx.Exec(`INSERT INTO alarm_acks (id, subject_type, device_id, alarm_type, acknowledged_by, acknowledged_at, snooze_until, snooze_until_next_success, created_at, updated_at)
-			VALUES (?, 'device', ?, 'stale', ?, ?, ?, 1, 1, 1)`, tx.id(), w.devA.ID, w.admin.ID, t0.UnixMilli(), snooze)
+			VALUES (?, 'device', ?, ?, ?, ?, ?, 1, 1, 1)`, tx.id(), w.devA.ID, ackType, w.admin.ID, t0.UnixMilli(), snooze)
+		if err != nil {
+			return err
+		}
+		// P20-T2F batch 2: the read path honours an ack only while an episode of its type is open.
+		alarm, _ := EpisodeAlarmOfAck(ackType)
+		_, err = tx.Exec(`INSERT INTO alarm_episodes (id, subject_type, device_id, alarm_type, opened_at, state_since, created_at, updated_at)
+			VALUES (?, 'device', ?, ?, 1700000000000, 1700000000000, 1700000000000, 1700000000000)`, tx.id(), w.devA.ID, alarm)
 		return err
 	}))
 	a := facts(t, w, w.devA.ID).Ack

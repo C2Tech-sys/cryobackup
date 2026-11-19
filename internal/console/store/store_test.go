@@ -91,11 +91,11 @@ func TestOpenAppliesMigrationsAndReopenIsNoop(t *testing.T) {
 	s, err := Open(ctx, Options{Path: path, Clock: clk.Now})
 	ok(t, err)
 	tables, indexes := countObjects(t, s)
-	if tables != 35 || indexes != 106 {
-		t.Fatalf("schema has %d tables and %d indexes, want 35 and 106 (same as replica/schema_test.py)", tables, indexes)
+	if tables != 36 || indexes != 113 {
+		t.Fatalf("schema has %d tables and %d indexes, want 36 and 113 (same as replica/schema_test.py)", tables, indexes)
 	}
-	if v := must[int](t)(s.SchemaVersion(ctx)); v != 7 {
-		t.Fatalf("SchemaVersion = %d, want 7", v)
+	if v := must[int](t)(s.SchemaVersion(ctx)); v != 8 {
+		t.Fatalf("SchemaVersion = %d, want 8", v)
 	}
 	var name, sum string
 	var created int64
@@ -130,7 +130,7 @@ func TestOpenAppliesMigrationsAndReopenIsNoop(t *testing.T) {
 	if created2 != created {
 		t.Fatalf("re-open re-applied the migration (created_at %d -> %d)", created, created2)
 	}
-	if tb, ix := countObjects(t, s2); tb != 35 || ix != 106 {
+	if tb, ix := countObjects(t, s2); tb != 36 || ix != 113 {
 		t.Fatalf("after re-open: %d tables, %d indexes", tb, ix)
 	}
 }
@@ -171,10 +171,10 @@ func TestNewerDatabaseRefusesToOpen(t *testing.T) {
 
 func TestMigrationsListAndChecksum(t *testing.T) {
 	ms := must[[]migrations.Migration](t)(migrations.List())
-	if len(ms) != 7 || ms[0].Version != 1 || ms[0].Name != "0001_initial" || ms[1].Version != 2 || ms[1].Name != "0002_unsupported_file_class" ||
+	if len(ms) != 8 || ms[0].Version != 1 || ms[0].Name != "0001_initial" || ms[1].Version != 2 || ms[1].Name != "0002_unsupported_file_class" ||
 		ms[2].Version != 3 || ms[2].Name != "0003_fleet_start_lease" || ms[3].Version != 4 || ms[3].Name != "0004_m2w1a" ||
 		ms[4].Version != 5 || ms[4].Name != "0005_m3t3_view_audience" || ms[5].Version != 6 || ms[5].Name != "0006_m3t6_token_delete" ||
-		ms[6].Version != 7 || ms[6].Name != "0007_adr19_purge" {
+		ms[6].Version != 7 || ms[6].Name != "0007_adr19_purge" || ms[7].Version != 8 || ms[7].Name != "0008_m4_alerts" {
 		t.Fatalf("List = %+v", ms)
 	}
 	lf, crlf := migrations.Checksum([]byte("a\nb\n")), migrations.Checksum([]byte("a\r\nb\r\n"))

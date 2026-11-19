@@ -28,6 +28,12 @@ const (
 	SMTPFailuresToAlarm = 3
 	// SMTPPendingWithoutSend raises C03 when alerts are pending and nothing was delivered for this long.
 	SMTPPendingWithoutSend = 24 * time.Hour
+	// SMTPPendingMinAge is how old the oldest pending alert must be before "pending and nothing
+	// delivered" raises C03: a console that has just queued its first alert has nothing delivered and
+	// something pending for the minute before it goes out, and that is not a failure. It is the
+	// schedule's third retry delay, so a message that is still waiting after the first two retries
+	// has had its chance.
+	SMTPPendingMinAge = 15 * time.Minute
 
 	// CertWarnDays and CertCritDays are the C05 thresholds (warn under 21 days, critical under 7).
 	CertWarnDays = 21
@@ -314,7 +320,7 @@ func gatewayBanners(g *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
 }
 
 // smtpBanners is C03: three failed sends or probes in a row, a failed test, or
-// alerts pending with nothing delivered for a day. Recent successful delivery
+// alerts pending (the oldest for at least SMTPPendingMinAge) with nothing delivered for a day. Recent successful delivery
 // is evidence too, so an unchecked probe is only a warning when nothing has
 // been delivered within the day.
 func smtpBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
@@ -322,7 +328,7 @@ func smtpBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
 	sent, sentOK := recorded(s.LastSendOKAt, c.now)
 	recent := sentOK && c.now.Sub(sent) <= SMTPPendingWithoutSend
 	failing := s.ConsecutiveSendFailures >= SMTPFailuresToAlarm || s.LastTestFailed || v == probeFailing ||
-		(s.PendingAlerts > 0 && !recent)
+		(s.PendingAlerts > 0 && !recent && pendingLongEnough(s, c.now))
 	if failing {
 		b := Banner{ID: "C03", Severity: SeverityCritical, Count: s.ConsecutiveSendFailures,
 			Text: "Alert e-mail cannot be delivered: alarms may go unnoticed."}
@@ -334,10 +340,24 @@ func smtpBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
 		}
 		return []Banner{b}
 	}
+	if s.NotRead != "" {
+		return []Banner{notChecked("C03b", "Alert e-mail", "alert e-mail that cannot be delivered would go unnoticed", s.NotRead, 0)}
+	}
 	if v == probeUnchecked && !recent {
 		return []Banner{notChecked("C03b", "Alert e-mail", "alert e-mail that cannot be delivered would go unnoticed", why, n)}
 	}
 	return nil
+}
+
+// pendingLongEnough reports whether the oldest pending alert has waited SMTPPendingMinAge. An age
+// that is unknown (zero) or garbled (further ahead than the tolerated clock skew) cannot clear the
+// alert of the doubt, so it counts: a check that cannot tell is an alarm, never silence.
+func pendingLongEnough(s *SMTPFacts, now time.Time) bool {
+	queued, ok := recorded(s.OldestPendingAt, now)
+	if !ok {
+		return true
+	}
+	return now.Sub(queued) >= SMTPPendingMinAge
 }
 
 // jobVerdict reads a job heartbeat: stalled once the newest finish is older than
@@ -616,6 +636,10 @@ func DigestKey(t time.Time, loc *time.Location) string {
 func digestBanners(d *DigestFacts, c bannerCtx) []Banner {
 	if d.NotInBuild || d.Disabled {
 		return nil
+	}
+	if d.NotRead != "" {
+		return []Banner{{ID: "C14b", Severity: SeverityAlarm,
+			Text: "Daily digest not checked: " + d.NotRead + ", so a digest that is never sent would go unnoticed."}}
 	}
 	hh, mm, ok := parseLocalTime(d.LocalTime)
 	if !ok {

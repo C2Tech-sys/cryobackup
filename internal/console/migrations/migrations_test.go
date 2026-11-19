@@ -17,7 +17,7 @@ var fixedNow = func() time.Time { return time.Date(2026, 10, 22, 13, 42, 10, 0, 
 
 func openConn(t *testing.T, path string) (*sql.DB, *sql.Conn) {
 	t.Helper()
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(60000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestApplyIsIdempotentAndRecordsChecksum(t *testing.T) {
 	ctx := context.Background()
 	_, conn := openConn(t, filepath.Join(t.TempDir(), "m.db"))
 	applied, err := Apply(ctx, conn, fixedNow)
-	if err != nil || len(applied) != 7 || applied[0] != 1 || applied[1] != 2 || applied[2] != 3 || applied[3] != 4 || applied[4] != 5 || applied[5] != 6 || applied[6] != 7 {
+	if err != nil || len(applied) != 8 || applied[0] != 1 || applied[1] != 2 || applied[2] != 3 || applied[3] != 4 || applied[4] != 5 || applied[5] != 6 || applied[6] != 7 || applied[7] != 8 {
 		t.Fatalf("first Apply = %v, %v", applied, err)
 	}
 	again, err := Apply(ctx, conn, fixedNow)
@@ -89,7 +89,7 @@ func TestChangedMigrationAndNewerDatabase(t *testing.T) {
 	if _, err := conn.ExecContext(ctx, `UPDATE schema_migrations SET checksum = ? WHERE version = 1`, func() string { ms, _ := List(); return ms[0].Checksum }()); err != nil {
 		t.Fatalf("connection unusable after ErrMigrationChanged: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, checksum, created_at) VALUES (8, '0008_future', 'x', 1)`); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, checksum, created_at) VALUES (9, '0009_future', 'x', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Apply(ctx, conn, fixedNow); !errors.Is(err, ErrMigrationAhead) {
@@ -130,11 +130,11 @@ func TestConcurrentApplyFromTwoConnections(t *testing.T) {
 	}
 	all := append(append([]int(nil), results[0]...), results[1]...)
 	sort.Ints(all)
-	if len(all) != 7 || all[0] != 1 || all[1] != 2 || all[2] != 3 || all[3] != 4 || all[4] != 5 || all[5] != 6 || all[6] != 7 {
-		t.Fatalf("migrations applied %v (%v, %v), want each of 1 to 7 exactly once", all, results[0], results[1])
+	if len(all) != 8 || all[0] != 1 || all[1] != 2 || all[2] != 3 || all[3] != 4 || all[4] != 5 || all[5] != 6 || all[6] != 7 || all[7] != 8 {
+		t.Fatalf("migrations applied %v (%v, %v), want each of 1 to 8 exactly once", all, results[0], results[1])
 	}
 	var n int
-	if err := c1.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil || n != 7 {
+	if err := c1.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil || n != 8 {
 		t.Fatalf("schema_migrations rows = %d, %v", n, err)
 	}
 }

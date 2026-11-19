@@ -358,6 +358,7 @@ func matrix() map[string]matrixCase {
 	addM3T3Matrix(m)     // M3-T3: saved views, pause/resume, run search, heartbeat ring (m3t3_test.go)
 	addM3T6Matrix(m)     // M3-T6: device retire and token delete (m3t6_test.go)
 	addADR19Matrix(m)    // ADR 0019: device purge and customer delete (purge_adr19_test.go)
+	addM4Matrix(m)       // ADR 0020: alarm episodes, recipients, delivery log, acknowledgements (scope_m4_test.go)
 	return m
 }
 

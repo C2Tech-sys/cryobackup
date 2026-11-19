@@ -1,5 +1,5 @@
 -- =============================================================================
--- CryoBackup console schema  (SQLite, WAL)            migrations 0001_initial..0003_fleet_start_lease
+-- CryoBackup console schema  (SQLite, WAL)            migrations 0001_initial..0008_m4_alerts
 -- Companion to architecture.md (section 3). ADR 0002 D3: modernc.org/sqlite.
 --
 -- CONVENTIONS
@@ -929,6 +929,34 @@ CREATE INDEX idx_start_leases_target_until ON start_leases(storage_target_id, le
 CREATE INDEX idx_start_leases_device       ON start_leases(device_id);
 
 -- -----------------------------------------------------------------------------
+-- 36. alarm_episodes   (0008, M4, ADR 0020)  one row per OPEN alarm of a subject and alarm type;
+--     remembers that mail went out, so a state computed on read is mailed once per episode.
+-- -----------------------------------------------------------------------------
+CREATE TABLE alarm_episodes (
+  id                    TEXT    PRIMARY KEY CHECK (length(id) = 26),
+  subject_type          TEXT    NOT NULL CHECK (subject_type IN ('device','customer')),
+  device_id             TEXT    REFERENCES devices(id) ON DELETE CASCADE,
+  customer_id           TEXT    REFERENCES customers(id) ON DELETE CASCADE,
+  alarm_type            TEXT    NOT NULL CHECK (length(alarm_type) BETWEEN 1 AND 40),                 -- the state name: FAILED, STALE, MISSING, ...
+  opened_at             INTEGER NOT NULL CHECK (opened_at >= 1000000000000),
+  state_since           INTEGER NOT NULL CHECK (state_since >= 1000000000000),                        -- the state engine's "since" at the time the episode opened
+  notified_at           INTEGER CHECK (notified_at IS NULL OR notified_at >= 1000000000000),          -- NULL = the alert has not gone out yet
+  closed_at             INTEGER CHECK (closed_at IS NULL OR closed_at >= 1000000000000),              -- NULL = the alarm is still open
+  recovery_notified_at  INTEGER CHECK (recovery_notified_at IS NULL OR (closed_at IS NOT NULL AND recovery_notified_at >= 1000000000000)),
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL,
+  CHECK ((subject_type = 'device' AND device_id IS NOT NULL AND customer_id IS NULL)
+      OR (subject_type = 'customer' AND customer_id IS NOT NULL AND device_id IS NULL))
+);
+CREATE INDEX idx_alarm_episodes_device     ON alarm_episodes(device_id);
+CREATE INDEX idx_alarm_episodes_customer   ON alarm_episodes(customer_id);
+CREATE UNIQUE INDEX uq_alarm_episodes_open_device   ON alarm_episodes(device_id, alarm_type)   WHERE closed_at IS NULL AND device_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_alarm_episodes_open_customer ON alarm_episodes(customer_id, alarm_type) WHERE closed_at IS NULL AND customer_id IS NOT NULL;
+CREATE INDEX idx_alarm_episodes_open       ON alarm_episodes(opened_at) WHERE closed_at IS NULL;
+CREATE INDEX idx_alarm_episodes_unnotified ON alarm_episodes(opened_at) WHERE closed_at IS NULL AND notified_at IS NULL;
+CREATE INDEX idx_alarm_episodes_recovery_due ON alarm_episodes(closed_at) WHERE closed_at IS NOT NULL AND notified_at IS NOT NULL AND recovery_notified_at IS NULL;
+
+-- -----------------------------------------------------------------------------
 -- Seed rows. Only the migration marker and neutral product defaults; nothing
 -- operator-, customer- or host-specific. The application overwrites checksum.
 -- -----------------------------------------------------------------------------
@@ -941,4 +969,5 @@ INSERT INTO settings (key, value, created_at, updated_at) VALUES
   ('audit_retention_days',       '400',     CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
   ('heartbeat_ring_hours',       '24',      CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
   ('digest_local_time',          '"07:00"', CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+  ('digest_enabled',             'true',    CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
   ('fleet_ever_enrolled',        'false',   CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000);

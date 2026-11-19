@@ -27,6 +27,8 @@ import (
 const (
 	SettingDisplayTimezone = "display_timezone"
 	SettingRefreshInterval = "refresh_interval_s"
+	SettingDigestLocalTime = "digest_local_time" // M4 (ADR 0020): HH:MM in the display zone
+	SettingDigestEnabled   = "digest_enabled"    // M4: the daily digest on or off; on when absent
 )
 
 // SettingDef describes one setting the console knows. Editable settings can be
@@ -57,8 +59,10 @@ var settingDefs = []SettingDef{
 		Help: "Backup runs older than this are deleted nightly, never the newest success of a device."},
 	{Key: "heartbeat_ring_hours", Label: "Heartbeat history", Kind: "int", Unit: "hours", Min: 1, Max: 168, Since: "M3",
 		Help: "How long raw heartbeats are kept for the state engine."},
-	{Key: "digest_local_time", Label: "Daily digest time", Kind: "time", Since: "M4",
-		Help: "The local time the daily digest is sent, in the display zone."},
+	{Key: SettingDigestLocalTime, Label: "Daily digest time", Kind: "time", Editable: true,
+		Help: "The local time the daily digest is sent, in the display zone, as HH:MM on a 24-hour clock."},
+	{Key: SettingDigestEnabled, Label: "Daily digest", Kind: "flag", Editable: true,
+		Help: "Whether the daily digest is sent. It goes out every day, also when everything is green, so that a quiet inbox cannot be mistaken for a stopped console."},
 	{Key: "fleet_ever_enrolled", Label: "Fleet has enrolled a device", Kind: "flag", Since: "system",
 		Help: "Set by the console when the first device enrolls. It turns an empty fleet from a first-run state into an alarm."},
 }
@@ -148,6 +152,23 @@ func ValidateSetting(key string, raw json.RawMessage) (json.RawMessage, error) {
 			return nil, validation([]FieldError{fieldf("value", "Use a whole number from %d to %d.", def.Min, def.Max)})
 		}
 		return json.RawMessage(strconv.Itoa(v)), nil
+	case "time":
+		var hhmm string
+		if err := json.Unmarshal(raw, &hhmm); err != nil {
+			return nil, validation([]FieldError{fieldf("value", "Use a time of day as HH:MM on a 24-hour clock, such as 07:00.")})
+		}
+		hhmm = strings.TrimSpace(hhmm)
+		if !ValidLocalTime(hhmm) {
+			return nil, validation([]FieldError{fieldf("value", "Use a time of day as HH:MM on a 24-hour clock, such as 07:00.")})
+		}
+		b, _ := json.Marshal(hhmm)
+		return b, nil
+	case "flag":
+		switch string(raw) {
+		case "true", "false":
+			return json.RawMessage(raw), nil
+		}
+		return nil, validation([]FieldError{fieldf("value", "Use true or false.")})
 	}
 	return nil, validation([]FieldError{fieldf("key", "This setting cannot be changed here.")})
 }

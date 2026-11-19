@@ -1,6 +1,6 @@
 """DDL test for schema.sql.
 
-Run:  python -I replica/schema_test.py [path-to-schema.sql]   (ships next to schema.sql; 259 DDL assertions)
+Run:  python -I replica/schema_test.py [path-to-schema.sql]   (ships next to schema.sql; 270 DDL assertions)
 
 1. executescript() the whole file into :memory: (clean execution).
 2. Insert one valid row into every table.
@@ -258,6 +258,12 @@ def f_ack(did, **o):
     r.update(o); return r
 
 
+def f_episode(did, **o):
+    r = dict(id=ulid(), subject_type="device", device_id=did, alarm_type="FAILED", opened_at=NOW, state_since=NOW,
+             created_at=NOW, updated_at=NOW)
+    r.update(o); return r
+
+
 def f_rule(**o):
     r = dict(id=ulid(), scope="global", name=f"rule{n()}", channel="email", destination="ops@example.test",
              created_at=NOW, updated_at=NOW)
@@ -347,6 +353,7 @@ insert("audit_events", f_audit())
 insert("agent_releases", f_rel())
 insert("job_state", f_job())
 insert("start_leases", dict(run_id=ulid(), device_id=D, storage_target_id=S, granted_at=NOW, lease_until=NOW + 900000, created_at=NOW, updated_at=NOW))
+ep = f_episode(D); insert("alarm_episodes", ep)
 
 TABLES = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
 empty = [t for t in TABLES if conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0] == 0]
@@ -607,6 +614,21 @@ accept("alarm_acks: customer ack accepted", "alarm_acks", f_ack(None, subject_ty
 insert("alarm_acks", f_ack(None, subject_type="customer", device_id=None, customer_id=C, alarm_type="missing_customer"))
 dup("alarm_acks: one active ack per customer and alarm type", "alarm_acks",
     f_ack(None, subject_type="customer", device_id=None, customer_id=C, alarm_type="missing_customer"), UNQ)
+# alarm_episodes (0008, M4)
+dup("alarm_episodes: one open episode per device and alarm type", "alarm_episodes", f_episode(D), UNQ,
+    release=[("UPDATE alarm_episodes SET closed_at = %d WHERE id = ?" % (NOW + 1000), (ep["id"],))])
+accept("alarm_episodes: a different alarm type on the same device accepted", "alarm_episodes", f_episode(D, alarm_type="STALE"))
+fire("alarm_episodes: device subject cannot carry a customer", "alarm_episodes", lambda **k: f_episode(D3, **k), CHK, customer_id=C)
+fire("alarm_episodes: customer subject requires customer_id", "alarm_episodes", lambda **k: f_episode(D3, **k), CHK, subject_type="customer")
+fire("alarm_episodes: alarm_type is not empty", "alarm_episodes", lambda **k: f_episode(D3, **k), CHK, alarm_type="")
+fire("alarm_episodes: opened_at in ms", "alarm_episodes", lambda **k: f_episode(D3, **k), CHK, opened_at=12)
+fire("alarm_episodes: a recovery notice needs a closed episode", "alarm_episodes", lambda **k: f_episode(D3, **k), CHK, recovery_notified_at=NOW)
+accept("alarm_episodes: closed with a recovery notice accepted", "alarm_episodes", f_episode(D3, closed_at=NOW + 1, notified_at=NOW, recovery_notified_at=NOW + 2))
+fire("alarm_episodes: device FK", "alarm_episodes", lambda **k: f_episode(D3, **k), FK, device_id="01NOSUCHDEVICE00000000000")
+accept("alarm_episodes: customer episode accepted", "alarm_episodes", f_episode(None, subject_type="customer", device_id=None, customer_id=C, alarm_type="MISSING"))
+insert("alarm_episodes", f_episode(None, subject_type="customer", device_id=None, customer_id=C, alarm_type="MISSING"))
+dup("alarm_episodes: one open episode per customer and alarm type", "alarm_episodes",
+    f_episode(None, subject_type="customer", device_id=None, customer_id=C, alarm_type="MISSING"), UNQ)
 # notification_rules / log
 fire("notification_rules: global scope cannot carry a customer", "notification_rules", f_rule, CHK, customer_id=C)
 fire("notification_rules: customer scope requires customer", "notification_rules", f_rule, CHK, scope="customer")

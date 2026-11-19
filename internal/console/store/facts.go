@@ -221,10 +221,11 @@ type factLoader struct {
 	compErr  error
 	sysDrive string
 	versions map[string]string // update ring -> newest non-withdrawn release version
+	now      time.Time         // the store clock at the start of the load: the instant states are judged at
 }
 
 func newFactLoader(tx *Tx, opts LoadOptions) (*factLoader, error) {
-	l := &factLoader{tx: tx, sysDrive: strings.ToUpper(strings.TrimSpace(opts.SystemDrive)), versions: map[string]string{}}
+	l := &factLoader{tx: tx, sysDrive: strings.ToUpper(strings.TrimSpace(opts.SystemDrive)), versions: map[string]string{}, now: tx.Now()}
 	if l.sysDrive == "" {
 		l.sysDrive = "C"
 	}
@@ -395,26 +396,6 @@ func (l *factLoader) deviceFacts(ctx context.Context, d Device, c Customer) stat
 		}
 	}
 
-	// acknowledgement (v0: the newest active ack covers the device)
-	var ackedAt int64
-	var snooze sql.NullInt64
-	var untilNext int
-	switch err := l.tx.QueryRow(`SELECT acknowledged_at, snooze_until, snooze_until_next_success FROM alarm_acks
-		WHERE device_id = ? AND cleared_at IS NULL ORDER BY acknowledged_at DESC LIMIT 1`, d.ID).Scan(&ackedAt, &snooze, &untilNext); {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
-		return fail("ack", err)
-	default:
-		a := &state.AckFacts{AckedAt: state.Millis(ackedAt), SnoozeUntil: state.Millis(snooze.Int64), SnoozeUntilNextSuccess: untilNext != 0}
-		var at sql.NullInt64
-		if err := l.tx.QueryRow(`SELECT MIN(finished_at, received_at) FROM runs INDEXED BY idx_runs_last_success
-			WHERE device_id = ? AND kind = 'backup' AND outcome = 'success' AND finished_at <= ? ORDER BY finished_at DESC LIMIT 1`, d.ID, ackedAt).Scan(&at); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fail("ack", err)
-		}
-		a.AckedAtSuccess = state.Millis(at.Int64)
-		f.Ack = a
-	}
-
 	// expected agent version: the pin, else the newest non-withdrawn release on the device's ring
 	if d.TargetVersion != "" {
 		f.ExpectedVersion = d.TargetVersion
@@ -425,7 +406,59 @@ func (l *factLoader) deviceFacts(ctx context.Context, d Device, c Customer) stat
 		}
 		f.ExpectedVersion = v
 	}
+
+	// acknowledgement, per alarm type (ADR 0020 decision 7): the newest active ack whose alarm type
+	// matches one of the device's own states. It is read last because the match needs the state, which
+	// needs every fact above; an ack never changes the state, so classifying without it is exact.
+	ack, err := l.ackFacts(d.ID, f)
+	if err != nil {
+		return fail("ack", err)
+	}
+	f.Ack = ack
 	return f
+}
+
+// ackFacts returns the active acknowledgement of the device that covers one of its current states,
+// or nil. An acknowledgement of another alarm type is not the device's: acknowledging FAILED must
+// not mute a later STALE. A lapsed snooze is still returned (the engine shows it as lapsed, not
+// muting); the alarm_acks schema has no row without an alarm type, so none covers every type. An
+// acknowledgement counts only while an episode of the same type is open (ackHasOpenEpisode): one with no
+// episode (a legacy row, or one written by SQL) is not acknowledged and mutes nothing.
+func (l *factLoader) ackFacts(deviceID string, f state.DeviceFacts) (*state.AckFacts, error) {
+	type row struct {
+		kind    string
+		ackedAt int64
+		snooze  sql.NullInt64
+		next    int
+	}
+	rows, err := collect(l.tx, `SELECT a.alarm_type, a.acknowledged_at, a.snooze_until, a.snooze_until_next_success FROM alarm_acks a
+		WHERE a.device_id = ? AND a.cleared_at IS NULL AND `+ackHasOpenEpisode+` ORDER BY a.acknowledged_at DESC, a.id DESC`, []any{deviceID}, func(sc scanner) (row, error) {
+		var r row
+		return r, sc.Scan(&r.kind, &r.ackedAt, &r.snooze, &r.next)
+	})
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	covered := map[string]bool{}
+	for _, st := range state.Classify(f, l.now).Flags {
+		if kind, ok := AckAlarmType(string(st)); ok {
+			covered[kind] = true
+		}
+	}
+	for _, r := range rows {
+		if !covered[r.kind] {
+			continue
+		}
+		a := &state.AckFacts{AckedAt: state.Millis(r.ackedAt), SnoozeUntil: state.Millis(r.snooze.Int64), SnoozeUntilNextSuccess: r.next != 0}
+		var at sql.NullInt64
+		if err := l.tx.QueryRow(`SELECT MIN(finished_at, received_at) FROM runs INDEXED BY idx_runs_last_success
+			WHERE device_id = ? AND kind = 'backup' AND outcome = 'success' AND finished_at <= ? ORDER BY finished_at DESC LIMIT 1`, deviceID, r.ackedAt).Scan(&at); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		a.AckedAtSuccess = state.Millis(at.Int64)
+		return a, nil
+	}
+	return nil, nil
 }
 
 func millisOf(t *time.Time) state.Millis {
