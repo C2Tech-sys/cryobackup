@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
@@ -287,12 +286,12 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 		if len(still) == 0 {
 			// Nothing goes out: the muted episodes leave the batch now; the pass settles the
 			// recoveries of the closed ones (owedRecoveries).
-			if err := r.leaveBatch(ctx, at, nil, muted, res); err != nil {
+			if err := r.leaveBatch(ctx, at, d.ID, nil, muted, res); err != nil {
 				return nil, skip{}, err
 			}
 			return nil, sk, nil
 		}
-		if err := r.leaveBatch(ctx, at, closed, muted, res); err != nil {
+		if err := r.leaveBatch(ctx, at, d.ID, closed, muted, res); err != nil {
 			return nil, skip{}, err
 		}
 		c, err = RenderAlert(v, still, o)
@@ -306,29 +305,23 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	return &msg, skip{}, nil
 }
 
-// leaveBatch takes the episodes a re-rendered alert of batch at leaves out out of the batch,
-// unless a delivery of that batch was already sent (then someone saw them in the full alert, and
-// what follows is owed as usual). It runs before the send: from here on no message of the batch
-// can name them, so nothing may follow from it either. One store transaction
-// (store.LeaveAlertBatch) handles each episode as it stands at that moment, so one that closes
-// between this run's read and the release cannot stay behind:
+// leaveBatch takes the episodes the re-rendered alert row retried of batch at leaves out out of
+// the batch, in one store transaction that reads the batch's delivery rows itself
+// (store.LeaveAlertBatch), before the send:
 //
-//   - open (muted: acknowledged, snoozed or of a suspended customer): its alert mark is taken back
-//     (RetryResult.Released), so it is mailed normally if it becomes mailable while still open;
-//   - closed: its recovery is settled without a message (RetryResult.RecoveryUnsent), under a
-//     free batch id like Notifier's silent marks.
-func (r *Retrier) leaveBatch(ctx context.Context, at time.Time, closed, muted []store.Episode, res *RetryResult) error {
+//   - muted (open, but acknowledged, snoozed or of a suspended customer): released, so it is
+//     mailed normally if it becomes mailable while still open (RetryResult.Released), only when
+//     every other row of the batch is final without having been sent. While a sibling row is sent
+//     or still in flight it may carry the episode, so the episode stays in the batch and the
+//     batch's recovery rule applies. The rule is per batch, not per message: if that sibling then
+//     fails for good while this row was delivered without the episode, the batch still counts as
+//     delivered, so the episode owes a recovery when it closes and is not mailed again when its
+//     mute ends (TestRetryMutedEpisodeStaysWhenTheSiblingThenFailsForGood).
+//   - closed: its recovery is settled without a message (RetryResult.RecoveryUnsent) when no row of
+//     the batch was sent, under a free batch id like Notifier's silent marks.
+func (r *Retrier) leaveBatch(ctx context.Context, at time.Time, retried string, closed, muted []store.Episode, res *RetryResult) error {
 	if len(closed) == 0 && len(muted) == 0 {
 		return nil
-	}
-	rows, err := r.Store.ListDeliveriesByKeyPrefix(ctx, store.ScopeAll(), keyAlert+":"+strconv.FormatInt(at.UnixMilli(), 10)+":")
-	if err != nil {
-		return err
-	}
-	for _, d := range rows {
-		if d.Result == store.DeliverySent {
-			return nil
-		}
 	}
 	id, err := r.batchID(ctx)
 	if err != nil {
@@ -337,7 +330,7 @@ func (r *Retrier) leaveBatch(ctx context.Context, at time.Time, closed, muted []
 	if r.beforeLeave != nil {
 		r.beforeLeave()
 	}
-	released, settled, err := r.Store.LeaveAlertBatch(ctx, store.ScopeAll(), append(episodeIDs(muted), episodeIDs(closed)...), at, time.UnixMilli(id).UTC())
+	released, settled, err := r.Store.LeaveAlertBatch(ctx, store.ScopeAll(), append(episodeIDs(muted), episodeIDs(closed)...), at, time.UnixMilli(id).UTC(), retried)
 	if err != nil {
 		return err
 	}
