@@ -151,6 +151,9 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 	if res.Left > 0 {
 		r.log().Warn("notifications due for retry have no renderer here", logx.Count("left", res.Left))
 	}
+	if res.Due == res.Left {
+		return res, first
+	}
 	r.log().Info("notification retry", logx.Count("due", res.Due), logx.Count("sent", res.Sent), logx.Count("failed", res.Failed),
 		logx.Count("suppressed", res.Suppressed), logx.Count("settled", res.Settled), logx.Count("deferred", res.Deferred))
 	return res, first

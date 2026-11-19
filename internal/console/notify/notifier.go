@@ -164,7 +164,7 @@ func (n *Notifier) Pass(ctx context.Context, v state.FleetView) (PassResult, err
 	} else {
 		err = sendAll(ctx, n.Dispatch, n.SendBudget, outs, &res.Sent, &res.Failed, &res.Deferred)
 	}
-	if res.Messages > 0 || res.Held > 0 || res.Rearmed > 0 || res.RecoveryUnwanted > 0 {
+	if res.Messages > 0 || res.Rearmed > 0 || res.RecoveryUnwanted > 0 { // a held alarm alone is not news every minute
 		n.log().Info("alert pass", logx.Count("opened", len(res.Sync.Opened)), logx.Count("closed", len(res.Sync.Closed)),
 			logx.Count("alerted", res.Alerted), logx.Count("held", res.Held), logx.Count("rearmed", res.Rearmed),
 			logx.Count("recovered", res.Recovered), logx.Count("messages", res.Messages), logx.Count("sent", res.Sent),
