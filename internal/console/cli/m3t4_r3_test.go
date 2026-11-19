@@ -344,6 +344,10 @@ func r3WaitFor(t *testing.T, base, token string, ok func(adminapi.SystemHealthRe
 // and the clock check a small fleet cannot run said on their rows.
 func TestR3AHealthyConsoleReadsOverallOK(t *testing.T) { // M3-T4 r3 M1
 	app := r3RealApp(t, nil)
+	if _, err := app.Store.CreateRecipient(context.Background(), store.ScopeAll(), store.RecipientInput{Name: "Ops", Address: "ops@example.test", Alerts: true},
+		store.AuditActor{Username: "test", Method: "api"}); err != nil { // P20-W2A: a relay with no alert recipient raises C18
+		t.Fatal(err)
+	}
 	r3MaintainPass(t, app.Store)
 	token := r3Token(t, app)
 	base := r3Serve(t, app)
