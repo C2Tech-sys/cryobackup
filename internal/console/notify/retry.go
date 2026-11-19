@@ -231,7 +231,7 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	var c Content
 	if d.Kind == store.DeliveryAlert {
 		var still []store.Episode
-		reason := reasonDeduped // every episode closed: the alarm is over, a recovery notice follows
+		reason := reasonDeduped // every episode closed: the alarm is over; no recovery follows an alert nobody received
 		for _, e := range eps {
 			if !e.Open() {
 				continue

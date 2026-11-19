@@ -20,6 +20,10 @@
 // (DH10), is held back while that lasts; a snooze that ends while the alarm persists raises it
 // again (store.RearmLapsedSnoozes).
 //
+// A recovery notice follows only an alert that reached someone: an episode closes owing one when a
+// delivery row of its alert batch was sent. When every row of the batch failed for good or was
+// suppressed, the recovery is settled without a message; while a row is still in retry, it waits.
+//
 // # Batches and crash safety
 //
 // A batch is the episodes one pass mails together. Its id is the time the pass marks them

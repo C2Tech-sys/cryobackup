@@ -67,6 +67,10 @@ type PassResult struct {
 	// Recovered counts the episodes of the recovery batch; RecoveryUnwanted those marked without a
 	// message because no recipient receives recoveries.
 	Recovered, RecoveryUnwanted int
+	// RecoveryUnsent counts the closed episodes marked without a notice because no alert of their
+	// batch was ever delivered (every row of it failed for good or was suppressed): nobody heard of
+	// the alarm, so nobody is told it ended.
+	RecoveryUnsent int
 	// Messages counts the delivery rows written; Sent and Failed the outcomes of this pass's sends;
 	// Deferred the rows left queued for the retry job because the send budget ran out.
 	Messages, Sent, Failed, Deferred int
@@ -118,8 +122,9 @@ func (n *Notifier) batchID() int64 {
 //     re-armed (not those of a suspended customer: rearmScope), and the open, unmailed, critical
 //     episodes that are neither acknowledged nor of a suspended customer go to each such recipient
 //     as one message.
-//  3. With mail configured: the closed episodes that were mailed go to each recipient with the
-//     recoveries switch as one notice (marked without a message when there is no such recipient).
+//  3. With mail configured: the closed episodes whose alert was delivered to someone go to each
+//     recipient with the recoveries switch as one notice (marked without a message when there is
+//     no such recipient, or when no alert of their batch was ever delivered; owedRecoveries).
 //  4. The sends, under SendBudget.
 //
 // The error is a store error (or a rendering bug): the pass failed and the job says so. A send
@@ -178,10 +183,10 @@ func (n *Notifier) Pass(ctx context.Context, v state.FleetView) (PassResult, err
 	} else {
 		err = sendAll(ctx, n.Dispatch, n.SendBudget, outs, &res.Sent, &res.Failed, &res.Deferred)
 	}
-	if res.Messages > 0 || res.Rearmed > 0 || res.RecoveryUnwanted > 0 || res.RecipientsGone > 0 { // a held alarm alone is not news every minute
+	if res.Messages > 0 || res.Rearmed > 0 || res.RecoveryUnwanted > 0 || res.RecoveryUnsent > 0 || res.RecipientsGone > 0 { // a held alarm alone is not news every minute
 		n.log().Info("alert pass", logx.Count("opened", len(res.Sync.Opened)), logx.Count("closed", len(res.Sync.Closed)),
 			logx.Count("alerted", res.Alerted), logx.Count("held", res.Held), logx.Count("rearmed", res.Rearmed),
-			logx.Count("recovered", res.Recovered), logx.Count("messages", res.Messages), logx.Count("sent", res.Sent),
+			logx.Count("recovered", res.Recovered), logx.Count("recovery_unsent", res.RecoveryUnsent), logx.Count("messages", res.Messages), logx.Count("sent", res.Sent),
 			logx.Count("failed", res.Failed), logx.Count("deferred", res.Deferred), logx.Count("recipients_gone", res.RecipientsGone))
 	}
 	return res, err
@@ -262,16 +267,30 @@ func rearmScope(v state.FleetView) store.Scope {
 }
 
 // recoveryBatch writes the delivery rows of this pass's recovery notice and marks its episodes.
+// Only the episodes whose alert reached someone are in the notice (owedRecoveries).
 func (n *Notifier) recoveryBatch(ctx context.Context, v state.FleetView, to []store.Recipient, res *PassResult) ([]outgoing, error) {
 	all := store.ScopeAll()
 	due, err := n.Store.ListRecoveryDueEpisodes(ctx, all)
 	if err != nil || len(due) == 0 {
 		return nil, err
 	}
+	due, unsent, err := n.owedRecoveries(ctx, due)
+	if err != nil {
+		return nil, err
+	}
+	if len(unsent) > 0 {
+		if err := n.markWithoutNotice(ctx, unsent); err != nil {
+			return nil, err
+		}
+		res.RecoveryUnsent = len(unsent)
+	}
+	if len(due) == 0 {
+		return nil, nil
+	}
 	if len(to) == 0 {
 		// Nobody receives recoveries: the notices are owed to no one. Marking them keeps a recipient who
 		// switches recoveries on later from receiving a backlog of old ones.
-		if _, err := n.Store.MarkRecoveryNotified(ctx, all, episodeIDs(due), time.Time{}); err != nil {
+		if err := n.markWithoutNotice(ctx, due); err != nil {
 			return nil, err
 		}
 		res.RecoveryUnwanted = len(due)
@@ -300,6 +319,46 @@ func (n *Notifier) recoveryBatch(ctx context.Context, v state.FleetView, to []st
 	}
 	res.Recovered = len(due)
 	return outs, nil
+}
+
+// owedRecoveries splits the closed, mailed episodes by what became of the alert of their batch
+// (its delivery rows, "alert:<notified_at ms>:"): owed when a row of the batch was delivered;
+// unsent when every row is final without having been delivered (failed for good, or suppressed),
+// or the batch has no row; neither, so the decision waits for a later pass, while a row is still
+// queued or has a retry scheduled. A recovery notice for an alert nobody received would be the
+// only message its recipient ever got about the alarm.
+func (n *Notifier) owedRecoveries(ctx context.Context, due []store.Episode) (owed, unsent []store.Episode, err error) {
+	type outcome struct{ sent, pending bool }
+	batches := map[int64]outcome{}
+	for _, e := range due {
+		ms := e.NotifiedAt.UnixMilli() // ListRecoveryDueEpisodes returns mailed episodes only
+		o, ok := batches[ms]
+		if !ok {
+			rows, err := n.Store.ListDeliveriesByKeyPrefix(ctx, store.ScopeAll(), keyAlert+":"+strconv.FormatInt(ms, 10)+":")
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, d := range rows {
+				o.sent = o.sent || d.Result == store.DeliverySent
+				o.pending = o.pending || d.Result == store.DeliveryQueued || d.Result == store.DeliveryFailed && d.NextRetryAt != nil
+			}
+			batches[ms] = o
+		}
+		switch {
+		case o.sent:
+			owed = append(owed, e)
+		case !o.pending:
+			unsent = append(unsent, e)
+		}
+	}
+	return owed, unsent, nil
+}
+
+// markWithoutNotice settles the recovery of eps with no message. The mark takes a fresh batch id,
+// so a retry of a real recovery batch, which finds its episodes by their mark, never picks them up.
+func (n *Notifier) markWithoutNotice(ctx context.Context, eps []store.Episode) error {
+	_, err := n.Store.MarkRecoveryNotified(ctx, store.ScopeAll(), episodeIDs(eps), time.UnixMilli(n.batchID()).UTC())
+	return err
 }
 
 // maxBatchTries bounds the search for a free batch id (enqueue).

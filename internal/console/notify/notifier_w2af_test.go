@@ -348,3 +348,108 @@ func TestNotifyRecoveryOfTheOriginalAlertAfterALapsedSnooze(t *testing.T) {
 		t.Fatalf("recovery pass %+v, sent %d", res, len(sent))
 	}
 }
+
+// recoveryOwed is how many closed, mailed episodes still wait for their recovery decision.
+func (w *world) recoveryOwed() int {
+	w.t.Helper()
+	eps, err := w.st.ListRecoveryDueEpisodes(w.ctx, store.ScopeAll())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return len(eps)
+}
+
+// Item 1. The alert fails, the device recovers, the retry suppresses the alert: no recovery notice,
+// so the recipient receives nothing at all.
+func TestNotifyNoRecoveryAfterAFailedThenSuppressedAlert(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	w.recipient("ops@example.test", true, true)
+	w.fake.FailNext(1, &mail.SendError{Stage: mail.StageConnect, Class: mail.ClassTimeout, Temporary: true})
+	w.set(state.StateFailed, site...)
+	w.pass()
+	w.clk.Advance(30 * time.Second)
+	w.set(state.StateOK, site...)
+	if res := w.pass(); res.Recovered != 0 || res.Messages != 0 || w.recoveryOwed() != 1 {
+		t.Fatalf("recovery while the alert is in retry %+v, owed %d", res, w.recoveryOwed())
+	}
+	w.clk.Advance(time.Minute)
+	if rr := w.retry(); rr.Suppressed != 1 {
+		t.Fatalf("retry %+v", rr)
+	}
+	w.clk.Advance(time.Minute)
+	res := w.pass()
+	if len(w.fake.Sent()) != 0 || res.Recovered != 0 || res.RecoveryUnsent != 1 || w.recoveryOwed() != 0 {
+		t.Fatalf("pass after the suppressed alert %+v, sent %d, owed %d", res, len(w.fake.Sent()), w.recoveryOwed())
+	}
+	w.clk.Advance(time.Minute)
+	if res := w.pass(); res.Messages != 0 || res.RecoveryUnsent != 0 {
+		t.Fatalf("a later pass %+v", res)
+	}
+}
+
+// Item 1. A permanent failure: the alert row is final unsent, so the recovery is marked done with
+// no message.
+func TestNotifyNoRecoveryAfterAPermanentFailure(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	w.recipient("ops@example.test", true, true)
+	w.fake.FailNext(1, &mail.SendError{Stage: mail.StageRecipient, Class: mail.ClassRecipientRejected})
+	w.set(state.StateFailed, site...)
+	if res := w.pass(); res.Failed != 1 {
+		t.Fatalf("pass %+v", res)
+	}
+	w.clk.Advance(time.Minute)
+	w.set(state.StateOK, site...)
+	res := w.pass()
+	if len(w.fake.Sent()) != 0 || res.Recovered != 0 || res.RecoveryUnsent != 1 || w.recoveryOwed() != 0 {
+		t.Fatalf("recovery pass %+v, sent %d", res, len(w.fake.Sent()))
+	}
+}
+
+// Item 1. One of two recipients received the alert: the recovery goes out.
+func TestNotifyRecoveryWhenOneRecipientReceivedTheAlert(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	w.recipient("ops@example.test", true, true)
+	w.recipient("refused@example.test", true, false)
+	w.fake.FailWhen(func(m mail.Message) *mail.SendError {
+		if m.To[0] == "refused@example.test" {
+			return &mail.SendError{Stage: mail.StageRecipient, Class: mail.ClassRecipientRejected}
+		}
+		return nil
+	})
+	w.set(state.StateFailed, site...)
+	if res := w.pass(); res.Sent != 1 || res.Failed != 1 {
+		t.Fatalf("pass %+v", res)
+	}
+	w.clk.Advance(time.Minute)
+	w.set(state.StateOK, site...)
+	res := w.pass()
+	sent := w.fake.Sent()
+	if res.Recovered != 1 || len(sent) != 2 || sent[1].Kind != mail.KindRecovery || sent[1].To[0] != "ops@example.test" {
+		t.Fatalf("recovery pass %+v, sent %v", res, sent)
+	}
+}
+
+// Item 1. One recipient received the alert while another's is still in retry: the recovery does
+// not wait for the retry.
+func TestNotifyRecoveryDoesNotWaitWhenOneAlertWasDelivered(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	w.recipient("ops@example.test", true, true)
+	w.recipient("slow@example.test", true, false)
+	w.fake.FailWhen(func(m mail.Message) *mail.SendError {
+		if m.To[0] == "slow@example.test" {
+			return &mail.SendError{Stage: mail.StageConnect, Class: mail.ClassTimeout, Temporary: true}
+		}
+		return nil
+	})
+	w.set(state.StateFailed, site...)
+	w.pass()
+	w.clk.Advance(30 * time.Second)
+	w.set(state.StateOK, site...)
+	if res := w.pass(); res.Recovered != 1 || res.Sent != 1 {
+		t.Fatalf("recovery pass %+v", res)
+	}
+}

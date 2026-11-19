@@ -232,6 +232,34 @@ func TestM4W2AFDueRetriesOfKinds(t *testing.T) {
 	}
 }
 
+// ListDeliveriesByKeyPrefix returns the rows of one batch, whatever their result, and no row of
+// another batch whose id merely starts with the same digits (P20-W2AF item 1).
+func TestM4W2AFDeliveriesByKeyPrefix(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	a := enqueueM4(t, w, DeliveryAlert, "alert:1763413440000:r1")
+	b := enqueueM4(t, w, DeliveryAlert, "alert:1763413440000:r2")
+	must[Delivery](t)(w.s.SuppressDelivery(w.ctx, all, b.ID, "deduped"))
+	enqueueM4(t, w, DeliveryAlert, "alert:17634134400001:r1")
+	enqueueM4(t, w, DeliveryRecovery, "recovery:1763413440000:r1")
+	got := must[[]Delivery](t)(w.s.ListDeliveriesByKeyPrefix(w.ctx, all, "alert:1763413440000:"))
+	if len(got) != 2 || got[0].ID != a.ID || got[1].ID != b.ID || got[1].Result != DeliverySuppressed {
+		t.Fatalf("batch rows = %+v", got)
+	}
+	if got := must[[]Delivery](t)(w.s.ListDeliveriesByKeyPrefix(w.ctx, all, "alert:9:")); len(got) != 0 {
+		t.Fatalf("an unknown batch = %+v", got)
+	}
+	var ve *ValidationError
+	for _, bad := range []string{"", "has space", "caf\u00e9"} {
+		if _, err := w.s.ListDeliveriesByKeyPrefix(w.ctx, all, bad); !errors.As(err, &ve) {
+			t.Fatalf("prefix %q: %v", bad, err)
+		}
+	}
+	if _, err := w.s.ListDeliveriesByKeyPrefix(w.ctx, ScopeOf(w.custA.ID), "alert:"); !errors.Is(err, ErrScope) {
+		t.Fatalf("customer scope: %v", err)
+	}
+}
+
 // addW2AMatrix adds the P20-W2A methods to the §3.5 scope matrix. It needs one line in matrix()
 // (scope_test.go), next to addM4Matrix: addW2AMatrix(m).
 func addW2AMatrix(m map[string]matrixCase) {
@@ -344,6 +372,10 @@ func addW2AMatrix(m map[string]matrixCase) {
 	}}
 	m["ListDueRetriesOfKinds"] = matrixCase{kind: globalWrite, call: func(w *world, sc Scope, t *target) ([]string, error) {
 		_, err := w.s.ListDueRetriesOfKinds(w.ctx, sc, t0, []string{DeliveryAlert}, 10)
+		return nil, err
+	}}
+	m["ListDeliveriesByKeyPrefix"] = matrixCase{kind: globalWrite, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		_, err := w.s.ListDeliveriesByKeyPrefix(w.ctx, sc, "alert:1:")
 		return nil, err
 	}}
 	m["SuppressDelivery"] = matrixCase{kind: globalWrite, call: func(w *world, sc Scope, t *target) ([]string, error) {

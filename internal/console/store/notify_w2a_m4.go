@@ -194,3 +194,27 @@ func (s *Store) ListDueRetriesOfKinds(ctx context.Context, scope Scope, now time
 	})
 	return out, err
 }
+
+// ListDeliveriesByKeyPrefix returns every row whose dedupe key starts with prefix, whatever its
+// result, oldest first: the rows of one batch ("alert:<ms>:"). The notifier reads them to decide
+// whether a recovery notice is owed: only when an alert of the episode's batch was delivered
+// (P20-W2AF). The prefix is 1 to 200 printable characters without spaces, like a dedupe key; anything
+// else is a *ValidationError. The log is console-wide: scope.All is required.
+func (s *Store) ListDeliveriesByKeyPrefix(ctx context.Context, scope Scope, prefix string) ([]Delivery, error) {
+	if err := s.needAll(scope); err != nil {
+		return nil, err
+	}
+	if !dedupeKeyRE.MatchString(prefix) {
+		return nil, validation([]FieldError{fieldf("prefix", "Use 1 to 200 printable characters without spaces.")})
+	}
+	out := []Delivery{}
+	err := s.Read(ctx, func(tx *Tx) error {
+		// A key holds only \x21 to \x7e, so [prefix, prefix+"\x7f") is exactly the keys that start with
+		// prefix, and the range uses the dedupe_key index.
+		rows, err := collect(tx, `SELECT `+deliveryCols+` FROM notification_log WHERE dedupe_key >= ? AND dedupe_key < ?
+			ORDER BY created_at, id`, []any{prefix, prefix + "\x7f"}, scanDelivery)
+		out = append(out, rows...)
+		return err
+	})
+	return out, err
+}
