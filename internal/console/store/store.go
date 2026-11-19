@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -98,6 +97,9 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 // migration ErrMigrationChanged, as with Open; a missing file is ErrNotFound (it is not created).
 // The returned Store reads; any Write fails.
 func OpenNoMigrate(ctx context.Context, o Options) (*Store, []string, error) {
+	if err := checkPath(o.Path); err != nil {
+		return nil, nil, err // the same rule as Open, before the file is looked for
+	}
 	if fi, err := os.Stat(o.Path); err != nil || fi.IsDir() {
 		return nil, nil, ErrNotFound
 	}
@@ -105,11 +107,8 @@ func OpenNoMigrate(ctx context.Context, o Options) (*Store, []string, error) {
 }
 
 func open(ctx context.Context, o Options, noMigrate bool) (*Store, []string, error) {
-	if o.Path == "" {
-		return nil, nil, invalidf("Options.Path is required")
-	}
-	if strings.ContainsAny(o.Path, "?#") || strings.HasPrefix(o.Path, "file:") {
-		return nil, nil, invalidf("Options.Path must be a plain file path")
+	if err := checkPath(o.Path); err != nil {
+		return nil, nil, err
 	}
 	if o.Clock == nil {
 		o.Clock = time.Now
@@ -167,6 +166,19 @@ func open(ctx context.Context, o Options, noMigrate bool) (*Store, []string, err
 	return s, pending, nil
 }
 
+// checkPath is the rule every open applies to Options.Path: required, and a plain file path, so
+// "?", "#" and a "file:" prefix are refused (the connection string would read them as URI or query
+// syntax).
+func checkPath(path string) error {
+	if path == "" {
+		return invalidf("Options.Path is required")
+	}
+	if strings.ContainsAny(path, "?#") || strings.HasPrefix(path, "file:") {
+		return invalidf("Options.Path must be a plain file path")
+	}
+	return nil
+}
+
 // dsn builds the modernc.org/sqlite connection string. Every pragma here runs
 // on every new connection the pool makes, so a connection that is recycled can
 // never come back without foreign keys or the busy timeout.
@@ -194,7 +206,37 @@ func checkDSN(path string, busy time.Duration) string {
 	q.Add("_pragma", "busy_timeout("+strconv.FormatInt(busy.Milliseconds(), 10)+")")
 	q.Add("_pragma", "query_only(1)")
 	q.Add("_pragma", "wal_autocheckpoint(0)")
-	return "file:" + filepath.ToSlash(path) + "?" + q.Encode()
+	return checkURIPath(path, runtime.GOOS == "windows") + "?" + q.Encode()
+}
+
+// checkURIPath is path as the file part of a SQLite URI naming exactly that file: every byte that a
+// URI would read otherwise (%, ?, #, space, controls, non-ASCII) is percent-encoded; on Windows the
+// separators become slashes, a drive path becomes file:///C:/... and a UNC path file:////server/...
+// A relative path stays relative. Open, which takes no URI, opens the same file for the same path.
+func checkURIPath(path string, windows bool) string {
+	p := path
+	if windows {
+		p = strings.ReplaceAll(p, `\`, "/")
+	}
+	var b strings.Builder
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c <= ' ' || c >= 0x7f || c == '%' || c == '?' || c == '#' {
+			b.WriteString(fmt.Sprintf("%%%02X", c))
+			continue
+		}
+		b.WriteByte(c)
+	}
+	e := b.String()
+	switch {
+	case windows && strings.HasPrefix(e, "//"): // a UNC path, \\server\share
+		return "file://" + e
+	case windows && len(e) >= 2 && e[1] == ':': // a drive letter
+		return "file:///" + e
+	case strings.HasPrefix(e, "/"):
+		return "file://" + e
+	}
+	return "file:" + e
 }
 
 // prepare runs quick_check and the migrations on the write connection. With noMigrate it applies

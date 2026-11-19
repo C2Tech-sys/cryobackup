@@ -276,3 +276,24 @@ func TestDoctorStatusColumnFitsNotChecked(t *testing.T) {
 
 // doctorLine is the start of one doctor line: the status, padded to its column, and the check name.
 func doctorLine(level, name string) string { return fmt.Sprintf("%-11s %s", level, name) }
+
+// P20-W2BF C2: doctor reads exactly the file serve opens, also when the path holds "%41" and a
+// space ("%41" is not "A").
+func TestDoctorOpensTheConfiguredFileWhateverItsName(t *testing.T) {
+	dir := t.TempDir()
+	if code, _, e := run(t, "", initArgs(dir, "--master-key-copy-confirmed", "--admin-listen", "127.0.0.1:0", "--agent-listen", "127.0.0.1:0",
+		"--data-dir", filepath.Join(dir, "pct%41 data"))...); code != 0 {
+		t.Fatal(e)
+	}
+	_, out, _ := run(t, "", "doctor", "--config", filepath.Join(dir, "config.json"))
+	ms, err := migrations.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, doctorLine("OK", "database")) || !strings.Contains(out, fmt.Sprintf("schema version %d,", len(ms))) {
+		t.Fatalf("doctor on a path with %%41 and a space:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pctA data")); err == nil {
+		t.Fatal("a decoded directory exists")
+	}
+}
