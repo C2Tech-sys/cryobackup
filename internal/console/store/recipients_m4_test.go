@@ -114,12 +114,19 @@ func TestM4RecipientValidation(t *testing.T) {
 		"ops@example.test\r\nBcc: spy@example.test", "ops@example.test\n", "\nops@example.test", "ops@example.test\r", "ops @example.test",
 		"ops@exa mple.test", "pöps@example.test", "ops@exämple.test", "ops@example.test\x00", strings.Repeat("a", 65) + "@example.test",
 		strings.Repeat("a", 60) + "@" + strings.Repeat("b", 190) + ".test", // 256 characters
+		// P20-T2F item 5: the mail sender's rule. An address literal, a label that starts or ends with a hyphen, an empty
+		// label, one label only, a quoted or misplaced-dot local part, and characters outside atext.
+		"a@[127.0.0.1]", "a@[IPv6:::1]", "a@-example.test", "a@example-.test", "a@exa-.mple.test", "a@example..test", "a@.example.test",
+		"a@example.test.", "a@localhost", "ops@localhost", "a@1", "a..b@example.test", ".a@example.test", "a.@example.test",
+		"a(b)@example.test", "a,b@example.test", "a:b@example.test", "a\\b@example.test", "a[b]@example.test", "a@exa_mple.test",
+		"a@exa!mple.test", "a@exa+mple.test", "a@example.te$t", "a@@",
 	}
 	for _, a := range bad {
 		_, err := w.s.CreateRecipient(w.ctx, all, RecipientInput{Name: "X", Address: a}, actor)
 		fe := FieldErrors(err)
 		if !errors.Is(err, ErrInvalid) || len(fe) != 1 || fe[0].Field != "address" {
 			t.Errorf("address %q: err = %v, want a field error on address", a, err)
+			continue
 		}
 		if len(strings.TrimSpace(a)) > 3 && strings.Contains(err.Error(), strings.TrimSpace(a)) {
 			t.Errorf("address %q: the error echoes the input: %v", a, err)
@@ -129,7 +136,7 @@ func TestM4RecipientValidation(t *testing.T) {
 	if len(long) != 254 {
 		t.Fatalf("test address is %d long", len(long))
 	}
-	good := []string{"ops@example.test", "a.b+tag@sub.example.test", "O'Brien@example.test", "ops@localhost", "x@y.z", long}
+	good := []string{"ops@example.test", "a.b+tag@sub.example.test", "O'Brien@example.test", "x@y.z", "a-b.c_d!#$%&'*+/=?^`{|}~@a-b.c1.example.test", "A@B.C", long}
 	for _, a := range good {
 		if _, err := w.s.CreateRecipient(w.ctx, all, RecipientInput{Name: "G " + a[:3], Address: a}, actor); err != nil {
 			t.Errorf("address %q refused: %v", a, err)
@@ -261,5 +268,25 @@ func TestM4DeletingARecipientKeepsItsLog(t *testing.T) {
 	l := must[Listing[Delivery]](t)(w.s.ListRecentDeliveries(w.ctx, all, DeliveryFilter{}, Page{}))
 	if len(l.Items) != 1 || l.Items[0].RuleID != "" {
 		t.Fatalf("log after deleting the rule = %+v", l.Items)
+	}
+}
+
+// P20-T2F item 5: only digest_schedule = 'daily' reads as the digest switch on; a value this code
+// does not write (another schedule) is not a daily digest.
+func TestM4RecipientDigestIsOnlyTheDailySchedule(t *testing.T) {
+	w := seed(t)
+	all, actor := ScopeAll(), m4Actor(w)
+	r := must[Recipient](t)(w.s.CreateRecipient(w.ctx, all, RecipientInput{Name: "A", Address: "a@example.test", Digest: true}, actor))
+	if !r.Digest {
+		t.Fatal("a daily schedule must read as digest on")
+	}
+	for _, sched := range []string{"weekly", "hourly", "DAILY"} {
+		ok(t, w.s.Write(w.ctx, func(tx *Tx) error {
+			_, err := tx.Exec(`UPDATE notification_rules SET digest_schedule = ? WHERE id = ?`, sched, r.ID)
+			return err
+		}))
+		if g := must[Recipient](t)(w.s.GetRecipient(w.ctx, all, r.ID)); g.Digest {
+			t.Errorf("digest_schedule %q reads as digest on", sched)
+		}
 	}
 }

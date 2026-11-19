@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net/mail"
 	"strings"
 	"time"
 )
@@ -58,10 +57,16 @@ type RecipientInput struct {
 	Alerts, Recoveries, Digest bool
 }
 
-// CleanMailAddress trims s and reports whether it is exactly one plain address: no display name,
-// no angle brackets, comment or quoting, no space, control character or CR or LF, ASCII only,
-// at most 254 characters and a local part of at most 64. It is the check recipients and the test
-// mail use, so an address that passes here cannot inject a header or a second recipient.
+// CleanMailAddress trims s and reports whether it is exactly one plain address: a local part that
+// is a dot-atom of RFC 5322 atext (no quoting, no comment, no display name, no angle brackets) of
+// at most 64 octets, "@", and a domain of at least two dot-separated labels of letters, digits and
+// hyphens (no label starts or ends with a hyphen, no address literal), at most 254 octets in all,
+// ASCII only. It is the check recipients and the test mail use, so an address that passes here
+// cannot inject a header or a second recipient.
+//
+// The mail sender (internal/console/mail) applies the same rule to every recipient it is handed;
+// the store may not import it, so the rule is written out here too and the two must agree: change
+// them together.
 func CleanMailAddress(s string) (string, bool) {
 	if strings.ContainsAny(s, "\r\n") {
 		return s, false // never trimmed away: a line break in an address is an attempt, not a typo
@@ -70,20 +75,50 @@ func CleanMailAddress(s string) (string, bool) {
 	if s == "" || len(s) > maxMailAddress {
 		return s, false
 	}
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c <= 0x20 || c >= 0x7f {
+	local, domain, found := strings.Cut(s, "@")
+	if !found || len(local) > maxMailLocalPart || !validDotAtom(local) {
+		return s, false
+	}
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return s, false
+	}
+	for _, l := range labels {
+		if !validLDHLabel(l) {
 			return s, false
 		}
 	}
-	a, err := mail.ParseAddress(s)
-	if err != nil || a.Name != "" || a.Address != s {
-		return s, false
-	}
-	local, domain, found := strings.Cut(s, "@")
-	if !found || local == "" || domain == "" || len(local) > maxMailLocalPart || strings.Contains(domain, "@") {
-		return s, false
-	}
 	return s, true
+}
+
+// validDotAtom reports whether s is one or more runs of RFC 5322 atext separated by single dots.
+func validDotAtom(s string) bool {
+	for _, atom := range strings.Split(s, ".") {
+		if atom == "" {
+			return false
+		}
+		for i := 0; i < len(atom); i++ {
+			c := atom[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("!#$%&'*+-/=?^_`{|}~", c) >= 0) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// validLDHLabel reports whether s is a non-empty run of letters, digits and hyphens that neither starts nor ends with a hyphen.
+func validLDHLabel(s string) bool {
+	if s == "" || s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func (in RecipientInput) clean() (RecipientInput, error) {
@@ -128,7 +163,7 @@ func scanRecipient(sc scanner) (Recipient, error) {
 		}
 	}
 	r.Recoveries = recov != 0
-	r.Digest = digest.Valid && digest.String != ""
+	r.Digest = digest.Valid && digest.String == digestScheduleDaily
 	return r, nil
 }
 
