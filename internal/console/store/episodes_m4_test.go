@@ -279,13 +279,13 @@ func TestM4OneOpenEpisodePerSubjectIsEnforcedByTheDatabase(t *testing.T) {
 func TestM4ClosingAnEpisodeClearsItsAcknowledgement(t *testing.T) {
 	w := seed(t)
 	actor := AuditActor{AdminID: w.admin.ID, Username: "root", Method: "api"}
+	must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeAll(), []EpisodeKey{epKey(w.devA.ID, "FAILED"), epKey(w.devA.ID, "STALE")}, t0))
 	failed := must[Ack](t)(w.s.CreateAck(w.ctx, ScopeAll(), AckInput{SubjectType: EpisodeDevice, SubjectID: w.devA.ID, AlarmType: "failed", Note: "known"}, actor))
 	must[Ack](t)(w.s.CreateAck(w.ctx, ScopeAll(), AckInput{SubjectType: EpisodeDevice, SubjectID: w.devA.ID, AlarmType: "stale"}, actor))
-	must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeAll(), []EpisodeKey{epKey(w.devA.ID, "FAILED")}, t0))
 	if n := auditCount(t, w, "alarm_ack.clear"); n != 0 {
 		t.Fatalf("%d clear rows before anything closed", n)
 	}
-	r := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeAll(), nil, t0.Add(time.Minute)))
+	r := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeAll(), []EpisodeKey{epKey(w.devA.ID, "STALE")}, t0.Add(time.Minute))) // FAILED ends, STALE stays
 	if r.ClearedAcks != 1 {
 		t.Fatalf("cleared %d acks, want 1", r.ClearedAcks)
 	}
@@ -301,7 +301,7 @@ func TestM4ClosingAnEpisodeClearsItsAcknowledgement(t *testing.T) {
 		t.Fatalf("clear audit = %s %q %s", actorType, by, details)
 	}
 	// Closing again clears nothing more.
-	if again := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeAll(), nil, t0.Add(2*time.Minute))); again.ClearedAcks != 0 {
+	if again := must[EpisodeSync](t)(w.s.SyncEpisodes(w.ctx, ScopeAll(), []EpisodeKey{epKey(w.devA.ID, "STALE")}, t0.Add(2*time.Minute))); again.ClearedAcks != 0 {
 		t.Fatalf("second close cleared %d", again.ClearedAcks)
 	}
 }

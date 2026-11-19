@@ -322,7 +322,7 @@ func TestM4TheLoaderMatchesAcknowledgementsPerAlarmType(t *testing.T) {
 	}
 	var other string // an alarm type the device does not have
 	for _, k := range AckAlarmTypes(EpisodeDevice) {
-		if !have[k] {
+		if _, mapped := EpisodeAlarmOfAck(k); !have[k] && mapped {
 			other = k
 			break
 		}
@@ -331,7 +331,10 @@ func TestM4TheLoaderMatchesAcknowledgementsPerAlarmType(t *testing.T) {
 		t.Fatalf("flags %v cover every ack type", flags)
 	}
 
-	// An ack of an alarm type the device does not have covers nothing.
+	// An ack of an alarm type the device does not have covers nothing (its episode is open: the evaluator
+	// and the loader read different things, and the loader is what matters here).
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, other)
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "failed")
 	must[Ack](t)(w.s.CreateAck(w.ctx, all, ackIn(w.devA.ID, other), actor))
 	if a := facts(t, w, w.devA.ID).Ack; a != nil {
 		t.Fatalf("an acknowledgement of %q covers a device that is %v: %+v", other, flags, a)

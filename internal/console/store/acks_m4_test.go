@@ -14,6 +14,10 @@ func ackIn(dev, alarm string) AckInput {
 func TestM4CreateAckPlainSnoozeAndNextSuccess(t *testing.T) {
 	w := seed(t)
 	all, actor := ScopeAll(), m4Actor(w)
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "failed")
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "stale")
+	openAlarm(t, w, EpisodeDevice, w.devB.ID, "unseen")
+	openAlarm(t, w, EpisodeCustomer, w.custB.ID, "missing_customer")
 
 	plain := must[Ack](t)(w.s.CreateAck(w.ctx, all, AckInput{SubjectType: EpisodeDevice, SubjectID: w.devA.ID, AlarmType: "failed", Note: "  waiting for the part  "}, actor))
 	if plain.SubjectType != EpisodeDevice || plain.SubjectID != w.devA.ID || plain.CustomerID != w.custA.ID || plain.AlarmType != "failed" || plain.Note != "waiting for the part" ||
@@ -98,6 +102,7 @@ func TestM4CreateAckValidation(t *testing.T) {
 func TestM4CreateAckReplacesTheActiveOne(t *testing.T) {
 	w := seed(t)
 	all, actor := ScopeAll(), m4Actor(w)
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "failed")
 	first := must[Ack](t)(w.s.CreateAck(w.ctx, all, ackIn(w.devA.ID, "failed"), actor))
 	w.clk.Advance(time.Minute)
 	second := must[Ack](t)(w.s.CreateAck(w.ctx, all, AckInput{SubjectType: EpisodeDevice, SubjectID: w.devA.ID, AlarmType: "failed", Note: "second"}, actor))
@@ -131,6 +136,7 @@ func TestM4CreateAckReplacesTheActiveOne(t *testing.T) {
 func TestM4AckAuditRowsNeverCarryTheNote(t *testing.T) {
 	w := seed(t)
 	all, actor := ScopeAll(), m4Actor(w)
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "failed")
 	a := must[Ack](t)(w.s.CreateAck(w.ctx, all, AckInput{SubjectType: EpisodeDevice, SubjectID: w.devA.ID, AlarmType: "failed", Note: "confidential-note-text"}, actor))
 	must[Ack](t)(w.s.ClearAck(w.ctx, all, a.ID, actor))
 	var rows []string
@@ -160,6 +166,7 @@ func TestM4AckAuditRowsNeverCarryTheNote(t *testing.T) {
 func TestM4ClearAck(t *testing.T) {
 	w := seed(t)
 	all, actor := ScopeAll(), m4Actor(w)
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "failed")
 	a := must[Ack](t)(w.s.CreateAck(w.ctx, all, ackIn(w.devA.ID, "failed"), actor))
 	if _, err := w.s.ClearAck(w.ctx, ScopeOf(w.custB.ID), a.ID, actor); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("clearing another customer's ack = %v, want ErrNotFound", err)
@@ -193,6 +200,10 @@ func TestM4ClearAck(t *testing.T) {
 func TestM4ActiveAcksEndWhenTheirSnoozeDoes(t *testing.T) {
 	w := seed(t)
 	all, actor := ScopeAll(), m4Actor(w)
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "stale")
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "failed")
+	openAlarm(t, w, EpisodeDevice, w.devB.ID, "failed")
+	openAlarm(t, w, EpisodeCustomer, w.custB.ID, "missing_customer")
 	until := t0.Add(time.Hour)
 	must[Ack](t)(w.s.CreateAck(w.ctx, all, AckInput{SubjectType: EpisodeDevice, SubjectID: w.devA.ID, AlarmType: "stale", SnoozeUntil: &until}, actor))
 	must[Ack](t)(w.s.CreateAck(w.ctx, all, ackIn(w.devA.ID, "failed"), actor))
@@ -230,6 +241,8 @@ func TestM4ActiveAcksEndWhenTheirSnoozeDoes(t *testing.T) {
 func TestM4NextSuccessAckInForceMatchesTheStateEngine(t *testing.T) {
 	w := seed(t)
 	all, actor := ScopeAll(), m4Actor(w)
+	openAlarm(t, w, EpisodeDevice, w.devA.ID, "stale")
+	openAlarm(t, w, EpisodeDevice, w.devB.ID, "blank")
 	// A success before the ack is not "next".
 	ingest(t, w, w.devA.ID, runInput(runID1, t0.Add(-3*time.Hour)))
 	a := must[Ack](t)(w.s.CreateAck(w.ctx, all, AckInput{SubjectType: EpisodeDevice, SubjectID: w.devA.ID, AlarmType: "stale", UntilNextSuccess: true}, actor))

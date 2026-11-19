@@ -145,7 +145,14 @@ type EpisodeSync struct {
 //
 // An acknowledgement or snooze that covers an episode this call closes is cleared in the same
 // transaction (one alarm_ack.clear audit row, actor system): the alarm it muted is over, and an
-// ack left behind would silently mute the next, unrelated failure of the same kind.
+// ack left behind would silently mute the next, unrelated failure of the same kind. For the same
+// reason, one that is already in place when this call OPENS the episode (a row written before
+// v8, or by a fixture; CreateAck refuses to make one without an open episode) is cleared and
+// audited the same way, with the reason stale_before_alarm.
+//
+// Every state that can be acknowledged must be in current, the alarm-level ones too (the notifier
+// mails only the critical ones): CreateAck needs an open episode, and a state missing from the
+// evaluator's input can never be acknowledged.
 //
 // The caller must pass the complete set of alarms inside scope. A pass that could not load the
 // fleet must not call SyncEpisodes with what it did load: every episode missing from the input
@@ -229,8 +236,16 @@ func (s *Store) SyncEpisodes(ctx context.Context, scope Scope, current []Episode
 				VALUES (?,?,?,?,?,?,?,?,?)`, id, r.subjectType, dev, cust, r.alarm, at, since, at, at); err != nil {
 				return err
 			}
-			out.Opened = append(out.Opened, Episode{ID: id, SubjectType: r.subjectType, SubjectID: r.subjectID, CustomerID: owners[r],
-				AlarmType: r.alarm, OpenedAt: timeOf(at), StateSince: timeOf(since)})
+			ep := Episode{ID: id, SubjectType: r.subjectType, SubjectID: r.subjectID, CustomerID: owners[r],
+				AlarmType: r.alarm, OpenedAt: timeOf(at), StateSince: timeOf(since)}
+			out.Opened = append(out.Opened, ep)
+			// An acknowledgement already in place belongs to an earlier alarm (rows written before v8, or by
+			// fixtures: CreateAck needs an open episode): it must not mute this one.
+			n, err := clearAcksOfEpisode(tx, ep, at, ackClearStale)
+			if err != nil {
+				return err
+			}
+			out.ClearedAcks += n
 		}
 		for _, e := range open {
 			if _, still := want[e.ref()]; still {

@@ -73,7 +73,10 @@ func addM4Matrix(m map[string]matrixCase) {
 	}
 
 	m["SyncEpisodes"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
-		_, err := w.s.SyncEpisodes(w.ctx, sc, []EpisodeKey{{SubjectType: EpisodeDevice, SubjectID: t.dev, AlarmType: "FAILED"}}, time.Time{})
+		r, err := w.s.SyncEpisodes(w.ctx, sc, []EpisodeKey{{SubjectType: EpisodeDevice, SubjectID: t.dev, AlarmType: "FAILED"}}, time.Time{})
+		if err == nil && len(r.Skipped) > 0 {
+			err = ErrNotFound // P20-T2F item 6: a subject outside scope is skipped, which the matrix reads as "denied" (the fingerprint check proves nothing changed)
+		}
 		return nil, err
 	}}
 	m["ListOpenEpisodes"] = matrixCase{kind: list, call: func(w *world, sc Scope, t *target) ([]string, error) {
@@ -121,10 +124,16 @@ func addM4Matrix(m map[string]matrixCase) {
 	}}
 
 	m["CreateAck"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		if err := ensureEpisode(w, t.dev, "FAILED"); err != nil {
+			return nil, err
+		}
 		_, err := w.s.CreateAck(w.ctx, sc, AckInput{SubjectType: EpisodeDevice, SubjectID: t.dev, AlarmType: "failed", Note: "matrix"}, actorOf(w))
 		return nil, err
 	}}
 	m["ClearAck"] = matrixCase{kind: byID, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		if err := ensureEpisode(w, t.dev, "STALE"); err != nil {
+			return nil, err
+		}
 		a, err := w.s.CreateAck(w.ctx, ScopeAll(), AckInput{SubjectType: EpisodeDevice, SubjectID: t.dev, AlarmType: "stale"}, actorOf(w))
 		if err != nil {
 			return nil, err
@@ -134,6 +143,9 @@ func addM4Matrix(m map[string]matrixCase) {
 	}}
 	m["ListActiveAcks"] = matrixCase{kind: list, call: func(w *world, sc Scope, t *target) ([]string, error) {
 		for _, d := range []string{w.devA.ID, w.devB.ID} {
+			if err := ensureEpisode(w, d, "UNSEEN"); err != nil {
+				return nil, err
+			}
 			if _, err := w.s.CreateAck(w.ctx, ScopeAll(), AckInput{SubjectType: EpisodeDevice, SubjectID: d, AlarmType: "unseen"}, actorOf(w)); err != nil {
 				return nil, err
 			}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -19,6 +20,10 @@ import (
 // An acknowledgement is in force ("active") until it is cleared, its snooze time passes, or, for
 // a device snoozed until the next success, a backup succeeds after it. A snooze that ends while
 // the alarm persists therefore stops muting, and the alert goes out again.
+//
+// An acknowledgement answers an alarm that is open: CreateAck needs an open episode of the same
+// subject and alarm type, and SyncEpisodes clears it when that episode closes (and clears one it
+// finds already in place when an episode opens), so no acknowledgement outlives its alarm.
 //
 // The schema requires an alarm type on every row (alarm_type is NOT NULL), so there is no "covers
 // every alarm" acknowledgement: an operator who wants one names each type.
@@ -58,7 +63,7 @@ func validAckType(subject, t string) bool {
 
 // stateAckType maps a state name (the alarm_type of an episode, or a state.State) to the
 // alarm_type an acknowledgement uses for it. first_backup_overdue and quota are named by the
-// schema but no state maps to them yet, so an acknowledgement of those types mutes nothing.
+// schema but no state maps to them yet, so CreateAck refuses them as invalid input: nothing in M4 consumes them.
 var stateAckType = map[string]string{
 	string(state.StateBlank): "blank", string(state.StateStuck): "stuck", string(state.StateFailed): "failed",
 	string(state.StatePartial): "partial", string(state.StateUnseen): "unseen", string(state.StateStale): "stale",
@@ -73,6 +78,24 @@ func AckAlarmType(stateName string) (string, bool) {
 	t, ok := stateAckType[stateName]
 	return t, ok
 }
+
+// EpisodeAlarmOfAck is the inverse of AckAlarmType: the state name (an episode's alarm_type) that an
+// acknowledgement of type ackType covers, and false for a type no state maps to.
+func EpisodeAlarmOfAck(ackType string) (string, bool) {
+	for _, subject := range []string{EpisodeDevice, EpisodeCustomer} {
+		for _, alarm := range EpisodeAlarmTypes(subject) {
+			if t, ok := AckAlarmType(alarm); ok && t == ackType {
+				return alarm, true
+			}
+		}
+	}
+	return "", false
+}
+
+// ErrAlarmNotOpen is what CreateAck returns when no episode of the subject and alarm type is open
+// ("this alarm is not open (yet)"). It is an ErrConflict: the request is well formed but the state of
+// the console does not allow it.
+var ErrAlarmNotOpen = fmt.Errorf("%w: this alarm is not open", ErrConflict)
 
 // Ack is one acknowledgement or snooze.
 type Ack struct {
@@ -146,10 +169,15 @@ func (a Ack) auditDetails(extra map[string]any) json.RawMessage {
 	return jsonBytes(d)
 }
 
-// CreateAck acknowledges or snoozes one alarm of a device or customer inside scope. An active
-// acknowledgement of the same subject and alarm type is replaced (cleared, then the new one
+// CreateAck acknowledges or snoozes one alarm of a device or customer inside scope. The alarm must
+// be open: with no open episode of the same subject and alarm type (AlarmType mapped through
+// EpisodeAlarmOfAck) the call is refused with ErrAlarmNotOpen and nothing is written. Every state
+// that can be acknowledged must therefore be passed to SyncEpisodes by the evaluator, the
+// alarm-level ones too (the notifier mails only the critical ones, but an operator may
+// acknowledge any alarm they see). An alarm type no state maps to (first_backup_overdue, quota)
+// is invalid input. An active acknowledgement of the same subject and alarm type is replaced (cleared, then the new one
 // created, in one transaction) and the audit row says so. A subject outside scope or one that
-// does not exist is ErrNotFound; an alarm type that does not fit the subject, a snooze that is
+// does not exist is ErrNotFound; an alarm type that does not fit the subject or maps to no state, a snooze that is
 // not in the future or lasts longer than MaxSnooze, both snooze forms together, or a note that is
 // too long is a *ValidationError. One alarm_ack.create audit row is written in the same
 // transaction (ids and switches; never the note); a change whose audit row cannot be written is
@@ -163,6 +191,9 @@ func (s *Store) CreateAck(ctx context.Context, scope Scope, in AckInput, actor A
 	case EpisodeDevice, EpisodeCustomer:
 		if !validAckType(in.SubjectType, in.AlarmType) {
 			bad = append(bad, fieldf("alarm_type", "Choose an alarm type that applies to a %s.", in.SubjectType))
+		} else if _, covers := EpisodeAlarmOfAck(in.AlarmType); !covers {
+			// first_backup_overdue and quota are named by the schema but no state maps to them: nothing consumes the ack.
+			bad = append(bad, fieldf("alarm_type", "No alarm of this type is raised yet, so there is nothing to acknowledge."))
 		}
 	default:
 		bad = append(bad, fieldf("subject_type", "Use device or customer."))
@@ -216,6 +247,16 @@ func (s *Store) CreateAck(ctx context.Context, scope Scope, in AckInput, actor A
 		col := "device_id"
 		if in.SubjectType == EpisodeCustomer {
 			col = "customer_id"
+		}
+		// The alarm must be open: an acknowledgement made while nothing is wrong would sit there and mute a
+		// later, unrelated alarm of the same type. Checked after the input, so a bad snooze is still reported as such.
+		alarm, _ := EpisodeAlarmOfAck(in.AlarmType) // validated above
+		var open int
+		switch err := tx.QueryRow(`SELECT 1 FROM alarm_episodes WHERE `+col+` = ? AND alarm_type = ? AND closed_at IS NULL`, in.SubjectID, alarm).Scan(&open); {
+		case errors.Is(err, sql.ErrNoRows):
+			return ErrAlarmNotOpen
+		case err != nil:
+			return err
 		}
 		res, err := tx.Exec(`UPDATE alarm_acks SET cleared_at = ?, updated_at = ? WHERE `+col+` = ? AND alarm_type = ? AND cleared_at IS NULL`,
 			now, now, in.SubjectID, in.AlarmType)
