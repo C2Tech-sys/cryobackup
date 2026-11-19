@@ -54,7 +54,9 @@ const ackClearSnoozeEnded = "snooze_ended"
 // once, because the cleared row cannot lapse a second time. A plain acknowledgement never
 // lapses and is left alone; so is a snooze still in force. It returns how many alarms were
 // re-armed. The notifier calls it only when an alert can actually go out (mail configured and a
-// recipient with the alerts switch), so an alarm is not re-armed into a queue nobody reads.
+// recipient with the alerts switch), with a scope that leaves out the suspended customers, so an
+// alarm is not re-armed into a queue nobody reads: re-arming resets notified_at, and an alarm that
+// then closed unmailed would lose the recovery notice of the alert that did go out.
 func (s *Store) RearmLapsedSnoozes(ctx context.Context, scope Scope) (int, error) {
 	if err := scope.check(); err != nil {
 		return 0, err

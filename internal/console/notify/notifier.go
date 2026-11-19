@@ -115,8 +115,9 @@ func (n *Notifier) batchID() int64 {
 //     every MISSING customer). A device whose facts could not be read (UNKNOWN) keeps its other
 //     open episodes: not knowing is no recovery.
 //  2. With mail configured and a recipient with the alerts switch: the snoozes that ended are
-//     re-armed, and the open, unmailed, critical episodes that are neither acknowledged nor of a
-//     suspended customer go to each such recipient as one message.
+//     re-armed (not those of a suspended customer: rearmScope), and the open, unmailed, critical
+//     episodes that are neither acknowledged nor of a suspended customer go to each such recipient
+//     as one message.
 //  3. With mail configured: the closed episodes that were mailed go to each recipient with the
 //     recoveries switch as one notice (marked without a message when there is no such recipient).
 //  4. The sends, under SendBudget.
@@ -190,7 +191,7 @@ func (n *Notifier) Pass(ctx context.Context, v state.FleetView) (PassResult, err
 func (n *Notifier) alertBatch(ctx context.Context, v state.FleetView, to []store.Recipient, res *PassResult) ([]outgoing, error) {
 	all := store.ScopeAll()
 	var err error
-	if res.Rearmed, err = n.Store.RearmLapsedSnoozes(ctx, all); err != nil {
+	if res.Rearmed, err = n.Store.RearmLapsedSnoozes(ctx, rearmScope(v)); err != nil {
 		return nil, err
 	}
 	unmailed, err := n.Store.ListUnnotifiedEpisodes(ctx, all)
@@ -238,6 +239,26 @@ func (n *Notifier) alertBatch(ctx context.Context, v state.FleetView, to []store
 	}
 	res.Alerted = len(batch)
 	return outs, nil
+}
+
+// rearmScope is where a lapsed snooze may be re-armed in this pass: the customers that are not
+// suspended. The caller has a relay and an alert recipient. Re-arming resets the episode's
+// notified_at, so re-arming one that cannot be mailed now would lose the recovery notice of the
+// alert that was mailed; it waits for a pass that can mail it.
+func rearmScope(v state.FleetView) store.Scope {
+	ids := make([]string, 0, len(v.Customers))
+	suspended := false
+	for _, c := range v.Customers {
+		if c.Muted {
+			suspended = true
+			continue
+		}
+		ids = append(ids, c.ID)
+	}
+	if !suspended {
+		return store.ScopeAll()
+	}
+	return store.ScopeOf(ids...)
 }
 
 // recoveryBatch writes the delivery rows of this pass's recovery notice and marks its episodes.

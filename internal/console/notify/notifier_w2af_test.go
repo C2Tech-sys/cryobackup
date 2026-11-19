@@ -274,3 +274,77 @@ func TestNotifyBatchIDCollisionIsBounded(t *testing.T) {
 		t.Fatalf("next pass %+v", res)
 	}
 }
+
+// snoozedAlert mails a STALE alert for one device, snoozes it for an hour and lets the snooze lapse
+// while the alarm persists. It returns the device id.
+func (w *world) snoozedAlert(customer string) string {
+	w.t.Helper()
+	site := w.site(customer, 1)
+	w.set(state.StateStale, site...)
+	if res := w.pass(); res.Sent != 1 {
+		w.t.Fatalf("the first alert: %+v", res)
+	}
+	until := w.clk.Now().Add(time.Hour)
+	if _, err := w.st.CreateAck(w.ctx, store.ScopeAll(), store.AckInput{SubjectType: store.EpisodeDevice, SubjectID: site[0], AlarmType: "stale", SnoozeUntil: &until}, w.actor); err != nil {
+		w.t.Fatal(err)
+	}
+	w.clk.Advance(2 * time.Hour)
+	return site[0]
+}
+
+// Item 4. A lapsed snooze of a suspended customer is not re-armed: nothing could be mailed. When
+// the customer is resumed it is re-armed and mailed once.
+func TestNotifyLapsedSnoozeOfASuspendedCustomerWaits(t *testing.T) {
+	w := newWorld(t)
+	w.recipient("ops@example.test", true, true)
+	w.snoozedAlert("Summit Eye Care")
+	w.muted[w.cust["Summit Eye Care"]] = true
+	if res := w.pass(); res.Rearmed != 0 || res.Alerted != 0 || len(w.unnotified()) != 0 {
+		t.Fatalf("suspended pass %+v, %d unnotified", res, len(w.unnotified()))
+	}
+	w.muted[w.cust["Summit Eye Care"]] = false
+	w.clk.Advance(time.Minute)
+	if res := w.pass(); res.Rearmed != 1 || res.Alerted != 1 || w.fake.Calls() != 2 {
+		t.Fatalf("resumed pass %+v, calls %d", res, w.fake.Calls())
+	}
+	for i := 0; i < 3; i++ {
+		w.clk.Advance(time.Minute)
+		w.pass()
+	}
+	if w.fake.Calls() != 2 {
+		t.Fatalf("re-raised more than once: %d messages", w.fake.Calls())
+	}
+}
+
+// Item 4. Without a relay the lapsed snooze is not re-armed either.
+func TestNotifyLapsedSnoozeWithoutARelayWaits(t *testing.T) {
+	w := newWorld(t)
+	w.recipient("ops@example.test", true, true)
+	w.snoozedAlert("Summit Eye Care")
+	w.n.Configured = false
+	if res := w.pass(); res.Rearmed != 0 || len(w.unnotified()) != 0 {
+		t.Fatalf("unconfigured pass %+v", res)
+	}
+	w.n.Configured = true
+	w.clk.Advance(time.Minute)
+	if res := w.pass(); res.Rearmed != 1 || res.Sent != 1 {
+		t.Fatalf("configured pass %+v", res)
+	}
+}
+
+// Item 4. The alarm of a suspended customer closes while its lapsed snooze waits: the recovery of
+// the alert that WAS mailed still goes out.
+func TestNotifyRecoveryOfTheOriginalAlertAfterALapsedSnooze(t *testing.T) {
+	w := newWorld(t)
+	w.recipient("ops@example.test", true, true)
+	dev := w.snoozedAlert("Summit Eye Care")
+	w.muted[w.cust["Summit Eye Care"]] = true
+	w.pass()
+	w.clk.Advance(time.Minute)
+	w.set(state.StateOK, dev)
+	res := w.pass()
+	sent := w.fake.Sent()
+	if res.Recovered != 1 || len(sent) != 2 || sent[1].Kind != mail.KindRecovery {
+		t.Fatalf("recovery pass %+v, sent %d", res, len(sent))
+	}
+}
