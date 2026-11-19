@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
@@ -65,11 +66,19 @@ type Retrier struct {
 	// neither a renderer here nor an entry is not read (kinds): its owner retries it.
 	Rerender map[string]RerenderFunc
 	Log      *logx.Logger
+
+	ids batchIDs
+	// afterSettle, when set, runs after a re-render settled recoveries and before the send (the
+	// tests inject a crash there).
+	afterSettle func() error
 }
 
 // RetryResult counts what one run did.
 type RetryResult struct {
 	Due, Sent, Failed, Suppressed, Settled, Left, Deferred int
+	// RecoveryUnsent counts the closed episodes whose recovery a re-rendered alert settled without a
+	// message: the retry left them out and no alert of their batch had been delivered.
+	RecoveryUnsent int
 }
 
 func (r *Retrier) log() *logx.Logger {
@@ -148,7 +157,7 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 			res.Deferred++
 			continue
 		}
-		m, sk, err := r.rerender(ctx, d, rv, o)
+		m, sk, err := r.rerender(ctx, d, rv, o, &res)
 		if err != nil {
 			keep(err)
 			continue
@@ -186,13 +195,14 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 		return res, first
 	}
 	r.log().Info("notification retry", logx.Count("due", res.Due), logx.Count("sent", res.Sent), logx.Count("failed", res.Failed),
-		logx.Count("suppressed", res.Suppressed), logx.Count("settled", res.Settled), logx.Count("deferred", res.Deferred))
+		logx.Count("suppressed", res.Suppressed), logx.Count("settled", res.Settled), logx.Count("deferred", res.Deferred),
+		logx.Count("recovery_unsent", res.RecoveryUnsent))
 	return res, first
 }
 
 // rerender is the message a due row should carry now, or a decision not to send it, or neither
 // (nil and no reason) for a row this retrier leaves alone.
-func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView, o Options) (*mail.Message, skip, error) {
+func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView, o Options, res *RetryResult) (*mail.Message, skip, error) {
 	switch d.Kind {
 	case store.DeliveryAlert, store.DeliveryRecovery:
 	case store.DeliveryTest:
@@ -246,10 +256,13 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	}
 	var c Content
 	if d.Kind == store.DeliveryAlert {
-		var still []store.Episode
+		var still, closed []store.Episode
 		sk := skip{reasonResolved, "alarm_resolved"} // every episode closed; no recovery follows an alert nobody received
 		for _, e := range eps {
 			if !e.Open() {
+				if e.RecoveryNotifiedAt == nil {
+					closed = append(closed, e)
+				}
 				continue
 			}
 			if why := m.reason(e); why != "" {
@@ -259,7 +272,10 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 			still = append(still, e)
 		}
 		if len(still) == 0 {
-			return nil, sk, nil
+			return nil, sk, nil // nothing goes out: the pass settles the recoveries (owedRecoveries)
+		}
+		if err := r.settleLeftOut(ctx, at, closed, res); err != nil {
+			return nil, skip{}, err
 		}
 		c, err = RenderAlert(v, still, o)
 	} else {
@@ -270,6 +286,39 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	}
 	msg := c.Message(to.Address)
 	return &msg, skip{}, nil
+}
+
+// settleLeftOut settles, without a message, the recovery of the closed episodes a re-rendered
+// alert of batch at leaves out, unless a delivery of that batch was already sent (then someone saw
+// them in the full alert and their recovery is owed as usual). It runs before the send: from here
+// on no message of the batch can name them, so no recovery may either. The mark takes a free batch
+// id, like Notifier's silent marks.
+func (r *Retrier) settleLeftOut(ctx context.Context, at time.Time, closed []store.Episode, res *RetryResult) error {
+	if len(closed) == 0 {
+		return nil
+	}
+	rows, err := r.Store.ListDeliveriesByKeyPrefix(ctx, store.ScopeAll(), keyAlert+":"+strconv.FormatInt(at.UnixMilli(), 10)+":")
+	if err != nil {
+		return err
+	}
+	for _, d := range rows {
+		if d.Result == store.DeliverySent {
+			return nil
+		}
+	}
+	id, err := r.ids.next(ctx, r.Store)
+	if err != nil {
+		return err
+	}
+	n, err := r.Store.MarkRecoveryNotified(ctx, store.ScopeAll(), episodeIDs(closed), time.UnixMilli(id).UTC())
+	if err != nil {
+		return err
+	}
+	res.RecoveryUnsent += n
+	if r.afterSettle != nil {
+		return r.afterSettle()
+	}
+	return nil
 }
 
 // recipient is the row's recipient, or a decision not to send when it no longer exists.

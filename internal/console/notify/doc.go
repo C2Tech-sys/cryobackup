@@ -23,6 +23,8 @@
 // A recovery notice follows only an alert that reached someone: an episode closes owing one when a
 // delivery row of its alert batch was sent. When every row of the batch failed for good or was
 // suppressed, the recovery is settled without a message; while a row is still in retry, it waits.
+// A retry that re-renders the alert without the episodes that closed meanwhile settles their
+// recovery the same way before it sends, unless a row of the batch was already delivered.
 //
 // # Batches and crash safety
 //

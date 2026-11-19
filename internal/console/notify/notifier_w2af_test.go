@@ -648,3 +648,139 @@ func TestNotifySilentRecoveryMarkHoldsItsBatchID(t *testing.T) {
 		t.Fatalf("the recovery retry lists the silently settled device:\n%s", last.Text)
 	}
 }
+
+// mentions counts the delivered messages of a kind that name the host.
+func (w *world) mentions(kind mail.Kind, host string) int {
+	n := 0
+	for _, m := range w.fake.Sent() {
+		if m.Kind == kind && strings.Contains(m.Text, host) {
+			n++
+		}
+	}
+	return n
+}
+
+// twoDeviceFailedBatch mails one alert batch of two FAILED devices whose send fails temporarily
+// for the recipients failFor names. It returns the two device ids.
+func (w *world) twoDeviceFailedBatch(failFor ...string) []string {
+	w.t.Helper()
+	site := w.site("Summit Eye Care", 2)
+	w.fake.FailWhen(func(m mail.Message) *mail.SendError {
+		for _, a := range failFor {
+			if m.To[0] == a && m.Kind == mail.KindAlert {
+				return &mail.SendError{Stage: mail.StageConnect, Class: mail.ClassTimeout, Temporary: true}
+			}
+		}
+		return nil
+	})
+	w.set(state.StateFailed, site...)
+	w.pass()
+	w.fake.FailWhen(nil)
+	return site
+}
+
+// Batch 2 item 1, the verifier's repro. dev0 closes while the batch's only alert is in retry; the
+// retry mails dev1 only and settles dev0's recovery without a message, before it sends.
+func TestRetrySettlesTheRecoveryOfEpisodesItLeavesOut(t *testing.T) {
+	w := newWorld(t)
+	w.recipient("ops@example.test", true, true)
+	site := w.twoDeviceFailedBatch("ops@example.test")
+	w.clk.Advance(30 * time.Second)
+	w.set(state.StateOK, site[0])
+	w.n.Configured = false // the pass that closes dev0 decides nothing about mail
+	w.pass()
+	w.n.Configured = true
+	w.clk.Advance(time.Minute)
+	if rr := w.retry(); rr.Sent != 1 || rr.RecoveryUnsent != 1 {
+		t.Fatalf("retry %+v", rr)
+	}
+	w.clk.Advance(time.Minute)
+	if res := w.pass(); res.Recovered != 0 || res.Messages != 0 {
+		t.Fatalf("pass after the retry %+v", res)
+	}
+	w.clk.Advance(time.Minute)
+	w.set(state.StateOK, site[1])
+	if res := w.pass(); res.Recovered != 1 || res.Sent != 1 {
+		t.Fatalf("dev1 recovery pass %+v", res)
+	}
+	h0, h1 := w.host[site[0]], w.host[site[1]]
+	if w.mentions(mail.KindAlert, h0) != 0 || w.mentions(mail.KindRecovery, h0) != 0 ||
+		w.mentions(mail.KindAlert, h1) != 1 || w.mentions(mail.KindRecovery, h1) != 1 {
+		t.Fatalf("dev0 alert %d recovery %d; dev1 alert %d recovery %d", w.mentions(mail.KindAlert, h0), w.mentions(mail.KindRecovery, h0),
+			w.mentions(mail.KindAlert, h1), w.mentions(mail.KindRecovery, h1))
+	}
+}
+
+// Batch 2 item 1. A received the full alert; B is retried after dev0 closed: nothing is settled,
+// dev0's recovery goes out to A.
+func TestRetrySettlesNothingWhenAnotherRecipientSawTheAlert(t *testing.T) {
+	w := newWorld(t)
+	w.recipient("a@example.test", true, true)
+	w.recipient("b@example.test", true, false)
+	site := w.twoDeviceFailedBatch("b@example.test")
+	w.clk.Advance(30 * time.Second)
+	w.set(state.StateOK, site[0])
+	w.n.Configured = false
+	w.pass()
+	w.n.Configured = true
+	w.clk.Advance(time.Minute)
+	if rr := w.retry(); rr.Sent != 1 || rr.RecoveryUnsent != 0 {
+		t.Fatalf("retry %+v", rr)
+	}
+	w.clk.Advance(time.Minute)
+	if res := w.pass(); res.Recovered != 1 || w.mentions(mail.KindRecovery, w.host[site[0]]) != 1 {
+		t.Fatalf("recovery pass %+v", res)
+	}
+}
+
+// Batch 2 item 1. A recovery pass between the close and the retry waits; then nothing for dev0.
+func TestRetrySettlesAfterARecoveryPassWaited(t *testing.T) {
+	w := newWorld(t)
+	w.recipient("ops@example.test", true, true)
+	site := w.twoDeviceFailedBatch("ops@example.test")
+	w.clk.Advance(20 * time.Second)
+	w.set(state.StateOK, site[0])
+	for i := 0; i < 2; i++ {
+		if res := w.pass(); res.Recovered != 0 || res.RecoveryUnsent != 0 || w.recoveryOwed() != 1 {
+			t.Fatalf("pass before the retry %+v", res)
+		}
+		w.clk.Advance(20 * time.Second)
+	}
+	w.clk.Advance(time.Minute)
+	w.retry()
+	w.clk.Advance(time.Minute)
+	w.pass()
+	if w.mentions(mail.KindRecovery, w.host[site[0]]) != 0 || w.mentions(mail.KindAlert, w.host[site[1]]) != 1 || w.recoveryOwed() != 0 {
+		t.Fatalf("after the retry: sent %d", len(w.fake.Sent()))
+	}
+}
+
+// Batch 2 item 1. A crash between the settle and the send: dev0 stays settled (no recovery), and
+// dev1's alert is still retried.
+func TestRetryCrashBetweenSettleAndSend(t *testing.T) {
+	w := newWorld(t)
+	w.recipient("ops@example.test", true, true)
+	site := w.twoDeviceFailedBatch("ops@example.test")
+	w.clk.Advance(30 * time.Second)
+	w.set(state.StateOK, site[0])
+	w.pass()
+	w.clk.Advance(time.Minute)
+	crash := errors.New("crash")
+	w.r.afterSettle = func() error { return crash }
+	if _, err := w.r.Run(w.ctx); !errors.Is(err, crash) {
+		t.Fatalf("injected crash: %v", err)
+	}
+	w.r.afterSettle = nil
+	if w.fake.Calls() != 1 || w.recoveryOwed() != 0 {
+		t.Fatalf("after the crash: %d calls, %d recoveries owed", w.fake.Calls(), w.recoveryOwed())
+	}
+	w.clk.Advance(time.Minute)
+	if rr := w.retry(); rr.Sent != 1 || rr.RecoveryUnsent != 0 {
+		t.Fatalf("retry after the crash %+v", rr)
+	}
+	w.clk.Advance(time.Minute)
+	w.pass()
+	if w.mentions(mail.KindRecovery, w.host[site[0]]) != 0 || w.mentions(mail.KindAlert, w.host[site[0]]) != 0 || w.mentions(mail.KindAlert, w.host[site[1]]) != 1 {
+		t.Fatalf("sent %d", len(w.fake.Sent()))
+	}
+}
