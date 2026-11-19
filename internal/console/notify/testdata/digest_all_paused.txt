@@ -1,0 +1,27 @@
+CryoBackup daily digest, Tue 17 Nov
+No devices backed up: 3 paused.
+Polled Tue 17 Nov 2026, 3:04 PM CST
+
+Console
+  No console condition: every self-check passes.
+
+Critical
+  None. 3 devices checked.
+
+Warnings
+  None. 3 devices checked.
+
+Parked and long-deferred devices
+  Summit Eye Care
+    [PAUSED] SUMMIT-PC-01 since an unknown time
+    [PAUSED] SUMMIT-PC-02 since an unknown time
+    [PAUSED] SUMMIT-PC-03 since an unknown time
+
+Totals: 3 devices: 0 backed up, 3 paused. Exceptions: 0 critical, 0 warnings, 3 parked or deferred. 1 customer, 0 missing.
+
+Open the console to see the details.
+
+This digest is sent every day, also when everything is green: a day
+without it means the console or its mail has stopped.
+You receive this because this address receives the CryoBackup daily
+digest.

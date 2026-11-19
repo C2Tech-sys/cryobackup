@@ -1,0 +1,24 @@
+CryoBackup daily digest, Tue 17 Nov
+No devices enrolled yet: nothing is being backed up.
+Polled Tue 17 Nov 2026, 3:04 PM CST
+
+Console
+  No console condition: every self-check passes.
+
+Critical
+  None. 0 devices checked.
+
+Warnings
+  None. 0 devices checked.
+
+Parked and long-deferred devices
+  None. 0 devices checked.
+
+Totals: 0 devices: 0 backed up. Exceptions: 0 critical, 0 warnings, 0 parked or deferred. 0 customers, 0 missing.
+
+Open the console to see the details.
+
+This digest is sent every day, also when everything is green: a day
+without it means the console or its mail has stopped.
+You receive this because this address receives the CryoBackup daily
+digest.

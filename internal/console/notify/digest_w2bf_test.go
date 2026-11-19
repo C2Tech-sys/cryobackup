@@ -51,7 +51,9 @@ func TestDigestNamesWhatThePolicyLeavesOut(t *testing.T) {
 	if strings.Contains(c.Text, "ALP-OFFICE") || strings.Contains(c.Text, "Alpine") {
 		t.Fatalf("the excluded customer is listed:\n%s", c.Text)
 	}
-	if !strings.HasSuffix(c.Subject, ", 1 customer not included by policy") || strings.Contains(c.Subject, "all clear") {
+	// B4: the day is judged over the included devices; the excluded critical device is named only
+	// in the "not included by policy" line.
+	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: all clear, 2 of 2 devices backed up, 1 customer not included by policy" {
 		t.Fatalf("subject %q", c.Subject)
 	}
 	if !strings.Contains(c.Text, "\nTotals: 2 devices: 2 backed up.") || !strings.Contains(c.Text, "1 customer not included by policy.") {
@@ -63,7 +65,7 @@ func TestDigestNamesWhatThePolicyLeavesOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "All 2 devices backed up. 1 customer not included by policy." {
+	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "All clear: 2 of 2 devices backed up. 1 customer not included by policy." {
 		t.Fatalf("first line %q", first)
 	}
 }
@@ -124,5 +126,53 @@ func TestDigestRetryKeepsItsDateAndStopsWhenDisabled(t *testing.T) {
 		if d.Result == store.DeliverySuppressed && d.SuppressReason != "deduped" {
 			t.Fatalf("suppress reason %v", d.SuppressReason)
 		}
+	}
+}
+
+// P20-W2BF B4: the headline per case. The day's all-clear is judged over the included devices; a
+// day with nothing backed up never says "all clear". Each case is a golden.
+func TestGoldenDigestHeadlines(t *testing.T) {
+	paused := greenView(3)
+	for i := range paused.Devices {
+		paused.Devices[i].Primary, paused.Devices[i].Flags = state.StatePaused, []state.State{state.StatePaused}
+	}
+	empty := state.FleetView{ComputedAt: renderNow, Complete: true, FirstRun: true}
+	allExcluded := greenView(2)
+	for i := range allExcluded.Devices {
+		allExcluded.Devices[i].DigestExcluded = true
+	}
+	excludedCritical := greenView(2)
+	excludedCritical.Customers = append(excludedCritical.Customers, state.CustomerState{ID: custAlpine, Name: "Alpine Orthodontics", Alarm: state.SeverityCritical})
+	x := dev(devAlp1, custAlpine, "ALP-OFFICE", state.StateFailed, state.SeverityCritical, time.Hour)
+	x.DigestExcluded = true
+	excludedCritical.Devices = append(excludedCritical.Devices, x)
+	for _, tc := range []struct {
+		name, golden, subject, first string
+		v                            state.FleetView
+	}{
+		{"all paused", "digest_all_paused", "no devices backed up, 3 paused", "No devices backed up: 3 paused.", paused},
+		{"no devices", "digest_no_devices", "no devices enrolled yet", "No devices enrolled yet: nothing is being backed up.", empty},
+		{"all excluded", "digest_all_excluded", "no devices included, 1 customer not included by policy",
+			"No devices included in this digest: 1 customer not included by policy.", allExcluded},
+		{"excluded critical, the rest OK", "digest_excluded_critical", "all clear, 2 of 2 devices backed up, 1 customer not included by policy",
+			"All clear: 2 of 2 devices backed up. 1 customer not included by policy.", excludedCritical},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := RenderDigest(tc.v, nil, Options{Loc: cst})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "[CryoBackup] Backup digest Tue 17 Nov: " + tc.subject; c.Subject != want {
+				t.Fatalf("subject %q, want %q", c.Subject, want)
+			}
+			if first := strings.SplitN(c.Text, "\n", 3)[1]; first != tc.first {
+				t.Fatalf("first line %q, want %q", first, tc.first)
+			}
+			if tc.golden != "digest_excluded_critical" && strings.Contains(strings.ToLower(c.Subject+c.Text), "all clear") {
+				t.Fatalf("a day with nothing backed up says all clear:\n%s", c.Text)
+			}
+			golden(t, tc.golden+".txt", c.Text)
+			golden(t, tc.golden+".html", c.HTML)
+		})
 	}
 }

@@ -292,24 +292,19 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	if d.ExcludedDevices > 0 {
 		left = append(left, count(d.ExcludedDevices, "device", "devices")+" not included by policy")
 	}
+	// The day is all clear on the INCLUDED devices: no console condition, no critical or warning
+	// line (excluded devices make none), and complete data, unless what made it incomplete is an
+	// excluded device the engine could not read. Excluded devices are named only in left.
+	excludedUnknown := false
+	for i := range v.Devices {
+		excludedUnknown = excludedUnknown || v.Devices[i].DigestExcluded && v.Devices[i].Primary == state.StateUnknown
+	}
+	complete := v.Complete || excludedUnknown && len(d.Banners) == 0
+	allClear := len(d.Banners) == 0 && complete && critDevices+missing == 0 && warn == 0
 	var summary string
+	leftSaid := false
 	switch {
-	case d.AllClear && p.Checked == 0 && len(left) == 0:
-		summary, p.Title = "all clear, no devices enrolled yet", "No devices enrolled yet: nothing is being backed up."
-	case d.AllClear && len(rest) == 0 && p.Checked > 0:
-		summary = "all clear, " + count(p.Checked, "device", "devices") + " backed up"
-		p.Title = "All " + strconv.Itoa(p.Checked) + " devices backed up."
-		if p.Checked == 1 {
-			p.Title = "The 1 device is backed up."
-		}
-	case d.AllClear:
-		summary = "all clear, " + strconv.Itoa(backedUp) + " of " + count(p.Checked, "device", "devices") + " backed up"
-		p.Title = "All clear: " + strconv.Itoa(backedUp) + " of " + count(p.Checked, "device", "devices") + " backed up."
-		if len(rest) > 0 {
-			summary += ", " + strings.Join(rest, ", ")
-			p.Title += " " + upperFirst(strings.Join(rest, ", ")) + "."
-		}
-	default:
+	case !allClear:
 		parts := []string{strconv.Itoa(critDevices) + " critical", count(warn, "warning", "warnings")}
 		if missing > 0 {
 			parts = append(parts, count(missing, "customer missing", "customers missing"))
@@ -317,13 +312,34 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 		if len(p.Banners) > 0 {
 			parts = append(parts, count(len(p.Banners), "console condition", "console conditions"))
 		}
-		if !v.Complete {
+		if !complete {
 			parts = append(parts, "data incomplete")
 		}
 		summary = strings.Join(parts, ", ")
 		p.Title = "Not all clear: " + summary + "."
+	case p.Checked == 0 && len(left) == 0:
+		summary, p.Title = "no devices enrolled yet", "No devices enrolled yet: nothing is being backed up."
+	case p.Checked == 0:
+		summary = "no devices included, " + strings.Join(left, ", ")
+		p.Title, leftSaid = "No devices included in this digest: "+strings.Join(left, ", ")+".", true
+	case backedUp == 0: // nothing is backed up: never "all clear"
+		summary = "no devices backed up, " + strings.Join(rest, ", ")
+		p.Title = "No devices backed up: " + strings.Join(rest, ", ") + "."
+	case len(rest) == 0 && len(left) == 0:
+		summary = "all clear, " + count(p.Checked, "device", "devices") + " backed up"
+		p.Title = "All " + strconv.Itoa(p.Checked) + " devices backed up."
+		if p.Checked == 1 {
+			p.Title = "The 1 device is backed up."
+		}
+	default:
+		summary = "all clear, " + strconv.Itoa(backedUp) + " of " + count(p.Checked, "device", "devices") + " backed up"
+		p.Title = "All clear: " + strconv.Itoa(backedUp) + " of " + count(p.Checked, "device", "devices") + " backed up."
+		if len(rest) > 0 {
+			summary += ", " + strings.Join(rest, ", ")
+			p.Title += " " + upperFirst(strings.Join(rest, ", ")) + "."
+		}
 	}
-	if len(left) > 0 {
+	if len(left) > 0 && !leftSaid {
 		summary += ", " + strings.Join(left, ", ")
 		p.Title += " " + upperFirst(strings.Join(left, ", ")) + "."
 	}
