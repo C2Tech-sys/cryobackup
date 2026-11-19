@@ -250,13 +250,21 @@ func isASCII(s string) bool {
 // Build renders the message as RFC 5322 text with CRLF line ends, ready for the
 // DATA command. now becomes the Date header (always in UTC). Headers: Date,
 // From, To, Subject (encoded words when it is not ASCII; a non-ASCII display name
-// is encoded the same way, and no header line passes 78 octets), Message-ID under the
-// From domain, MIME-Version, Content-Type, Auto-Submitted: auto-generated and,
+// is encoded the same way), Message-ID under the From domain, MIME-Version,
+// Content-Type (the boundary on a continuation line), Auto-Submitted: auto-generated and,
 // when Kind is set, X-CryoBackup-Kind. There is no Bcc and no Cc: every
 // recipient is in To. The body is multipart/alternative with the text part
 // first and the HTML part second, both UTF-8 and quoted-printable; without HTML
 // it is one text/plain part. Nothing in the output loads remote content unless
 // the caller's own HTML does.
+//
+// Header lines are at most 78 octets wherever there is a fold point: a space in
+// an ASCII subject or display name, the gap between encoded words, between
+// addresses and in the Content-Type. A token with no fold point (an address of
+// 254 octets, a long unbroken ASCII word, a Message-ID under a long domain) stays
+// on one line; no line passes 998 octets, which maxSubject and maxDisplayName
+// guarantee for the parts the caller supplies. A fold never leaves a line of
+// whitespace only.
 func (m Message) Build(now time.Time) ([]byte, error) {
 	a, err := m.parse()
 	if err != nil {
@@ -303,7 +311,7 @@ func (m Message) Build(now time.Time) ([]byte, error) {
 	if err := mw.Close(); err != nil {
 		return nil, err
 	}
-	h("Content-Type", "multipart/alternative; boundary="+mw.Boundary())
+	h("Content-Type", "multipart/alternative;\r\n boundary="+mw.Boundary())
 	b.WriteString("\r\n")
 	b.Write(body.Bytes())
 	return b.Bytes(), nil
@@ -381,7 +389,10 @@ func foldSpaces(col int, value string) string {
 	var out strings.Builder
 	for i, w := range strings.Split(value, " ") {
 		if i > 0 {
-			if col+1+len(w) > foldColumn && col > 1 {
+			// Never fold before an empty word (a trailing space or a run of
+			// spaces): the new line would hold whitespace only, which RFC 5322
+			// 3.2.2 forbids generating. The spaces stay at the end of the line.
+			if w != "" && col+1+len(w) > foldColumn && col > 1 {
 				out.WriteString("\r\n ")
 				col = 1
 			} else {

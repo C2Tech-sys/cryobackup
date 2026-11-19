@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"mime/quotedprintable"
 	netmail "net/mail"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func parts(t *testing.T, msg *netmail.Message) []partInfo {
 func TestBuildStructure(t *testing.T) {
 	m := Message{
 		From:    "Cryo Console <console@example.com>",
-		To:      []string{"ops@example.com", "Night Desk <night@example.org>"},
+		To:      []string{"ops@example.com", "Night Desk <night@example.test>"},
 		Subject: "Backup alert: 2 devices",
 		Text:    "Two devices failed.\nSee the console.\n",
 		HTML:    "<p>Two devices failed.</p>\n",
@@ -104,7 +105,7 @@ func TestBuildStructure(t *testing.T) {
 		t.Fatalf("From = %v, %v", from, err)
 	}
 	to, err := h.AddressList("To")
-	if err != nil || len(to) != 2 || to[1].Address != "night@example.org" {
+	if err != nil || len(to) != 2 || to[1].Address != "night@example.test" {
 		t.Fatalf("To = %v, %v", to, err)
 	}
 	if h.Get("Bcc") != "" || h.Get("Cc") != "" {
@@ -391,7 +392,7 @@ func TestBuildFoldsLongNonASCIIHeaders(t *testing.T) {
 	for name, subj := range map[string]string{"cjk": cjk, "two-byte": twoByte, "mixed": mixed, "emoji": strings.Repeat("\U0001F6A8", 125)} {
 		subj = strings.ToValidUTF8(subj, "")
 		msg, raw := mustBuild(t, Message{
-			From: "console@example.com", To: []string{"ops@example.com"}, Subject: subj, Text: "t\n",
+			From: "console@example.com", To: []string{"ops@example.com"}, Subject: subj, Text: "t\n", HTML: "<p>t</p>\n",
 		})
 		got, err := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
 		if err != nil || got != subj {
@@ -410,7 +411,7 @@ func TestBuildFoldsLongNonASCIIHeaders(t *testing.T) {
 	}
 	// A long ASCII subject is folded at spaces within 78 octets.
 	ascii := strings.Repeat("backup status for the whole fleet ", 14) + "end"
-	msg, raw := mustBuild(t, Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: ascii, Text: "t\n"})
+	msg, raw := mustBuild(t, Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: ascii, Text: "t\n", HTML: "<p>t</p>\n"})
 	if got := msg.Header.Get("Subject"); got != ascii {
 		t.Fatalf("ASCII subject round trip = %q", got)
 	}
@@ -434,7 +435,7 @@ func TestBuildFoldsLongDisplayNames(t *testing.T) {
 	for name, dn := range names {
 		msg, raw := mustBuild(t, Message{
 			From: dn + " <console@example.com>", To: []string{dn + " <ops@example.com>", "Second Person <more@example.com>"},
-			Subject: "s", Text: "t\n",
+			Subject: "s", Text: "t\n", HTML: "<p>t</p>\n",
 		})
 		assertHeaderLines(t, raw, 78)
 		from, err := msg.Header.AddressList("From")
@@ -462,5 +463,64 @@ func TestBuildFoldsLongDisplayNames(t *testing.T) {
 		if strings.Contains(fmt.Sprint(m.Validate()), "é") {
 			t.Errorf("%s: the error echoes the value", name)
 		}
+	}
+}
+
+// unfoldedSubject returns the Subject value as RFC 5322 3.2.2 unfolds it: only
+// the CRLF is removed (net/textproto trims, which would hide the defects).
+func unfoldedSubject(t *testing.T, raw []byte) string {
+	t.Helper()
+	head := string(raw[:bytes.Index(raw, []byte("\r\n\r\n"))])
+	i := strings.Index(head, "\r\nSubject: ")
+	if i < 0 {
+		t.Fatal("no Subject header")
+	}
+	var out strings.Builder
+	lines := strings.Split(head[i+len("\r\nSubject: "):], "\r\n")
+	out.WriteString(lines[0])
+	for _, l := range lines[1:] {
+		if !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "\t") {
+			break // the next header
+		}
+		out.WriteString(l)
+	}
+	return out.String()
+}
+
+func TestFoldingNeverMakesAWhitespaceOnlyLine(t *testing.T) {
+	ws := regexp.MustCompile(`^[ \t]*$`)
+	for n := 1; n <= maxSubject; n++ {
+		a := strings.Repeat("a", n)
+		for name, subj := range map[string]string{
+			"trailing space": a + " ", "trailing spaces": a + "   ", "leading space": " " + a,
+			"run at the fold": a + "    b", "words and run": a[:n/2] + " " + a[n/2:] + "   b  ",
+		} {
+			if len(subj) > maxSubject {
+				continue
+			}
+			raw, err := (Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: subj, Text: "t\n", HTML: "<p>t</p>\n"}).Build(fixedNow)
+			if err != nil {
+				t.Fatalf("%s n=%d: %v", name, n, err)
+			}
+			for _, l := range headerLines(raw) {
+				if ws.MatchString(l) {
+					t.Fatalf("%s n=%d: whitespace-only header line %q", name, n, l)
+				}
+			}
+			if got := unfoldedSubject(t, raw); got != subj {
+				t.Fatalf("%s n=%d: unfolded subject %q, want %q", name, n, got, subj)
+			}
+		}
+	}
+}
+
+func TestMultipartContentTypeIsFolded(t *testing.T) {
+	msg, raw := mustBuild(t, Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: "s", Text: "t\n", HTML: "<p>t</p>\n"})
+	assertHeaderLines(t, raw, 78)
+	if mt, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type")); err != nil || mt != "multipart/alternative" || params["boundary"] == "" {
+		t.Fatalf("Content-Type = %q, %v", msg.Header.Get("Content-Type"), err)
+	}
+	if len(parts(t, msg)) != 2 {
+		t.Fatal("the folded Content-Type no longer parses to two parts")
 	}
 }

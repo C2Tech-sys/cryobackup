@@ -284,7 +284,7 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 	if checkEnvelopeAddr(a.from.Address) != nil {
 		return newErr(StageConfig, ClassMessageInvalid, false)
 	}
-	if err := c.Mail(a.from.Address); err != nil {
+	if err := c.Mail(a.from.Address); err != nil && !bareOK(err) {
 		return replyFailure(ctx, StageSender, ClassSenderRejected, err)
 	}
 	for _, r := range a.to {
@@ -292,7 +292,7 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 			closing(conn, overall, c.Reset) // all or nothing, as for a refused recipient
 			return newErr(StageConfig, ClassMessageInvalid, false)
 		}
-		if err := c.Rcpt(r.Address); err != nil {
+		if err := c.Rcpt(r.Address); err != nil && !bareOK(err) {
 			closing(conn, overall, c.Reset) // all or nothing: no DATA after a refused recipient
 			return replyFailure(ctx, StageRecipient, ClassRecipientRejected, err)
 		}
@@ -304,7 +304,7 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 	if _, err := w.Write(data); err != nil {
 		return netFailure(ctx, StageData, err)
 	}
-	if err := w.Close(); err != nil {
+	if err := w.Close(); err != nil && !bareOK(err) {
 		return replyFailure(ctx, StageData, ClassMessageRejected, err)
 	}
 	// The relay has accepted the message. A QUIT that fails or hangs now must not

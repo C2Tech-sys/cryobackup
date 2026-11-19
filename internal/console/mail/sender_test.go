@@ -77,7 +77,7 @@ func TestSTARTTLSDeliversWithAuth(t *testing.T) {
 	set := srv.settings("starttls")
 	set.Username, set.PasswordFile = "svc", pwFile(t, "s3cret-pw\n")
 	m := testMsg()
-	m.To = []string{"ops@example.com", "Night Desk <night@example.org>"}
+	m.To = []string{"ops@example.com", "Night Desk <night@example.test>"}
 	if err := sendWith(t, set, m); err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestSTARTTLSDeliversWithAuth(t *testing.T) {
 	if c.from != "console@example.com" {
 		t.Fatalf("envelope sender = %q: Settings.From is the default", c.from)
 	}
-	if strings.Join(c.rcpts, ",") != "ops@example.com,night@example.org" {
+	if strings.Join(c.rcpts, ",") != "ops@example.com,night@example.test" {
 		t.Fatalf("envelope recipients = %v", c.rcpts)
 	}
 	msg, err := netmail.ReadMessage(bytes.NewReader(c.data))
@@ -347,11 +347,11 @@ func TestEnvelopeAndDataRejections(t *testing.T) {
 func TestRefusedRecipientSendsNothing(t *testing.T) {
 	// All or nothing: with two recipients and the second refused, DATA is never
 	// issued, so a retry cannot deliver twice to the first.
-	srv := startFake(t, fakeCfg{rcptReply: map[string]string{"bad@example.org": "550 5.1.1 unknown LEAK-REPLY-TEXT"}})
+	srv := startFake(t, fakeCfg{rcptReply: map[string]string{"bad@example.test": "550 5.1.1 unknown LEAK-REPLY-TEXT"}})
 	set := srv.settings("plain")
 	set.AllowPlaintext = true
 	m := testMsg()
-	m.To = []string{"ok@example.com", "bad@example.org"}
+	m.To = []string{"ok@example.com", "bad@example.test"}
 	err := sendWith(t, set, m)
 	wantErr(t, err, StageRecipient, ClassRecipientRejected, false)
 	if srv.sawCmd("DATA") || len(srv.captured()) != 0 {
@@ -682,7 +682,7 @@ func TestPasswordFileUnusedWithoutAUsername(t *testing.T) {
 func TestNoReplyTextAddressOrPasswordInErrorsOrLogs(t *testing.T) {
 	p := testPKI(t)
 	const pass = "hunter2-LEAKPW"
-	rcpt := "patient-rcpt@example.org"
+	rcpt := "patient-rcpt@example.test"
 	pwPath := pwFile(t, pass)
 	secrets := []string{"LEAK-REPLY-TEXT", rcpt, "console@example.com", testHost, pass, "svc-user", pwPath, filepath.Base(pwPath), "127.0.0.1"}
 
@@ -923,9 +923,9 @@ func TestClosingCommandsHaveAShortDeadline(t *testing.T) {
 	})
 	t.Run("RSET hangs after a refused recipient", func(t *testing.T) {
 		m := testMsg()
-		m.To = []string{"ok@example.com", "bad@example.org"}
+		m.To = []string{"ok@example.com", "bad@example.test"}
 		err, took, _ := run(t, fakeCfg{
-			rcptReply: map[string]string{"bad@example.org": "550 5.1.1 unknown"},
+			rcptReply: map[string]string{"bad@example.test": "550 5.1.1 unknown"},
 			hang:      map[string]bool{"RSET": true},
 		}, m)
 		wantErr(t, err, StageRecipient, ClassRecipientRejected, false)
@@ -991,4 +991,50 @@ func TestLowerCaseEHLOKeywordsFailClosed(t *testing.T) {
 			t.Fatalf("%s: credentials or mail were sent", sec)
 		}
 	}
+}
+
+func TestBareReplyCodesAreSMTP(t *testing.T) {
+	plain := func(cfg fakeCfg) (Settings, *fakeSrv) {
+		srv := startFake(t, cfg)
+		set := srv.settings("plain")
+		set.AllowPlaintext = true
+		return set, srv
+	}
+	// A bare 250 after the final dot: the relay accepted the message.
+	set, srv := plain(fakeCfg{reply: map[string]string{"DATAEND": "250"}})
+	if err := sendWith(t, set, testMsg()); err != nil {
+		t.Fatalf("bare 250 after DATA: %v", err)
+	}
+	if !srv.sawCmd("QUIT") {
+		t.Fatal("no QUIT after an accepted message")
+	}
+	// A bare 250 for MAIL and RCPT too.
+	set, _ = plain(fakeCfg{reply: map[string]string{"MAIL": "250", "RCPT": "250"}})
+	if err := sendWith(t, set, testMsg()); err != nil {
+		t.Fatalf("bare 250 for MAIL and RCPT: %v", err)
+	}
+	for _, tc := range []struct {
+		verb  string
+		reply string
+		stage Stage
+		class Class
+		temp  bool
+	}{
+		{"DATAEND", "421", StageData, ClassMessageRejected, true},
+		{"DATAEND", "550", StageData, ClassMessageRejected, false},
+		{"MAIL", "421", StageSender, ClassSenderRejected, true},
+		{"MAIL", "550", StageSender, ClassSenderRejected, false},
+		{"RCPT", "450", StageRecipient, ClassRecipientRejected, true},
+		{"RCPT", "550", StageRecipient, ClassRecipientRejected, false},
+		{"EHLO", "421", StageConnect, ClassProtocol, true},
+	} {
+		set, srv := plain(fakeCfg{reply: map[string]string{tc.verb: tc.reply}})
+		wantErr(t, sendWith(t, set, testMsg()), tc.stage, tc.class, tc.temp)
+		if len(srv.captured()) != 0 {
+			t.Fatalf("%s %s: a message was kept", tc.verb, tc.reply)
+		}
+	}
+	// A line that is not an SMTP reply stays a permanent protocol error.
+	set, _ = plain(fakeCfg{greeting: "HTTP/1.1 400"})
+	wantErr(t, sendWith(t, set, testMsg()), StageConnect, ClassProtocol, false)
 }

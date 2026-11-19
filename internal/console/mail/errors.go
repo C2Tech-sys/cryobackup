@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net"
 	"net/textproto"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -205,6 +207,9 @@ func replyFailure(ctx context.Context, stage Stage, class Class, err error) *Sen
 	if errors.As(err, &te) {
 		return newErr(stage, class, te.Code >= 400 && te.Code < 500)
 	}
+	if code, ok := bareCode(err); ok {
+		return newErr(stage, class, code >= 400 && code < 500)
+	}
 	if notSMTP(err) {
 		return newErr(stage, ClassProtocol, false)
 	}
@@ -212,12 +217,47 @@ func replyFailure(ctx context.Context, stage Stage, class Class, err error) *Sen
 }
 
 // notSMTP reports a reply that is not an SMTP reply at all (no three-digit code
-// and a space or hyphen), such as the "HTTP/1.1 400" of a web server on the
-// mail port. The relay answered, so it is not a network failure, and a retry
-// would get the same answer.
+// followed by end of line, a space or a hyphen), such as the "HTTP/1.1 400" of a
+// web server on the mail port. The relay answered, so it is not a network
+// failure, and a retry would get the same answer. A bare code ("250") is SMTP
+// (RFC 5321 4.2.1: the text is optional): see bareCode.
 func notSMTP(err error) bool {
 	var pe textproto.ProtocolError
-	return errors.As(err, &pe)
+	if !errors.As(err, &pe) {
+		return false
+	}
+	_, bare := bareCode(err)
+	return !bare
+}
+
+// bareCode returns the code of a reply that is nothing but three digits. net/smtp
+// reads replies with net/textproto, which treats a line shorter than four
+// characters as a protocol error ("short response: "250""), so the code has to
+// be read back from that error. A test pins the text.
+func bareCode(err error) (int, bool) {
+	var pe textproto.ProtocolError
+	if !errors.As(err, &pe) {
+		return 0, false
+	}
+	quoted, ok := strings.CutPrefix(string(pe), "short response: ")
+	if !ok {
+		return 0, false
+	}
+	line, uerr := strconv.Unquote(quoted)
+	if uerr != nil || len(line) != 3 {
+		return 0, false
+	}
+	code, aerr := strconv.Atoi(line)
+	if aerr != nil || code < 200 || code > 599 || line[0] < '0' || line[0] > '9' {
+		return 0, false
+	}
+	return code, true
+}
+
+// bareOK reports a bare "250": a success that net/smtp reports as an error.
+func bareOK(err error) bool {
+	code, ok := bareCode(err)
+	return ok && code == 250
 }
 
 // tlsFailure classifies a failed TLS handshake.
@@ -229,6 +269,9 @@ func tlsFailure(ctx context.Context, err error) *SendError {
 	var te *textproto.Error
 	if errors.As(err, &te) {
 		return newErr(StageTLS, ClassStartTLSRejected, te.Code >= 400 && te.Code < 500)
+	}
+	if code, ok := bareCode(err); ok {
+		return newErr(StageTLS, ClassStartTLSRejected, code >= 400 && code < 500)
 	}
 	if notSMTP(err) {
 		return newErr(StageTLS, ClassStartTLSRejected, false)
