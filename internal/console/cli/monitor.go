@@ -10,6 +10,8 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
+	"github.com/c2tech-sys/cryobackup/internal/console/mail"
+	"github.com/c2tech-sys/cryobackup/internal/console/notify"
 	"github.com/c2tech-sys/cryobackup/internal/console/probe"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
@@ -17,6 +19,31 @@ import (
 // The M3 monitoring wiring of serve: the health-prober, the alarm-evaluator
 // loop, the abandoned-run sweeper and the optional healthcheck ping
 // (architecture §5.7), and the World's probe facts (health.Evaluator.Probes).
+// M4 (ADR 0020): the operator mail sender, the evaluator's notify step and the
+// notification-retry job.
+
+// fixturesFrom is the sender address of a fixture console without smtp.from: its FakeSender has no
+// settings to take one from, and nothing it accepts leaves the process.
+const fixturesFrom = "CryoBackup <console@fixtures.example.test>"
+
+// newMailer builds the operator mail sender and its dispatcher: the relay of the smtp block in
+// serve (a console without one still starts; every send then says not_configured), a FakeSender in
+// fixtures mode.
+func newMailer(cfg config.Config, fix bool, a *App) (mail.Sender, *notify.Dispatcher) {
+	from := cfg.SMTP.From
+	var s mail.Sender
+	if fix {
+		s = mail.NewFakeSender()
+		if from == "" {
+			from = fixturesFrom
+		}
+	} else {
+		set := mail.SettingsFromConfig(cfg.SMTP)
+		set.HeloName, set.Log = heloName(cfg.PublicURL), a.log
+		s = mail.NewSMTPSender(set)
+	}
+	return s, &notify.Dispatcher{Store: a.Store, Sender: s, From: from, Log: a.log}
+}
 
 // gatewayCAUnusable is the not-checked reason of a gateway CA file that cannot be used.
 const gatewayCAUnusable = "health_prober.gateway_ca_file cannot be read or holds no certificate"
@@ -64,10 +91,15 @@ func (a *App) probeSource(fix bool) func() state.ProbeFacts {
 func (a *App) addMonitorJobs(cfg config.Config, fleet *health.Evaluator) {
 	a.Prober.Holder = a.Runner.Holder // its probe lease names this process like every other lease
 	a.Runner.Add(a.Prober.Job())
-	a.Runner.Add((&jobs.AlarmEvaluator{Store: a.Store, Evaluate: func(ctx context.Context) error {
-		_, err := fleet.Alarms(ctx)
-		return err
-	}}).Job())
+	view := func(ctx context.Context) (state.FleetView, error) {
+		f, err := fleet.Alarms(ctx)
+		return f.View, err
+	}
+	n := &notify.Notifier{Store: a.Store, Dispatch: a.Dispatch, Configured: mail.SettingsFromConfig(cfg.SMTP).Configured(),
+		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}
+	a.Runner.Add((&jobs.AlarmEvaluator{Store: a.Store, View: view, Notify: jobs.NotifyStep(n)}).Job())
+	a.Runner.Add((&jobs.NotificationRetry{Retrier: &notify.Retrier{Store: a.Store, Dispatch: a.Dispatch, View: view,
+		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}}).Job())
 	a.Runner.Add((&jobs.AbandonedRunSweeper{Store: a.Store}).Job())
 	if hp := cfg.HealthcheckPing; hp.URL != "" {
 		a.Runner.Add((&jobs.HealthcheckPing{Store: a.Store, URL: hp.URL, Method: hp.Method,
