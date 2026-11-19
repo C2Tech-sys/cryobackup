@@ -608,6 +608,11 @@ func loadFixtures(tx *Tx, now time.Time, cfg fixtureConfig) error {
 				tx.id(), id, x.override, "large initial dataset", adminID, nowMS, nowMS)
 		}
 		if x.ackSnooze > 0 {
+			staleAlarm, _ := EpisodeAlarmOfAck("stale")
+			// The alarm the acknowledgement answers is open, and was opened before the acknowledgement was made
+			// (CreateAck requires this; a fixture ack without its episode would be cleared by the first sync).
+			exec(`INSERT INTO alarm_episodes (id, subject_type, device_id, alarm_type, opened_at, state_since, created_at, updated_at)
+				VALUES (?,'device',?,?,?,?,?,?)`, tx.id(), id, staleAlarm, nowMS-int64(2*time.Hour/time.Millisecond), nowMS-int64(2*time.Hour/time.Millisecond), nowMS, nowMS)
 			exec(`INSERT INTO alarm_acks (id, subject_type, device_id, alarm_type, acknowledged_by, acknowledged_at, note, snooze_until, created_at, updated_at)
 				VALUES (?,'device',?,'stale',?,?,?,?,?,?)`, tx.id(), id, adminID, nowMS, "laptop is at the customer's other site",
 				now.Add(x.ackSnooze).UnixMilli(), nowMS, nowMS)
