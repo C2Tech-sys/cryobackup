@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -534,4 +535,55 @@ func TestM4MailFactsCarryTheAgeOfThePendingAlert(t *testing.T) {
 	if b := at(state.SMTPPendingMinAge); b["C03"].Severity != state.SeverityCritical {
 		t.Fatalf("no C03 %v after queueing with nothing delivered: %v", state.SMTPPendingMinAge, b)
 	}
+}
+
+// P20-T2F batch 2 item 4: a stored counter that is not a non-negative integer is treated as zero by
+// the next write (the next failure stores 1, the next success stores 0), while the read stays strict
+// so the damage is visible until then. A good value keeps counting.
+func TestM4FailureCounterRepairsADamagedValueOnWrite(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	soon := func() *time.Time { n := w.clk.Now().Add(time.Minute); return &n }
+	stored := func() string {
+		g := must[Setting](t)(w.s.GetSetting(w.ctx, SettingSMTPConsecutiveFailures))
+		return string(g.Value)
+	}
+	for i, c := range []struct{ before, afterFailure string }{
+		{`"x"`, "1"}, {`"7"`, "1"}, {`1.5`, "1"}, {`-5`, "1"}, {`null`, "1"}, {`7`, "8"}, {`0`, "1"},
+	} {
+		ok(t, w.s.PutSetting(w.ctx, SettingSMTPConsecutiveFailures, json.RawMessage(c.before), ""))
+		_, err := w.s.LoadSendFacts(w.ctx, all)
+		damaged := c.before != "7" && c.before != "0"
+		if damaged != errors.Is(err, ErrInvalid) {
+			t.Errorf("stored %s: LoadSendFacts = %v, want ErrInvalid exactly when damaged", c.before, err)
+		}
+		d := enqueueM4(t, w, DeliveryAlert, "alert:repair"+string(rune('a'+i)))
+		w.clk.Advance(time.Second)
+		must[Delivery](t)(w.s.MarkDeliveryFailed(w.ctx, all, d.ID, "connect", soon()))
+		if got := stored(); got != c.afterFailure {
+			t.Errorf("stored %s then one failure: counter = %s, want %s", c.before, got, c.afterFailure)
+		}
+		if f := must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, all)); f.ConsecutiveFailures != mustAtoi(t, c.afterFailure) {
+			t.Errorf("stored %s: facts count %d after one failure", c.before, f.ConsecutiveFailures)
+		}
+		w.clk.Advance(time.Second)
+		must[Delivery](t)(w.s.MarkDeliverySent(w.ctx, all, d.ID))
+		if got := stored(); got != "0" {
+			t.Errorf("stored %s then a success: counter = %s, want 0", c.before, got)
+		}
+	}
+	// A damaged value is also set right by a success alone.
+	ok(t, w.s.PutSetting(w.ctx, SettingSMTPConsecutiveFailures, json.RawMessage(`"x"`), ""))
+	e := enqueueM4(t, w, DeliveryAlert, "alert:repairs")
+	must[Delivery](t)(w.s.MarkDeliverySent(w.ctx, all, e.ID))
+	if got := stored(); got != "0" {
+		t.Errorf("a success over a damaged value stored %s, want 0", got)
+	}
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	ok(t, err)
+	return n
 }

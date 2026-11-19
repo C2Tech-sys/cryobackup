@@ -57,8 +57,9 @@ func readFailureCount(tx *Tx) (int, error) {
 	case err != nil:
 		return 0, err
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || n < 0 {
+	// The same rule the writer applies: plain digits, at most nine of them (no sign, no fraction, no quotes).
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 || len(raw) > 9 || strings.Trim(raw, "0123456789") != "" {
 		return 0, invalidf("the failure counter is not a non-negative integer")
 	}
 	return n, nil

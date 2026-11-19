@@ -231,10 +231,13 @@ func (s *Store) MarkDeliveryFailed(ctx context.Context, scope Scope, id, errorCl
 	return s.finishDelivery(ctx, scope, id, DeliveryFailed, errorClass, nextRetryAt)
 }
 
-// bumpFailureCount adds one failed attempt to the consecutive-failure counter (a missing row counts as zero).
+// bumpFailureCount adds one failed attempt to the consecutive-failure counter. A missing row, or a
+// stored value that is not a non-negative integer (plain digits, at most nine), counts as zero, so the
+// next failure stores 1; the read (readFailureCount) stays strict, so the damage shows until then.
 func bumpFailureCount(tx *Tx, now int64) error {
 	_, err := tx.Exec(`INSERT INTO settings (key, value, updated_by, created_at, updated_at) VALUES (?, '1', NULL, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = excluded.updated_at`,
+		ON CONFLICT(key) DO UPDATE SET value = CASE WHEN value <> '' AND length(value) <= 9 AND value NOT GLOB '*[^0-9]*'
+			THEN CAST(CAST(value AS INTEGER) + 1 AS TEXT) ELSE '1' END, updated_at = excluded.updated_at`,
 		SettingSMTPConsecutiveFailures, now, now)
 	return err
 }
