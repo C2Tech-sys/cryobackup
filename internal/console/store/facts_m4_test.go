@@ -499,3 +499,36 @@ func TestM4FailureCounterIsHiddenAndReadStrictly(t *testing.T) {
 		}
 	}
 }
+
+// P20-T2F item 2: MailFacts carries the age of the oldest pending alert into the SMTP facts, and
+// the banner waits SMTPPendingMinAge before it calls a queue with no delivery a failure.
+func TestM4MailFactsCarryTheAgeOfThePendingAlert(t *testing.T) {
+	w := seed(t)
+	all := ScopeAll()
+	probe := state.ProbeRun{LastRunAt: state.Millis(t0.UnixMilli()), LastOKAt: state.Millis(t0.UnixMilli())}
+	first := enqueueM4(t, w, DeliveryAlert, "alert:age1")
+	smtp, _, err := w.s.MailFacts(w.ctx, all, probe)
+	ok(t, err)
+	if smtp.PendingAlerts != 1 || smtp.OldestPendingAt != state.Millis(first.CreatedAt.UnixMilli()) {
+		t.Fatalf("pending %d oldest %d, want 1 and %d", smtp.PendingAlerts, smtp.OldestPendingAt, first.CreatedAt.UnixMilli())
+	}
+	digest := &state.DigestFacts{NotInBuild: true}
+	at := func(d time.Duration) map[string]state.Banner {
+		now := t0.Add(d)
+		probe := state.ProbeRun{LastRunAt: state.Millis(now.UnixMilli()), LastOKAt: state.Millis(now.UnixMilli())}
+		smtp, _, err := w.s.MailFacts(w.ctx, all, probe)
+		ok(t, err)
+		wd := worldWith(smtp, digest)
+		wd.LoadedAt = now
+		return bannerIDs(wd, now)
+	}
+	if b := at(time.Minute); b["C03"].ID != "" {
+		t.Fatalf("C03 one minute after the first alert was queued: %+v", b["C03"])
+	}
+	if b := at(state.SMTPPendingMinAge - time.Second); b["C03"].ID != "" {
+		t.Fatalf("C03 just under %v after queueing: %+v", state.SMTPPendingMinAge, b["C03"])
+	}
+	if b := at(state.SMTPPendingMinAge); b["C03"].Severity != state.SeverityCritical {
+		t.Fatalf("no C03 %v after queueing with nothing delivered: %v", state.SMTPPendingMinAge, b)
+	}
+}

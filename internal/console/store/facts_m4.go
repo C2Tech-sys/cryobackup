@@ -156,6 +156,7 @@ func (s *Store) MailFacts(ctx context.Context, scope Scope, smtpProbe state.Prob
 		smtp.ConsecutiveSendFailures = sf.ConsecutiveFailures
 		smtp.LastSendOKAt = millisOrZero(sf.LastSentAt)
 		smtp.PendingAlerts = sf.PendingAlerts
+		smtp.OldestPendingAt = millisOrZero(sf.OldestPendingAt)
 		smtp.LastTestFailed = sf.LastTest != nil && !sf.LastTest.OK
 		digest.LastSentAt = millisOrZero(sf.LastDigestSentAt)
 	}

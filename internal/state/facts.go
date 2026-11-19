@@ -285,6 +285,10 @@ type SMTPFacts struct {
 	LastTestFailed bool
 	// PendingAlerts counts notifications waiting to be delivered by e-mail.
 	PendingAlerts int
+	// OldestPendingAt is when the oldest of them was queued; C03 needs it to be SMTPPendingMinAge old
+	// before "pending and nothing delivered" counts, so a just-queued alert is not a failure. Zero
+	// (unknown) or a time in the future counts as old enough: an age that cannot be read is no reason to stay quiet.
+	OldestPendingAt Millis
 	// NotRead says why the send facts above could not be read from the delivery log ("" = they were),
 	// path-free. Such a check is "not checked" with this reason (C03b), never healthy; a probe that
 	// is itself failing still raises C03.
