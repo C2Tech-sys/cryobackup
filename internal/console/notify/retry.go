@@ -15,13 +15,28 @@ import (
 // RetryBatch bounds the rows one retry run reads.
 const RetryBatch = 100
 
-// Suppress reasons the retry job records. The vocabulary is the schema's (notification_log CHECK,
-// migration 0001), which has no word for "the alarm is over" or "the recipient is gone": a message
-// whose content no longer applies is recorded as deduped (what it said is said by another row, a
-// recovery notice, or nobody wants it any more).
+// Suppress reasons this package records: the schema's vocabulary (the CHECK on
+// notification_log.suppress_reason, migration 0001: acknowledged, snoozed, paused, deduped,
+// customer_suspended, below_threshold), the best fitting word for each case. The schema has no word
+// for some cases, so the "notification suppressed" log line also names the precise case (why, a
+// class word):
+//
+//	case                                         reason            why
+//	orphan of a crashed pass, overlapping pass   deduped           orphan, overlap, batch_id_taken
+//	every alarm of the alert already resolved    below_threshold   alarm_resolved
+//	recipient deleted                            deduped           recipient_deleted
+//	recipient switched the kind off              paused            recipient_switched_off
+//	dedupe key that is not a batch key           deduped           bad_key
+//	a test send left queued                      deduped           test_not_retried
+//	acknowledged, snoozed, customer suspended    the same word     the same word
 const (
-	reasonDeduped = "deduped"
+	reasonDeduped     = "deduped"
+	reasonResolved    = "below_threshold" // the alarm no longer meets the alerting condition
+	reasonSwitchedOff = "paused"          // the recipient paused this kind of mail
 )
+
+// skip is a decision not to send a due row: the schema's reason and the precise case for the log.
+type skip struct{ reason, why string }
 
 // RerenderFunc rebuilds, for a retry, a message of a kind this package does not render (the
 // digest's), as it should read now, addressed to the row's recipient. A non-empty suppress reason
@@ -132,15 +147,15 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 			res.Deferred++
 			continue
 		}
-		m, suppress, err := r.rerender(ctx, d, rv, o)
+		m, sk, err := r.rerender(ctx, d, rv, o)
 		if err != nil {
 			keep(err)
 			continue
 		}
 		var out Result
 		switch {
-		case suppress != "":
-			out, err = r.Dispatch.Suppress(ctx, d, suppress)
+		case sk.reason != "":
+			out, err = r.Dispatch.suppress(ctx, d, sk.reason, sk.why)
 			if err == nil && !out.Settled {
 				res.Suppressed++
 			}
@@ -174,27 +189,27 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 	return res, first
 }
 
-// rerender is the message a due row should carry now, or a suppress reason, or (nil, "") for a row
-// this retrier leaves alone.
-func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView, o Options) (*mail.Message, string, error) {
+// rerender is the message a due row should carry now, or a decision not to send it, or neither
+// (nil and no reason) for a row this retrier leaves alone.
+func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView, o Options) (*mail.Message, skip, error) {
 	switch d.Kind {
 	case store.DeliveryAlert, store.DeliveryRecovery:
 	case store.DeliveryTest:
-		return nil, reasonDeduped, nil // a test is answered on the page at once, never retried in the background
+		return nil, skip{reasonDeduped, "test_not_retried"}, nil // a test is answered on the page at once, never retried in the background
 	default:
 		f := r.Rerender[d.Kind]
 		if f == nil {
-			return nil, "", nil
+			return nil, skip{}, nil
 		}
-		to, reason, err := r.recipient(ctx, d)
-		if err != nil || reason != "" {
-			return nil, reason, err
+		to, sk, err := r.recipient(ctx, d)
+		if err != nil || sk.reason != "" {
+			return nil, sk, err
 		}
 		m, suppress, err := f(ctx, d, to)
 		if err != nil || suppress != "" {
-			return nil, suppress, err
+			return nil, skip{suppress, suppress}, err
 		}
-		return &m, "", nil
+		return &m, skip{}, nil
 	}
 	prefix := keyAlert
 	if d.Kind == store.DeliveryRecovery {
@@ -203,14 +218,14 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	at, _, err := parseBatchKey(d.DedupeKey, prefix)
 	if err != nil {
 		r.log().Warn("notification not retried: its dedupe key is not a batch key", logx.ID("delivery", d.ID), logx.Kind(d.Kind))
-		return nil, reasonDeduped, nil
+		return nil, skip{reasonDeduped, "bad_key"}, nil
 	}
-	to, reason, err := r.recipient(ctx, d)
-	if err != nil || reason != "" {
-		return nil, reason, err
+	to, sk, err := r.recipient(ctx, d)
+	if err != nil || sk.reason != "" {
+		return nil, sk, err
 	}
 	if d.Kind == store.DeliveryAlert && !to.Alerts || d.Kind == store.DeliveryRecovery && !to.Recoveries {
-		return nil, reasonDeduped, nil // the recipient switched it off
+		return nil, skip{reasonSwitchedOff, "recipient_switched_off"}, nil
 	}
 	var eps []store.Episode
 	if d.Kind == store.DeliveryAlert {
@@ -219,54 +234,55 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 		eps, err = r.Store.ListEpisodesRecoveryNotifiedAt(ctx, store.ScopeAll(), at)
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, skip{}, err
 	}
 	if len(eps) == 0 {
-		return nil, reasonDeduped, nil // an orphan of a pass that stopped before it marked: the next pass mailed them
+		return nil, skip{reasonDeduped, "orphan"}, nil // an orphan of a pass that stopped before it marked: the next pass mailed them
 	}
 	v, m, err := rv.get(ctx, r.Store)
 	if err != nil {
-		return nil, "", err
+		return nil, skip{}, err
 	}
 	var c Content
 	if d.Kind == store.DeliveryAlert {
 		var still []store.Episode
-		reason := reasonDeduped // every episode closed: the alarm is over; no recovery follows an alert nobody received
+		sk := skip{reasonResolved, "alarm_resolved"} // every episode closed; no recovery follows an alert nobody received
 		for _, e := range eps {
 			if !e.Open() {
 				continue
 			}
 			if why := m.reason(e); why != "" {
-				reason = why
+				sk = skip{why, why}
 				continue
 			}
 			still = append(still, e)
 		}
 		if len(still) == 0 {
-			return nil, reason, nil
+			return nil, sk, nil
 		}
 		c, err = RenderAlert(v, still, o)
 	} else {
 		c, err = RenderRecovery(v, eps, o)
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, skip{}, err
 	}
 	msg := c.Message(to.Address)
-	return &msg, "", nil
+	return &msg, skip{}, nil
 }
 
-// recipient is the row's recipient, or a suppress reason when it no longer exists.
-func (r *Retrier) recipient(ctx context.Context, d store.Delivery) (store.Recipient, string, error) {
+// recipient is the row's recipient, or a decision not to send when it no longer exists.
+func (r *Retrier) recipient(ctx context.Context, d store.Delivery) (store.Recipient, skip, error) {
+	gone := skip{reasonDeduped, "recipient_deleted"}
 	if d.RuleID == "" {
-		return store.Recipient{}, reasonDeduped, nil // the rule was deleted: the log outlives it
+		return store.Recipient{}, gone, nil // the rule was deleted: the log outlives it
 	}
 	to, err := r.Store.GetRecipient(ctx, store.ScopeAll(), d.RuleID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return store.Recipient{}, reasonDeduped, nil
+		return store.Recipient{}, gone, nil
 	case err != nil:
-		return store.Recipient{}, "", err
+		return store.Recipient{}, skip{}, err
 	}
-	return to, "", nil
+	return to, skip{}, nil
 }

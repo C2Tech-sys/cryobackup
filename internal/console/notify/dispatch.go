@@ -135,6 +135,12 @@ func (d *Dispatcher) Deliver(ctx context.Context, row store.Delivery, m mail.Mes
 // Suppress records the decision not to send a waiting row (store.SuppressDelivery). A row that is
 // already final is Settled.
 func (d *Dispatcher) Suppress(ctx context.Context, row store.Delivery, reason string) (Result, error) {
+	return d.suppress(ctx, row, reason, reason)
+}
+
+// suppress is Suppress with the precise case for the log line (why, a class word): the schema's
+// reason words do not name every case (see the table at reasonDeduped).
+func (d *Dispatcher) suppress(ctx context.Context, row store.Delivery, reason, why string) (Result, error) {
 	upd, err := d.Store.SuppressDelivery(ctx, store.ScopeAll(), row.ID, reason)
 	switch {
 	case errors.Is(err, store.ErrConflict):
@@ -142,7 +148,7 @@ func (d *Dispatcher) Suppress(ctx context.Context, row store.Delivery, reason st
 	case err != nil:
 		return Result{Delivery: row}, err
 	}
-	d.log().Info("notification suppressed", logx.ID("delivery", row.ID), logx.Kind(row.Kind), logx.Str("reason", reason))
+	d.log().Info("notification suppressed", logx.ID("delivery", row.ID), logx.Kind(row.Kind), logx.Str("reason", reason), logx.Str("why", why))
 	return Result{Delivery: upd}, nil
 }
 

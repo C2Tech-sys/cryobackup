@@ -240,7 +240,7 @@ func (n *Notifier) alertBatch(ctx context.Context, v state.FleetView, to []store
 	if marked == 0 {
 		// An overlapping pass marked them first: its rows carry this alert, these would mail it twice.
 		res.Messages -= len(outs)
-		return nil, n.suppressAll(ctx, outs, reasonDeduped)
+		return nil, n.suppressAll(ctx, outs, "overlap")
 	}
 	res.Alerted = len(batch)
 	return outs, nil
@@ -315,7 +315,7 @@ func (n *Notifier) recoveryBatch(ctx context.Context, v state.FleetView, to []st
 	}
 	if marked == 0 { // an overlapping pass marked them first
 		res.Messages -= len(outs)
-		return nil, n.suppressAll(ctx, outs, reasonDeduped)
+		return nil, n.suppressAll(ctx, outs, "overlap")
 	}
 	res.Recovered = len(due)
 	return outs, nil
@@ -401,7 +401,7 @@ func (n *Notifier) enqueue(ctx context.Context, prefix, kind string, c Content, 
 			res.RecipientsGone += gone
 			return outs, time.UnixMilli(id).UTC(), nil
 		}
-		if err := n.suppressAll(ctx, outs, reasonDeduped); err != nil {
+		if err := n.suppressAll(ctx, outs, "batch_id_taken"); err != nil {
 			return nil, time.Time{}, err
 		}
 	}
@@ -409,10 +409,11 @@ func (n *Notifier) enqueue(ctx context.Context, prefix, kind string, c Content, 
 	return nil, time.Time{}, errBatchCollision
 }
 
-// suppressAll records the decision not to send rows this pass wrote and will not send.
-func (n *Notifier) suppressAll(ctx context.Context, outs []outgoing, reason string) error {
+// suppressAll records the decision not to send rows this pass wrote and will not send (reason
+// deduped: another batch carries the alert; why says which case).
+func (n *Notifier) suppressAll(ctx context.Context, outs []outgoing, why string) error {
 	for _, o := range outs {
-		if _, err := n.Dispatch.Suppress(ctx, o.row, reason); err != nil {
+		if _, err := n.Dispatch.suppress(ctx, o.row, reasonDeduped, why); err != nil {
 			return err
 		}
 	}

@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -451,5 +452,107 @@ func TestNotifyRecoveryDoesNotWaitWhenOneAlertWasDelivered(t *testing.T) {
 	w.set(state.StateOK, site...)
 	if res := w.pass(); res.Recovered != 1 || res.Sent != 1 {
 		t.Fatalf("recovery pass %+v", res)
+	}
+}
+
+// suppressed returns the suppress reason of every suppressed row, by delivery id.
+func (w *world) suppressed() map[string]string {
+	w.t.Helper()
+	out := map[string]string{}
+	for _, d := range w.deliveries() {
+		if d.Result == store.DeliverySuppressed {
+			out[d.ID] = d.SuppressReason
+		}
+	}
+	return out
+}
+
+// Item 7. Each case a retry suppresses records the schema word that fits it best, and the log line
+// names the precise case as a class word.
+func TestRetrySuppressReasons(t *testing.T) {
+	cases := []struct {
+		name, reason, why string
+		arrange           func(w *world, r store.Recipient, dev string)
+	}{
+		{"alarm resolved", "below_threshold", "alarm_resolved", func(w *world, _ store.Recipient, dev string) {
+			w.set(state.StateOK, dev)
+			w.pass()
+		}},
+		{"recipient switched off", "paused", "recipient_switched_off", func(w *world, r store.Recipient, _ string) {
+			if _, err := w.st.UpdateRecipient(w.ctx, store.ScopeAll(), r.ID, store.RecipientInput{Name: r.Name, Address: r.Address, Recoveries: true}, w.actor); err != nil {
+				w.t.Fatal(err)
+			}
+		}},
+		{"recipient deleted", "deduped", "recipient_deleted", func(w *world, r store.Recipient, _ string) {
+			if err := w.st.DeleteRecipient(w.ctx, store.ScopeAll(), r.ID, w.actor); err != nil {
+				w.t.Fatal(err)
+			}
+		}},
+		{"acknowledged", "acknowledged", "acknowledged", func(w *world, _ store.Recipient, dev string) {
+			if _, err := w.st.CreateAck(w.ctx, store.ScopeAll(), store.AckInput{SubjectType: store.EpisodeDevice, SubjectID: dev, AlarmType: "failed"}, w.actor); err != nil {
+				w.t.Fatal(err)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			site := w.site("Summit Eye Care", 1)
+			r := w.recipient("ops@example.test", true, true)
+			w.fake.FailNext(1, &mail.SendError{Stage: mail.StageConnect, Class: mail.ClassTimeout, Temporary: true})
+			w.set(state.StateFailed, site...)
+			w.pass()
+			w.clk.Advance(30 * time.Second)
+			c.arrange(w, r, site[0])
+			w.clk.Advance(time.Minute)
+			if rr := w.retry(); rr.Suppressed != 1 {
+				t.Fatalf("retry %+v", rr)
+			}
+			got := w.suppressed()
+			if len(got) != 1 {
+				t.Fatalf("suppressed rows %v", got)
+			}
+			for _, reason := range got {
+				if reason != c.reason {
+					t.Fatalf("reason %q, want %q", reason, c.reason)
+				}
+			}
+			if !strings.Contains(w.logs.String(), `"why":"`+c.why+`"`) {
+				t.Fatalf("no log line names %s:\n%s", c.why, w.logs.String())
+			}
+			w.noLeaks()
+		})
+	}
+}
+
+// Item 7. The orphan of a crashed pass and a row whose key is not a batch key are deduped, each
+// with its own class word in the log.
+func TestRetrySuppressReasonsOfOrphansAndBadKeys(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	r := w.recipient("ops@example.test", true, true)
+	w.set(state.StateFailed, site...)
+	w.n.beforeMark = func(string) error { return errors.New("crash") }
+	if _, err := w.n.Pass(w.ctx, w.view()); err == nil {
+		t.Fatal("no crash")
+	}
+	w.n.beforeMark = nil
+	if _, _, err := w.st.EnqueueDelivery(w.ctx, store.ScopeAll(), store.DeliveryInput{Kind: store.DeliveryAlert, RuleID: r.ID,
+		DedupeKey: "alert:not-a-batch:" + r.ID, SubjectType: "console"}); err != nil {
+		t.Fatal(err)
+	}
+	w.clk.Advance(store.QueuedStaleAfter)
+	if rr := w.retry(); rr.Suppressed != 2 {
+		t.Fatalf("retry %+v", rr)
+	}
+	for id, reason := range w.suppressed() {
+		if reason != "deduped" {
+			t.Fatalf("row %s reason %q", id, reason)
+		}
+	}
+	for _, why := range []string{"orphan", "bad_key"} {
+		if !strings.Contains(w.logs.String(), `"why":"`+why+`"`) {
+			t.Fatalf("no log line names %s:\n%s", why, w.logs.String())
+		}
 	}
 }

@@ -651,7 +651,7 @@ func TestRetryRerendersFromTheStateNow(t *testing.T) {
 			reason = d.SuppressReason
 		}
 	}
-	if reason != "deduped" {
+	if reason != "below_threshold" { // the alarm is over (P20-W2AF item 7)
 		t.Fatalf("suppress reason %q", reason)
 	}
 	w.noLeaks()
