@@ -354,6 +354,8 @@ func TestADR19CompletePurgeDeletesTheDeviceAndEverythingItOwnsAndNothingElse(t *
 			fmt.Sprintf("01J9Y4K3A0B1C2D3E4F5G6HL%02d", n), d, w.target.ID)
 		adr19Exec(w, `INSERT INTO alarm_acks (id, subject_type, device_id, alarm_type, acknowledged_at, created_at, updated_at) VALUES (?, 'device', ?, 'stale', 1, 1, 1)`,
 			fmt.Sprintf("01J9Y4K3A0B1C2D3E4F5G6HA%02d", n), d)
+		adr19Exec(w, `INSERT INTO alarm_episodes (id, subject_type, device_id, alarm_type, opened_at, state_since, created_at, updated_at) VALUES (?, 'device', ?, 'FAILED', 1700000000000, 1700000000000, 1, 1)`,
+			fmt.Sprintf("01J9Y4K3A0B1C2D3E4F5G6HE%02d", n), d)
 		adr19Exec(w, `INSERT INTO notification_rules (id, scope, device_id, name, channel, destination, created_at, updated_at) VALUES (?, 'device', ?, 'r', 'email', 'ops@example.invalid', 1, 1)`,
 			fmt.Sprintf("01J9Y4K3A0B1C2D3E4F5G6HN%02d", n), d)
 		adr19Exec(w, `INSERT INTO device_policy_overrides (id, device_id, patch, reason, created_at, updated_at) VALUES (?, ?, '{}', 'big first backup', 1, 1)`,
@@ -377,7 +379,8 @@ func TestADR19CompletePurgeDeletesTheDeviceAndEverythingItOwnsAndNothingElse(t *
 		"device_presence.device_id": true, "heartbeats.device_id": true, "enrollment_requests.device_id": true, "gateway_logins.device_id": true,
 		"repo_key_escrow.device_id": true, "device_policy_overrides.device_id": true, "runs.device_id": true, "snapshots.device_id": true,
 		"usage_samples.device_id": true, "maintenance_schedule.device_id": true, "commands.device_id": true, "restore_requests.device_id": true,
-		"restore_requests.target_device_id": true, "alarm_acks.device_id": true, "notification_rules.device_id": true, "start_leases.device_id": true}
+		"restore_requests.target_device_id": true, "alarm_acks.device_id": true, "notification_rules.device_id": true, "start_leases.device_id": true,
+		"alarm_episodes.device_id": true}
 	for _, r := range adr19Refs(w, "devices") {
 		tc, rule, _ := strings.Cut(r, " ")
 		if !seeded[tc] {
