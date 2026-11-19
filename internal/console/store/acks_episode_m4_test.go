@@ -121,11 +121,19 @@ func TestM4SyncEpisodesClearsAStaleAckWhenItOpensTheEpisode(t *testing.T) {
 		t.Fatalf("sync = %+v, want one episode opened and one stale ack cleared", r)
 	}
 	ids := map[string]bool{}
-	for _, a := range must[[]Ack](t)(w.s.ListActiveAcks(w.ctx, all)) {
-		ids[a.ID] = true
-	}
+	// Raw rows: the two untouched ones have no episode, so the listing would hide them anyway.
+	ok(t, w.s.Read(w.ctx, func(tx *Tx) error {
+		rows, err := collect(tx, `SELECT id FROM alarm_acks WHERE cleared_at IS NULL`, nil, func(sc scanner) (string, error) {
+			var id string
+			return id, sc.Scan(&id)
+		})
+		for _, id := range rows {
+			ids[id] = true
+		}
+		return err
+	}))
 	if len(ids) != 2 || ids[staleID] || !ids[otherType] || !ids[otherDevice] {
-		t.Fatalf("active acks after the episode opened = %v", ids)
+		t.Fatalf("uncleared acks after the episode opened = %v", ids)
 	}
 	var actorType, details string
 	ok(t, w.s.Read(w.ctx, func(tx *Tx) error {

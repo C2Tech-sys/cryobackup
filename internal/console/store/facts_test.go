@@ -305,6 +305,13 @@ func TestFactsEscrowMaintenanceAckAndVersions(t *testing.T) {
 	ok(t, w.s.Write(ctx, func(tx *Tx) error {
 		_, err := tx.Exec(`INSERT INTO alarm_acks (id, subject_type, device_id, alarm_type, acknowledged_by, acknowledged_at, snooze_until, snooze_until_next_success, created_at, updated_at)
 			VALUES (?, 'device', ?, ?, ?, ?, ?, 1, 1, 1)`, tx.id(), w.devA.ID, ackType, w.admin.ID, t0.UnixMilli(), snooze)
+		if err != nil {
+			return err
+		}
+		// P20-T2F batch 2: the read path honours an ack only while an episode of its type is open.
+		alarm, _ := EpisodeAlarmOfAck(ackType)
+		_, err = tx.Exec(`INSERT INTO alarm_episodes (id, subject_type, device_id, alarm_type, opened_at, state_since, created_at, updated_at)
+			VALUES (?, 'device', ?, ?, 1700000000000, 1700000000000, 1700000000000, 1700000000000)`, tx.id(), w.devA.ID, alarm)
 		return err
 	}))
 	a := facts(t, w, w.devA.ID).Ack

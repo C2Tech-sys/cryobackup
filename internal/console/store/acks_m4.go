@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -90,6 +91,25 @@ func EpisodeAlarmOfAck(ackType string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ackHasOpenEpisode is the SQL condition, on an alarm_acks row aliased a, that an episode of the same
+// subject and alarm type is open. The read paths (ListActiveAcks and the fact loader) apply it so an
+// acknowledgement with no open episode (a legacy row, or one written by SQL) neither mutes nor shows
+// as acknowledged: the same rule CreateAck enforces on write. The state names come from stateAckType.
+var ackHasOpenEpisode = buildAckHasOpenEpisode()
+
+func buildAckHasOpenEpisode() string {
+	var cases strings.Builder
+	for _, subject := range []string{EpisodeDevice, EpisodeCustomer} {
+		for _, alarm := range EpisodeAlarmTypes(subject) {
+			if kind, ok := AckAlarmType(alarm); ok {
+				cases.WriteString(" WHEN '" + kind + "' THEN '" + alarm + "'") // both come from the package's own constants
+			}
+		}
+	}
+	return `EXISTS (SELECT 1 FROM alarm_episodes e WHERE e.closed_at IS NULL AND e.alarm_type = CASE a.alarm_type` + cases.String() + ` END
+		AND ((a.subject_type = 'device' AND e.device_id = a.device_id) OR (a.subject_type = 'customer' AND e.customer_id = a.customer_id)))`
 }
 
 // ErrAlarmNotOpen is what CreateAck returns when no episode of the subject and alarm type is open
@@ -334,7 +354,7 @@ func (s *Store) ClearAck(ctx context.Context, scope Scope, id string, actor Audi
 }
 
 // ListActiveAcks returns the acknowledgements and snoozes in force inside scope, newest first:
-// not cleared, not past their snooze time, and (for a device snoozed until the next success) with
+// not cleared, with an open episode of the same subject and alarm type (ackHasOpenEpisode), not past their snooze time, and (for a device snoozed until the next success) with
 // no successful backup since. Lapsed ones are not listed; the evaluator reads that as "the alert
 // is due again".
 func (s *Store) ListActiveAcks(ctx context.Context, scope Scope) ([]Ack, error) {
@@ -345,7 +365,7 @@ func (s *Store) ListActiveAcks(ctx context.Context, scope Scope) ([]Ack, error) 
 	out := []Ack{}
 	err := s.Read(ctx, func(tx *Tx) error {
 		now := tx.nowMS()
-		rows, err := collect(tx, `SELECT `+ackCols+ackFrom+` WHERE a.cleared_at IS NULL AND `+clause+` ORDER BY a.acknowledged_at DESC, a.id DESC`, args, scanAck)
+		rows, err := collect(tx, `SELECT `+ackCols+ackFrom+` WHERE a.cleared_at IS NULL AND `+ackHasOpenEpisode+` AND `+clause+` ORDER BY a.acknowledged_at DESC, a.id DESC`, args, scanAck)
 		if err != nil {
 			return err
 		}

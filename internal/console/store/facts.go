@@ -421,7 +421,9 @@ func (l *factLoader) deviceFacts(ctx context.Context, d Device, c Customer) stat
 // ackFacts returns the active acknowledgement of the device that covers one of its current states,
 // or nil. An acknowledgement of another alarm type is not the device's: acknowledging FAILED must
 // not mute a later STALE. A lapsed snooze is still returned (the engine shows it as lapsed, not
-// muting); the alarm_acks schema has no row without an alarm type, so none covers every type.
+// muting); the alarm_acks schema has no row without an alarm type, so none covers every type. An
+// acknowledgement counts only while an episode of the same type is open (ackHasOpenEpisode): one with no
+// episode (a legacy row, or one written by SQL) is not acknowledged and mutes nothing.
 func (l *factLoader) ackFacts(deviceID string, f state.DeviceFacts) (*state.AckFacts, error) {
 	type row struct {
 		kind    string
@@ -429,8 +431,8 @@ func (l *factLoader) ackFacts(deviceID string, f state.DeviceFacts) (*state.AckF
 		snooze  sql.NullInt64
 		next    int
 	}
-	rows, err := collect(l.tx, `SELECT alarm_type, acknowledged_at, snooze_until, snooze_until_next_success FROM alarm_acks
-		WHERE device_id = ? AND cleared_at IS NULL ORDER BY acknowledged_at DESC, id DESC`, []any{deviceID}, func(sc scanner) (row, error) {
+	rows, err := collect(l.tx, `SELECT a.alarm_type, a.acknowledged_at, a.snooze_until, a.snooze_until_next_success FROM alarm_acks a
+		WHERE a.device_id = ? AND a.cleared_at IS NULL AND `+ackHasOpenEpisode+` ORDER BY a.acknowledged_at DESC, a.id DESC`, []any{deviceID}, func(sc scanner) (row, error) {
 		var r row
 		return r, sc.Scan(&r.kind, &r.ackedAt, &r.snooze, &r.next)
 	})
