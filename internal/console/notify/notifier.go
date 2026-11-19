@@ -44,7 +44,6 @@ type Notifier struct {
 	// Log receives a summary line per pass that did something (counts only); nil means logx.Default().
 	Log *logx.Logger
 
-	ids batchIDs
 	// beforeMark, when set, runs after a batch's delivery rows are written and before its episodes
 	// are marked: the tests inject a crash there.
 	beforeMark func(kind string) error
@@ -99,20 +98,31 @@ func (n *Notifier) options() Options {
 	return o
 }
 
-// batchIDs hands out batch ids. One process keeps one per Notifier or Retrier.
+// batchIDs hands out batch ids. The process has one (processBatchIDs), shared by every Notifier
+// and Retrier: the alarm-evaluator and notification-retry jobs run concurrently in one process,
+// and the mutex plus the monotonic last value keep them from picking the same millisecond, which
+// the store check alone (a read followed by a separate write) cannot.
 type batchIDs struct {
 	mu   sync.Mutex
 	last int64
 }
 
+// processBatchIDs is the one source of batch ids of this process.
+var processBatchIDs batchIDs
+
+// batchID is a free batch id from the process-wide source.
+func (n *Notifier) batchID(ctx context.Context) (int64, error) {
+	return processBatchIDs.next(ctx, n.Store)
+}
+
 // next returns a free batch id: starting at the store clock in milliseconds (and after the last id
-// it looked at, so a frozen clock never repeats one), the first millisecond that no batch uses: no
-// delivery row with the prefix "alert:<ms>:" or "recovery:<ms>:" (any recipient, any result) and
-// no episode marked at it (notified_at or recovery_notified_at). Alert batches, recovery batches
-// and the silent recovery marks all take their id here. It looks at maxBatchTries milliseconds at
-// most, then fails with errBatchCollision. The check and the use are two store calls, so two
-// processes (or a Notifier and a Retrier) that pick in the same instant can still meet; enqueue
-// catches that for delivery rows.
+// this process handed out, so a frozen clock never repeats one), the first millisecond that no
+// batch uses: no delivery row with the prefix "alert:<ms>:" or "recovery:<ms>:" (any recipient,
+// any result) and no episode marked at it (notified_at or recovery_notified_at). Alert batches,
+// recovery batches and the silent recovery marks all take their id here. It looks at
+// maxBatchTries milliseconds at most, then fails with errBatchCollision. Inside one process no two
+// picks are equal (one mutex, one last value); two processes on one database could still meet,
+// and enqueue catches that for delivery rows.
 func (b *batchIDs) next(ctx context.Context, st *store.Store) (int64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -289,27 +299,40 @@ func (n *Notifier) alertBatch(ctx context.Context, v state.FleetView, to []store
 			return nil, err
 		}
 	}
-	if marked == 0 {
+	switch {
+	case len(markable) == 0:
+		// Every episode of the batch was acknowledged, snoozed or suspended since it was chosen.
+		res.Messages -= len(outs)
+		return nil, n.suppressAll(ctx, outs, "muted_mid_pass")
+	case marked == 0:
 		// An overlapping pass marked them first: its rows carry this alert, these would mail it twice.
 		res.Messages -= len(outs)
 		return nil, n.suppressAll(ctx, outs, "overlap")
-	}
-	if marked < len(batch) {
+	case marked < len(batch):
 		// Part of the batch is muted now or was marked by an overlapping pass: send only what this
 		// pass marked, read back by its batch id (what a retry of these rows renders too).
 		if batch, err = n.Store.ListEpisodesNotifiedAt(ctx, all, at); err != nil {
 			return nil, err
 		}
-		content, err := RenderAlert(v, batch, n.options())
-		if err != nil {
+		if err := rerenderOuts(outs, func() (Content, error) { return RenderAlert(v, batch, n.options()) }); err != nil {
 			return nil, err
-		}
-		for i := range outs {
-			outs[i].msg = content.Message(outs[i].msg.To[0])
 		}
 	}
 	res.Alerted = len(batch)
 	return outs, nil
+}
+
+// rerenderOuts replaces the message of every outgoing row by a new rendering (the episodes a
+// pass actually marked, read back by its batch id).
+func rerenderOuts(outs []outgoing, render func() (Content, error)) error {
+	content, err := render()
+	if err != nil {
+		return err
+	}
+	for i := range outs {
+		outs[i].msg = content.Message(outs[i].msg.To[0])
+	}
+	return nil
 }
 
 // rearmScope is where a lapsed snooze may be re-armed in this pass: the customers that are not
@@ -383,6 +406,16 @@ func (n *Notifier) recoveryBatch(ctx context.Context, v state.FleetView, to []st
 		res.Messages -= len(outs)
 		return nil, n.suppressAll(ctx, outs, "overlap")
 	}
+	if marked < len(due) {
+		// Another writer settled part of the batch first: the notice lists only what this pass
+		// marked, read back by its batch id (what a retry of these rows renders too).
+		if due, err = n.Store.ListEpisodesRecoveryNotifiedAt(ctx, all, at); err != nil {
+			return nil, err
+		}
+		if err := rerenderOuts(outs, func() (Content, error) { return RenderRecovery(v, due, n.options()) }); err != nil {
+			return nil, err
+		}
+	}
 	res.Recovered = len(due)
 	return outs, nil
 }
@@ -423,7 +456,7 @@ func (n *Notifier) owedRecoveries(ctx context.Context, due []store.Episode) (owe
 // markWithoutNotice settles the recovery of eps with no message. The mark takes a free batch id,
 // so a retry of a real recovery batch, which finds its episodes by their mark, never picks them up.
 func (n *Notifier) markWithoutNotice(ctx context.Context, eps []store.Episode) error {
-	id, err := n.ids.next(ctx, n.Store)
+	id, err := n.batchID(ctx)
 	if err != nil {
 		return err
 	}
@@ -448,7 +481,7 @@ var errBatchCollision = errors.New("notify: no free batch id")
 // never sent under, nor its episodes marked with, an id another batch holds.
 func (n *Notifier) enqueue(ctx context.Context, prefix, kind string, c Content, to []store.Recipient, res *PassResult) ([]outgoing, time.Time, error) {
 	for try := 0; try < maxBatchTries; try++ {
-		id, err := n.ids.next(ctx, n.Store)
+		id, err := n.batchID(ctx)
 		if err != nil {
 			return nil, time.Time{}, err
 		}

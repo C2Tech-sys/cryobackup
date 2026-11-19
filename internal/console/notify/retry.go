@@ -29,6 +29,7 @@ const RetryBatch = 100
 //	recipient switched the kind off              deduped           recipient_switched_off
 //	dedupe key that is not a batch key           deduped           bad_key
 //	a test send left queued                      deduped           test_not_retried
+//	the whole batch muted while the pass ran     deduped           muted_mid_pass
 //	acknowledged, snoozed, customer suspended    the same word     the same word
 //
 // "paused" is not used: the rest of the product means the PAUSED device state by it.
@@ -67,9 +68,8 @@ type Retrier struct {
 	Rerender map[string]RerenderFunc
 	Log      *logx.Logger
 
-	ids batchIDs
-	// afterSettle, when set, runs after a re-render settled recoveries and before the send (the
-	// tests inject a crash there).
+	// afterSettle, when set, runs after a re-render took episodes out of their batch and before the
+	// send (the tests inject a crash there).
 	afterSettle func() error
 }
 
@@ -79,6 +79,15 @@ type RetryResult struct {
 	// RecoveryUnsent counts the closed episodes whose recovery a re-rendered alert settled without a
 	// message: the retry left them out and no alert of their batch had been delivered.
 	RecoveryUnsent int
+	// Released counts the open episodes a re-rendered alert left out (acknowledged, snoozed, or of a
+	// suspended customer) while no alert of their batch had been delivered: their alert mark was
+	// taken back, so they leave the batch (leaveBatch).
+	Released int
+}
+
+// batchID is a free batch id from the process-wide source (shared with every Notifier).
+func (r *Retrier) batchID(ctx context.Context) (int64, error) {
+	return processBatchIDs.next(ctx, r.Store)
 }
 
 func (r *Retrier) log() *logx.Logger {
@@ -196,7 +205,7 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 	}
 	r.log().Info("notification retry", logx.Count("due", res.Due), logx.Count("sent", res.Sent), logx.Count("failed", res.Failed),
 		logx.Count("suppressed", res.Suppressed), logx.Count("settled", res.Settled), logx.Count("deferred", res.Deferred),
-		logx.Count("recovery_unsent", res.RecoveryUnsent))
+		logx.Count("recovery_unsent", res.RecoveryUnsent), logx.Count("released", res.Released))
 	return res, first
 }
 
@@ -256,7 +265,7 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	}
 	var c Content
 	if d.Kind == store.DeliveryAlert {
-		var still, closed []store.Episode
+		var still, closed, muted []store.Episode
 		sk := skip{reasonResolved, "alarm_resolved"} // every episode closed; no recovery follows an alert nobody received
 		for _, e := range eps {
 			if !e.Open() {
@@ -267,14 +276,20 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 			}
 			if why := m.reason(e); why != "" {
 				sk = skip{why, why}
+				muted = append(muted, e)
 				continue
 			}
 			still = append(still, e)
 		}
 		if len(still) == 0 {
-			return nil, sk, nil // nothing goes out: the pass settles the recoveries (owedRecoveries)
+			// Nothing goes out: the muted episodes leave the batch now; the pass settles the
+			// recoveries of the closed ones (owedRecoveries).
+			if err := r.leaveBatch(ctx, at, nil, muted, res); err != nil {
+				return nil, skip{}, err
+			}
+			return nil, sk, nil
 		}
-		if err := r.settleLeftOut(ctx, at, closed, res); err != nil {
+		if err := r.leaveBatch(ctx, at, closed, muted, res); err != nil {
 			return nil, skip{}, err
 		}
 		c, err = RenderAlert(v, still, o)
@@ -288,13 +303,18 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 	return &msg, skip{}, nil
 }
 
-// settleLeftOut settles, without a message, the recovery of the closed episodes a re-rendered
-// alert of batch at leaves out, unless a delivery of that batch was already sent (then someone saw
-// them in the full alert and their recovery is owed as usual). It runs before the send: from here
-// on no message of the batch can name them, so no recovery may either. The mark takes a free batch
-// id, like Notifier's silent marks.
-func (r *Retrier) settleLeftOut(ctx context.Context, at time.Time, closed []store.Episode, res *RetryResult) error {
-	if len(closed) == 0 {
+// leaveBatch takes the episodes a re-rendered alert of batch at leaves out out of the batch,
+// unless a delivery of that batch was already sent (then someone saw them in the full alert, and
+// what follows is owed as usual). It runs before the send: from here on no message of the batch
+// can name them, so nothing may follow from it either.
+//
+//   - closed: their recovery is settled without a message (RetryResult.RecoveryUnsent). The mark
+//     takes a free batch id, like Notifier's silent marks.
+//   - muted (open, but acknowledged, snoozed or of a suspended customer): their alert mark is taken
+//     back (store.UnmarkEpisodesNotified; RetryResult.Released), so each is mailed normally if it
+//     becomes mailable while still open, and owes no recovery if it closes first.
+func (r *Retrier) leaveBatch(ctx context.Context, at time.Time, closed, muted []store.Episode, res *RetryResult) error {
+	if len(closed) == 0 && len(muted) == 0 {
 		return nil
 	}
 	rows, err := r.Store.ListDeliveriesByKeyPrefix(ctx, store.ScopeAll(), keyAlert+":"+strconv.FormatInt(at.UnixMilli(), 10)+":")
@@ -306,15 +326,24 @@ func (r *Retrier) settleLeftOut(ctx context.Context, at time.Time, closed []stor
 			return nil
 		}
 	}
-	id, err := r.ids.next(ctx, r.Store)
-	if err != nil {
-		return err
+	if len(muted) > 0 {
+		n, err := r.Store.UnmarkEpisodesNotified(ctx, store.ScopeAll(), episodeIDs(muted), at)
+		if err != nil {
+			return err
+		}
+		res.Released += n
 	}
-	n, err := r.Store.MarkRecoveryNotified(ctx, store.ScopeAll(), episodeIDs(closed), time.UnixMilli(id).UTC())
-	if err != nil {
-		return err
+	if len(closed) > 0 {
+		id, err := r.batchID(ctx)
+		if err != nil {
+			return err
+		}
+		n, err := r.Store.MarkRecoveryNotified(ctx, store.ScopeAll(), episodeIDs(closed), time.UnixMilli(id).UTC())
+		if err != nil {
+			return err
+		}
+		res.RecoveryUnsent += n
 	}
-	res.RecoveryUnsent += n
 	if r.afterSettle != nil {
 		return r.afterSettle()
 	}

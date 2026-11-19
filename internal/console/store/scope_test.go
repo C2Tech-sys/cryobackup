@@ -360,6 +360,7 @@ func matrix() map[string]matrixCase {
 	addADR19Matrix(m)    // ADR 0019: device purge and customer delete (purge_adr19_test.go)
 	addM4Matrix(m)       // ADR 0020: alarm episodes, recipients, delivery log, acknowledgements (scope_m4_test.go)
 	addW2AMatrix(m)      // P20-W2A: batch reads, snooze re-arm, suppress (notify_w2a_m4_test.go)
+	addW2BMatrix(m)      // P20-W2B: an episode leaves its alert batch (notify_w2b_m4_test.go)
 	return m
 }
 
