@@ -52,6 +52,7 @@
     "host": "",
     "port": 587,
     "security": "starttls",
+    "allow_plaintext": false,
     "username": "",
     "password_file": "",
     "from": ""

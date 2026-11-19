@@ -142,17 +142,31 @@ type HealthcheckPing struct {
 	IntervalS int    `json:"interval_s"`
 }
 
-// SMTP is validated in M0; M3's health-prober connects and says EHLO when a
-// host is set (no mail, no login; an empty host is the C03b "not configured"
-// warning); sending is M4. The password is never in this file: password_file
-// names a mounted file.
+// SMTP is the relay that carries alert and digest mail (ADR 0020); M3's
+// health-prober connects and says EHLO when a host is set (no mail, no login;
+// an empty host is the C03b "not configured" warning), and internal/console/mail
+// sends through it.
+//
+// Security is starttls (587, the default: the relay must offer STARTTLS, a relay
+// that does not is a failure, never a silent fall back to clear text), tls
+// (implicit TLS, 465) or plain (25). Plain is refused unless AllowPlaintext is
+// true, and credentials are never sent over it: Validate rejects a Username with
+// security plain, and the sender never authenticates before TLS.
+//
+// The password is never in this file. PasswordFile names a mounted file holding
+// the password on one line; a trailing newline is trimmed, nothing else is. It
+// is read at every send, so a rotated password needs no restart. On Unix the
+// file must not be readable by group or others (mode 0600 or 0400): a sender
+// refuses a more open file with the class password_file_mode rather than use
+// it. Windows has no such check; protect the file with its ACL.
 type SMTP struct {
-	Host         string `json:"host"`
-	Port         int    `json:"port"`
-	Security     string `json:"security"` // starttls | tls | plain
-	Username     string `json:"username"`
-	PasswordFile string `json:"password_file"`
-	From         string `json:"from"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Security       string `json:"security"` // starttls | tls | plain
+	AllowPlaintext bool   `json:"allow_plaintext"`
+	Username       string `json:"username"`
+	PasswordFile   string `json:"password_file"`
+	From           string `json:"from"`
 }
 
 // Config is the console configuration. The file is JSON (the standard library
@@ -507,6 +521,14 @@ func (c Config) Validate() error {
 		case "starttls", "tls", "plain":
 		default:
 			add("smtp.security must be starttls, tls or plain")
+		}
+		if c.SMTP.Security == "plain" {
+			if !c.SMTP.AllowPlaintext {
+				add("smtp.security plain sends mail unencrypted: set smtp.allow_plaintext to true (CRYO_SMTP_ALLOW_PLAINTEXT=true) to opt in, or use starttls or tls")
+			}
+			if c.SMTP.Username != "" {
+				add("smtp.username cannot be used with smtp.security plain: credentials are never sent in clear; use starttls or tls, or clear smtp.username")
+			}
 		}
 		if c.SMTP.From == "" || !strings.Contains(c.SMTP.From, "@") {
 			add("smtp.from must be an e-mail address")

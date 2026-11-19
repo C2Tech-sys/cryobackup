@@ -27,5 +27,14 @@
     "absolute_h": 168
   },
   "rate_limits": {},
+  "smtp": {
+    "host": "",
+    "port": 587,
+    "security": "starttls",
+    "allow_plaintext": false,
+    "username": "",
+    "password_file": "",
+    "from": ""
+  },
   "fixtures": false
 }

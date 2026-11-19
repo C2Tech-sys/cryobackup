@@ -90,7 +90,7 @@ func newR5Rig(t *testing.T, o r5Options) *r5Rig {
 	cfg.TLS = config.TLS{Cert: own, Key: ownKey}
 	cfg.PublicURL, cfg.AgentProbe.CAFile = agentURL, agentCA
 	cfg.GatewayURL, cfg.HealthProber.GatewayCAFile = gwURL, gwCA
-	cfg.SMTP = config.SMTP{Host: smtpHost, Port: smtpPort, Security: "plain", From: "cryo@example.invalid"}
+	cfg.SMTP = config.SMTP{Host: smtpHost, Port: smtpPort, Security: "plain", AllowPlaintext: true, From: "cryo@example.invalid"}
 	cfg.AdminpathSocket = filepath.Join(dir, "a.sock")
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
