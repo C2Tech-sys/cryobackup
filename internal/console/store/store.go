@@ -91,7 +91,7 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 // connection is opened read-only (checkDSN), no migration is applied, no checkpoint runs (not on
 // Close either) and the journal mode is left as it is, so the main file and the WAL are not
 // changed. It changes no data and applies no migration; to read a WAL database SQLite may create
-// or update the -shm index file. It runs PRAGMA quick_check like Open and returns, in version order, the
+// or update the -shm index file and create an empty -wal file. It runs PRAGMA quick_check like Open and returns, in version order, the
 // names of the embedded migrations the database does not have yet: what Open will apply at the
 // next start. A database newer than the binary is ErrMigrationAhead and an edited applied
 // migration ErrMigrationChanged, as with Open; a missing file is ErrNotFound (it is not created).
@@ -199,7 +199,8 @@ func dsn(path string, busy time.Duration, readOnly bool) string {
 // (SQLite URI mode=ro, SQLITE_OPEN_READONLY), so the connection can neither write the database nor
 // run a checkpoint, including the one SQLite runs when the last connection to a WAL database
 // closes; automatic checkpoints are off as well (wal_autocheckpoint(0)) and the journal mode is
-// never set. To read a WAL database SQLite still needs its -shm index file, and may create it.
+// never set. To read a WAL database SQLite still needs its -shm index file, and may create it and
+// an empty -wal file; where it cannot (a directory this account may not write in) the open fails.
 func checkDSN(path string, busy time.Duration) string {
 	q := url.Values{}
 	q.Add("mode", "ro")

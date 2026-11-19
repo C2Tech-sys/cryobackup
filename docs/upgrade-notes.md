@@ -6,7 +6,9 @@ you install. Run `cryo-console doctor` with the new binary and your current conf
 apply the upgrade: it reports every configuration problem the new console would refuse to start
 with, without starting it. Doctor is safe to run before the upgrade, and beside a running console:
 it opens the database read-only, changes no data and applies no migration, and runs no checkpoint,
-so the database file and its WAL stay as they are; it may create the -shm index file. On a database older than the binary it prints the recorded
+so the database file and its WAL stay as they are; it may create the -shm and an empty -wal file.
+Run it as the service account the console runs as: to read the database SQLite must be able to
+create the -shm file next to it, and doctor says so when it cannot. On a database older than the binary it prints the recorded
 schema version, the version the first start will migrate it to and the pending migrations, and
 reports the checks that need the new schema as NOT CHECKED.
 

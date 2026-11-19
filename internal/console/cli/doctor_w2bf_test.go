@@ -297,3 +297,38 @@ func TestDoctorOpensTheConfiguredFileWhateverItsName(t *testing.T) {
 		t.Fatal("a decoded directory exists")
 	}
 }
+
+// P20-W2BF C3: on a cleanly stopped WAL database doctor leaves the main file as it was; what it
+// may create beside it is the -shm index and an empty -wal file, nothing with content.
+func TestDoctorOnACleanWALDatabaseCreatesOnlyEmptyFiles(t *testing.T) {
+	cfgPath, db := doctorRig(t)
+	if _, err := os.Stat(db + "-wal"); err == nil {
+		t.Fatal("the test needs a cleanly stopped database (no -wal)")
+	}
+	before := fileHash(t, db)
+	_, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	if fileHash(t, db) != before {
+		t.Fatalf("doctor changed the main file:\n%s", out)
+	}
+	if fi, err := os.Stat(db + "-wal"); err == nil && fi.Size() != 0 {
+		t.Fatalf("doctor left a -wal of %d bytes", fi.Size())
+	}
+	if !strings.Contains(out, "may create the -shm and an empty -wal file") {
+		t.Fatalf("doctor's database line does not say what it may create:\n%s", out)
+	}
+}
+
+// P20-W2BF C3: when SQLite cannot set up the -shm index it needs to read a WAL database (here a
+// directory stands where the -shm file must go; in the field, a directory this account may not
+// write in), doctor says so and what to do, not a bare "unable to open database file (14)".
+func TestDoctorExplainsAnUnwritableShm(t *testing.T) {
+	cfgPath, db := doctorRig(t)
+	if err := os.Mkdir(db+"-shm", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	if code != ExitFailed || !strings.Contains(out, doctorLine("FAIL", "database")) || strings.Contains(out, "unable to open database file") ||
+		!strings.Contains(out, "-shm") || !strings.Contains(out, "service account") {
+		t.Fatalf("doctor with no usable -shm: %d\n%s", code, out)
+	}
+}
