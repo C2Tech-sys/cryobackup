@@ -227,8 +227,14 @@ func (n *Notifier) alertBatch(ctx context.Context, v state.FleetView, to []store
 			return nil, err
 		}
 	}
-	if _, err := n.Store.MarkEpisodesNotified(ctx, all, episodeIDs(batch), at); err != nil {
+	marked, err := n.Store.MarkEpisodesNotified(ctx, all, episodeIDs(batch), at)
+	if err != nil {
 		return nil, err
+	}
+	if marked == 0 {
+		// An overlapping pass marked them first: its rows carry this alert, these would mail it twice.
+		res.Messages -= len(outs)
+		return nil, n.suppressAll(ctx, outs, reasonDeduped)
 	}
 	res.Alerted = len(batch)
 	return outs, nil
@@ -263,35 +269,74 @@ func (n *Notifier) recoveryBatch(ctx context.Context, v state.FleetView, to []st
 			return nil, err
 		}
 	}
-	if _, err := n.Store.MarkRecoveryNotified(ctx, all, episodeIDs(due), at); err != nil {
+	marked, err := n.Store.MarkRecoveryNotified(ctx, all, episodeIDs(due), at)
+	if err != nil {
 		return nil, err
+	}
+	if marked == 0 { // an overlapping pass marked them first
+		res.Messages -= len(outs)
+		return nil, n.suppressAll(ctx, outs, reasonDeduped)
 	}
 	res.Recovered = len(due)
 	return outs, nil
 }
 
+// maxBatchTries bounds the search for a free batch id (enqueue).
+const maxBatchTries = 5
+
+// errBatchCollision is a pass that found no free batch id in maxBatchTries milliseconds.
+var errBatchCollision = errors.New("notify: no free batch id")
+
 // enqueue writes one queued delivery row per recipient under a fresh batch id and returns the rows
-// with the batch id as a time (what the episodes are marked with). A recipient deleted since the
-// pass read the list is skipped and counted (PassResult.RecipientsGone); with no row written the
-// caller marks nothing.
+// with the batch id as a time (what the episodes are marked with). Every row returned was created
+// by this call. A recipient deleted since the pass read the list is skipped and counted
+// (PassResult.RecipientsGone); with no row written the caller marks nothing.
+//
+// A batch id that already has a row (an earlier process used the same millisecond, or left a
+// suppressed orphan there) is a collision: the rows this try wrote are suppressed and the next
+// free millisecond is tried, at most maxBatchTries times, then the pass fails (errBatchCollision).
+// An alert is never sent under, nor its episodes marked with, an id another batch holds.
 func (n *Notifier) enqueue(ctx context.Context, prefix, kind string, c Content, to []store.Recipient, res *PassResult) ([]outgoing, time.Time, error) {
-	id := n.batchID()
-	outs := make([]outgoing, 0, len(to))
-	for _, r := range to {
-		row, created, err := n.Dispatch.Enqueue(ctx, store.DeliveryInput{Kind: kind, RuleID: r.ID, DedupeKey: batchKey(prefix, id, r.ID), SubjectType: "console"})
-		switch {
-		case errors.Is(err, store.ErrNotFound): // deleted since the pass read the recipients: skip it, mail the others
-			res.RecipientsGone++
-			continue
-		case err != nil:
+	for try := 0; try < maxBatchTries; try++ {
+		id := n.batchID()
+		outs := make([]outgoing, 0, len(to))
+		gone, collided := 0, false
+		for _, r := range to {
+			row, created, err := n.Dispatch.Enqueue(ctx, store.DeliveryInput{Kind: kind, RuleID: r.ID, DedupeKey: batchKey(prefix, id, r.ID), SubjectType: "console"})
+			switch {
+			case errors.Is(err, store.ErrNotFound): // deleted since the pass read the recipients: skip it, mail the others
+				gone++
+				continue
+			case err != nil:
+				return nil, time.Time{}, err
+			}
+			if !created {
+				collided = true
+				break
+			}
+			outs = append(outs, outgoing{row: row, msg: c.Message(r.Address)})
+		}
+		if !collided {
+			res.Messages += len(outs)
+			res.RecipientsGone += gone
+			return outs, time.UnixMilli(id).UTC(), nil
+		}
+		if err := n.suppressAll(ctx, outs, reasonDeduped); err != nil {
 			return nil, time.Time{}, err
 		}
-		if created {
-			res.Messages++
-		}
-		outs = append(outs, outgoing{row: row, msg: c.Message(r.Address)})
 	}
-	return outs, time.UnixMilli(id).UTC(), nil
+	n.log().Error("alert pass found no free batch id", logx.Kind(kind), logx.Count("tries", maxBatchTries))
+	return nil, time.Time{}, errBatchCollision
+}
+
+// suppressAll records the decision not to send rows this pass wrote and will not send.
+func (n *Notifier) suppressAll(ctx context.Context, outs []outgoing, reason string) error {
+	for _, o := range outs {
+		if _, err := n.Dispatch.Suppress(ctx, o.row, reason); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sendAll delivers every outgoing message under one budget. A row not attempted before the budget

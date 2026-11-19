@@ -38,6 +38,11 @@
 // marked episodes and queued rows; the retry job picks those rows up once they are
 // store.QueuedStaleAfter old and sends them. From step 2 on the delivery row owns the message.
 //
+// A pass sends only rows it created. Two passes that overlap both write rows, but only one marks
+// the episodes: the other's mark changes nothing, so it suppresses its rows and sends nothing. A
+// batch id that already has a row (another process used that millisecond) is never reused: the
+// pass suppresses what it wrote under it and takes the next millisecond, five tries at most.
+//
 // # Failing loudly
 //
 // Mail trouble never fails or stalls an evaluator pass: every send has its own deadline and its

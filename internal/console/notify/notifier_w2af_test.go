@@ -168,3 +168,109 @@ func TestNotifyOnlyRecipientDeletedMidPass(t *testing.T) {
 		t.Fatalf("next pass %+v", res)
 	}
 }
+
+// Item 3a. Two passes that overlap (the second runs while the first is between its delivery rows
+// and its marks) mail once per recipient: the first marks nothing, suppresses its own rows and
+// sends nothing.
+func TestNotifyOverlappingPassesMailOnce(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 3)
+	w.recipient("ops@example.test", true, true)
+	w.recipient("oncall@example.test", true, false)
+	w.set(state.StateStale, site...)
+	var second PassResult
+	w.n.beforeMark = func(string) error {
+		w.n.beforeMark = nil
+		var err error
+		second, err = w.n.Pass(w.ctx, w.view())
+		return err
+	}
+	first := w.pass()
+	by := sentTo(w.fake.Sent())
+	if len(by["ops@example.test"]) != 1 || len(by["oncall@example.test"]) != 1 || w.fake.Calls() != 2 {
+		t.Fatalf("overlapping passes sent %v", by)
+	}
+	if second.Alerted != 3 || second.Sent != 2 || first.Alerted != 0 || first.Sent != 0 || first.Messages != 0 {
+		t.Fatalf("first %+v second %+v", first, second)
+	}
+	suppressed := 0
+	for _, d := range w.deliveries() {
+		switch d.Result {
+		case store.DeliverySuppressed:
+			suppressed++
+		case store.DeliverySent:
+		default:
+			t.Fatalf("a row is left waiting: %+v", d)
+		}
+	}
+	if suppressed != 2 {
+		t.Fatalf("%d rows suppressed, want the first pass's 2", suppressed)
+	}
+	w.clk.Advance(store.QueuedStaleAfter + time.Minute)
+	if rr := w.retry(); rr.Due != 0 || w.fake.Calls() != 2 {
+		t.Fatalf("retry after the overlap %+v", rr)
+	}
+}
+
+// collide writes a suppressed delivery row under the batch id at for the recipient, as a crashed
+// pass of an earlier process would have left it.
+func (w *world) collide(at time.Time, r store.Recipient) {
+	w.t.Helper()
+	if _, created, err := w.st.EnqueueDelivery(w.ctx, store.ScopeAll(), store.DeliveryInput{Kind: store.DeliveryAlert, RuleID: r.ID,
+		DedupeKey: batchKey(keyAlert, at.UnixMilli(), r.ID), SubjectType: "console", SuppressReason: "deduped"}); err != nil || !created {
+		w.t.Fatalf("collide: %v %v", created, err)
+	}
+}
+
+// Item 3b. A batch id that an earlier row already holds (a suppressed orphan of another process)
+// moves to the next free millisecond: the alert is not lost to the collision.
+func TestNotifyBatchIDCollisionStillMails(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	r := w.recipient("ops@example.test", true, true)
+	w.collide(w.clk.Now(), r)
+	w.set(state.StateFailed, site...)
+	res := w.pass()
+	if res.Alerted != 1 || res.Sent != 1 || res.Messages != 1 || w.fake.Calls() != 1 {
+		t.Fatalf("pass over a colliding batch id %+v, calls %d", res, w.fake.Calls())
+	}
+	eps, err := w.st.ListEpisodesNotifiedAt(w.ctx, store.ScopeAll(), w.clk.Now().Add(time.Millisecond))
+	if err != nil || len(eps) != 1 {
+		t.Fatalf("episodes of the next millisecond: %v %v", eps, err)
+	}
+}
+
+// Item 3b. The search for a free batch id is bounded: five collisions fail the pass, nothing is
+// marked and nothing sent; the next pass, past the collisions, mails.
+func TestNotifyBatchIDCollisionIsBounded(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	free := w.recipient("ops@example.test", true, true)    // listed first (by name): its row is written, then abandoned
+	r := w.recipient("zz-oncall@example.test", true, true) // collides at every try
+	for i := 0; i < 5; i++ {
+		w.collide(w.clk.Now().Add(time.Duration(i)*time.Millisecond), r)
+	}
+	w.set(state.StateFailed, site...)
+	if _, err := w.n.Pass(w.ctx, w.view()); err == nil {
+		t.Fatal("five collisions did not fail the pass")
+	}
+	if w.fake.Calls() != 0 || len(w.unnotified()) != 1 {
+		t.Fatalf("after the failed pass: %d sent, %d unnotified", w.fake.Calls(), len(w.unnotified()))
+	}
+	abandoned := 0
+	for _, d := range w.deliveries() {
+		if d.RuleID == free.ID {
+			if d.Result != store.DeliverySuppressed {
+				t.Fatalf("a row of an abandoned batch id is waiting: %+v", d)
+			}
+			abandoned++
+		}
+	}
+	if abandoned != 5 {
+		t.Fatalf("%d abandoned rows suppressed, want one per try", abandoned)
+	}
+	w.clk.Advance(time.Minute)
+	if res := w.pass(); res.Alerted != 1 || res.Sent != 2 {
+		t.Fatalf("next pass %+v", res)
+	}
+}
