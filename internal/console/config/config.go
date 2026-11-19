@@ -133,9 +133,13 @@ type HealthProber struct {
 // operator's choosing), sent every IntervalS seconds (default 300, 60 to 86400) only while the
 // alarm-evaluator is healthy, so the monitor alerts when the console's alerting stops. It is off
 // while URL is empty, the default: nothing is sent anywhere unless the operator names a URL. The
-// URL must be https (http only for a loopback host). Method is GET (default), HEAD or POST with an
-// empty body. The URL often carries a monitor token, so it is never logged and never echoed in an
-// error. Each key has its CRYO_HEALTHCHECK_PING_* override.
+// URL must be https (http only for a loopback host), with no user name or password, no white space
+// around it and a port, when it names one, between 1 and 65535. Method is GET (default), HEAD or
+// POST with an empty body. The URL often carries a monitor token, so it is never logged and never
+// echoed in an error. The proxy environment variables (HTTPS_PROXY, NO_PROXY) are honoured; an https
+// ping goes through a proxy as a tunnel, so the proxy sees the host, never the path or the token.
+// The console warns (banner C19) after three failed pings in a row, so at a long interval the
+// warning is slow: three days at 86400. Each key has its CRYO_HEALTHCHECK_PING_* override.
 type HealthcheckPing struct {
 	URL       string `json:"url"`
 	Method    string `json:"method"`
@@ -510,8 +514,10 @@ func (c Config) Validate() error {
 	default:
 		add("healthcheck_ping.method must be GET, HEAD or POST")
 	}
-	if hp.URL != "" && !HeartbeatURLAllowed(hp.URL) {
-		add("healthcheck_ping.url must be an https URL (http only for a loopback host)") // the value is not echoed: it may carry a token
+	if hp.URL != "" {
+		if why := heartbeatURLProblem(hp.URL); why != "" {
+			add("%s", why) // a fixed text: the value is not echoed, it may carry a token
+		}
 	}
 	if c.SMTP.Host != "" {
 		if c.SMTP.Port < 1 || c.SMTP.Port > 65535 {

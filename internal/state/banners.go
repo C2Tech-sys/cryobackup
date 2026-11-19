@@ -226,6 +226,8 @@ func probeBanners(w World, now time.Time) []Banner {
 			out = append(out, k.absent)
 		}
 	}
+	// The heartbeat ping is optional: no facts, or no URL, raise nothing (no "not checked" warning).
+	out = append(out, heartbeatBanners(p.Heartbeat, c)...)
 	// View describes the page rendering this view; a caller with no page has none.
 	if p.View != nil {
 		out = append(out, viewBanners(p.View, w.LoadedAt, c)...)

@@ -247,6 +247,7 @@ func TestR4EveryBannerIsPinnedToItsRow(t *testing.T) { // r4 low 4 (A20)
 		"C04": "agent_api", "C04b": "agent_api", "C07": "maintenance_worker", "C07b": "maintenance_worker", "C11": "database",
 		"C06": "evaluator", "C06b": "evaluator", "C12": "master_key", "C12b": "master_key", "C08": "fleet_data", "C09": "fleet_data", "C10": "fleet_data",
 		"C13": "clock", "C16": "release_manifest", "C16b": "release_manifest", "C17": "gateway", "C17b": "gateway",
+		"C19": "jobs", "C19b": "jobs",
 	}
 	got := map[string]string{}
 	for row, ids := range healthRowBanners {

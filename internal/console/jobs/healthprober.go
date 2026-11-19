@@ -141,6 +141,9 @@ type HealthProber struct {
 	SMTP probe.SMTPSettings
 	// Endpoint, when set, is the agent-endpoint self-probe whose status is mirrored into job_state.
 	Endpoint func() probe.Status
+	// Heartbeat, when set, supplies the outbound heartbeat ping's facts (HeartbeatPing.Facts) for
+	// banner C19. Nil leaves ProbeFacts.Heartbeat nil, which raises nothing: the ping is optional.
+	Heartbeat func() state.HeartbeatFacts
 	// Interval is the period; zero means DefaultProberInterval.
 	Interval time.Duration
 	// StorageTimeout bounds the storage probe; zero means StorageProbeTimeout.
@@ -1063,10 +1066,15 @@ func (h *HealthProber) mirrorEndpoint(context.Context) result {
 // (alarm-evaluator, maintenance scheduler) and the later-milestone markers are
 // added by internal/console/health, which assembles the World. The SMTP check
 // carries the send-side facts of the delivery log and the recipients
-// (mailFacts, ADR 0020 decision 9 and 10), read outside the prober's lock.
+// (mailFacts, ADR 0020 decision 9 and 10), read outside the prober's lock, and the heartbeat ping's
+// facts come from its job (Heartbeat) when one is wired.
 func (h *HealthProber) Facts() state.ProbeFacts {
 	p := h.probeFacts()
 	p.SMTP, p.Digest = h.mailFacts(p.SMTP.Probe)
+	if h.Heartbeat != nil {
+		f := h.Heartbeat()
+		p.Heartbeat = &f
+	}
 	return p
 }
 

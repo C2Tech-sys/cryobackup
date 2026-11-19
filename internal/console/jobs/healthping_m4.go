@@ -44,8 +44,7 @@ const (
 )
 
 // HeartbeatPing is the healthcheck-ping job (ADR 0020 decision 12): an optional request to a URL
-// the operator names, so an outside monitor (a dead man's switch) notices a console that died. It
-// supersedes HealthcheckPing in monitor.go, which is the same idea without the hardening below.
+// the operator names, so an outside monitor (a dead man's switch) notices a console that died.
 //
 // WHEN A PING IS WITHHELD. A ping is sent only while the console is doing its job, which means the
 // newest pass of the alarm-evaluator ended ok and ended no longer ago than EvaluatorHealthyPeriods
@@ -60,7 +59,15 @@ const (
 // empty), no body, no cookies, no credentials of its own, and the fixed User-Agent
 // "CryoBackup/<version>". https only; plain http is accepted only when the host is loopback (tests
 // and a local relay). Redirects are not followed: a 3xx is a failure of class redirect. The total
-// time is HeartbeatPingTimeout. The reply body is read up to 4 KiB and dropped. 2xx is success.
+// time is HeartbeatPingTimeout. The reply body is read up to 4 KiB and dropped. 2xx is success,
+// once that read is done: a 2xx whose body then stalls past the timeout or breaks is a failure of
+// class timeout. The proxy environment variables (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) are honoured,
+// as by every Go HTTP client: an https ping then goes through the proxy as a CONNECT tunnel, so the
+// proxy sees the monitor's host name and port, never the path, the query or the token in them.
+//
+// WHEN IT WARNS. Banner C19 needs state.HeartbeatPingFailuresToWarn (three) failed pings in a row,
+// so the time to the warning is three periods: about fifteen minutes at the default five, three
+// days at the longest period (86400 s). A long period is a slow witness.
 //
 // WHAT IS KEPT. The facts between passes (Facts) live in this struct, behind a mutex, the way the
 // health-prober keeps its probe results: job_state keeps only the newest run (status and class)
@@ -247,9 +254,17 @@ func (j *HeartbeatPing) Run(ctx context.Context) error {
 		return j.failed(heartbeatErrClass(err))
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, heartbeatBodyCap))
+	_, cerr := io.Copy(io.Discard, io.LimitReader(resp.Body, heartbeatBodyCap))
 	if class := heartbeatStatusClass(resp.StatusCode); class != "" {
 		return j.failed(class)
+	}
+	if cerr != nil {
+		// A reply that stalls or breaks after its status line is not an answered ping: the monitor
+		// may never have recorded the request as complete. Its class is timeout, whatever broke it.
+		if ctx.Err() != nil {
+			return ctx.Err() // the console is stopping: not a failed ping
+		}
+		return j.failed(pingTimeout)
 	}
 	if n := j.succeeded(now); n > 0 {
 		j.log().Info("heartbeat ping recovered", logx.Str("job", NameHealthcheckPing), logx.Count("failures", n))

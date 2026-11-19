@@ -101,8 +101,10 @@ func (a *App) addMonitorJobs(cfg config.Config, fleet *health.Evaluator) {
 	a.Runner.Add((&jobs.NotificationRetry{Retrier: &notify.Retrier{Store: a.Store, Dispatch: a.Dispatch, View: view,
 		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}}).Job())
 	a.Runner.Add((&jobs.AbandonedRunSweeper{Store: a.Store}).Job())
-	if hp := cfg.HealthcheckPing; hp.URL != "" {
-		a.Runner.Add((&jobs.HealthcheckPing{Store: a.Store, URL: hp.URL, Method: hp.Method,
-			Every: time.Duration(hp.IntervalS) * time.Second, Started: a.clock().UTC()}).Job())
-	}
+	// The outbound heartbeat ping (ADR 0020 decision 12): registered only with a URL; its facts feed
+	// banner C19 through the prober either way (no URL: not configured, nothing raised).
+	hp := cfg.HealthcheckPing
+	ping := jobs.NewHeartbeatPing(a.Store, hp.URL, hp.Method, time.Duration(hp.IntervalS)*time.Second, a.clock().UTC())
+	a.Prober.Heartbeat = ping.Facts
+	jobs.RegisterHeartbeatPing(a.Runner, ping)
 }

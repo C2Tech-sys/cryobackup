@@ -472,6 +472,9 @@ type ProbeFacts struct {
 	Release *ReleaseFacts
 	// LoginFile is the measurement of the gateway's login file against the retired devices (C17).
 	LoginFile *LoginFileFacts
+	// Heartbeat is the optional outbound heartbeat ping (C19, ADR 0020 decision 12). Nil means the
+	// loader does not supply it: the feature is optional, so that raises nothing (heartbeatBanners).
+	Heartbeat *HeartbeatFacts
 }
 
 // LoginFileFacts says what a read of the file the gateway reads found, and which devices are retired

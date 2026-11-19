@@ -200,6 +200,7 @@ var healthRowBanners = map[string][]string{
 	"fleet_data":         {"C08", "C09", "C10"},
 	"clock":              {"C13"},
 	"release_manifest":   {"C16", "C16b"},
+	"jobs":               {"C19", "C19b"}, // the outbound heartbeat ping (healthcheck-ping) is failing
 }
 
 // bannerNotWired is C00: the console's own self-checks are not wired, so no
