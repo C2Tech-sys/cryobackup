@@ -47,6 +47,11 @@ type SendFacts struct {
 	// "digest:<local date>:<rule id>"); zero means never. A forced send-now ("digest-forced:")
 	// is not the day's digest and does not count (banner C14).
 	LastDigestSentAt time.Time
+	// Undelivered24h counts the alert, recovery and digest rows that became final without being
+	// sent in the last 24 hours of the store clock: failed with no retry left (sent_at is the time
+	// of that last attempt). Suppressed rows (a decision, not a failure) and test sends are not
+	// counted.
+	Undelivered24h int
 }
 
 // readFailureCount reads the consecutive-failure counter: zero when the row is absent, ErrInvalid
@@ -96,6 +101,10 @@ func (s *Store) LoadSendFacts(ctx context.Context, scope Scope) (SendFacts, erro
 			return err
 		}
 		f.LastDigestSentAt = ptrTimeOrZero(digest)
+		if err := tx.QueryRow(`SELECT count(*) FROM notification_log WHERE kind IN ('alert','recovery','digest')
+			AND result = 'failed' AND next_retry_at IS NULL AND sent_at >= ?`, tx.nowMS()-(24*time.Hour).Milliseconds()).Scan(&f.Undelivered24h); err != nil {
+			return err
+		}
 		var at int64
 		var res string
 		var class sql.NullString
@@ -162,6 +171,7 @@ func (s *Store) MailFacts(ctx context.Context, scope Scope, smtpProbe state.Prob
 		smtp.OldestPendingAt = millisOrZero(sf.OldestPendingAt)
 		smtp.LastTestFailed = sf.LastTest != nil && !sf.LastTest.OK
 		digest.LastSentAt = millisOrZero(sf.LastDigestSentAt)
+		smtp.Undelivered24h = sf.Undelivered24h
 	}
 	ds, derr := s.ReadDigestSettings(ctx, scope)
 	if derr != nil {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/policy"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // P20-W2B item 7: an open episode still marked at the batch id leaves the batch; a closed one, one
@@ -111,5 +112,39 @@ func TestM4W2BFForcedDigestIsNotTheDaysDigest(t *testing.T) {
 	f = must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, ScopeAll()))
 	if !f.LastDigestSentAt.Equal(d.SentAt) {
 		t.Fatalf("the daily digest: %v, want %v", f.LastDigestSentAt, d.SentAt)
+	}
+}
+
+// P20-W2BF item 5: the alert, recovery and digest rows that became final without being sent in
+// the last 24 hours. Suppressed rows, test sends, rows still in retry and older failures do not
+// count.
+func TestM4W2BFUndeliveredInTheLastDay(t *testing.T) {
+	w := seed(t)
+	sendM4(t, w, DeliveryAlert, "alert:old", 4, false) // failed for good...
+	w.clk.Advance(25 * time.Hour)                      // ...more than a day ago
+	sendM4(t, w, DeliveryDigest, "digest:2026-10-23:a", 4, false)
+	sendM4(t, w, DeliveryRecovery, "recovery:1:a", 4, false)
+	sendM4(t, w, DeliveryTest, "test:1", 4, false)
+	sendM4(t, w, DeliveryAlert, "alert:retrying", 1, false) // a retry is still scheduled
+	sendM4(t, w, DeliveryDigest, "digest:2026-10-23:b", 0, true)
+	d := enqueueM4(t, w, DeliveryAlert, "alert:suppressed")
+	must[Delivery](t)(w.s.SuppressDelivery(w.ctx, ScopeAll(), d.ID, "deduped"))
+	f := must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, ScopeAll()))
+	if f.Undelivered24h != 2 {
+		t.Fatalf("undelivered in the last day = %d, want 2", f.Undelivered24h)
+	}
+	smtp, _ := mailFactsOf(t)(w.s.MailFacts(w.ctx, ScopeAll(), state.ProbeRun{}))
+	if smtp.Undelivered24h != 2 {
+		t.Fatalf("SMTP facts %+v", smtp)
+	}
+}
+
+func mailFactsOf(t *testing.T) func(*state.SMTPFacts, *state.DigestFacts, error) (*state.SMTPFacts, *state.DigestFacts) {
+	return func(s *state.SMTPFacts, d *state.DigestFacts, err error) (*state.SMTPFacts, *state.DigestFacts) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s, d
 	}
 }

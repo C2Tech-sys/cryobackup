@@ -100,3 +100,15 @@ func TestC22DigestLeavesOutWhatThePolicyExcludes(t *testing.T) {
 		}
 	}
 }
+
+// P20-W2BF item 5: deliveries that became final without being sent in the last 24 hours are a
+// warning of their own (C21), also while another recipient's mail goes out and C03 stays quiet.
+func TestC21UndeliveredMailIsAWarning(t *testing.T) {
+	runProbeCases(t, []probeCase{
+		{name: "C21_one_undelivered_message", mod: func(p *ProbeFacts, _ *World) { p.SMTP.Undelivered24h = 1 },
+			want: []string{"C21/alarm"}, contains: "1 e-mail message could not be delivered in the last 24 hours: see the delivery log."},
+		{name: "C21_three_undelivered_messages", mod: func(p *ProbeFacts, _ *World) { p.SMTP.Undelivered24h = 3 },
+			want: []string{"C21/alarm"}, contains: "3 e-mail messages could not be delivered in the last 24 hours: see the delivery log."},
+		{name: "C21_none_no_banner", mod: func(p *ProbeFacts, _ *World) { p.SMTP.Undelivered24h = 0 }},
+	})
+}

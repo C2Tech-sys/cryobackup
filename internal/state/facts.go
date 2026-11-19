@@ -301,6 +301,10 @@ type SMTPFacts struct {
 	// (ADR 0020 decision 10): the warning C18. It is not judged while the probe says SMTP is not
 	// configured (C03b already says so).
 	NoAlertRecipient bool
+	// Undelivered24h counts the alert, recovery and digest messages that became final without being
+	// sent in the last 24 hours (failed for good; suppressed and test sends are not counted): the
+	// warning C21, which stays visible while other recipients' mail goes out and C03 is quiet.
+	Undelivered24h int
 }
 
 // MaintainFacts is the maintenance worker (C07).

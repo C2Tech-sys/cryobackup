@@ -325,14 +325,27 @@ func gatewayBanners(g *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
 // alerts pending (the oldest for at least SMTPPendingMinAge) with nothing delivered for a day. Recent successful delivery
 // is evidence too, so an unchecked probe is only a warning when nothing has
 // been delivered within the day. Beside it, C18 warns that a configured relay
-// has no recipient with the alerts switch (ADR 0020 decision 10).
+// has no recipient with the alerts switch (ADR 0020 decision 10), and C21 that
+// messages failed for good in the last 24 hours.
 func smtpBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
 	out := smtpDeliveryBanners(s, iv, c)
 	if s.NoAlertRecipient && s.Probe.Unconfigured == "" {
 		out = append(out, Banner{ID: "C18", Severity: SeverityAlarm, Text: "Alert e-mail has no recipient: alarms are not mailed to anyone."})
 	}
+	if n := s.Undelivered24h; n > 0 {
+		what := strconv.Itoa(n) + " e-mail messages could not"
+		if n == 1 {
+			what = "1 e-mail message could not"
+		}
+		out = append(out, Banner{ID: mailUndeliveredID, Severity: SeverityAlarm, Count: n,
+			Text: what + " be delivered in the last 24 hours: see the delivery log."})
+	}
 	return out
 }
+
+// mailUndeliveredID is the warning of messages that failed for good in the last 24 hours
+// (P20-W2BF): one recipient whose mail never arrives is visible although others' does.
+const mailUndeliveredID = "C21"
 
 // smtpDeliveryBanners is the C03 / C03b half of smtpBanners.
 func smtpDeliveryBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {

@@ -189,7 +189,7 @@ var healthRowBanners = map[string][]string{
 	"gateway":            {"C01", "C01b", "C17", "C17b"},
 	"storage":            {"C02", "C02b"},
 	"storage_quota":      {"C15", "C15b"},
-	"smtp":               {"C03", "C03b", "C18"},
+	"smtp":               {"C03", "C03b", "C18", "C21"},
 	"digest":             {"C14", "C14b", "C20"},
 	"certificates":       {"C05", "C05b"},
 	"agent_api":          {"C04", "C04b"},
@@ -1089,7 +1089,7 @@ func labFacts(now time.Time) healthFacts {
 		Probes: state.ProbeFacts{Wired: true, Gateway: &gw, Storage: &st, SMTP: &state.SMTPFacts{Probe: ok()}, Evaluator: good,
 			Maintain: &state.MaintainFacts{RPC: ok(), Scheduler: good}, MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "lab"},
 			Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second), SelfBackup: &state.SelfBackupFacts{NotInBuild: true}},
-			Digest:   &state.DigestFacts{NotInBuild: true}, Quota: &state.QuotaFacts{NotInBuild: true}, Release: &state.ReleaseFacts{NotInBuild: true}},
+			Digest:   &state.DigestFacts{LocalTime: "07:00", LastSentAt: at(time.Hour)}, Quota: &state.QuotaFacts{NotInBuild: true}, Release: &state.ReleaseFacts{NotInBuild: true}},
 		Endpoint: probe.Status{Runs: true, Known: true, Interval: time.Minute, Last: probe.Result{At: now.Add(-20 * time.Second), OK: true, NotAfter: now.Add(365 * 24 * time.Hour)}},
 	}
 }

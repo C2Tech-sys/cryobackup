@@ -247,7 +247,7 @@ func TestR4EveryBannerIsPinnedToItsRow(t *testing.T) { // r4 low 4 (A20)
 		"C04": "agent_api", "C04b": "agent_api", "C07": "maintenance_worker", "C07b": "maintenance_worker", "C11": "database",
 		"C06": "evaluator", "C06b": "evaluator", "C12": "master_key", "C12b": "master_key", "C08": "fleet_data", "C09": "fleet_data", "C10": "fleet_data",
 		"C13": "clock", "C16": "release_manifest", "C16b": "release_manifest", "C17": "gateway", "C17b": "gateway",
-		"C19": "jobs", "C19b": "jobs", "C20": "digest",
+		"C19": "jobs", "C19b": "jobs", "C20": "digest", "C21": "smtp",
 	}
 	got := map[string]string{}
 	for row, ids := range healthRowBanners {
@@ -261,6 +261,17 @@ func TestR4EveryBannerIsPinnedToItsRow(t *testing.T) { // r4 low 4 (A20)
 	for id, row := range want {
 		if got[id] != row {
 			t.Errorf("banner %s is on row %q, want %q", id, got[id], row)
+		}
+	}
+}
+
+// P20-W2BF item 7: the lab view of a healthy console no longer marks the digest as not in this
+// build: the digest is in this build, and a healthy console has sent it.
+func TestW2BFLabHealthyDigestIsInThisBuild(t *testing.T) {
+	overall, rows := LabHealthy(time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC))
+	for _, r := range rows {
+		if r.ID == "digest" && r.Status != statusOK {
+			t.Fatalf("lab digest row %+v (overall %s)", r, overall)
 		}
 	}
 }
