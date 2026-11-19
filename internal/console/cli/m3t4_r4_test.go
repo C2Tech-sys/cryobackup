@@ -146,6 +146,10 @@ func TestR4ARefusedGatewayCertificateNeverReadsOK(t *testing.T) { // r4 HIGH-1, 
 // MEDIUM-1: remove healthcheck_ping.url and restart. The job's old row must not hold overall off ok.
 func TestR4ALeftoverJobRowDoesNotHoldOverallOffOK(t *testing.T) { // r4 M1
 	app := r3RealApp(t, nil)
+	if _, err := app.Store.CreateRecipient(context.Background(), store.ScopeAll(), store.RecipientInput{Name: "Ops", Address: "ops@example.test", Alerts: true},
+		store.AuditActor{Username: "test", Method: "api"}); err != nil { // P20-W2A: a relay with no alert recipient raises C18
+		t.Fatal(err)
+	}
 	r3MaintainPass(t, app.Store)
 	last := time.Now().UTC().Add(-3 * time.Hour)
 	due := last.Add(5 * time.Minute)
