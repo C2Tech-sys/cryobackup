@@ -141,7 +141,7 @@ func TestMigration0008EpisodesTableAndItsRules(t *testing.T) {
 	}
 	// The migration file is plain LF, like the others.
 	raw, err := fs.ReadFile(Files(), "0008_m4_alerts.sql")
-	if err != nil || strings.Contains(string(raw), "") {
+	if err != nil || strings.Contains(string(raw), "\r") {
 		t.Errorf("0008_m4_alerts.sql unreadable or has CRLF line endings: %v", err)
 	}
 }
