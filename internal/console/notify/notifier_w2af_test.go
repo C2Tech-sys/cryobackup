@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -554,5 +555,38 @@ func TestRetrySuppressReasonsOfOrphansAndBadKeys(t *testing.T) {
 		if !strings.Contains(w.logs.String(), `"why":"`+why+`"`) {
 			t.Fatalf("no log line names %s:\n%s", why, w.logs.String())
 		}
+	}
+}
+
+// Batch 2 item 4. A RerenderFunc that answers with a suppress word the schema does not allow is
+// recorded as deduped, with the word (sanitised) in the log; the run does not fail.
+func TestRetryUnknownSuppressWordFromARerenderFunc(t *testing.T) {
+	w := newWorld(t)
+	rec := w.recipient("ops@example.test", false, false)
+	for i, word := range []string{"resolved", "Bad Word/../x" + strings.Repeat("y", 60)} {
+		key := fmt.Sprintf("digest:2026-11-1%d:%s", i, rec.ID)
+		if _, _, err := w.st.EnqueueDelivery(w.ctx, store.ScopeAll(), store.DeliveryInput{Kind: store.DeliveryDigest, RuleID: rec.ID, DedupeKey: key, SubjectType: "console"}); err != nil {
+			t.Fatal(err)
+		}
+		w.r.Rerender = map[string]RerenderFunc{store.DeliveryDigest: func(context.Context, store.Delivery, store.Recipient) (mail.Message, string, error) {
+			return mail.Message{}, word, nil
+		}}
+		w.clk.Advance(store.QueuedStaleAfter)
+		rr, err := w.r.Run(w.ctx)
+		if err != nil || rr.Suppressed != 1 {
+			t.Fatalf("%q: retry %+v %v", word, rr, err)
+		}
+	}
+	for _, reason := range w.suppressed() {
+		if reason != "deduped" {
+			t.Fatalf("reason %q", reason)
+		}
+	}
+	logs := w.logs.String()
+	if !strings.Contains(logs, `"why":"resolved"`) || !strings.Contains(logs, `"why":"badwordxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"`) {
+		t.Fatalf("log:\n%s", logs)
+	}
+	if strings.Contains(logs, "../") || strings.Contains(logs, "Bad Word") {
+		t.Fatalf("the raw word reached the log:\n%s", logs)
 	}
 }

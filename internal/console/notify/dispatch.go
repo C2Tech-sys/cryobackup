@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
@@ -138,9 +139,19 @@ func (d *Dispatcher) Suppress(ctx context.Context, row store.Delivery, reason st
 	return d.suppress(ctx, row, reason, reason)
 }
 
+// suppressReasons are the words the schema allows (the CHECK on notification_log.suppress_reason,
+// migration 0001).
+var suppressReasons = map[string]bool{"acknowledged": true, "snoozed": true, "paused": true, "deduped": true,
+	"customer_suspended": true, "below_threshold": true}
+
 // suppress is Suppress with the precise case for the log line (why, a class word): the schema's
-// reason words do not name every case (see the table at reasonDeduped).
+// reason words do not name every case (see the table at reasonDeduped). A reason outside the
+// schema's list (a RerenderFunc's own word) is recorded as deduped and the word, reduced to a class
+// word, goes to the log as why: a bad word is never a store error every minute.
 func (d *Dispatcher) suppress(ctx context.Context, row store.Delivery, reason, why string) (Result, error) {
+	if !suppressReasons[reason] {
+		reason, why = reasonDeduped, classOfWord(reason)
+	}
 	upd, err := d.Store.SuppressDelivery(ctx, store.ScopeAll(), row.ID, reason)
 	switch {
 	case errors.Is(err, store.ErrConflict):
@@ -150,6 +161,24 @@ func (d *Dispatcher) suppress(ctx context.Context, row store.Delivery, reason, w
 	}
 	d.log().Info("notification suppressed", logx.ID("delivery", row.ID), logx.Kind(row.Kind), logx.Str("reason", reason), logx.Str("why", why))
 	return Result{Delivery: upd}, nil
+}
+
+// classOfWord reduces a word to a class word for the log: lower-case letters and underscores
+// only, at most 40; "unknown" when nothing is left.
+func classOfWord(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if b.Len() == 40 {
+			break
+		}
+		if r == '_' || r >= 'a' && r <= 'z' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
 }
 
 // sendFailure turns what Send returned into a *mail.SendError, nil for a success. Every error of a
