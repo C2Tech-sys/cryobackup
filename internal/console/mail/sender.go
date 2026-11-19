@@ -4,12 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"errors"
-	"fmt"
 	"net"
 	"net/smtp"
-	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -254,15 +251,7 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 		return replyFailure(ctx, StageConnect, ClassProtocol, err)
 	}
 	if set.Security == "starttls" {
-		offered, _ := c.Extension("STARTTLS")
-		if !offered {
-			ext, err := ehloExtensions(c, helo)
-			if err != nil {
-				return replyFailure(ctx, StageConnect, ClassProtocol, err)
-			}
-			_, offered = ext["STARTTLS"]
-		}
-		if !offered {
+		if ok, _ := c.Extension("STARTTLS"); !ok {
 			return newErr(StageTLS, ClassStartTLSMissing, false)
 		}
 		if err := c.StartTLS(tcfg); err != nil {
@@ -277,8 +266,15 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 		if !encrypted {
 			return newErr(StageAuth, ClassPlaintextRefused, false)
 		}
-		if err := authenticate(ctx, c, helo, set.Host, set.Username, password); err != nil {
-			return err
+		auth := pickAuth(c, set.Host, set.Username, password)
+		if auth == nil {
+			return newErr(StageAuth, ClassAuthUnsupported, false)
+		}
+		if err := c.Auth(auth); err != nil {
+			if errors.Is(err, errLoginChallenge) {
+				return newErr(StageAuth, ClassProtocol, false)
+			}
+			return replyFailure(ctx, StageAuth, ClassAuthRejected, err)
 		}
 	}
 
@@ -331,108 +327,14 @@ func closing(conn net.Conn, overall time.Time, cmd func() error) {
 	_ = cmd()
 }
 
-// ehloExtensions asks the relay for its extensions once more and returns them
-// with upper-case keywords. net/smtp keeps the keywords as the relay wrote them
-// and looks them up in upper case, so a relay that writes "250-auth plain"
-// (keywords are case-insensitive, RFC 5321 2.4) would look as if it offered
-// neither AUTH nor STARTTLS. Only used when that lookup found nothing.
-func ehloExtensions(c *smtp.Client, helo string) (map[string]string, error) {
-	_, msg, err := textCmd(c, 250, "EHLO %s", helo)
-	if err != nil {
-		return nil, err
-	}
-	ext := map[string]string{}
-	lines := strings.Split(msg, "\n")
-	for _, l := range lines[1:] { // the first line is the greeting
-		k, v, _ := strings.Cut(l, " ")
-		ext[strings.ToUpper(k)] = v
-	}
-	return ext, nil
-}
-
-// textCmd sends one command and reads its reply, as net/smtp's own (unexported)
-// cmd does.
-func textCmd(c *smtp.Client, expect int, format string, args ...any) (int, string, error) {
-	id, err := c.Text.Cmd(format, args...)
-	if err != nil {
-		return 0, "", err
-	}
-	c.Text.StartResponse(id)
-	defer c.Text.EndResponse(id)
-	return c.Text.ReadResponse(expect)
-}
-
-// authenticate signs in with PLAIN, or LOGIN when that is all the relay offers.
-// Only called on an encrypted connection. The error is a *SendError.
-func authenticate(ctx context.Context, c *smtp.Client, helo, host, user, pass string) error {
-	offered, params := c.Extension("AUTH")
-	native := offered // net/smtp saw the AUTH keyword, so its own Auth can run
-	if !offered {
-		ext, err := ehloExtensions(c, helo)
-		if err != nil {
-			return replyFailure(ctx, StageConnect, ClassProtocol, err)
-		}
-		params, offered = ext["AUTH"]
-	}
-	auth := pickAuth(offered, params, host, user, pass)
-	if auth == nil {
-		return newErr(StageAuth, ClassAuthUnsupported, false)
-	}
-	var err error
-	if native {
-		err = c.Auth(auth)
-	} else {
-		err = authExchange(c, host, auth, strings.Fields(params))
-	}
-	if err != nil {
-		if errors.Is(err, errLoginChallenge) {
-			return newErr(StageAuth, ClassProtocol, false)
-		}
-		return replyFailure(ctx, StageAuth, ClassAuthRejected, err)
-	}
-	return nil
-}
-
-// authExchange is net/smtp's Client.Auth for the one case it cannot serve: it
-// refuses to run unless it saw the AUTH keyword in upper case. The exchange is
-// the same (RFC 4954), on an encrypted connection.
-func authExchange(c *smtp.Client, host string, a smtp.Auth, mechs []string) error {
-	enc := base64.StdEncoding
-	mech, resp, err := a.Start(&smtp.ServerInfo{Name: host, TLS: true, Auth: mechs})
-	if err != nil {
-		return err
-	}
-	line := strings.TrimSpace(fmt.Sprintf("AUTH %s %s", mech, enc.EncodeToString(resp)))
-	code, msg64, err := textCmd(c, 0, "%s", line)
-	for err == nil {
-		var msg []byte
-		switch code {
-		case 334:
-			msg, err = enc.DecodeString(msg64)
-		case 235:
-			msg = []byte(msg64) // the last message is not a challenge, so not base64
-		default:
-			err = &textproto.Error{Code: code, Msg: msg64}
-		}
-		if err != nil {
-			return err
-		}
-		if resp, err = a.Next(msg, code == 334); err != nil {
-			_, _, _ = textCmd(c, 501, "*") // abort the exchange
-			return err
-		}
-		if resp == nil {
-			return nil
-		}
-		code, msg64, err = textCmd(c, 0, "%s", enc.EncodeToString(resp))
-	}
-	return err
-}
-
-// pickAuth chooses PLAIN, or LOGIN when that is all the relay offers (params is
-// the mechanism list of its AUTH line, in any case); nil when it offers neither.
-func pickAuth(offered bool, params, host, user, pass string) smtp.Auth {
-	if !offered {
+// pickAuth chooses PLAIN, or LOGIN when that is all the relay offers; nil when
+// it offers neither. The mechanism names are matched in any case. Only called on
+// an encrypted connection. net/smtp looks the AUTH keyword up in upper case, so
+// a relay that writes its EHLO keywords in lower case ends as auth_unsupported
+// (or starttls_missing): it fails closed, by design.
+func pickAuth(c *smtp.Client, host, user, pass string) smtp.Auth {
+	ok, params := c.Extension("AUTH")
+	if !ok {
 		return nil
 	}
 	var plain, login bool

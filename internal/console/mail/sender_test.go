@@ -955,48 +955,40 @@ func TestPasswordFileBOMIsIgnored(t *testing.T) {
 	}
 }
 
-func TestAuthKeywordAndMechanismsAreCaseInsensitive(t *testing.T) {
+func TestAuthMechanismsAreCaseInsensitive(t *testing.T) {
 	p := testPKI(t)
-	for _, tc := range []struct {
-		name string
-		cfg  fakeCfg
-		ok   bool
-	}{
-		{"mechanism in lower case", fakeCfg{authMech: "plain"}, true},
-		{"keyword and mechanism in lower case", fakeCfg{authMech: "plain", lowerExt: true}, true},
-		{"lower-case LOGIN only", fakeCfg{authMech: "login", lowerExt: true}, true},
-		{"lower-case LOGIN and PLAIN", fakeCfg{authMech: "login plain", lowerExt: true}, true},
-		{"lower-case CRAM-MD5 only", fakeCfg{authMech: "cram-md5", lowerExt: true}, false},
-	} {
-		for _, sec := range []string{"tls", "starttls"} {
-			t.Run(tc.name+"/"+sec, func(t *testing.T) {
-				cfg := tc.cfg
-				cfg.cert, cfg.user, cfg.pass = &p.good, "svc", "pw"
-				cfg.implicit, cfg.startTLS = sec == "tls", sec == "starttls"
-				srv := startFake(t, cfg)
-				set := srv.settings(sec)
-				set.Username, set.PasswordFile = "svc", pwFile(t, "pw")
-				err := sendWith(t, set, testMsg())
-				if !tc.ok {
-					wantErr(t, err, StageAuth, ClassAuthUnsupported, false)
-					return
-				}
-				if err != nil {
-					t.Fatalf("send: %v", err)
-				}
-				if a := srv.authList(); len(a) == 0 || a[0] != "svc:pw:true" {
-					t.Fatalf("auth seen = %v", a)
-				}
-				if len(srv.captured()) != 1 {
-					t.Fatal("message not delivered")
-				}
-			})
+	for _, mech := range []string{"plain", "Plain", "login", "login cram-md5"} {
+		srv := startFake(t, fakeCfg{cert: &p.good, implicit: true, authMech: mech, user: "svc", pass: "pw"})
+		set := srv.settings("tls")
+		set.Username, set.PasswordFile = "svc", pwFile(t, "pw")
+		if err := sendWith(t, set, testMsg()); err != nil {
+			t.Fatalf("AUTH %s: %v", mech, err)
+		}
+		if a := srv.authList(); len(a) != 1 || a[0] != "svc:pw:true" {
+			t.Fatalf("AUTH %s: auth seen = %v", mech, a)
 		}
 	}
-	// A wrong password over a lower-case relay is still a rejection, not "unsupported".
-	cfg := fakeCfg{cert: &p.good, implicit: true, authMech: "plain", lowerExt: true, user: "svc", pass: "pw"}
-	srv := startFake(t, cfg)
-	set := srv.settings("tls")
-	set.Username, set.PasswordFile = "svc", pwFile(t, "nope")
-	wantErr(t, sendWith(t, set, testMsg()), StageAuth, ClassAuthRejected, false)
+}
+
+func TestLowerCaseEHLOKeywordsFailClosed(t *testing.T) {
+	// Intended: net/smtp looks keywords up in upper case, so a relay that sends
+	// "250-auth plain" or "250-starttls" is refused and nothing is sent.
+	p := testPKI(t)
+	for _, sec := range []string{"tls", "starttls"} {
+		srv := startFake(t, fakeCfg{
+			cert: &p.good, implicit: sec == "tls", startTLS: sec == "starttls",
+			authMech: "plain", lowerExt: true, user: "svc", pass: "pw",
+		})
+		set := srv.settings(sec)
+		set.Username, set.PasswordFile = "svc", pwFile(t, "pw")
+		err := sendWith(t, set, testMsg())
+		if sec == "tls" {
+			wantErr(t, err, StageAuth, ClassAuthUnsupported, false)
+		} else {
+			wantErr(t, err, StageTLS, ClassStartTLSMissing, false)
+		}
+		if len(srv.authList()) != 0 || len(srv.captured()) != 0 || srv.sawCmd("MAIL") {
+			t.Fatalf("%s: credentials or mail were sent", sec)
+		}
+	}
 }
