@@ -17,9 +17,10 @@
 // JSON has no comments, so the keys are documented on their Go types in
 // config.go. The M3 health keys: health_prober.interval_s (60) and
 // health_prober.gateway_ca_file (empty: system roots) for the health-prober;
-// healthcheck_ping.url (empty: off), .method (GET) and .interval_s (300) for the
-// outbound dead-man's-switch ping, sent only while the alarm-evaluator is
-// healthy. No default names an operator, a host or a monitoring service.
+// healthcheck_ping.url (empty: off; https, or http for loopback), .method (GET,
+// HEAD or POST) and .interval_s (300; 60 to 86400) for the outbound
+// dead-man's-switch ping, sent only while the alarm-evaluator is healthy. No
+// default names an operator, a host or a monitoring service.
 //
 // The smtp block (ADR 0020) names the relay that carries alert and digest mail.
 // security is starttls (default), tls or plain; plain needs smtp.allow_plaintext

@@ -36,5 +36,10 @@
     "password_file": "",
     "from": ""
   },
+  "healthcheck_ping": {
+    "url": "",
+    "method": "GET",
+    "interval_s": 300
+  },
   "fixtures": false
 }

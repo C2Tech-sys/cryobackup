@@ -128,14 +128,14 @@ type HealthProber struct {
 	GatewayCAFile string `json:"gateway_ca_file"`
 }
 
-// HealthcheckPing configures the healthcheck-ping job (architecture §5.7): an
-// outbound request to an external dead-man's switch (a healthchecks-style
-// monitor of the operator's choosing), sent every IntervalS seconds (default
-// 300, 60 to 3600) only while the alarm-evaluator is healthy, so the monitor
-// alerts when the console's alerting stops. It is off while URL is empty, the
-// default: nothing is sent anywhere unless the operator names a URL. Method is
-// GET (default) or POST with an empty body. The URL often carries a monitor
-// token, so it is never logged.
+// HealthcheckPing configures the healthcheck-ping job (architecture §5.7, ADR 0020 decision 12):
+// an outbound request to an external dead-man's switch (a healthchecks-style monitor of the
+// operator's choosing), sent every IntervalS seconds (default 300, 60 to 86400) only while the
+// alarm-evaluator is healthy, so the monitor alerts when the console's alerting stops. It is off
+// while URL is empty, the default: nothing is sent anywhere unless the operator names a URL. The
+// URL must be https (http only for a loopback host). Method is GET (default), HEAD or POST with an
+// empty body. The URL often carries a monitor token, so it is never logged and never echoed in an
+// error. Each key has its CRYO_HEALTHCHECK_PING_* override.
 type HealthcheckPing struct {
 	URL       string `json:"url"`
 	Method    string `json:"method"`
@@ -502,16 +502,16 @@ func (c Config) Validate() error {
 		add("health_prober.interval_s must be between 30 and 300")
 	}
 	hp := c.HealthcheckPing
-	if hp.IntervalS < 60 || hp.IntervalS > 3600 {
-		add("healthcheck_ping.interval_s must be between 60 and 3600")
+	if hp.IntervalS < HeartbeatMinIntervalS || hp.IntervalS > HeartbeatMaxIntervalS {
+		add("healthcheck_ping.interval_s must be between %d and %d", HeartbeatMinIntervalS, HeartbeatMaxIntervalS)
 	}
-	if hp.Method != "GET" && hp.Method != "POST" {
-		add("healthcheck_ping.method must be GET or POST")
+	switch hp.Method {
+	case "GET", "HEAD", "POST":
+	default:
+		add("healthcheck_ping.method must be GET, HEAD or POST")
 	}
-	if hp.URL != "" {
-		if u, err := url.Parse(hp.URL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			add("healthcheck_ping.url must be an http or https URL") // the value is not echoed: it may carry a token
-		}
+	if hp.URL != "" && !HeartbeatURLAllowed(hp.URL) {
+		add("healthcheck_ping.url must be an https URL (http only for a loopback host)") // the value is not echoed: it may carry a token
 	}
 	if c.SMTP.Host != "" {
 		if c.SMTP.Port < 1 || c.SMTP.Port > 65535 {

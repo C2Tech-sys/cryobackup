@@ -28,7 +28,9 @@ func TestHealthProberAndHealthcheckPingConfig(t *testing.T) {
 		{"prober interval too short", func(c *Config) { c.HealthProber.IntervalS = 10 }, false},
 		{"prober interval too long", func(c *Config) { c.HealthProber.IntervalS = 900 }, false},
 		{"ping https", func(c *Config) { c.HealthcheckPing.URL = "https://monitor.example.com/ping/abc" }, true},
-		{"ping post", func(c *Config) { c.HealthcheckPing.URL, c.HealthcheckPing.Method = "http://10.0.0.5/p", "POST" }, true},
+		{"ping post", func(c *Config) {
+			c.HealthcheckPing.URL, c.HealthcheckPing.Method = "https://monitor.example.com/p", "POST"
+		}, true},
 		{"ping bad method", func(c *Config) { c.HealthcheckPing.Method = "PUT" }, false},
 		{"ping bad interval", func(c *Config) { c.HealthcheckPing.IntervalS = 5 }, false},
 	} {
