@@ -51,6 +51,8 @@ type Notifier struct {
 	beforeMark func(kind string) error
 	// stopBeforeSend, when set, ends the pass after the marks without sending (the tests' crash there).
 	stopBeforeSend bool
+	// afterRecipients, when set, runs after the pass has read the recipients (the tests delete one there).
+	afterRecipients func()
 }
 
 // PassResult counts what one pass did.
@@ -68,6 +70,9 @@ type PassResult struct {
 	// Messages counts the delivery rows written; Sent and Failed the outcomes of this pass's sends;
 	// Deferred the rows left queued for the retry job because the send budget ran out.
 	Messages, Sent, Failed, Deferred int
+	// RecipientsGone counts the recipients deleted between the pass's read of the recipients and
+	// their delivery row: skipped, the others mailed.
+	RecipientsGone int
 }
 
 // outgoing is one message waiting to be sent: its delivery row and its content.
@@ -142,6 +147,9 @@ func (n *Notifier) Pass(ctx context.Context, v state.FleetView) (PassResult, err
 	if err != nil {
 		return res, err
 	}
+	if n.afterRecipients != nil {
+		n.afterRecipients()
+	}
 	var alertTo, recoveryTo []store.Recipient
 	for _, r := range recipients {
 		if r.Alerts {
@@ -169,11 +177,11 @@ func (n *Notifier) Pass(ctx context.Context, v state.FleetView) (PassResult, err
 	} else {
 		err = sendAll(ctx, n.Dispatch, n.SendBudget, outs, &res.Sent, &res.Failed, &res.Deferred)
 	}
-	if res.Messages > 0 || res.Rearmed > 0 || res.RecoveryUnwanted > 0 { // a held alarm alone is not news every minute
+	if res.Messages > 0 || res.Rearmed > 0 || res.RecoveryUnwanted > 0 || res.RecipientsGone > 0 { // a held alarm alone is not news every minute
 		n.log().Info("alert pass", logx.Count("opened", len(res.Sync.Opened)), logx.Count("closed", len(res.Sync.Closed)),
 			logx.Count("alerted", res.Alerted), logx.Count("held", res.Held), logx.Count("rearmed", res.Rearmed),
 			logx.Count("recovered", res.Recovered), logx.Count("messages", res.Messages), logx.Count("sent", res.Sent),
-			logx.Count("failed", res.Failed), logx.Count("deferred", res.Deferred))
+			logx.Count("failed", res.Failed), logx.Count("deferred", res.Deferred), logx.Count("recipients_gone", res.RecipientsGone))
 	}
 	return res, err
 }
@@ -211,8 +219,8 @@ func (n *Notifier) alertBatch(ctx context.Context, v state.FleetView, to []store
 		return nil, err
 	}
 	outs, at, err := n.enqueue(ctx, keyAlert, store.DeliveryAlert, content, to, res)
-	if err != nil {
-		return nil, err
+	if err != nil || len(outs) == 0 {
+		return nil, err // no row: nothing is marked, the episodes wait for the next pass
 	}
 	if n.beforeMark != nil {
 		if err := n.beforeMark(keyAlert); err != nil {
@@ -247,7 +255,7 @@ func (n *Notifier) recoveryBatch(ctx context.Context, v state.FleetView, to []st
 		return nil, err
 	}
 	outs, at, err := n.enqueue(ctx, keyRecovery, store.DeliveryRecovery, content, to, res)
-	if err != nil {
+	if err != nil || len(outs) == 0 {
 		return nil, err
 	}
 	if n.beforeMark != nil {
@@ -263,13 +271,19 @@ func (n *Notifier) recoveryBatch(ctx context.Context, v state.FleetView, to []st
 }
 
 // enqueue writes one queued delivery row per recipient under a fresh batch id and returns the rows
-// with the batch id as a time (what the episodes are marked with).
+// with the batch id as a time (what the episodes are marked with). A recipient deleted since the
+// pass read the list is skipped and counted (PassResult.RecipientsGone); with no row written the
+// caller marks nothing.
 func (n *Notifier) enqueue(ctx context.Context, prefix, kind string, c Content, to []store.Recipient, res *PassResult) ([]outgoing, time.Time, error) {
 	id := n.batchID()
 	outs := make([]outgoing, 0, len(to))
 	for _, r := range to {
 		row, created, err := n.Dispatch.Enqueue(ctx, store.DeliveryInput{Kind: kind, RuleID: r.ID, DedupeKey: batchKey(prefix, id, r.ID), SubjectType: "console"})
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound): // deleted since the pass read the recipients: skip it, mail the others
+			res.RecipientsGone++
+			continue
+		case err != nil:
 			return nil, time.Time{}, err
 		}
 		if created {

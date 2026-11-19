@@ -118,3 +118,53 @@ func TestRetryRowsOfAnotherKindDoNotStarveTheWindow(t *testing.T) {
 		}
 	}
 }
+
+// Item 6. A recipient deleted between the pass's read of the recipients and its delivery rows is
+// skipped and counted; the others are mailed. When it was the only one, nothing is marked: the
+// episodes wait for the next pass instead of being marked as mailed to nobody.
+func TestNotifyRecipientDeletedMidPass(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 2)
+	gone := w.recipient("gone@example.test", true, true)
+	w.recipient("ops@example.test", true, true)
+	w.n.afterRecipients = func() {
+		if err := w.st.DeleteRecipient(w.ctx, store.ScopeAll(), gone.ID, w.actor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.set(state.StateFailed, site...)
+	res, err := w.n.Pass(w.ctx, w.view())
+	if err != nil {
+		t.Fatalf("a deleted recipient failed the pass: %v", err)
+	}
+	by := sentTo(w.fake.Sent())
+	if res.RecipientsGone != 1 || res.Alerted != 2 || len(by) != 1 || len(by["ops@example.test"]) != 1 {
+		t.Fatalf("pass %+v, sent %v", res, by)
+	}
+	if !strings.Contains(w.logs.String(), `"recipients_gone":1`) {
+		t.Fatalf("the skip is not logged:\n%s", w.logs.String())
+	}
+	w.noLeaks()
+}
+
+func TestNotifyOnlyRecipientDeletedMidPass(t *testing.T) {
+	w := newWorld(t)
+	site := w.site("Summit Eye Care", 1)
+	gone := w.recipient("gone@example.test", true, true)
+	w.n.afterRecipients = func() {
+		if err := w.st.DeleteRecipient(w.ctx, store.ScopeAll(), gone.ID, w.actor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.set(state.StateFailed, site...)
+	res, err := w.n.Pass(w.ctx, w.view())
+	if err != nil || res.RecipientsGone != 1 || res.Messages != 0 || res.Alerted != 0 || len(w.unnotified()) != 1 {
+		t.Fatalf("pass %+v %v, %d unnotified", res, err, len(w.unnotified()))
+	}
+	w.n.afterRecipients = nil
+	w.recipient("ops@example.test", true, true)
+	w.clk.Advance(time.Minute)
+	if res := w.pass(); res.Alerted != 1 || w.fake.Calls() != 1 {
+		t.Fatalf("next pass %+v", res)
+	}
+}
