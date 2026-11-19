@@ -262,6 +262,7 @@ func Classify(f DeviceFacts, now time.Time) DeviceState {
 
 	// ---- row 11: STALE ----------------------------------------------------------------
 	rawStale := !noSuccess && now.Sub(succ) > th.StaleAfter
+	ds.CurrentBackup = !noSuccess && !rawStale
 	if rawStale {
 		set(StateStale, succ.Add(th.StaleAfter))
 	}

@@ -112,3 +112,21 @@ func TestC21UndeliveredMailIsAWarning(t *testing.T) {
 		{name: "C21_none_no_banner", mod: func(p *ProbeFacts, _ *World) { p.SMTP.Undelivered24h = 0 }},
 	})
 }
+
+// P20-W2BF C4: DeviceState.CurrentBackup is the engine's own freshness verdict (a success since
+// enrollment, not older than the stale threshold), whatever the primary state: an outdated agent
+// with fresh backups has one; a stale, never-backed-up or long-paused device has not.
+func TestDeviceStateCurrentBackup(t *testing.T) {
+	w := healthyFleet(1, 4)
+	w.Devices[0].ExpectedVersion = "9.0.0" // OUTDATED, backups current
+	w.Devices[1].LastSuccess, w.Devices[1].LastBackup = ago(100*hour), successRun(100*hour)
+	newlyEnrolled(&w.Devices[2], hour)
+	w.Devices[3].PausedAt = ago(30 * day)
+	w.Devices[3].LastSuccess, w.Devices[3].LastBackup = ago(30*day), successRun(30*day)
+	want := map[string]bool{w.Devices[0].ID: true, w.Devices[1].ID: false, w.Devices[2].ID: false, w.Devices[3].ID: false}
+	for _, d := range Evaluate(w, t0).Devices {
+		if d.CurrentBackup != want[d.ID] {
+			t.Errorf("%s (%s): CurrentBackup %v, want %v", d.ID, d.Primary, d.CurrentBackup, want[d.ID])
+		}
+	}
+}

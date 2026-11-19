@@ -107,6 +107,18 @@ func digestByState(v state.FleetView) map[state.State]int {
 	return m
 }
 
+// digestBackedUp counts the devices a digest speaks for that have a current backup
+// (state.DeviceState.CurrentBackup: the engine's own freshness verdict, not a list of states).
+func digestBackedUp(v state.FleetView) int {
+	n := 0
+	for i := range v.Devices {
+		if d := &v.Devices[i]; d.Primary != state.StateRetired && !d.DigestExcluded && d.CurrentBackup {
+			n++
+		}
+	}
+	return n
+}
+
 // stateWords is how a count of devices in a state reads ("1 paused", "3 awaiting first backup").
 func stateWords(s state.State) string {
 	switch s {
@@ -278,8 +290,8 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	p.CheckedAs = count(p.Checked, "device", "devices")
 	critDevices, warn, other := p.Sections[sectionCritical].Count-missing, p.Sections[sectionWarning].Count, p.Sections[sectionOther].Count
 	byState := digestByState(v)
-	backedUp := byState[state.StateOK]
-	var rest []string // the devices that are not backed up, by state: never inside the backed-up number
+	backedUp := digestBackedUp(v) // the engine's freshness verdict, whatever the primary state
+	var rest []string             // the devices that are not backed up, by state: never inside the backed-up number
 	for _, st := range state.Precedence() {
 		if n := byState[st]; n > 0 && st != state.StateOK {
 			rest = append(rest, strconv.Itoa(n)+" "+stateWords(st))
@@ -322,22 +334,24 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	case p.Checked == 0:
 		summary = "no devices included, " + strings.Join(left, ", ")
 		p.Title, leftSaid = "No devices included in this digest: "+strings.Join(left, ", ")+".", true
-	case backedUp == 0: // nothing is backed up: never "all clear"
-		summary = "no devices backed up, " + strings.Join(rest, ", ")
-		p.Title = "No devices backed up: " + strings.Join(rest, ", ") + "."
-	case len(rest) == 0 && len(left) == 0:
+	case backedUp == 0: // nothing has a current backup: never "all clear"
+		summary, p.Title = "no devices backed up", "No devices backed up."
+		if len(rest) > 0 {
+			summary += ", " + strings.Join(rest, ", ")
+			p.Title = "No devices backed up: " + strings.Join(rest, ", ") + "."
+		}
+	case len(rest) > 0: // an exception (a device in another state than OK): never "all clear"
+		summary = strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up, " + strings.Join(rest, ", ")
+		p.Title = strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up. " + upperFirst(strings.Join(rest, ", ")) + "."
+	case len(left) == 0 && backedUp == p.Checked:
 		summary = "all clear, " + count(p.Checked, "device", "devices") + " backed up"
 		p.Title = "All " + strconv.Itoa(p.Checked) + " devices backed up."
 		if p.Checked == 1 {
 			p.Title = "The 1 device is backed up."
 		}
 	default:
-		summary = "all clear, " + strconv.Itoa(backedUp) + " of " + count(p.Checked, "device", "devices") + " backed up"
-		p.Title = "All clear: " + strconv.Itoa(backedUp) + " of " + count(p.Checked, "device", "devices") + " backed up."
-		if len(rest) > 0 {
-			summary += ", " + strings.Join(rest, ", ")
-			p.Title += " " + upperFirst(strings.Join(rest, ", ")) + "."
-		}
+		summary = "all clear, " + strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up"
+		p.Title = "All clear: " + strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up."
 	}
 	if len(left) > 0 && !leftSaid {
 		summary += ", " + strings.Join(left, ", ")

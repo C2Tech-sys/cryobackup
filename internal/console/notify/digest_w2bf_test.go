@@ -14,8 +14,8 @@ import (
 // subject count only what is backed up and name the rest.
 func TestGoldenDigestAllClearNamesWhatIsNotBackedUp(t *testing.T) {
 	v := greenView(4)
-	v.Devices[2].Primary, v.Devices[2].Flags = state.StatePaused, []state.State{state.StatePaused}
-	v.Devices[3].Primary, v.Devices[3].Flags = state.StatePendingFirst, []state.State{state.StatePendingFirst}
+	v.Devices[2].Primary, v.Devices[2].Flags, v.Devices[2].CurrentBackup = state.StatePaused, []state.State{state.StatePaused}, false
+	v.Devices[3].Primary, v.Devices[3].Flags, v.Devices[3].CurrentBackup = state.StatePendingFirst, []state.State{state.StatePendingFirst}, false
 	if !v.AllClear() {
 		t.Fatal("the control fleet is not all clear")
 	}
@@ -23,10 +23,11 @@ func TestGoldenDigestAllClearNamesWhatIsNotBackedUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: all clear, 2 of 4 devices backed up, 1 paused, 1 awaiting first backup" {
+	// C4: an exception (a parked or never-backed-up device) means no "All clear".
+	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: 2 of 4 devices backed up, 1 paused, 1 awaiting first backup" {
 		t.Fatalf("subject %q", c.Subject)
 	}
-	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "All clear: 2 of 4 devices backed up. 1 paused, 1 awaiting first backup." {
+	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "2 of 4 devices backed up. 1 paused, 1 awaiting first backup." {
 		t.Fatalf("first line %q", first)
 	}
 	if strings.Contains(c.Text, "All 4") || strings.Contains(c.Subject, "all clear, 4 devices") || strings.Contains(c.Text, ": 4 backed up") {
@@ -60,7 +61,7 @@ func TestDigestNamesWhatThePolicyLeavesOut(t *testing.T) {
 		t.Fatalf("totals:\n%s", c.Text)
 	}
 	// The excluded device is green: the day is all clear, and still says what it left out.
-	v.Devices[2].Primary, v.Devices[2].Flags, v.Devices[2].Alarm, v.Devices[2].AlarmFlags = state.StateOK, []state.State{state.StateOK}, state.SeverityNone, nil
+	v.Devices[2].Primary, v.Devices[2].Flags, v.Devices[2].Alarm, v.Devices[2].AlarmFlags, v.Devices[2].CurrentBackup = state.StateOK, []state.State{state.StateOK}, state.SeverityNone, nil, true
 	c, err = RenderDigest(v, nil, Options{Loc: cst})
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +135,7 @@ func TestDigestRetryKeepsItsDateAndStopsWhenDisabled(t *testing.T) {
 func TestGoldenDigestHeadlines(t *testing.T) {
 	paused := greenView(3)
 	for i := range paused.Devices {
-		paused.Devices[i].Primary, paused.Devices[i].Flags = state.StatePaused, []state.State{state.StatePaused}
+		paused.Devices[i].Primary, paused.Devices[i].Flags, paused.Devices[i].CurrentBackup = state.StatePaused, []state.State{state.StatePaused}, false
 	}
 	empty := state.FleetView{ComputedAt: renderNow, Complete: true, FirstRun: true}
 	allExcluded := greenView(2)
@@ -175,4 +176,24 @@ func TestGoldenDigestHeadlines(t *testing.T) {
 			golden(t, tc.golden+".html", c.HTML)
 		})
 	}
+}
+
+// P20-W2BF C4: a device whose backups are current counts as backed up whatever its primary state:
+// an outdated agent (not an alarm here) reads "1 of 1 devices backed up. 1 on an outdated agent.",
+// never "No devices backed up", and never "All clear" while there is any exception.
+func TestGoldenDigestOutdatedAgentIsBackedUp(t *testing.T) {
+	v := greenView(1)
+	v.Devices[0].Primary, v.Devices[0].Flags = state.StateOutdated, []state.State{state.StateOutdated}
+	c, err := RenderDigest(v, nil, Options{Loc: cst})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: 1 of 1 devices backed up, 1 on an outdated agent" {
+		t.Fatalf("subject %q", c.Subject)
+	}
+	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "1 of 1 devices backed up. 1 on an outdated agent." {
+		t.Fatalf("first line %q", first)
+	}
+	golden(t, "digest_outdated.txt", c.Text)
+	golden(t, "digest_outdated.html", c.HTML)
 }

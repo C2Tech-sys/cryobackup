@@ -20,14 +20,15 @@ func greenView(n int) state.FleetView {
 	v := state.FleetView{ComputedAt: renderNow, Complete: true, Customers: []state.CustomerState{{ID: custSummit, Name: "Summit Eye Care"}}}
 	for i := 0; i < n; i++ {
 		v.Devices = append(v.Devices, state.DeviceState{ID: fmt.Sprintf("01DEVGREEN%016d", i), CustomerID: custSummit,
-			Hostname: fmt.Sprintf("SUMMIT-PC-%02d", i+1), Primary: state.StateOK, Flags: []state.State{state.StateOK}})
+			Hostname: fmt.Sprintf("SUMMIT-PC-%02d", i+1), Primary: state.StateOK, Flags: []state.State{state.StateOK}, CurrentBackup: true})
 	}
 	return v
 }
 
 // dev is one device of a hand-built view in state s at severity sev since the given age.
 func dev(id, cust, host string, s state.State, sev state.Severity, age time.Duration) state.DeviceState {
-	d := state.DeviceState{ID: id, CustomerID: cust, Hostname: host, Primary: s, Flags: []state.State{s}, Alarm: sev, Since: renderNow.Add(-age)}
+	d := state.DeviceState{ID: id, CustomerID: cust, Hostname: host, Primary: s, Flags: []state.State{s}, Alarm: sev, Since: renderNow.Add(-age),
+		CurrentBackup: s == state.StateOK}
 	if sev > state.SeverityNone {
 		d.AlarmFlags = []state.State{s}
 	}
