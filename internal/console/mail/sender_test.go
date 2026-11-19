@@ -801,3 +801,202 @@ func TestSettingsFromConfig(t *testing.T) {
 		t.Fatal("Configured")
 	}
 }
+
+func TestQuotedLocalPartsNeverReachTheSocket(t *testing.T) {
+	const evil = `"x@evil.example> NOTIFY=NEVER <y"@example.com`
+	srv := startFake(t, fakeCfg{})
+	set := srv.settings("plain")
+	set.AllowPlaintext = true
+	for name, mod := range map[string]func(*Settings, *Message){
+		"to":            func(_ *Settings, m *Message) { m.To = []string{evil} },
+		"second to":     func(_ *Settings, m *Message) { m.To = []string{"ops@example.com", evil} },
+		"to with space": func(_ *Settings, m *Message) { m.To = []string{`"a b"@example.com`} },
+		"message from":  func(_ *Settings, m *Message) { m.From = evil },
+		"settings from": func(s *Settings, _ *Message) { s.From = evil },
+	} {
+		s, m := set, testMsg()
+		mod(&s, &m)
+		err := sendWith(t, s, m)
+		if name == "settings from" {
+			wantErr(t, err, StageConfig, ClassConfigInvalid, false)
+		} else {
+			wantErr(t, err, StageConfig, ClassMessageInvalid, false)
+		}
+		if strings.Contains(err.Error(), "evil") {
+			t.Fatalf("%s: the error echoes the address: %v", name, err)
+		}
+	}
+	if srv.connCount() != 0 {
+		t.Fatalf("%d connection(s) for an invalid address", srv.connCount())
+	}
+	if err := (Settings{Host: "mail.example.com", Port: 587, Security: "starttls", From: `"a b"@example.com`}).Validate(); err == nil {
+		t.Fatal("Settings.Validate accepted a quoted local part in From")
+	}
+	// A plain address with a display name is still a good default sender.
+	set.From = "CryoBackup Console <console@example.com>"
+	if err := sendWith(t, set, testMsg()); err != nil {
+		t.Fatalf("display name in Settings.From: %v", err)
+	}
+	if got := srv.captured(); len(got) != 1 || got[0].from != "console@example.com" {
+		t.Fatalf("envelope sender = %+v", got)
+	}
+}
+
+func TestDeliverRechecksTheEnvelopeBeforeWritingIt(t *testing.T) {
+	// deliver is handed addresses that bypassed Validate: neither MAIL FROM nor
+	// RCPT TO may carry them.
+	good := &netmail.Address{Address: "console@example.com"}
+	evil := &netmail.Address{Address: "x@evil.example> NOTIFY=NEVER <y@example.com"}
+	for name, a := range map[string]addrs{
+		"sender":    {from: evil, to: []*netmail.Address{{Address: "ops@example.com"}}},
+		"recipient": {from: good, to: []*netmail.Address{{Address: "ops@example.com"}, evil}},
+	} {
+		srv := startFake(t, fakeCfg{})
+		set := srv.settings("plain")
+		set.AllowPlaintext = true
+		err := NewSMTPSender(set).deliver(context.Background(), a, []byte("Subject: s\r\n\r\nt\r\n"), "")
+		wantErr(t, err, StageConfig, ClassMessageInvalid, false)
+		if len(srv.captured()) != 0 || bytes.Contains(srv.rawBytes(), []byte("evil")) {
+			t.Fatalf("%s: the evil address was sent", name)
+		}
+		if name == "sender" && srv.sawCmd("MAIL") {
+			t.Fatal("MAIL was written for an invalid sender")
+		}
+		if name == "recipient" && srv.sawCmd("DATA") {
+			t.Fatal("DATA after an invalid recipient")
+		}
+	}
+}
+
+func TestNonSMTPReplyIsAProtocolError(t *testing.T) {
+	// A web server on the SMTP port: not a 4xx, not a network failure, and not
+	// worth a retry.
+	for _, g := range []string{"HTTP/1.1 400 Bad Request", "HTTP/1.1 400", "garbage", "+OK POP3 ready"} {
+		srv := startFake(t, fakeCfg{greeting: g})
+		set := srv.settings("plain")
+		set.AllowPlaintext = true
+		wantErr(t, sendWith(t, set, testMsg()), StageConnect, ClassProtocol, false)
+	}
+	// The same after the TLS handshake of an implicit-TLS relay.
+	p := testPKI(t)
+	srv := startFake(t, fakeCfg{cert: &p.good, implicit: true, greeting: "HTTP/1.1 400 Bad Request"})
+	wantErr(t, sendWith(t, srv.settings("tls"), testMsg()), StageConnect, ClassProtocol, false)
+	// And a STARTTLS command answered with something that is not SMTP.
+	srv = startFake(t, fakeCfg{cert: &p.good, startTLS: true, reply: map[string]string{"STARTTLS": "HTTP/1.1 400 Bad Request"}})
+	wantErr(t, sendWith(t, srv.settings("starttls"), testMsg()), StageTLS, ClassStartTLSRejected, false)
+}
+
+func TestClosingCommandsHaveAShortDeadline(t *testing.T) {
+	old := closeTimeout
+	closeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { closeTimeout = old })
+	if closingTimeout != 5*time.Second {
+		t.Fatalf("closingTimeout = %v, want 5s", closingTimeout)
+	}
+	run := func(t *testing.T, cfg fakeCfg, m Message) (error, time.Duration, *fakeSrv) {
+		srv := startFake(t, cfg)
+		set := srv.settings("plain")
+		set.AllowPlaintext = true
+		set.Timeout = 30 * time.Second
+		start := time.Now()
+		done := make(chan error, 1)
+		go func() { done <- sendWith(t, set, m) }()
+		select {
+		case err := <-done:
+			return err, time.Since(start), srv
+		case <-time.After(10 * time.Second):
+			t.Fatal("Send is held by a closing command for the whole deadline")
+			return nil, 0, nil
+		}
+	}
+	t.Run("QUIT hangs after the message is accepted", func(t *testing.T) {
+		err, took, srv := run(t, fakeCfg{hang: map[string]bool{"QUIT": true}}, testMsg())
+		if err != nil {
+			t.Fatalf("a delivered message reported as failed: %v", err)
+		}
+		if len(srv.captured()) != 1 {
+			t.Fatal("message not delivered")
+		}
+		if took > 5*time.Second {
+			t.Fatalf("took %v", took)
+		}
+	})
+	t.Run("RSET hangs after a refused recipient", func(t *testing.T) {
+		m := testMsg()
+		m.To = []string{"ok@example.com", "bad@example.org"}
+		err, took, _ := run(t, fakeCfg{
+			rcptReply: map[string]string{"bad@example.org": "550 5.1.1 unknown"},
+			hang:      map[string]bool{"RSET": true},
+		}, m)
+		wantErr(t, err, StageRecipient, ClassRecipientRejected, false)
+		if took > 5*time.Second {
+			t.Fatalf("took %v", took)
+		}
+	})
+}
+
+func TestPasswordFileBOMIsIgnored(t *testing.T) {
+	const bom = "\xEF\xBB\xBF"
+	for in, want := range map[string]string{
+		bom + "pw":              "pw",
+		bom + "pw\r\n":          "pw",
+		bom + "p" + bom + "w\n": "p" + bom + "w", // only a leading one
+		"pw" + bom:              "pw" + bom,
+	} {
+		got, err := ReadPasswordFile(pwFile(t, in))
+		if err != nil || got != want {
+			t.Errorf("ReadPasswordFile(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{bom, bom + "\r\n", bom + "a\nb"} {
+		if _, err := ReadPasswordFile(pwFile(t, bad)); err == nil {
+			t.Errorf("ReadPasswordFile(%q) accepted", bad)
+		}
+	}
+}
+
+func TestAuthKeywordAndMechanismsAreCaseInsensitive(t *testing.T) {
+	p := testPKI(t)
+	for _, tc := range []struct {
+		name string
+		cfg  fakeCfg
+		ok   bool
+	}{
+		{"mechanism in lower case", fakeCfg{authMech: "plain"}, true},
+		{"keyword and mechanism in lower case", fakeCfg{authMech: "plain", lowerExt: true}, true},
+		{"lower-case LOGIN only", fakeCfg{authMech: "login", lowerExt: true}, true},
+		{"lower-case LOGIN and PLAIN", fakeCfg{authMech: "login plain", lowerExt: true}, true},
+		{"lower-case CRAM-MD5 only", fakeCfg{authMech: "cram-md5", lowerExt: true}, false},
+	} {
+		for _, sec := range []string{"tls", "starttls"} {
+			t.Run(tc.name+"/"+sec, func(t *testing.T) {
+				cfg := tc.cfg
+				cfg.cert, cfg.user, cfg.pass = &p.good, "svc", "pw"
+				cfg.implicit, cfg.startTLS = sec == "tls", sec == "starttls"
+				srv := startFake(t, cfg)
+				set := srv.settings(sec)
+				set.Username, set.PasswordFile = "svc", pwFile(t, "pw")
+				err := sendWith(t, set, testMsg())
+				if !tc.ok {
+					wantErr(t, err, StageAuth, ClassAuthUnsupported, false)
+					return
+				}
+				if err != nil {
+					t.Fatalf("send: %v", err)
+				}
+				if a := srv.authList(); len(a) == 0 || a[0] != "svc:pw:true" {
+					t.Fatalf("auth seen = %v", a)
+				}
+				if len(srv.captured()) != 1 {
+					t.Fatal("message not delivered")
+				}
+			})
+		}
+	}
+	// A wrong password over a lower-case relay is still a rejection, not "unsupported".
+	cfg := fakeCfg{cert: &p.good, implicit: true, authMech: "plain", lowerExt: true, user: "svc", pass: "pw"}
+	srv := startFake(t, cfg)
+	set := srv.settings("tls")
+	set.Username, set.PasswordFile = "svc", pwFile(t, "nope")
+	wantErr(t, sendWith(t, set, testMsg()), StageAuth, ClassAuthRejected, false)
+}

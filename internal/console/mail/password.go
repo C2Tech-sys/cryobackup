@@ -13,7 +13,8 @@ import (
 const maxPasswordFile = 4096
 
 // ReadPasswordFile reads the relay password from the file smtp.password_file
-// names: one line, the trailing newline (LF or CRLF) trimmed and nothing else.
+// names: one line, a leading UTF-8 byte order mark and the trailing newline (LF
+// or CRLF) trimmed and nothing else.
 // It is called at every send, so a rotated password needs no restart, and by
 // the doctor check.
 //
@@ -43,6 +44,9 @@ func ReadPasswordFile(path string) (string, error) {
 	if err != nil || len(raw) > maxPasswordFile {
 		return "", newErr(StageConfig, ClassPasswordFile, false)
 	}
+	// Notepad and some other editors write a UTF-8 byte order mark: it is not
+	// part of the password.
+	raw = bytes.TrimPrefix(raw, []byte("\xEF\xBB\xBF"))
 	if bytes.HasSuffix(raw, []byte("\r\n")) {
 		raw = raw[:len(raw)-2]
 	} else {

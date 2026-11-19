@@ -205,7 +205,19 @@ func replyFailure(ctx context.Context, stage Stage, class Class, err error) *Sen
 	if errors.As(err, &te) {
 		return newErr(stage, class, te.Code >= 400 && te.Code < 500)
 	}
+	if notSMTP(err) {
+		return newErr(stage, ClassProtocol, false)
+	}
 	return netFailure(ctx, stage, err)
+}
+
+// notSMTP reports a reply that is not an SMTP reply at all (no three-digit code
+// and a space or hyphen), such as the "HTTP/1.1 400" of a web server on the
+// mail port. The relay answered, so it is not a network failure, and a retry
+// would get the same answer.
+func notSMTP(err error) bool {
+	var pe textproto.ProtocolError
+	return errors.As(err, &pe)
 }
 
 // tlsFailure classifies a failed TLS handshake.
@@ -217,6 +229,9 @@ func tlsFailure(ctx context.Context, err error) *SendError {
 	var te *textproto.Error
 	if errors.As(err, &te) {
 		return newErr(StageTLS, ClassStartTLSRejected, te.Code >= 400 && te.Code < 500)
+	}
+	if notSMTP(err) {
+		return newErr(StageTLS, ClassStartTLSRejected, false)
 	}
 	if f := netFailure(ctx, StageTLS, err); f.Class == ClassTimeout || f.Class == ClassCanceled {
 		return f

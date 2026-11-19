@@ -118,6 +118,8 @@ type fakeCfg struct {
 	authMech      string
 	authBeforeTLS bool // offer AUTH on a clear connection too (a hostile or careless relay)
 	user, pass    string
+	// lowerExt sends the EHLO extension keywords and the AUTH mechanisms in lower case.
+	lowerExt bool
 
 	greeting   string            // replaces "220 ..."
 	noGreeting bool              // accept the connection and say nothing
@@ -297,6 +299,11 @@ func (s *fakeSrv) serve(raw net.Conn) {
 				lines = append(lines, "AUTH "+s.cfg.authMech)
 			}
 			lines = append(lines, "8BITMIME")
+			if s.cfg.lowerExt {
+				for i := 1; i < len(lines); i++ {
+					lines[i] = strings.ToLower(lines[i])
+				}
+			}
 			var b strings.Builder
 			for i, l := range lines {
 				sep := "-"

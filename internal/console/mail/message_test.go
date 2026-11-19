@@ -3,6 +3,7 @@ package mail
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -298,5 +299,168 @@ func TestMessageIDsAreUniqueAndDateIsUTC(t *testing.T) {
 	}
 	if got := a.Header.Get("Date"); got != "Wed, 18 Nov 2026 12:30:00 +0000" {
 		t.Fatalf("Date = %q", got)
+	}
+}
+
+// headerLines returns the lines of the header block of a built message.
+func headerLines(raw []byte) []string {
+	return strings.Split(string(raw[:bytes.Index(raw, []byte("\r\n\r\n"))]), "\r\n")
+}
+
+func assertHeaderLines(t *testing.T, raw []byte, max int) {
+	t.Helper()
+	for _, l := range headerLines(raw) {
+		if len(l) > max {
+			t.Fatalf("header line of %d octets (limit %d): %q", len(l), max, l)
+		}
+	}
+	if !isASCII(string(raw[:bytes.Index(raw, []byte("\r\n\r\n"))])) {
+		t.Fatal("a header carries raw non-ASCII")
+	}
+}
+
+func TestEnvelopeAddressesMustBePlain(t *testing.T) {
+	long := func(n int) string { return strings.Repeat("a", n) }
+	bad := []string{
+		`"x@evil.example> NOTIFY=NEVER <y"@example.com`,
+		`"a b"@example.com`,
+		`a b@example.com`,
+		`a\b@example.com`,
+		`a..b@example.com`,
+		`.a@example.com`,
+		`a.@example.com`,
+		`a@example..com`,
+		`a@.example.com`,
+		`a@example.com.`,
+		`a@-example.com`,
+		`a@example-.com`,
+		`a@exa_mple.com`,
+		`a@[192.0.2.1]`,
+		`a@[IPv6:2001:db8::1]`,
+		long(65) + `@example.com`,
+		`a@` + long(64) + `.com`, // label of 64
+	}
+	good := []string{
+		"a@example.com", "a.b@example.com", "a+tag@example.com", "o'brien@example.com",
+		"a=b@example.test", "x@localhost", long(64) + "@example.com", "A-b_c@Sub-Domain.example.com",
+	}
+	base := Message{From: "console@example.com", To: []string{"ops@example.com"}, Subject: "s", Text: "t\n"}
+	for _, a := range bad {
+		for name, mod := range map[string]func(*Message){
+			"to":              func(m *Message) { m.To = []string{a} },
+			"second to":       func(m *Message) { m.To = []string{"ops@example.com", a} },
+			"to with name":    func(m *Message) { m.To = []string{"Ops <" + a + ">"} },
+			"from":            func(m *Message) { m.From = a },
+			"from with name":  func(m *Message) { m.From = "Console <" + a + ">" },
+			"to quoted-first": func(m *Message) { m.To = []string{a, "ops@example.com"} },
+		} {
+			m := base
+			mod(&m)
+			err := m.Validate()
+			if !errors.Is(err, ErrInvalidMessage) {
+				t.Errorf("%s %q: Validate = %v", name, a, err)
+			}
+			if raw, err := m.Build(fixedNow); !errors.Is(err, ErrInvalidMessage) {
+				t.Errorf("%s %q: Build = %v\n%s", name, a, err, raw)
+			}
+		}
+	}
+	for _, a := range good {
+		m := base
+		m.To, m.From = []string{a}, "Console <"+a+">"
+		if err := m.Validate(); err != nil {
+			t.Errorf("%q refused: %v", a, err)
+		}
+	}
+	// 254 octets is the limit: "a@", three 63-letter labels with their dots and
+	// a fourth label of 60 (254 octets) or 61 (255 octets) letters.
+	three := strings.Repeat(long(63)+".", 3)
+	for n, wantOK := range map[int]bool{60: true, 61: false} {
+		m := base
+		m.To = []string{"a@" + three + long(n)}
+		if err := m.Validate(); (err == nil) != wantOK {
+			t.Errorf("address of %d octets: Validate = %v, want ok=%v", len(m.To[0]), err, wantOK)
+		}
+	}
+}
+
+func TestBuildFoldsLongNonASCIIHeaders(t *testing.T) {
+	cjk := strings.Repeat("備", 166)     // 498 bytes
+	twoByte := strings.Repeat("é", 250) // 500 bytes: the longest subject
+	mixed := strings.Repeat("Sauvegarde échouée sur le poste 備份 ", 13)[:maxSubject]
+	for name, subj := range map[string]string{"cjk": cjk, "two-byte": twoByte, "mixed": mixed, "emoji": strings.Repeat("\U0001F6A8", 125)} {
+		subj = strings.ToValidUTF8(subj, "")
+		msg, raw := mustBuild(t, Message{
+			From: "console@example.com", To: []string{"ops@example.com"}, Subject: subj, Text: "t\n",
+		})
+		got, err := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
+		if err != nil || got != subj {
+			t.Fatalf("%s: subject round trip failed (%v): %d bytes in, %d bytes out", name, err, len(subj), len(got))
+		}
+		assertHeaderLines(t, raw, 78)
+		assertWireLimits(t, raw)
+		for _, l := range headerLines(raw) {
+			// every encoded word is at most 75 characters
+			for _, w := range strings.Fields(strings.TrimPrefix(l, "Subject:")) {
+				if strings.HasPrefix(w, "=?") && len(w) > 75 {
+					t.Fatalf("%s: encoded word of %d characters", name, len(w))
+				}
+			}
+		}
+	}
+	// A long ASCII subject is folded at spaces within 78 octets.
+	ascii := strings.Repeat("backup status for the whole fleet ", 14) + "end"
+	msg, raw := mustBuild(t, Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: ascii, Text: "t\n"})
+	if got := msg.Header.Get("Subject"); got != ascii {
+		t.Fatalf("ASCII subject round trip = %q", got)
+	}
+	assertHeaderLines(t, raw, 78)
+}
+
+func TestSubjectOverTheByteLimitIsRefused(t *testing.T) {
+	m := Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: strings.Repeat("é", 300), Text: "t\n"}
+	if _, err := m.Build(fixedNow); !errors.Is(err, ErrInvalidMessage) {
+		t.Fatalf("a 600-byte subject: %v", err)
+	}
+}
+
+func TestBuildFoldsLongDisplayNames(t *testing.T) {
+	names := map[string]string{
+		"cjk 128":   strings.Repeat("備", 128),
+		"latin 128": strings.Repeat("Ünï ", 32),
+		"ascii 128": strings.Repeat("Operations desk ", 8),
+		"short":     "Réception",
+	}
+	for name, dn := range names {
+		msg, raw := mustBuild(t, Message{
+			From: dn + " <console@example.com>", To: []string{dn + " <ops@example.com>", "Second Person <more@example.com>"},
+			Subject: "s", Text: "t\n",
+		})
+		assertHeaderLines(t, raw, 78)
+		from, err := msg.Header.AddressList("From")
+		if err != nil || len(from) != 1 || from[0].Name != strings.TrimSpace(dn) || from[0].Address != "console@example.com" {
+			t.Fatalf("%s: From = %+v, %v", name, from, err)
+		}
+		to, err := msg.Header.AddressList("To")
+		if err != nil || len(to) != 2 || to[0].Name != strings.TrimSpace(dn) || to[1].Address != "more@example.com" {
+			t.Fatalf("%s: To = %+v, %v", name, to, err)
+		}
+	}
+	for name, dn := range map[string]string{
+		"129 characters":    strings.Repeat("備", 129),
+		"1200 bytes":        strings.Repeat("é", 600),
+		"ascii 129":         strings.Repeat("a", 129),
+		"to over the bound": strings.Repeat("é", 129),
+	} {
+		m := Message{From: dn + " <console@example.com>", To: []string{"ops@example.com"}, Subject: "s", Text: "t\n"}
+		if name == "to over the bound" {
+			m.From, m.To = "console@example.com", []string{dn + " <ops@example.com>"}
+		}
+		if _, err := m.Build(fixedNow); !errors.Is(err, ErrInvalidMessage) {
+			t.Errorf("%s: Build = %v", name, err)
+		}
+		if strings.Contains(fmt.Sprint(m.Validate()), "é") {
+			t.Errorf("%s: the error echoes the value", name)
+		}
 	}
 }

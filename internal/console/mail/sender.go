@@ -4,12 +4,16 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
@@ -99,6 +103,13 @@ func (s Settings) Validate() error {
 	}
 	for _, v := range []string{s.Host, s.HeloName, s.From} {
 		if headerSafe("setting", v) != nil {
+			return newErr(StageConfig, ClassConfigInvalid, false)
+		}
+	}
+	// The default sender becomes the envelope sender of every message without
+	// its own From: it must be a plain address like any other (checkEnvelopeAddr).
+	if s.From != "" {
+		if f, err := parseAddr(s.From); err != nil || utf8.RuneCountInString(f.Name) > maxDisplayName {
 			return newErr(StageConfig, ClassConfigInvalid, false)
 		}
 	}
@@ -243,7 +254,15 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 		return replyFailure(ctx, StageConnect, ClassProtocol, err)
 	}
 	if set.Security == "starttls" {
-		if ok, _ := c.Extension("STARTTLS"); !ok {
+		offered, _ := c.Extension("STARTTLS")
+		if !offered {
+			ext, err := ehloExtensions(c, helo)
+			if err != nil {
+				return replyFailure(ctx, StageConnect, ClassProtocol, err)
+			}
+			_, offered = ext["STARTTLS"]
+		}
+		if !offered {
 			return newErr(StageTLS, ClassStartTLSMissing, false)
 		}
 		if err := c.StartTLS(tcfg); err != nil {
@@ -258,24 +277,27 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 		if !encrypted {
 			return newErr(StageAuth, ClassPlaintextRefused, false)
 		}
-		auth := pickAuth(c, set.Host, set.Username, password)
-		if auth == nil {
-			return newErr(StageAuth, ClassAuthUnsupported, false)
-		}
-		if err := c.Auth(auth); err != nil {
-			if errors.Is(err, errLoginChallenge) {
-				return newErr(StageAuth, ClassProtocol, false)
-			}
-			return replyFailure(ctx, StageAuth, ClassAuthRejected, err)
+		if err := authenticate(ctx, c, helo, set.Host, set.Username, password); err != nil {
+			return err
 		}
 	}
 
+	// The envelope is checked again here, one address at a time, immediately
+	// before it is written: whatever built addrs, nothing but a plain address
+	// goes between the angle brackets.
+	if checkEnvelopeAddr(a.from.Address) != nil {
+		return newErr(StageConfig, ClassMessageInvalid, false)
+	}
 	if err := c.Mail(a.from.Address); err != nil {
 		return replyFailure(ctx, StageSender, ClassSenderRejected, err)
 	}
 	for _, r := range a.to {
+		if checkEnvelopeAddr(r.Address) != nil {
+			closing(conn, overall, c.Reset) // all or nothing, as for a refused recipient
+			return newErr(StageConfig, ClassMessageInvalid, false)
+		}
 		if err := c.Rcpt(r.Address); err != nil {
-			_ = c.Reset() // all or nothing: no DATA after a refused recipient
+			closing(conn, overall, c.Reset) // all or nothing: no DATA after a refused recipient
 			return replyFailure(ctx, StageRecipient, ClassRecipientRejected, err)
 		}
 	}
@@ -289,17 +311,128 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 	if err := w.Close(); err != nil {
 		return replyFailure(ctx, StageData, ClassMessageRejected, err)
 	}
-	// The relay has accepted the message. A QUIT that fails now must not turn a
-	// delivered message into a failure: a retry would send it twice.
-	_ = c.Quit()
+	// The relay has accepted the message. A QUIT that fails or hangs now must not
+	// turn a delivered message into a failure (a retry would send it twice) nor
+	// hold Send until the whole deadline: it gets closeTimeout and its outcome is
+	// dropped.
+	closing(conn, overall, c.Quit)
 	return nil
 }
 
-// pickAuth chooses PLAIN, or LOGIN when that is all the relay offers; nil when
-// it offers neither. Only called on an encrypted connection.
-func pickAuth(c *smtp.Client, host, user, pass string) smtp.Auth {
-	ok, params := c.Extension("AUTH")
-	if !ok {
+// closing runs a closing command (QUIT, RSET) under its own short deadline,
+// closeTimeout, never later than the deadline of the whole send. Its outcome is
+// ignored: by now the result of the send is already decided.
+func closing(conn net.Conn, overall time.Time, cmd func() error) {
+	dl := time.Now().Add(closeTimeout)
+	if dl.After(overall) {
+		dl = overall
+	}
+	_ = conn.SetDeadline(dl)
+	_ = cmd()
+}
+
+// ehloExtensions asks the relay for its extensions once more and returns them
+// with upper-case keywords. net/smtp keeps the keywords as the relay wrote them
+// and looks them up in upper case, so a relay that writes "250-auth plain"
+// (keywords are case-insensitive, RFC 5321 2.4) would look as if it offered
+// neither AUTH nor STARTTLS. Only used when that lookup found nothing.
+func ehloExtensions(c *smtp.Client, helo string) (map[string]string, error) {
+	_, msg, err := textCmd(c, 250, "EHLO %s", helo)
+	if err != nil {
+		return nil, err
+	}
+	ext := map[string]string{}
+	lines := strings.Split(msg, "\n")
+	for _, l := range lines[1:] { // the first line is the greeting
+		k, v, _ := strings.Cut(l, " ")
+		ext[strings.ToUpper(k)] = v
+	}
+	return ext, nil
+}
+
+// textCmd sends one command and reads its reply, as net/smtp's own (unexported)
+// cmd does.
+func textCmd(c *smtp.Client, expect int, format string, args ...any) (int, string, error) {
+	id, err := c.Text.Cmd(format, args...)
+	if err != nil {
+		return 0, "", err
+	}
+	c.Text.StartResponse(id)
+	defer c.Text.EndResponse(id)
+	return c.Text.ReadResponse(expect)
+}
+
+// authenticate signs in with PLAIN, or LOGIN when that is all the relay offers.
+// Only called on an encrypted connection. The error is a *SendError.
+func authenticate(ctx context.Context, c *smtp.Client, helo, host, user, pass string) error {
+	offered, params := c.Extension("AUTH")
+	native := offered // net/smtp saw the AUTH keyword, so its own Auth can run
+	if !offered {
+		ext, err := ehloExtensions(c, helo)
+		if err != nil {
+			return replyFailure(ctx, StageConnect, ClassProtocol, err)
+		}
+		params, offered = ext["AUTH"]
+	}
+	auth := pickAuth(offered, params, host, user, pass)
+	if auth == nil {
+		return newErr(StageAuth, ClassAuthUnsupported, false)
+	}
+	var err error
+	if native {
+		err = c.Auth(auth)
+	} else {
+		err = authExchange(c, host, auth, strings.Fields(params))
+	}
+	if err != nil {
+		if errors.Is(err, errLoginChallenge) {
+			return newErr(StageAuth, ClassProtocol, false)
+		}
+		return replyFailure(ctx, StageAuth, ClassAuthRejected, err)
+	}
+	return nil
+}
+
+// authExchange is net/smtp's Client.Auth for the one case it cannot serve: it
+// refuses to run unless it saw the AUTH keyword in upper case. The exchange is
+// the same (RFC 4954), on an encrypted connection.
+func authExchange(c *smtp.Client, host string, a smtp.Auth, mechs []string) error {
+	enc := base64.StdEncoding
+	mech, resp, err := a.Start(&smtp.ServerInfo{Name: host, TLS: true, Auth: mechs})
+	if err != nil {
+		return err
+	}
+	line := strings.TrimSpace(fmt.Sprintf("AUTH %s %s", mech, enc.EncodeToString(resp)))
+	code, msg64, err := textCmd(c, 0, "%s", line)
+	for err == nil {
+		var msg []byte
+		switch code {
+		case 334:
+			msg, err = enc.DecodeString(msg64)
+		case 235:
+			msg = []byte(msg64) // the last message is not a challenge, so not base64
+		default:
+			err = &textproto.Error{Code: code, Msg: msg64}
+		}
+		if err != nil {
+			return err
+		}
+		if resp, err = a.Next(msg, code == 334); err != nil {
+			_, _, _ = textCmd(c, 501, "*") // abort the exchange
+			return err
+		}
+		if resp == nil {
+			return nil
+		}
+		code, msg64, err = textCmd(c, 0, "%s", enc.EncodeToString(resp))
+	}
+	return err
+}
+
+// pickAuth chooses PLAIN, or LOGIN when that is all the relay offers (params is
+// the mechanism list of its AUTH line, in any case); nil when it offers neither.
+func pickAuth(offered bool, params, host, user, pass string) smtp.Auth {
+	if !offered {
 		return nil
 	}
 	var plain, login bool
@@ -348,3 +481,9 @@ func (a loginAuth) Next(challenge []byte, more bool) ([]byte, error) {
 	}
 	return nil, errLoginChallenge
 }
+
+// closingTimeout bounds the closing QUIT and RSET (see closeTimeout).
+const closingTimeout = 5 * time.Second
+
+// closeTimeout is closingTimeout; a variable only so a test can shorten it.
+var closeTimeout = closingTimeout
