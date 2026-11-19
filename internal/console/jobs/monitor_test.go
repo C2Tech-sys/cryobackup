@@ -13,6 +13,7 @@ import (
 
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 func pingRig(t *testing.T) (*store.Store, *time.Time, *httptest.Server, *atomic.Int64, *atomic.Value) {
@@ -92,12 +93,12 @@ func TestC13AlarmEvaluatorLoopRecordsRuns(t *testing.T) {
 	st, _, _, _, _ := pingRig(t)
 	var calls atomic.Int64
 	var fail atomic.Bool
-	j := &AlarmEvaluator{Store: st, Evaluate: func(context.Context) error {
+	j := &AlarmEvaluator{Store: st, View: func(context.Context) (state.FleetView, error) {
 		calls.Add(1)
 		if fail.Load() {
-			return &ClassError{Class: ClassStore}
+			return state.FleetView{}, &ClassError{Class: ClassStore}
 		}
-		return nil
+		return state.FleetView{}, nil
 	}}
 	if got := j.Job(); got.Name != NameAlarmEvaluator || got.Every != time.Minute {
 		t.Fatalf("job %+v", got)

@@ -51,11 +51,8 @@ const ClassEvaluatorUnhealthy = "evaluator_unhealthy"
 type AlarmEvaluator struct {
 	// Store receives the NameAlarmEvaluatorOK row after each successful evaluation.
 	Store *store.Store
-	// Evaluate runs one evaluation (health.Evaluator.Alarms); an error is the run's error class.
-	// It is used when View is nil.
-	Evaluate func(ctx context.Context) error
-	// View runs one evaluation and returns the view (health.Evaluator.Alarms). When set it replaces
-	// Evaluate and its view is handed to Notify.
+	// View runs one evaluation and returns the view (health.Evaluator.Alarms); an error is the run's
+	// error class. The view is handed to Notify.
 	View func(ctx context.Context) (state.FleetView, error)
 	// Notify is the alerting step of the pass (notify.Notifier.Pass); nil means none. Its error is the
 	// run's error, and the evaluation does not count as successful.
@@ -70,18 +67,14 @@ func (j *AlarmEvaluator) Job() Job {
 // Run is one evaluation and its notify step; a successful one also stamps NameAlarmEvaluatorOK.
 func (j *AlarmEvaluator) Run(ctx context.Context) error {
 	start := j.Store.Now()
-	if j.View != nil {
-		v, err := j.View(ctx)
-		if err != nil {
+	v, err := j.View(ctx)
+	if err != nil {
+		return err
+	}
+	if j.Notify != nil {
+		if err := j.Notify(ctx, v); err != nil {
 			return err
 		}
-		if j.Notify != nil {
-			if err := j.Notify(ctx, v); err != nil {
-				return err
-			}
-		}
-	} else if err := j.Evaluate(ctx); err != nil {
-		return err
 	}
 	end := j.Store.Now()
 	if end.Before(start) {
