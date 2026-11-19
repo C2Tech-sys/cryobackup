@@ -25,14 +25,15 @@ const RetryBatch = 100
 //	orphan of a crashed pass, overlapping pass   deduped           orphan, overlap, batch_id_taken
 //	every alarm of the alert already resolved    below_threshold   alarm_resolved
 //	recipient deleted                            deduped           recipient_deleted
-//	recipient switched the kind off              paused            recipient_switched_off
+//	recipient switched the kind off              deduped           recipient_switched_off
 //	dedupe key that is not a batch key           deduped           bad_key
 //	a test send left queued                      deduped           test_not_retried
 //	acknowledged, snoozed, customer suspended    the same word     the same word
+//
+// "paused" is not used: the rest of the product means the PAUSED device state by it.
 const (
-	reasonDeduped     = "deduped"
-	reasonResolved    = "below_threshold" // the alarm no longer meets the alerting condition
-	reasonSwitchedOff = "paused"          // the recipient paused this kind of mail
+	reasonDeduped  = "deduped"
+	reasonResolved = "below_threshold" // the alarm no longer meets the alerting condition
 )
 
 // skip is a decision not to send a due row: the schema's reason and the precise case for the log.
@@ -225,7 +226,7 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 		return nil, sk, err
 	}
 	if d.Kind == store.DeliveryAlert && !to.Alerts || d.Kind == store.DeliveryRecovery && !to.Recoveries {
-		return nil, skip{reasonSwitchedOff, "recipient_switched_off"}, nil
+		return nil, skip{reasonDeduped, "recipient_switched_off"}, nil
 	}
 	var eps []store.Episode
 	if d.Kind == store.DeliveryAlert {

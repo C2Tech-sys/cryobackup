@@ -478,7 +478,7 @@ func TestRetrySuppressReasons(t *testing.T) {
 			w.set(state.StateOK, dev)
 			w.pass()
 		}},
-		{"recipient switched off", "paused", "recipient_switched_off", func(w *world, r store.Recipient, _ string) {
+		{"recipient switched off", "deduped", "recipient_switched_off", func(w *world, r store.Recipient, _ string) {
 			if _, err := w.st.UpdateRecipient(w.ctx, store.ScopeAll(), r.ID, store.RecipientInput{Name: r.Name, Address: r.Address, Recoveries: true}, w.actor); err != nil {
 				w.t.Fatal(err)
 			}
