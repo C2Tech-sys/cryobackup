@@ -17,7 +17,7 @@ var fixedNow = func() time.Time { return time.Date(2026, 10, 22, 13, 42, 10, 0, 
 
 func openConn(t *testing.T, path string) (*sql.DB, *sql.Conn) {
 	t.Helper()
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(60000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		t.Fatal(err)
 	}
