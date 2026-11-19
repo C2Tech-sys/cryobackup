@@ -192,3 +192,123 @@ func TestM4W2ASuppressDelivery(t *testing.T) {
 		t.Fatalf("customer scope: %v", err)
 	}
 }
+
+// addW2AMatrix adds the P20-W2A methods to the §3.5 scope matrix. It needs one line in matrix()
+// (scope_test.go), next to addM4Matrix: addW2AMatrix(m).
+func addW2AMatrix(m map[string]matrixCase) {
+	actorOf := func(w *world) AuditActor { return AuditActor{AdminID: w.admin.ID, Username: "matrix", Method: "api"} }
+	// openOn makes an episode of the alarm open on each device, leaving the other open episodes as they are.
+	openOn := func(w *world, alarm string, devs ...string) ([]Episode, error) {
+		open, err := w.s.ListOpenEpisodes(w.ctx, ScopeAll())
+		if err != nil {
+			return nil, err
+		}
+		var keys []EpisodeKey
+		for _, d := range devs {
+			keys = append(keys, EpisodeKey{SubjectType: EpisodeDevice, SubjectID: d, AlarmType: alarm})
+		}
+		for _, e := range open {
+			keys = append(keys, EpisodeKey{SubjectType: e.SubjectType, SubjectID: e.SubjectID, AlarmType: e.AlarmType})
+		}
+		if _, err := w.s.SyncEpisodes(w.ctx, ScopeAll(), keys, time.Time{}); err != nil {
+			return nil, err
+		}
+		open, err = w.s.ListOpenEpisodes(w.ctx, ScopeAll())
+		var out []Episode
+		for _, e := range open {
+			if e.AlarmType == alarm {
+				out = append(out, e)
+			}
+		}
+		return out, err
+	}
+	ids := func(eps []Episode) []string {
+		var out []string
+		for _, e := range eps {
+			out = append(out, e.ID)
+		}
+		return out
+	}
+	customers := func(eps []Episode) []string {
+		var out []string
+		for _, e := range eps {
+			out = append(out, e.CustomerID)
+		}
+		return out
+	}
+	batch := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	m["ListEpisodesNotifiedAt"] = matrixCase{kind: list, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		eps, err := openOn(w, "UNKNOWN", w.devA.ID, w.devB.ID)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := w.s.MarkEpisodesNotified(w.ctx, ScopeAll(), ids(eps), batch); err != nil {
+			return nil, err
+		}
+		got, err := w.s.ListEpisodesNotifiedAt(w.ctx, sc, batch)
+		return customers(got), err
+	}}
+	m["ListEpisodesRecoveryNotifiedAt"] = matrixCase{kind: list, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		eps, err := openOn(w, "OUTDATED", w.devA.ID, w.devB.ID)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := w.s.MarkEpisodesNotified(w.ctx, ScopeAll(), ids(eps), time.Time{}); err != nil {
+			return nil, err
+		}
+		open, err := w.s.ListOpenEpisodes(w.ctx, ScopeAll())
+		if err != nil {
+			return nil, err
+		}
+		var keys []EpisodeKey
+		for _, e := range open {
+			if e.AlarmType != "OUTDATED" {
+				keys = append(keys, EpisodeKey{SubjectType: e.SubjectType, SubjectID: e.SubjectID, AlarmType: e.AlarmType})
+			}
+		}
+		if _, err := w.s.SyncEpisodes(w.ctx, ScopeAll(), keys, time.Time{}); err != nil {
+			return nil, err
+		}
+		if _, err := w.s.MarkRecoveryNotified(w.ctx, ScopeAll(), ids(eps), batch); err != nil {
+			return nil, err
+		}
+		got, err := w.s.ListEpisodesRecoveryNotifiedAt(w.ctx, sc, batch)
+		return customers(got), err
+	}}
+	m["RearmLapsedSnoozes"] = matrixCase{kind: list, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		eps, err := openOn(w, "IDENTITY_CONFLICT", w.devA.ID, w.devB.ID)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := w.s.MarkEpisodesNotified(w.ctx, ScopeAll(), ids(eps), time.Time{}); err != nil {
+			return nil, err
+		}
+		until := w.clk.Now().Add(time.Minute)
+		for _, e := range eps {
+			if _, err := w.s.CreateAck(w.ctx, ScopeAll(), AckInput{SubjectType: EpisodeDevice, SubjectID: e.SubjectID, AlarmType: "identity", SnoozeUntil: &until}, actorOf(w)); err != nil {
+				return nil, err
+			}
+		}
+		w.clk.Advance(2 * time.Minute) // both snoozes lapse; only those inside scope may be re-armed
+		if _, err := w.s.RearmLapsedSnoozes(w.ctx, sc); err != nil {
+			return nil, err
+		}
+		un, err := w.s.ListUnnotifiedEpisodes(w.ctx, ScopeAll())
+		var rearmed []Episode
+		for _, e := range un {
+			if e.AlarmType == "IDENTITY_CONFLICT" {
+				rearmed = append(rearmed, e)
+			}
+		}
+		return customers(rearmed), err
+	}}
+	m["SuppressDelivery"] = matrixCase{kind: globalWrite, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		d, _, err := w.s.EnqueueDelivery(w.ctx, ScopeAll(), DeliveryInput{Kind: DeliveryAlert, DedupeKey: uniq("alert:matrix-suppress"), SubjectType: "console"})
+		if err != nil {
+			return nil, err
+		}
+		_, err = w.s.SuppressDelivery(w.ctx, sc, d.ID, "deduped")
+		return nil, err
+	}}
+}
