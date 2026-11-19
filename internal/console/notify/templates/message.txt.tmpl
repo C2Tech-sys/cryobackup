@@ -1,0 +1,18 @@
+CryoBackup: {{.Title}}
+Polled {{.Polled}}
+{{range .Groups}}
+{{.Customer}}
+{{range .Lines}}{{if $.Recovery}}  [RESOLVED] {{if .Host}}{{.Host}}: {{end}}{{.State}} since {{.Since}},
+      ended {{.Ended}}{{if .Now}}; now {{.Now}}{{end}}
+{{else}}  [{{.State}}] {{if .Host}}{{.Host}}{{else}}no active device{{end}} since {{.Since}}{{if .Class}}
+      error class: {{.Class}}{{end}}
+{{end}}{{end}}{{end}}
+{{if .Recovery}}These alarms have ended. No further mail is sent about them.{{else}}Each alarm is mailed once while it lasts. Acknowledge or snooze it in the
+console to mute it; a recovery notice follows when it ends.{{end}}
+{{if .ConsoleURL}}
+Open the console: {{.ConsoleURL}}
+{{else}}
+Open the console to see the details.
+{{end}}
+{{if .Recovery}}You receive this because this address receives CryoBackup recovery
+notices.{{else}}You receive this because this address receives CryoBackup alerts.{{end}}

@@ -1,0 +1,17 @@
+CryoBackup: 2 alarms resolved at 2 customers
+Polled Tue 17 Nov 2026, 3:04 PM CST
+
+Northwind Dental
+  [RESOLVED] MISSING since Sat 14 Nov 2026, 3:04 PM CST,
+      ended Tue 17 Nov 2026, 3:02 PM CST
+
+Summit Eye Care
+  [RESOLVED] RECEPTION-02: FAILED since Mon 16 Nov 2026, 1:04 PM CST,
+      ended Tue 17 Nov 2026, 3:02 PM CST; now OK
+
+These alarms have ended. No further mail is sent about them.
+
+Open the console: https://console.example.com/
+
+You receive this because this address receives CryoBackup recovery
+notices.

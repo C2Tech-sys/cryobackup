@@ -243,7 +243,7 @@ func TestR4ClockRowForAScopedAccountSaysItIsThatAccountsView(t *testing.T) { // 
 func TestR4EveryBannerIsPinnedToItsRow(t *testing.T) { // r4 low 4 (A20)
 	want := map[string]string{
 		"C01": "gateway", "C01b": "gateway", "C02": "storage", "C02b": "storage", "C15": "storage_quota", "C15b": "storage_quota",
-		"C03": "smtp", "C03b": "smtp", "C14": "digest", "C14b": "digest", "C05": "certificates", "C05b": "certificates",
+		"C03": "smtp", "C03b": "smtp", "C18": "smtp", "C14": "digest", "C14b": "digest", "C05": "certificates", "C05b": "certificates",
 		"C04": "agent_api", "C04b": "agent_api", "C07": "maintenance_worker", "C07b": "maintenance_worker", "C11": "database",
 		"C06": "evaluator", "C06b": "evaluator", "C12": "master_key", "C12b": "master_key", "C08": "fleet_data", "C09": "fleet_data", "C10": "fleet_data",
 		"C13": "clock", "C16": "release_manifest", "C16b": "release_manifest", "C17": "gateway", "C17b": "gateway",

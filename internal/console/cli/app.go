@@ -20,6 +20,8 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
+	"github.com/c2tech-sys/cryobackup/internal/console/mail"
+	"github.com/c2tech-sys/cryobackup/internal/console/notify"
 	"github.com/c2tech-sys/cryobackup/internal/console/probe"
 	"github.com/c2tech-sys/cryobackup/internal/console/restores"
 	"github.com/c2tech-sys/cryobackup/internal/console/server"
@@ -65,6 +67,11 @@ type App struct {
 	Htpasswd *jobs.HtpasswdSync
 	// Display is the live display zone and refresh interval (M2-W3A) shared by the UI and the API.
 	Display *store.DisplayPrefs
+	// Mail sends the operator mail (ADR 0020): the relay of config.json, or a mail.FakeSender in
+	// fixtures mode, so nothing ever leaves a fixture console. Dispatch sends through it and records
+	// every message in the delivery log.
+	Mail     mail.Sender
+	Dispatch *notify.Dispatcher
 	// FixturesPassword is the password of the fixtures admin ("admin").
 	FixturesPassword string
 
@@ -183,6 +190,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 			logx.Int("config_refresh_s", cfg.RefreshIntervalS), logx.Int("saved_refresh_s", snap.RefreshS))
 	}
 	a.Display = disp
+	a.Mail, a.Dispatch = newMailer(cfg, fix, a)
 
 	a.Endpoint = newEndpointProbe(cfg, a.clock, a.log)
 	if !fix {

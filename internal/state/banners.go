@@ -322,8 +322,18 @@ func gatewayBanners(g *ProbeRun, iv time.Duration, c bannerCtx) []Banner {
 // smtpBanners is C03: three failed sends or probes in a row, a failed test, or
 // alerts pending (the oldest for at least SMTPPendingMinAge) with nothing delivered for a day. Recent successful delivery
 // is evidence too, so an unchecked probe is only a warning when nothing has
-// been delivered within the day.
+// been delivered within the day. Beside it, C18 warns that a configured relay
+// has no recipient with the alerts switch (ADR 0020 decision 10).
 func smtpBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
+	out := smtpDeliveryBanners(s, iv, c)
+	if s.NoAlertRecipient && s.Probe.Unconfigured == "" {
+		out = append(out, Banner{ID: "C18", Severity: SeverityAlarm, Text: "Alert e-mail has no recipient: alarms are not mailed to anyone."})
+	}
+	return out
+}
+
+// smtpDeliveryBanners is the C03 / C03b half of smtpBanners.
+func smtpDeliveryBanners(s *SMTPFacts, iv time.Duration, c bannerCtx) []Banner {
 	v, why, n := judgeProbe(&s.Probe, SMTPFailuresToAlarm, iv, c.now)
 	sent, sentOK := recorded(s.LastSendOKAt, c.now)
 	recent := sentOK && c.now.Sub(sent) <= SMTPPendingWithoutSend
