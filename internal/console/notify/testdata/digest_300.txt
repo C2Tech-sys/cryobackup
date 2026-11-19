@@ -1,0 +1,294 @@
+CryoBackup daily digest, Tue 17 Nov
+Not all clear: 93 critical, 60 warnings, 3 customers missing.
+Polled Tue 17 Nov 2026, 3:04 PM CST
+
+Console
+  No console condition: every self-check passes.
+
+Critical
+  Customer 10 Family Practice
+    [MISSING] no active device
+    [UNSEEN] C10-WS-08 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C10-WS-04 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C10-WS-05 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 20 Family Practice
+    [MISSING] no active device
+    [UNSEEN] C20-WS-08 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C20-WS-04 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C20-WS-05 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 30 Family Practice
+    [MISSING] no active device
+    [UNSEEN] C30-WS-08 since Mon 16 Nov 2026, 2:04 AM CST
+    [FAILED] C30-WS-04 since Mon 16 Nov 2026, 6:04 AM CST
+    [STALE] C30-WS-05 since Mon 16 Nov 2026, 5:04 AM CST
+  Customer 01 Family Practice
+    [UNSEEN] C01-WS-07 since Tue 17 Nov 2026, 8:04 AM CST
+    [FAILED] C01-WS-03 since Tue 17 Nov 2026, 12:04 PM CST
+    [STALE] C01-WS-04 since Tue 17 Nov 2026, 11:04 AM CST
+  Customer 02 Family Practice
+    [UNSEEN] C02-WS-06 since Tue 17 Nov 2026, 8:04 AM CST
+    [FAILED] C02-WS-02 since Tue 17 Nov 2026, 12:04 PM CST
+    [STALE] C02-WS-03 since Tue 17 Nov 2026, 11:04 AM CST
+  Customer 03 Family Practice
+    [UNSEEN] C03-WS-05 since Tue 17 Nov 2026, 8:04 AM CST
+    [FAILED] C03-WS-01 since Tue 17 Nov 2026, 12:04 PM CST
+    [STALE] C03-WS-02 since Tue 17 Nov 2026, 11:04 AM CST
+  Customer 04 Family Practice
+    [UNSEEN] C04-WS-04 since Tue 17 Nov 2026, 8:04 AM CST
+    [FAILED] C04-WS-10 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C04-WS-01 since Tue 17 Nov 2026, 11:04 AM CST
+  Customer 05 Family Practice
+    [UNSEEN] C05-WS-03 since Tue 17 Nov 2026, 8:04 AM CST
+    [FAILED] C05-WS-09 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C05-WS-10 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 06 Family Practice
+    [UNSEEN] C06-WS-02 since Tue 17 Nov 2026, 8:04 AM CST
+    [FAILED] C06-WS-08 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C06-WS-09 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 07 Family Practice
+    [UNSEEN] C07-WS-01 since Tue 17 Nov 2026, 8:04 AM CST
+    [FAILED] C07-WS-07 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C07-WS-08 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 08 Family Practice
+    [UNSEEN] C08-WS-10 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C08-WS-06 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C08-WS-07 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 09 Family Practice
+    [UNSEEN] C09-WS-09 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C09-WS-05 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C09-WS-06 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 11 Family Practice
+    [UNSEEN] C11-WS-07 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C11-WS-03 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C11-WS-04 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 12 Family Practice
+    [UNSEEN] C12-WS-06 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C12-WS-02 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C12-WS-03 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 13 Family Practice
+    [UNSEEN] C13-WS-05 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C13-WS-01 since Tue 17 Nov 2026, 2:04 AM CST
+    [STALE] C13-WS-02 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 14 Family Practice
+    [UNSEEN] C14-WS-04 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C14-WS-10 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C14-WS-01 since Tue 17 Nov 2026, 1:04 AM CST
+  Customer 15 Family Practice
+    [UNSEEN] C15-WS-03 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C15-WS-09 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C15-WS-10 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 16 Family Practice
+    [UNSEEN] C16-WS-02 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C16-WS-08 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C16-WS-09 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 17 Family Practice
+    [UNSEEN] C17-WS-01 since Mon 16 Nov 2026, 10:04 PM CST
+    [FAILED] C17-WS-07 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C17-WS-08 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 18 Family Practice
+    [UNSEEN] C18-WS-10 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C18-WS-06 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C18-WS-07 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 19 Family Practice
+    [UNSEEN] C19-WS-09 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C19-WS-05 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C19-WS-06 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 21 Family Practice
+    [UNSEEN] C21-WS-07 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C21-WS-03 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C21-WS-04 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 22 Family Practice
+    [UNSEEN] C22-WS-06 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C22-WS-02 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C22-WS-03 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 23 Family Practice
+    [UNSEEN] C23-WS-05 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C23-WS-01 since Mon 16 Nov 2026, 4:04 PM CST
+    [STALE] C23-WS-02 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 24 Family Practice
+    [UNSEEN] C24-WS-04 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C24-WS-10 since Mon 16 Nov 2026, 6:04 AM CST
+    [STALE] C24-WS-01 since Mon 16 Nov 2026, 3:04 PM CST
+  Customer 25 Family Practice
+    [UNSEEN] C25-WS-03 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C25-WS-09 since Mon 16 Nov 2026, 6:04 AM CST
+    [STALE] C25-WS-10 since Mon 16 Nov 2026, 5:04 AM CST
+  Customer 26 Family Practice
+    [UNSEEN] C26-WS-02 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C26-WS-08 since Mon 16 Nov 2026, 6:04 AM CST
+    [STALE] C26-WS-09 since Mon 16 Nov 2026, 5:04 AM CST
+  Customer 27 Family Practice
+    [UNSEEN] C27-WS-01 since Mon 16 Nov 2026, 12:04 PM CST
+    [FAILED] C27-WS-07 since Mon 16 Nov 2026, 6:04 AM CST
+    [STALE] C27-WS-08 since Mon 16 Nov 2026, 5:04 AM CST
+  Customer 28 Family Practice
+    [UNSEEN] C28-WS-10 since Mon 16 Nov 2026, 2:04 AM CST
+    [FAILED] C28-WS-06 since Mon 16 Nov 2026, 6:04 AM CST
+    [STALE] C28-WS-07 since Mon 16 Nov 2026, 5:04 AM CST
+  Customer 29 Family Practice
+    [UNSEEN] C29-WS-09 since Mon 16 Nov 2026, 2:04 AM CST
+    [FAILED] C29-WS-05 since Mon 16 Nov 2026, 6:04 AM CST
+    [STALE] C29-WS-06 since Mon 16 Nov 2026, 5:04 AM CST
+
+Warnings
+  Customer 01 Family Practice
+    [PARTIAL] C01-WS-05 since Tue 17 Nov 2026, 10:04 AM CST
+    [MAINT_FAILED] C01-WS-08 since Tue 17 Nov 2026, 7:04 AM CST
+  Customer 02 Family Practice
+    [PARTIAL] C02-WS-04 since Tue 17 Nov 2026, 10:04 AM CST
+    [MAINT_FAILED] C02-WS-07 since Tue 17 Nov 2026, 7:04 AM CST
+  Customer 03 Family Practice
+    [PARTIAL] C03-WS-03 since Tue 17 Nov 2026, 10:04 AM CST
+    [MAINT_FAILED] C03-WS-06 since Tue 17 Nov 2026, 7:04 AM CST
+  Customer 04 Family Practice
+    [PARTIAL] C04-WS-02 since Tue 17 Nov 2026, 10:04 AM CST
+    [MAINT_FAILED] C04-WS-05 since Tue 17 Nov 2026, 7:04 AM CST
+  Customer 05 Family Practice
+    [PARTIAL] C05-WS-01 since Tue 17 Nov 2026, 10:04 AM CST
+    [MAINT_FAILED] C05-WS-04 since Tue 17 Nov 2026, 7:04 AM CST
+  Customer 06 Family Practice
+    [PARTIAL] C06-WS-10 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C06-WS-03 since Tue 17 Nov 2026, 7:04 AM CST
+  Customer 07 Family Practice
+    [PARTIAL] C07-WS-09 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C07-WS-02 since Tue 17 Nov 2026, 7:04 AM CST
+  Customer 08 Family Practice
+    [PARTIAL] C08-WS-08 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C08-WS-01 since Tue 17 Nov 2026, 7:04 AM CST
+  Customer 09 Family Practice
+    [PARTIAL] C09-WS-07 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C09-WS-10 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 10 Family Practice
+    [PARTIAL] C10-WS-06 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C10-WS-09 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 11 Family Practice
+    [PARTIAL] C11-WS-05 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C11-WS-08 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 12 Family Practice
+    [PARTIAL] C12-WS-04 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C12-WS-07 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 13 Family Practice
+    [PARTIAL] C13-WS-03 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C13-WS-06 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 14 Family Practice
+    [PARTIAL] C14-WS-02 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C14-WS-05 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 15 Family Practice
+    [PARTIAL] C15-WS-01 since Tue 17 Nov 2026, 12:04 AM CST
+    [MAINT_FAILED] C15-WS-04 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 16 Family Practice
+    [PARTIAL] C16-WS-10 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C16-WS-03 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 17 Family Practice
+    [PARTIAL] C17-WS-09 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C17-WS-02 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 18 Family Practice
+    [PARTIAL] C18-WS-08 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C18-WS-01 since Mon 16 Nov 2026, 9:04 PM CST
+  Customer 19 Family Practice
+    [PARTIAL] C19-WS-07 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C19-WS-10 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 20 Family Practice
+    [PARTIAL] C20-WS-06 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C20-WS-09 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 21 Family Practice
+    [PARTIAL] C21-WS-05 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C21-WS-08 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 22 Family Practice
+    [PARTIAL] C22-WS-04 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C22-WS-07 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 23 Family Practice
+    [PARTIAL] C23-WS-03 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C23-WS-06 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 24 Family Practice
+    [PARTIAL] C24-WS-02 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C24-WS-05 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 25 Family Practice
+    [PARTIAL] C25-WS-01 since Mon 16 Nov 2026, 2:04 PM CST
+    [MAINT_FAILED] C25-WS-04 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 26 Family Practice
+    [PARTIAL] C26-WS-10 since Mon 16 Nov 2026, 4:04 AM CST
+    [MAINT_FAILED] C26-WS-03 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 27 Family Practice
+    [PARTIAL] C27-WS-09 since Mon 16 Nov 2026, 4:04 AM CST
+    [MAINT_FAILED] C27-WS-02 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 28 Family Practice
+    [PARTIAL] C28-WS-08 since Mon 16 Nov 2026, 4:04 AM CST
+    [MAINT_FAILED] C28-WS-01 since Mon 16 Nov 2026, 11:04 AM CST
+  Customer 29 Family Practice
+    [PARTIAL] C29-WS-07 since Mon 16 Nov 2026, 4:04 AM CST
+    [MAINT_FAILED] C29-WS-10 since Mon 16 Nov 2026, 1:04 AM CST
+  Customer 30 Family Practice
+    [PARTIAL] C30-WS-06 since Mon 16 Nov 2026, 4:04 AM CST
+    [MAINT_FAILED] C30-WS-09 since Mon 16 Nov 2026, 1:04 AM CST
+
+Parked and long-deferred devices
+  Customer 01 Family Practice
+    [PAUSED] C01-WS-09 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 02 Family Practice
+    [PAUSED] C02-WS-08 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 03 Family Practice
+    [PAUSED] C03-WS-07 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 04 Family Practice
+    [PAUSED] C04-WS-06 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 05 Family Practice
+    [PAUSED] C05-WS-05 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 06 Family Practice
+    [PAUSED] C06-WS-04 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 07 Family Practice
+    [PAUSED] C07-WS-03 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 08 Family Practice
+    [PAUSED] C08-WS-02 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 09 Family Practice
+    [PAUSED] C09-WS-01 since Tue 17 Nov 2026, 6:04 AM CST
+  Customer 10 Family Practice
+    [PAUSED] C10-WS-10 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 11 Family Practice
+    [PAUSED] C11-WS-09 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 12 Family Practice
+    [PAUSED] C12-WS-08 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 13 Family Practice
+    [PAUSED] C13-WS-07 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 14 Family Practice
+    [PAUSED] C14-WS-06 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 15 Family Practice
+    [PAUSED] C15-WS-05 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 16 Family Practice
+    [PAUSED] C16-WS-04 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 17 Family Practice
+    [PAUSED] C17-WS-03 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 18 Family Practice
+    [PAUSED] C18-WS-02 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 19 Family Practice
+    [PAUSED] C19-WS-01 since Mon 16 Nov 2026, 8:04 PM CST
+  Customer 20 Family Practice
+    [PAUSED] C20-WS-10 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 21 Family Practice
+    [PAUSED] C21-WS-09 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 22 Family Practice
+    [PAUSED] C22-WS-08 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 23 Family Practice
+    [PAUSED] C23-WS-07 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 24 Family Practice
+    [PAUSED] C24-WS-06 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 25 Family Practice
+    [PAUSED] C25-WS-05 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 26 Family Practice
+    [PAUSED] C26-WS-04 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 27 Family Practice
+    [PAUSED] C27-WS-03 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 28 Family Practice
+    [PAUSED] C28-WS-02 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 29 Family Practice
+    [PAUSED] C29-WS-01 since Mon 16 Nov 2026, 10:04 AM CST
+  Customer 30 Family Practice
+    [PAUSED] C30-WS-10 since Mon 16 Nov 2026, 12:04 AM CST
+
+Totals: 300 devices: 90 critical, 60 warnings, 30 parked or deferred, 120 fine. 30 customers, 3 missing.
+
+Open the console: https://console.example.com/
+
+This digest is sent every day, also when everything is green: a day
+without it means the console or its mail has stopped.
+You receive this because this address receives the CryoBackup daily
+digest.

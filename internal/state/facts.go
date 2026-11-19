@@ -379,6 +379,12 @@ type DigestFacts struct {
 	// NotRead says why the digest settings or the delivery log could not be read ("" = they were),
 	// path-free. The digest is then "not checked" with this reason (C14b), never judged on empty facts.
 	NotRead string
+	// MailNotSetUp is true when no relay is configured: no digest can go out, which is the "not set
+	// up" warning C14b, not the red C14 about a send that was never possible.
+	MailNotSetUp bool
+	// NoRecipient is true when e-mail is set up and no recipient has the digest switch: the digest
+	// goes to nobody (warning C20). It is judged only while a relay is configured.
+	NoRecipient bool
 }
 
 // UsageSample is one usage_samples row of a storage target.

@@ -250,6 +250,20 @@ func r3RealApp(t *testing.T, mod func(*config.Config)) *App {
 	return app
 }
 
+// r3DigestSent records today's daily digest as delivered (P20-W2B: the digest is live, so a
+// healthy console is one whose digest went out; this is its delivery-log row).
+func r3DigestSent(t *testing.T, app *App) {
+	t.Helper()
+	ctx := context.Background()
+	row, _, err := app.Store.EnqueueDelivery(ctx, store.ScopeAll(), store.DeliveryInput{Kind: store.DeliveryDigest, DedupeKey: "digest:r3-healthy", SubjectType: "console"})
+	if err == nil {
+		_, err = app.Store.MarkDeliverySent(ctx, store.ScopeAll(), row.ID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // r3Serve runs the App until the test ends and answers its admin address.
 func r3Serve(t *testing.T, app *App) string {
 	t.Helper()
@@ -344,18 +358,19 @@ func r3WaitFor(t *testing.T, base, token string, ok func(adminapi.SystemHealthRe
 // and the clock check a small fleet cannot run said on their rows.
 func TestR3AHealthyConsoleReadsOverallOK(t *testing.T) { // M3-T4 r3 M1
 	app := r3RealApp(t, nil)
-	if _, err := app.Store.CreateRecipient(context.Background(), store.ScopeAll(), store.RecipientInput{Name: "Ops", Address: "ops@example.test", Alerts: true},
+	if _, err := app.Store.CreateRecipient(context.Background(), store.ScopeAll(), store.RecipientInput{Name: "Ops", Address: "ops@example.test", Alerts: true, Digest: true},
 		store.AuditActor{Username: "test", Method: "api"}); err != nil { // P20-W2A: a relay with no alert recipient raises C18
 		t.Fatal(err)
 	}
 	r3MaintainPass(t, app.Store)
+	r3DigestSent(t, app) // P20-W2B: the digest is live, and a healthy console has sent today's
 	token := r3Token(t, app)
 	base := r3Serve(t, app)
 	h, ok := r3WaitFor(t, base, token, func(h adminapi.SystemHealthResponse) bool { return h.Overall == "ok" })
 	if !ok {
 		t.Fatalf("a healthy console never read overall ok: %s%s", h.Overall, r3Rows(h))
 	}
-	want := map[string]string{"release_manifest": "not_in_build", "storage_quota": "not_in_build", "digest": "not_in_build", "self_backup": "not_in_build", "clock": "not_applicable", "fleet_data": "not_applicable"}
+	want := map[string]string{"release_manifest": "not_in_build", "storage_quota": "not_in_build", "self_backup": "not_in_build", "clock": "not_applicable", "fleet_data": "not_applicable"}
 	for _, c := range h.Components {
 		w, special := want[c.ID]
 		if !special {
@@ -380,7 +395,7 @@ func TestR3AHealthyConsoleReadsOverallOK(t *testing.T) { // M3-T4 r3 M1
 	if !regexp.MustCompile(`id="sys-h" class="sys-title">Overall</h2><span class="st ok"><i aria-hidden="true"></i>OK<`).MatchString(page) {
 		t.Errorf("S36 does not read overall OK: %.400s", page)
 	}
-	for _, s := range []string{"NOT IN THIS BUILD", "NOT APPLICABLE", "Needs at least 5 devices", "6 cannot be checked here", "No devices enrolled yet: nothing is being backed up"} {
+	for _, s := range []string{"NOT IN THIS BUILD", "NOT APPLICABLE", "Needs at least 5 devices", "5 cannot be checked here" /* P20-W2B: the digest is checked now */, "No devices enrolled yet: nothing is being backed up"} {
 		if !strings.Contains(page, s) {
 			t.Errorf("S36 lacks %q", s)
 		}
@@ -404,7 +419,7 @@ func TestR3NotCheckedForSomethingInThisBuildStillBlocksOverall(t *testing.T) { /
 	// Wait until everything else is ok: no probe is still on its way, and only the unconfigured relay is left.
 	h, ok := r3WaitFor(t, base, token, func(h adminapi.SystemHealthResponse) bool {
 		for _, c := range h.Components {
-			if c.ID != "smtp" && c.Status != "ok" && c.Status != "not_in_build" && c.Status != "not_applicable" {
+			if c.ID != "smtp" && c.ID != "digest" && c.Status != "ok" && c.Status != "not_in_build" && c.Status != "not_applicable" { // P20-W2B: no relay is also the digest's C14b
 				return false
 			}
 		}

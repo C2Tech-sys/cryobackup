@@ -55,8 +55,8 @@ func seedFreeText(t *testing.T, st *store.Store) {
 	}
 }
 
-// Every rendered subject and body, over every alarm of the fixture world with seeded free text,
-// carries none of the seeds.
+// Every rendered subject and body (alert, recovery and the daily digest), over every alarm of the
+// fixture world with seeded free text, carries none of the seeds.
 func TestRenderedMessagesCarryNoPathOrPatientText(t *testing.T) {
 	ctx := context.Background()
 	now := fixtures.Now()
@@ -102,6 +102,19 @@ func TestRenderedMessagesCarryNoPathOrPatientText(t *testing.T) {
 			out = append(out, c.Subject, c.Text, c.HTML)
 		}
 	}
+	// The daily digest of the same world, with its acknowledgements (whose notes are seeded).
+	acks, err := st.ListActiveAcks(ctx, store.ScopeAll())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dg, err := RenderDigest(f.View, acks, Options{ConsoleURL: "https://console.example.test/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) == 0 || !strings.Contains(dg.Text, "[ACKNOWLEDGED]") && !strings.Contains(dg.Text, "[SNOOZED]") {
+		t.Fatalf("the digest of the fixture world marks no acknowledgement (%d active): the test would prove little", len(acks))
+	}
+	out = append(out, dg.Subject, dg.Text, dg.HTML)
 	all := strings.Join(out, "\n")
 	if len(f.View.Devices) == 0 || !strings.Contains(all, f.View.Devices[0].Hostname) {
 		t.Fatal("the rendered output names no host: the test renders nothing")

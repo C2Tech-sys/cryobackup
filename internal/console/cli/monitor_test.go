@@ -115,8 +115,8 @@ func markedChecks(p state.ProbeFacts) []string {
 	if p.Database != nil && p.Database.SelfBackup != nil && p.Database.SelfBackup.NotInBuild {
 		out = append(out, health.CheckSelfBackup)
 	}
-	if p.Digest != nil && p.Digest.NotInBuild {
-		out = append(out, health.CheckDigest)
+	if p.Digest != nil && p.Digest.NotInBuild { // P20-W2B: the digest is live; a marker here has no table entry and fails
+		out = append(out, "digest")
 	}
 	if p.Release != nil && p.Release.NotInBuild {
 		out = append(out, health.CheckRelease)

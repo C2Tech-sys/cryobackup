@@ -190,7 +190,7 @@ var healthRowBanners = map[string][]string{
 	"storage":            {"C02", "C02b"},
 	"storage_quota":      {"C15", "C15b"},
 	"smtp":               {"C03", "C03b", "C18"},
-	"digest":             {"C14", "C14b"},
+	"digest":             {"C14", "C14b", "C20"},
 	"certificates":       {"C05", "C05b"},
 	"agent_api":          {"C04", "C04b"},
 	"maintenance_worker": {"C07", "C07b"},

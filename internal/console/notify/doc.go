@@ -1,7 +1,8 @@
-// Package notify turns alarm episodes into operator mail (ADR 0020 decisions 4 to 7, 9 and 10):
-// the alert and recovery messages, the dispatcher that owns one delivery end to end, the
-// alerting step of every alarm-evaluator pass (Notifier) and the notification-retry job's work
-// (Retrier).
+// Package notify turns alarm episodes into operator mail (ADR 0020 decisions 4 to 10): the alert
+// and recovery messages, the daily digest, the dispatcher that owns one delivery end to end, the
+// alerting step of every alarm-evaluator pass (Notifier), the daily-digest job's work, send-now and
+// preview (Digester; its doc says how one digest per local date per recipient is kept) and the
+// notification-retry job's work (Retrier).
 //
 // # What a message says
 //

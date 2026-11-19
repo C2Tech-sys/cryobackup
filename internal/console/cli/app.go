@@ -72,6 +72,9 @@ type App struct {
 	// every message in the delivery log.
 	Mail     mail.Sender
 	Dispatch *notify.Dispatcher
+	// Digest renders and sends the daily digest: the daily-digest job's work, and the send-now and
+	// preview of the API (SendDigestNow, PreviewDigest). Nil in fixtures mode, which runs no jobs.
+	Digest *notify.Digester
 	// FixturesPassword is the password of the fixtures admin ("admin").
 	FixturesPassword string
 

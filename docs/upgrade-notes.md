@@ -44,3 +44,24 @@ Two things to know about the ping:
 - The console warns (banner C19, "The external heartbeat ping is failing") after three failed pings
   in a row. At the default interval of 300 seconds that is about fifteen minutes; at a long interval
   it is three intervals, up to three days at 86400.
+
+### The daily digest is on by default, and banner C14 is live
+
+The `daily-digest` job now runs: every day at `digest_local_time` (07:00 by default) in the display
+zone it mails the digest to each recipient that has the digest switch, also on days when everything
+is green. A console that was stopped at that time sends the day's digest when it starts again the
+same day; it never sends a missed day's digest late. Turn it off with the "Daily digest" setting
+(`digest_enabled`) if you do not want it.
+
+The digest banners are now judged on every installation:
+
+- No smtp block: the warning "Daily digest not sent: e-mail is not set up. Configure the smtp block
+  of config.json, or turn the digest off." It stays until mail is configured or the digest is off.
+  (Beside it, the existing "Alert e-mail not checked: SMTP is not configured" warning.)
+- Mail configured but no recipient receives the digest: the warning "The daily digest has no
+  recipient: it is not mailed to anyone." (C20).
+- Mail configured and a recipient set, but the day's digest was not delivered within 30 minutes of
+  its time: the critical banner C14, "Daily digest was not delivered."
+
+Right after the upgrade, before the day's digest time has come, C14 can name the previous day's
+digest, which the old console never sent. It clears when the day's first digest goes out.

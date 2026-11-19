@@ -633,18 +633,29 @@ func DigestDue(localTime string, loc *time.Location, now time.Time) (time.Time, 
 	return digestDueAtOrBefore(hh, mm, loc, now).UTC(), true
 }
 
-// DigestKey is the notification_log dedupe key of the digest for the local
-// calendar date of t in loc (nil means UTC): "digest:2006-01-02" (§4.7).
-func DigestKey(t time.Time, loc *time.Location) string {
+// DigestKey is the notification_log dedupe key of one recipient's digest for
+// the local calendar date of t in loc (nil means UTC):
+// "digest:2006-01-02:<rule id>" (§4.7, ADR 0020 decision 8). One row per key, so
+// a recipient gets at most one digest per local date, and one recipient can be
+// retried without mailing the others twice.
+func DigestKey(t time.Time, loc *time.Location, ruleID string) string {
 	if loc == nil {
 		loc = time.UTC
 	}
-	return "digest:" + t.In(loc).Format("2006-01-02")
+	return "digest:" + t.In(loc).Format("2006-01-02") + ":" + ruleID
 }
+
+// digestNoRecipientID is the warning of a digest that is on, with e-mail set up, and that no
+// recipient receives (P20-W2B; the digest's sibling of C18).
+const digestNoRecipientID = "C20"
 
 // digestBanners is C14: no digest on the local date of the newest due time
 // whose grace has passed. A digest sent earlier that same local date (a manual
 // "send now") counts, because the dedupe key is the local date.
+//
+// A digest that cannot go out for a reason the facts know is a warning that
+// says the reason, not a red C14 about a send that was never possible: e-mail
+// not set up (C14b) or no recipient with the digest switch (C20).
 func digestBanners(d *DigestFacts, c bannerCtx) []Banner {
 	if d.NotInBuild || d.Disabled {
 		return nil
@@ -652,6 +663,14 @@ func digestBanners(d *DigestFacts, c bannerCtx) []Banner {
 	if d.NotRead != "" {
 		return []Banner{{ID: "C14b", Severity: SeverityAlarm,
 			Text: "Daily digest not checked: " + d.NotRead + ", so a digest that is never sent would go unnoticed."}}
+	}
+	if d.MailNotSetUp {
+		return []Banner{{ID: "C14b", Severity: SeverityAlarm,
+			Text: "Daily digest not sent: e-mail is not set up. Configure the smtp block of config.json, or turn the digest off."}}
+	}
+	if d.NoRecipient {
+		return []Banner{{ID: digestNoRecipientID, Severity: SeverityAlarm,
+			Text: "The daily digest has no recipient: it is not mailed to anyone."}}
 	}
 	hh, mm, ok := parseLocalTime(d.LocalTime)
 	if !ok {
