@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,5 +134,111 @@ func TestDoctorNewerOrMissingDatabaseFails(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg.DBPath); err == nil {
 		t.Fatal("doctor created the database")
+	}
+}
+
+// doctorRig is an initialised console with its config and database paths.
+func doctorRig(t *testing.T) (cfgPath, db string) {
+	t.Helper()
+	dir := t.TempDir()
+	if code, _, e := run(t, "", initArgs(dir, "--master-key-copy-confirmed", "--admin-listen", "127.0.0.1:0", "--agent-listen", "127.0.0.1:0")...); code != 0 {
+		t.Fatal(e)
+	}
+	cfgPath = filepath.Join(dir, "config.json")
+	cfg, err := config.Read(cfgPath, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfgPath, cfg.DBPath
+}
+
+// writer opens the database as a second process would, in WAL mode with automatic checkpoints
+// off, and writes one row.
+func writer(t *testing.T, db string, n int) *sql.DB {
+	t.Helper()
+	w, err := sql.Open("sqlite", db+"?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(0)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.SetMaxOpenConns(1)
+	writeRow(t, w, n)
+	return w
+}
+
+func writeRow(t *testing.T, w *sql.DB, n int) {
+	t.Helper()
+	if _, err := w.Exec(`INSERT INTO settings (key, value, created_at, updated_at) VALUES (?, '"x"', 1, 1)`, fmt.Sprintf("doctor_test_%d", n)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func copyFile(t *testing.T, from, to string) {
+	t.Helper()
+	b, err := os.ReadFile(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(to, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// P20-W2BF B2 (a): a database left with a non-empty WAL by an unclean stop: doctor leaves the main
+// file and the WAL byte for byte as they were (it may create or touch the -shm index).
+func TestDoctorLeavesAnUncleanWALAsItIs(t *testing.T) {
+	cfgPath, db := doctorRig(t)
+	w := writer(t, db, 1)
+	tmp := t.TempDir()
+	for _, s := range []string{"", "-wal", "-shm"} {
+		copyFile(t, db+s, filepath.Join(tmp, "c"+s)) // the files as a crash would leave them
+	}
+	_ = w.Close()
+	for _, s := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(db + s)
+		copyFile(t, filepath.Join(tmp, "c"+s), db+s)
+	}
+	if fi, err := os.Stat(db + "-wal"); err != nil || fi.Size() == 0 {
+		t.Fatalf("the test needs a non-empty WAL: %v", err)
+	}
+	mainBefore, walBefore := fileHash(t, db), fileHash(t, db+"-wal")
+	_, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	if fileHash(t, db) != mainBefore {
+		t.Fatalf("doctor changed the main file:\n%s", out)
+	}
+	if _, err := os.Stat(db + "-wal"); err != nil {
+		t.Fatalf("doctor removed the WAL:\n%s", out)
+	}
+	if fileHash(t, db+"-wal") != walBefore {
+		t.Fatalf("doctor changed the WAL:\n%s", out)
+	}
+	if !strings.Contains(out, "OK    database") {
+		t.Fatalf("doctor did not read the database:\n%s", out)
+	}
+}
+
+// P20-W2BF B2 (b): doctor while another connection holds the database open and writes: the writer
+// is undisturbed, the main file is unchanged and the WAL is not truncated.
+func TestDoctorBesideALiveWriter(t *testing.T) {
+	cfgPath, db := doctorRig(t)
+	w := writer(t, db, 1)
+	defer w.Close()
+	writeRow(t, w, 2)
+	mainBefore := fileHash(t, db)
+	fi, err := os.Stat(db + "-wal")
+	if err != nil || fi.Size() == 0 {
+		t.Fatalf("the test needs a live WAL: %v", err)
+	}
+	walBefore := fi.Size()
+	_, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	if fileHash(t, db) != mainBefore {
+		t.Fatalf("doctor changed the main file under a live writer:\n%s", out)
+	}
+	if fi, err := os.Stat(db + "-wal"); err != nil || fi.Size() < walBefore {
+		t.Fatalf("doctor truncated the live WAL (%v):\n%s", err, out)
+	}
+	writeRow(t, w, 3) // the writer goes on
+	var n int
+	if err := w.QueryRow(`SELECT count(*) FROM settings WHERE key LIKE 'doctor_test_%'`).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("writer rows %d (%v)", n, err)
 	}
 }

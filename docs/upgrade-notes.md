@@ -4,8 +4,9 @@ What an operator must check before replacing the console binary with a newer rel
 names the release line it applies to; read every section between the version you run and the one
 you install. Run `cryo-console doctor` with the new binary and your current config.json before you
 apply the upgrade: it reports every configuration problem the new console would refuse to start
-with, without starting it. Doctor is safe to run before the upgrade: it opens the database without
-applying migrations and writes nothing. On a database older than the binary it prints the recorded
+with, without starting it. Doctor is safe to run before the upgrade, and beside a running console:
+it opens the database read-only, changes no data and applies no migration, and runs no checkpoint,
+so the database file and its WAL stay as they are; it may create the -shm index file. On a database older than the binary it prints the recorded
 schema version, the version the first start will migrate it to and the pending migrations, and
 reports the checks that need the new schema as NOT CHECKED.
 

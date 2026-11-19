@@ -58,8 +58,10 @@ func isLoopbackBind(addr string) bool {
 // the database, the master key, the listener binds, the host's swap (ADR 0008)
 // and the maintenance worker.
 // It prints OK, WARN, FAIL or NOT CHECKED per check and exits 1 on any FAIL.
-// It changes nothing it checks: the database is opened without migrations
-// (checkDatabase), so doctor is safe to run before an upgrade.
+// It changes no data it checks: the database is opened read-only without
+// migrations or checkpoints (checkDatabase, store.OpenNoMigrate), so doctor is
+// safe to run before an upgrade and beside a running console. SQLite may create
+// the -shm index file to read a WAL database.
 func runDoctor(args []string, io IO) int {
 	fs := newFlags("doctor", io)
 	cfgPath := fs.String("config", "config.json", "path of config.json")
@@ -168,14 +170,14 @@ func checkDatabase(path string, report func(level, name, detail string)) {
 	}
 	if len(pending) > 0 {
 		target := v + len(pending)
-		report("WARN", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok; the first start of this binary migrates it to schema version %d (pending: %s). Doctor changed nothing; take the backup before you start the new binary",
+		report("WARN", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok; the first start of this binary migrates it to schema version %d (pending: %s). Doctor changes no data and applies no migration (SQLite may create the -shm index file); take the backup before you start the new binary",
 			v, target, strings.Join(pending, ", ")))
 		why := fmt.Sprintf("the database is at schema version %d and this binary reads schema version %d: checked after the upgrade", v, target)
 		report("NOT CHECKED", "default policy", why)
 		report("NOT CHECKED", "storage target", why)
 		return
 	}
-	report("OK", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok", v))
+	report("OK", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok; read only: no data changed (SQLite may create the -shm index file)", v))
 	if _, err := st.DefaultPolicy(ctx); err != nil {
 		report("FAIL", "default policy", "none: run cryo-console init")
 	}

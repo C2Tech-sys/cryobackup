@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -58,6 +59,7 @@ type Store struct {
 	closeErr  error
 	closeWait time.Duration // overrides CloseWait (tests)
 	cleanup   func()        // removes the temp directory of OpenMemory
+	checkOnly bool          // opened by OpenNoMigrate: read-only connections, no checkpoint on Close
 
 	// prev holds, per Scope, the device count of the last complete LoadWorld in
 	// this process (state.World.PreviousDeviceCount; absent means -1).
@@ -87,8 +89,10 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 }
 
 // OpenNoMigrate opens an existing database for checking only (cryo-console doctor): every
-// connection is query_only, no migration is applied and nothing is written, so a check never
-// changes what it checks. It runs PRAGMA quick_check like Open and returns, in version order, the
+// connection is opened read-only (checkDSN), no migration is applied, no checkpoint runs (not on
+// Close either) and the journal mode is left as it is, so the main file and the WAL are not
+// changed. It changes no data and applies no migration; to read a WAL database SQLite may create
+// or update the -shm index file. It runs PRAGMA quick_check like Open and returns, in version order, the
 // names of the embedded migrations the database does not have yet: what Open will apply at the
 // next start. A database newer than the binary is ErrMigrationAhead and an edited applied
 // migration ErrMigrationChanged, as with Open; a missing file is ErrNotFound (it is not created).
@@ -124,7 +128,14 @@ func open(ctx context.Context, o Options, noMigrate bool) (*Store, []string, err
 		wsem:  make(chan struct{}, 1),
 	}
 
-	wdb, err := sql.Open("sqlite", dsn(o.Path, o.BusyTimeout, noMigrate))
+	s.checkOnly = noMigrate
+	open := func(readOnly bool) (*sql.DB, error) {
+		if noMigrate {
+			return sql.Open("sqlite", checkDSN(o.Path, o.BusyTimeout))
+		}
+		return sql.Open("sqlite", dsn(o.Path, o.BusyTimeout, readOnly))
+	}
+	wdb, err := open(false)
 	if err != nil {
 		return nil, nil, mapErr(err)
 	}
@@ -139,7 +150,7 @@ func open(ctx context.Context, o Options, noMigrate bool) (*Store, []string, err
 		return nil, nil, err
 	}
 
-	rdb, err := sql.Open("sqlite", dsn(o.Path, o.BusyTimeout, true))
+	rdb, err := open(true)
 	if err != nil {
 		_ = wdb.Close()
 		return nil, nil, mapErr(err)
@@ -170,6 +181,20 @@ func dsn(path string, busy time.Duration, readOnly bool) string {
 		q.Add("_pragma", "journal_mode(WAL)")
 	}
 	return path + "?" + q.Encode()
+}
+
+// checkDSN is the connection string of a store opened with OpenNoMigrate: a read-only open
+// (SQLite URI mode=ro, SQLITE_OPEN_READONLY), so the connection can neither write the database nor
+// run a checkpoint, including the one SQLite runs when the last connection to a WAL database
+// closes; automatic checkpoints are off as well (wal_autocheckpoint(0)) and the journal mode is
+// never set. To read a WAL database SQLite still needs its -shm index file, and may create it.
+func checkDSN(path string, busy time.Duration) string {
+	q := url.Values{}
+	q.Add("mode", "ro")
+	q.Add("_pragma", "busy_timeout("+strconv.FormatInt(busy.Milliseconds(), 10)+")")
+	q.Add("_pragma", "query_only(1)")
+	q.Add("_pragma", "wal_autocheckpoint(0)")
+	return "file:" + filepath.ToSlash(path) + "?" + q.Encode()
 }
 
 // prepare runs quick_check and the migrations on the write connection. With noMigrate it applies
@@ -361,10 +386,13 @@ func (s *Store) closeNow() error {
 	s.wsem <- struct{}{}
 	// Release afterwards so a Write queued behind Close wakes up and returns ErrClosed.
 	defer func() { <-s.wsem }()
-	// Fold the WAL back into the main file so the file alone is a complete copy.
-	if conn, err := s.wdb.Conn(context.Background()); err == nil {
-		_, _ = conn.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)")
-		_ = conn.Close()
+	// Fold the WAL back into the main file so the file alone is a complete copy; never for a
+	// store opened to check (OpenNoMigrate), which changes nothing it reads.
+	if !s.checkOnly {
+		if conn, err := s.wdb.Conn(context.Background()); err == nil {
+			_, _ = conn.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)")
+			_ = conn.Close()
+		}
 	}
 	err1 := s.rdb.Close()
 	err2 := s.wdb.Close()
