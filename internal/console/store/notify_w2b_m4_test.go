@@ -97,3 +97,19 @@ func TestM4W2BFThresholdsCarryDigestInclude(t *testing.T) {
 		}
 	}
 }
+
+// P20-W2BF item 4: a forced send-now ("digest-forced:...") is not the day's digest, so it does
+// not count for C14; a daily row ("digest:<date>:<rule>") does.
+func TestM4W2BFForcedDigestIsNotTheDaysDigest(t *testing.T) {
+	w := seed(t)
+	sendM4(t, w, DeliveryDigest, "digest-forced:1794949440000:r1", 0, true)
+	f := must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, ScopeAll()))
+	if !f.LastDigestSentAt.IsZero() {
+		t.Fatalf("a forced send counts as the day's digest: %v", f.LastDigestSentAt)
+	}
+	d := sendM4(t, w, DeliveryDigest, "digest:2026-10-22:r1", 0, true)
+	f = must[SendFacts](t)(w.s.LoadSendFacts(w.ctx, ScopeAll()))
+	if !f.LastDigestSentAt.Equal(d.SentAt) {
+		t.Fatalf("the daily digest: %v, want %v", f.LastDigestSentAt, d.SentAt)
+	}
+}

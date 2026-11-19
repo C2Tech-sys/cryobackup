@@ -43,7 +43,9 @@ type SendFacts struct {
 	OldestPendingAt time.Time
 	// LastTest is the newest test send; nil when none was ever sent.
 	LastTest *TestResult
-	// LastDigestSentAt is when a digest was last delivered; zero means never.
+	// LastDigestSentAt is when a daily digest was last delivered (a row keyed
+	// "digest:<local date>:<rule id>"); zero means never. A forced send-now ("digest-forced:")
+	// is not the day's digest and does not count (banner C14).
 	LastDigestSentAt time.Time
 }
 
@@ -90,7 +92,7 @@ func (s *Store) LoadSendFacts(ctx context.Context, scope Scope) (SendFacts, erro
 			return err
 		}
 		f.OldestPendingAt = ptrTimeOrZero(oldest)
-		if err := tx.QueryRow(`SELECT MAX(sent_at) FROM notification_log WHERE kind = 'digest' AND result = 'sent'`).Scan(&digest); err != nil {
+		if err := tx.QueryRow(`SELECT MAX(sent_at) FROM notification_log WHERE kind = 'digest' AND result = 'sent' AND dedupe_key LIKE 'digest:%'`).Scan(&digest); err != nil {
 			return err
 		}
 		f.LastDigestSentAt = ptrTimeOrZero(digest)
