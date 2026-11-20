@@ -17,8 +17,8 @@
 
 <div class="stack" id="d-mail-log"><h3 class="h-label">Delivery log: each outcome and each suppress label</h3>
 {{template "m4_log_table" .Log}}
-<div class="card compact"><p class="meta-mono">At 640 px and below each row stacks into a card; a row past its first attempt adds a line labelled like its siblings, shown here as it reads there:</p>
-<p class="ui"><span class="label-mono">Kind:</span> Alert · <span class="label-mono">Attempt:</span> 4 · <span class="label-mono">Detail:</span> <code class="cls">recipient_rejected</code></p></div></div>
+<div class="stack"><p class="meta-mono">At 640 px and below each row stacks into a card, and a row past its first attempt adds ATTEMPT: N, labelled like its siblings. The live row template, laid out as a phone shows it:</p>
+<div class="d-stack">{{template "m4_log_table" .Stacked}}</div></div></div>
 
 <div class="stack" id="d-mail-acks"><h3 class="h-label">Acknowledged and snoozed alarms</h3>
 {{range .Alarms}}<div><p class="meta-mono">{{.Name}}</p>{{template "m4_alarms" .V}}</div>{{end}}</div>

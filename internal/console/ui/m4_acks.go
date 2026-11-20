@@ -184,10 +184,7 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 	if len(readErrs) > 0 {
 		v.Err = &Note{"crit", "Not everything about these alarms could be read.", capFirst(strings.Join(readErrs, "; and ")) + ". This is an alarm, not \"none\". Reload the page to try again."}
 	}
-	notYet := "Not recorded yet: it can be acknowledged after the console's next alarm check, within about " + durText(jobs.AlarmEvaluatorEvery.Milliseconds()) + "."
-	if s.Fixtures {
-		notYet = "Not recorded yet: it can be acknowledged after the console's next alarm check. Fixtures mode runs none."
-	}
+	notYet := notRecordedText(s.Fixtures)
 	if unchecked { // H3: what was not read is not stated as fact; no form is offered for it either
 		notYet = "Could not be checked: reload the page."
 	}
@@ -279,6 +276,19 @@ func snoozeEnd(mode string, now time.Time, loc *time.Location) (time.Time, bool)
 		return time.Date(l.Year(), l.Month(), l.Day()+7, l.Hour(), l.Minute(), l.Second(), l.Nanosecond(), loc), true
 	}
 	return time.Time{}, false
+}
+
+// evaluatorEvery is the alarm-evaluator's period, which records the episodes (jobs.AlarmEvaluatorEvery);
+// a variable only so a test can show that every text derives from it.
+var evaluatorEvery = jobs.AlarmEvaluatorEvery
+
+// notRecordedText is the line of an alarm shown before the evaluator recorded it: the page and the
+// design samples both say it through here (J4).
+func notRecordedText(fixtures bool) string {
+	if fixtures {
+		return "Not recorded yet: it can be acknowledged after the console's next alarm check. Fixtures mode runs none."
+	}
+	return "Not recorded yet: it can be acknowledged after the console's next alarm check, within about " + durText(evaluatorEvery.Milliseconds()) + "."
 }
 
 // snoozeEndText is a snooze end as every page shows it: the day, the clock and the zone abbreviation,

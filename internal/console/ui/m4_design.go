@@ -24,8 +24,10 @@ type DesignMail struct {
 	TestOff    TestMailView
 	Digests    []designDigest
 	Log        DeliveryLogView
-	Alarms     []designAlarms
-	Preview    *DigestPreviewView
+	// Stacked is one row of the log rendered by the live template, laid out as a phone shows it (J4).
+	Stacked DeliveryLogView
+	Alarms  []designAlarms
+	Preview *DigestPreviewView
 }
 
 type designMailStatus struct {
@@ -183,6 +185,12 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 		}
 		d.Log.Rows = append(d.Log.Rows, row)
 	}
+	for _, row := range d.Log.Rows {
+		if row.Attempt > 1 && row.Chip.Label == "FAILED" {
+			d.Stacked = DeliveryLogView{Zone: d.Log.Zone, Rows: []DeliveryRow{row}}
+			break
+		}
+	}
 
 	// acknowledgements: not acknowledged, acknowledged, snoozed to a date and to the next success, read-only, not open
 	form := func(alarm, label string) AckForm {
@@ -199,7 +207,7 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 	missChip := Chip{ID: "da-m", Label: "MISSING", Class: ClassCrit}
 	d.Alarms = []designAlarms{
 		{"Not acknowledged (critical and alarm level)", AlarmsView{CanAck: true, Rows: []AlarmRow{{Chip: failedChip, Form: form("failed", "FAILED"), Recorded: true}, {Chip: partChip, Form: form("partial", "PARTIAL"), Recorded: true}}}},
-		{"Shown before the console recorded it: no Acknowledge yet, one plain line", AlarmsView{CanAck: true, Rows: []AlarmRow{{Chip: staleChip, NotYet: "Not recorded yet: it can be acknowledged after the console's next alarm check, within about 1 min."}}}},
+		{"Shown before the console recorded it: no Acknowledge yet, one plain line", AlarmsView{CanAck: true, Rows: []AlarmRow{{Chip: staleChip, NotYet: notRecordedText(false)}}}},
 		{"Acknowledged, with its note; snoozed to a date; snoozed to the next success", AlarmsView{CanAck: true, Notice: &Note{"ok", "Alarm acknowledged.", "E-mail for this alarm is muted. The alarm stays on the board, marked ACK, until its cause clears."},
 			Rows: []AlarmRow{{Chip: failedChip, Ack: ack, Recorded: true, Form: form("failed", "FAILED")}, {Chip: staleChip, Ack: snooze, Recorded: true, Form: form("stale", "STALE")}, {Chip: partChip, Ack: nextOK, Recorded: true, Form: form("partial", "PARTIAL")}}}},
 		{"Read-only: the line, no buttons, the reason", AlarmsView{Why: "Acknowledging or snoozing an alarm needs the operator role.", Rows: []AlarmRow{{Chip: missChip, Ack: ack, Recorded: true}}}},

@@ -1340,3 +1340,14 @@ q.acknote { flex-basis: 100%; padding: 4px 0 0 10px; border-left: 2px solid var(
   .mailkv { grid-template-columns: 80px minmax(0, 1fr); }
   .alarms .mailhead .meta-mono { flex-basis: 100%; }
 }
+/* J4: /design/mail shows a delivery row as a phone stacks it, through the live row template, at any width. */
+.d-stack { max-width: 390px; }
+.d-stack table.fleet thead { display: none; }
+.d-stack table.fleet.dlog tr.dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 10px; border-bottom: 1px solid var(--border); }
+.d-stack table.fleet.dlog tr.dl td { border: 0; padding: 0; white-space: normal; width: auto; min-width: 0; }
+.d-stack table.fleet.dlog td.when { grid-column: 1; grid-row: 1; }
+.d-stack table.fleet.dlog td.state-cell { grid-column: 2; grid-row: 1; }
+.d-stack table.fleet.dlog td.kind-cell, .d-stack table.fleet.dlog td.who, .d-stack table.fleet.dlog td.detail { grid-column: 1 / -1; }
+.d-stack table.fleet.dlog td.att:not(.multi) { display: none; }
+.d-stack table.fleet.dlog td.att.multi { grid-column: 1 / -1; text-align: left; font: inherit; }
+.d-stack table.fleet td[data-label]::before { content: attr(data-label) ": "; color: var(--text-muted); font: 500 10.5px/1.3 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }

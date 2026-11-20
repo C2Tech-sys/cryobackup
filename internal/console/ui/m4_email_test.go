@@ -516,3 +516,21 @@ func TestP20W3B_J3_ARecipientRemovedMidSendIsStillUnknown(t *testing.T) {
 	_, body := e.post("/ui/settings/email/digest/send", url.Values{"force": {"1"}}, false)
 	mustContain(t, "removed mid-send", body, "<b>Sent to 1 recipient.</b> For 1 more the outcome could not be recorded: they may or may not have received it.")
 }
+
+// J4: /design/mail renders its ATTEMPT: N sample through the live delivery-row template, and its "Not
+// recorded yet" sample from the evaluator's interval, as the live page does.
+func TestP20W3B_J4_DesignSamplesComeFromTheLiveCode(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	old := evaluatorEvery
+	evaluatorEvery = 2 * time.Minute
+	t.Cleanup(func() { evaluatorEvery = old })
+	body := e.page("/design/mail", 200)
+	mustContain(t, "interval", body, "within about 2 min.")
+	i := strings.Index(body, `<div class="d-stack">`)
+	if i < 0 {
+		t.Fatal("no stacked delivery-row sample on /design/mail")
+	}
+	sample := body[i : i+strings.Index(body[i:], "</table>")]
+	mustContain(t, "live row", sample, `<tr id="dl-`, `class="dl"`, `<td class="att multi" data-label="Attempt">4</td>`, `data-label="Kind"`)
+}
