@@ -136,7 +136,7 @@ func ackLine(a adminapi.AckJSON, c fmtCtx, s *Service, r *http.Request) *AckLine
 	switch {
 	case a.Kind == adminapi.AckKindSnooze && a.SnoozeUntil != nil:
 		l.Lead, l.Badge = "Snoozed", Badge{"SNOOZED", ClassNeutral}
-		l.Until = "until " + c.dayClock(*a.SnoozeUntil)
+		l.Until = "until " + snoozeEndText(c, *a.SnoozeUntil)
 	case a.Kind == adminapi.AckKindSnooze:
 		l.Lead, l.Badge = "Snoozed", Badge{"SNOOZED", ClassNeutral}
 		l.Until = "until the next successful backup"
@@ -260,8 +260,8 @@ func deviceAlarms(ds state.DeviceState) []string {
 // saving time "3 days" ends at the hour the operator expects rather than 72 hours on. On a day where that
 // local time does not exist (the clocks jump over it) or exists twice (the clocks go back over it), Go's
 // time.Date picks one of the two offsets of the transition, which one is not specified: the end is then
-// never more than an hour from the local time asked for, and the page shows the stored end, so the
-// operator sees which it was.
+// never more than an hour from the local time asked for. The page shows the stored end with its zone
+// abbreviation (snoozeEndText: "1:30 AM CDT" or "1:30 AM CST"), so the operator sees which it was.
 func snoozeEnd(mode string, now time.Time, loc *time.Location) (time.Time, bool) {
 	l := now.In(loc)
 	switch mode {
@@ -275,6 +275,12 @@ func snoozeEnd(mode string, now time.Time, loc *time.Location) (time.Time, bool)
 		return time.Date(l.Year(), l.Month(), l.Day()+7, l.Hour(), l.Minute(), l.Second(), l.Nanosecond(), loc), true
 	}
 	return time.Time{}, false
+}
+
+// snoozeEndText is a snooze or acknowledgement end as every page shows it: the day, the clock and the
+// zone abbreviation, so an end in the hour the clocks repeat says which of the two it is (H2).
+func snoozeEndText(c fmtCtx, t time.Time) string {
+	return c.dayClock(t) + " " + c.zoneAbbr(t)
 }
 
 // ---- writes ----

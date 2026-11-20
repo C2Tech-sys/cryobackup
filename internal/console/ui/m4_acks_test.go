@@ -399,3 +399,24 @@ func TestP20W3B_G5_BothReadFailuresAreReported(t *testing.T) {
 	block := alarmsBlock(t, body)
 	mustContain(t, "both", block, "Not everything about these alarms could be read.", "The acknowledgements could not be read", "and the open alarms could not be checked")
 }
+
+// H2: a snooze end in the hour the clocks repeat says which of the two it is: the zone abbreviation is
+// shown with the end, in the acknowledgement line and in the engine's SNOOZED badge.
+func TestP20W3B_H2_ASnoozeEndShowsItsZone(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	id := e.dev[fixtures.SnoozedHost]
+	for _, c := range []struct {
+		utc  time.Time
+		zone string
+	}{{time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC), "CDT"}, {time.Date(2026, 11, 1, 7, 30, 0, 0, time.UTC), "CST"}} {
+		u := c.utc
+		if _, err := e.st.CreateAck(context.Background(), store.ScopeAll(), store.AckInput{SubjectType: store.EpisodeDevice, SubjectID: id, AlarmType: "stale", SnoozeUntil: &u},
+			store.AuditActor{AdminID: e.adminID("admin"), Username: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+		body := e.page("/devices/"+id, 200)
+		mustContain(t, c.zone, alarmsBlock(t, body), "until Sun 1 Nov, 1:30 AM "+c.zone)
+		mustContain(t, c.zone+" badge", body, "SNOOZED until Sun 1:30 AM "+c.zone)
+	}
+}

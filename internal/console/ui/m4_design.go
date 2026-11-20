@@ -185,7 +185,7 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 	at := now.Add(-40 * time.Minute)
 	ack := &AckLine{ID: "a1", Badge: Badge{"ACK", ClassNeutral}, Lead: "Acknowledged", By: "admin", At: s.when(ctx, &at), Until: "until cleared or the alarm ends",
 		Note: "Vendor replaces the VSS writer on Thursday; failures are expected until then.", Action: "/design/mail"}
-	snooze := &AckLine{ID: "a2", Badge: Badge{"SNOOZED", ClassNeutral}, Lead: "Snoozed", By: "operator.one", At: s.when(ctx, &at), Until: "until " + c.dayClock(now.Add(20*time.Hour)), Action: "/design/mail"}
+	snooze := &AckLine{ID: "a2", Badge: Badge{"SNOOZED", ClassNeutral}, Lead: "Snoozed", By: "operator.one", At: s.when(ctx, &at), Until: "until " + snoozeEndText(c, now.Add(20*time.Hour)), Action: "/design/mail"}
 	nextOK := &AckLine{ID: "a3", Badge: Badge{"SNOOZED", ClassNeutral}, Lead: "Snoozed", By: "an account since deleted", At: s.when(ctx, &at), Until: "until the next successful backup", Action: "/design/mail"}
 	failedChip := Chip{ID: "da-f", Label: "FAILED", Class: ClassCrit}
 	staleChip := Chip{ID: "da-s", Label: "STALE", Class: ClassCrit}

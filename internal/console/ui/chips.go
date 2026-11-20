@@ -494,7 +494,7 @@ func BadgesFor(ds state.DeviceState, c fmtCtx) BadgeSet {
 		case state.AttrSnoozed:
 			t := "SNOOZED"
 			if ds.Ack != nil && !ds.Ack.SnoozedUntil.IsZero() {
-				t += " until " + c.dayTime(ds.Ack.SnoozedUntil)
+				t += " until " + c.dayTime(ds.Ack.SnoozedUntil) + " " + c.zoneAbbr(ds.Ack.SnoozedUntil) // H2: the zone says which of a repeated hour
 			}
 			all = append(all, Badge{t, ClassNeutral})
 		}
