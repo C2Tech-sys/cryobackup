@@ -179,10 +179,11 @@ func TestGoldenDigestHeadlines(t *testing.T) {
 	}
 }
 
-// P20-W2BF C4, as D4 rules: a device in an exception state is counted under that exception only,
-// whatever the age of its last success. An outdated agent with current backups reads "No devices
-// backed up: 1 on an outdated agent." ("backed up" is the backed-up number of the Totals line, 0
-// here), never "All clear", and its Totals never count the one device twice.
+// P20-W2BF C4, D4 and D7: a device in an exception state is counted under that exception only in
+// the Totals, whatever the age of its last success, so an outdated agent with current backups has
+// "0 backed up, 1 on an outdated agent" there. The headline leads with the exception, "1 device
+// needs attention: 1 on an outdated agent.": never "All clear", and never "No devices backed up"
+// while the engine says the device has a current backup.
 func TestGoldenDigestOutdatedAgentCountedUnderItsException(t *testing.T) {
 	v := greenView(1)
 	v.Devices[0].Primary, v.Devices[0].Flags = state.StateOutdated, []state.State{state.StateOutdated}
@@ -190,10 +191,10 @@ func TestGoldenDigestOutdatedAgentCountedUnderItsException(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: no devices backed up, 1 on an outdated agent" {
+	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: 1 device needs attention, 1 on an outdated agent" {
 		t.Fatalf("subject %q", c.Subject)
 	}
-	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "No devices backed up: 1 on an outdated agent." {
+	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "1 device needs attention: 1 on an outdated agent." {
 		t.Fatalf("first line %q", first)
 	}
 	if !strings.Contains(c.Text, "\nTotals: 1 device: 0 backed up, 1 on an outdated agent.") {
@@ -209,7 +210,8 @@ func TestGoldenDigestOutdatedAgentCountedUnderItsException(t *testing.T) {
 // alone and mixed, with and without a current backup, the numbers before "Exceptions:" sum to the
 // device count, the backed-up number is exactly that count, and the headline keeps the batch 2
 // invariants over the same number (never "All clear" with an exception, never "No devices backed
-// up" when one is).
+// up" when one is). D7: "No devices backed up" only when no included device has a current backup
+// per the engine.
 func TestDigestTotalsPartitionTheDevices(t *testing.T) {
 	mk := func(i int, s state.State, current bool) state.DeviceState {
 		d := dev(fmt.Sprintf("01DEVPART%017d", i), custSummit, fmt.Sprintf("SUMMIT-PC-%02d", i+1), s, state.SeverityNone, time.Hour)
@@ -240,12 +242,13 @@ func TestDigestTotalsPartitionTheDevices(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			v := greenView(0)
 			v.Devices = c.devs
-			devices, backedUp, exception := 0, 0, false
+			devices, backedUp, exception, anyCurrent := 0, 0, false, false
 			for _, d := range c.devs {
 				if d.Primary == state.StateRetired {
 					continue
 				}
 				devices++
+				anyCurrent = anyCurrent || d.CurrentBackup
 				if d.Primary == state.StateOK && d.CurrentBackup {
 					backedUp++
 				} else {
@@ -293,6 +296,9 @@ func TestDigestTotalsPartitionTheDevices(t *testing.T) {
 			}
 			if backedUp > 0 && strings.Contains(first, "No devices backed up") {
 				t.Fatalf("headline %q with %d backed up", first, backedUp)
+			}
+			if anyCurrent && strings.Contains(strings.ToLower(first+out.Subject), "no devices backed up") { // D7
+				t.Fatalf("headline %q (subject %q) while the engine says a device has a current backup", first, out.Subject)
 			}
 		})
 	}

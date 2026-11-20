@@ -312,6 +312,14 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	if notCurrent > 0 {
 		rest = append(rest, strconv.Itoa(notCurrent)+" without a current backup")
 	}
+	// anyCurrent is the engine's freshness verdict over the devices the digest speaks for, whatever
+	// their state. The headline says "No devices backed up" only when it is false (P20-W2BF D7): a
+	// device in an exception with fresh backups (an outdated agent) never reads as unprotected.
+	anyCurrent := false
+	for i := range v.Devices {
+		dv := &v.Devices[i]
+		anyCurrent = anyCurrent || dv.Primary != state.StateRetired && !dv.DigestExcluded && dv.CurrentBackup
+	}
 	var left []string // what the policy leaves out: always said, so it cannot hide in an all-clear
 	if d.ExcludedCustomers > 0 {
 		left = append(left, count(d.ExcludedCustomers, "customer", "customers")+" not included by policy")
@@ -349,12 +357,16 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	case p.Checked == 0:
 		summary = "no devices included, " + strings.Join(left, ", ")
 		p.Title, leftSaid = "No devices included in this digest: "+strings.Join(left, ", ")+".", true
-	case backedUp == 0: // nothing has a current backup: never "all clear"
+	case backedUp == 0 && !anyCurrent: // the engine says no device has a current backup: never "all clear"
 		summary, p.Title = "no devices backed up", "No devices backed up."
 		if len(rest) > 0 {
 			summary += ", " + strings.Join(rest, ", ")
 			p.Title = "No devices backed up: " + strings.Join(rest, ", ") + "."
 		}
+	case backedUp == 0: // every device is in an exception, some with a current backup: lead with the exceptions
+		need := count(p.Checked, "device needs attention", "devices need attention")
+		summary = need + ", " + strings.Join(rest, ", ")
+		p.Title = need + ": " + strings.Join(rest, ", ") + "."
 	case len(rest) > 0: // an exception (a device in another state than OK): never "all clear"
 		summary = strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up, " + strings.Join(rest, ", ")
 		p.Title = strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up. " + upperFirst(strings.Join(rest, ", ")) + "."
