@@ -346,3 +346,62 @@ func deviceID(t *testing.T, app *cli.App, host string) string {
 	t.Fatalf("no device %s", host)
 	return ""
 }
+
+// P20-W3B F2: every Acknowledge the fixtures app offers works. Walk every device and customer page,
+// post every acknowledge form on it as it stands, and require the console to accept each one.
+func TestEveryAcknowledgeTheFixturesAppOffersWorks(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Resolve()
+	cfg.Fixtures = true
+	cfg.AdminListen = "127.0.0.1:0"
+	app, err := cli.Build(ctx, cfg, cli.BuildOptions{FixturesPassword: "fixtures-pass-1", FixtureMailWorld: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	srv := httptest.NewServer(app.Server.AdminRouter)
+	t.Cleanup(srv.Close)
+	c := &client{t: t, base: srv.URL}
+	c.login("fixtures-pass-1")
+	var pages []string
+	devs, err := app.Store.ListDevices(ctx, store.ScopeAll(), store.ListDevicesOptions{Page: store.Page{Limit: 500}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range devs.Items {
+		pages = append(pages, "/devices/"+d.ID)
+	}
+	custs, err := app.Store.ListCustomers(ctx, store.ScopeAll())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cu := range custs {
+		pages = append(pages, "/customers/"+cu.ID)
+	}
+	formRE := regexp.MustCompile(`(?s)<form method="post" action="/ui/acks" class="stack">(.*?)</form>`)
+	hidden := regexp.MustCompile(`<input type="hidden" name="([a-z_]+)" value="([^"]*)">`)
+	offered, notYet := 0, 0
+	for _, path := range pages {
+		body := c.page(path)
+		notYet += strings.Count(body, "Not recorded yet")
+		for _, f := range formRE.FindAllStringSubmatch(body, -1) {
+			v := url.Values{"mode": {"ack"}, "note": {"fixtures walk"}}
+			for _, h := range hidden.FindAllStringSubmatch(f[1], -1) {
+				v.Set(h[1], h[2])
+			}
+			offered++
+			res, _ := c.do("POST", "/ui/acks", v)
+			if res.StatusCode != http.StatusSeeOther || !strings.Contains(res.Header.Get("Location"), "ack=acked") {
+				t.Errorf("%s: the Acknowledge offered for %s answered %d %s", path, v.Get("alarm_type"), res.StatusCode, res.Header.Get("Location"))
+			}
+		}
+	}
+	if offered < 5 {
+		t.Fatalf("only %d Acknowledge forms on %d pages: the walk measures nothing", offered, len(pages))
+	}
+	if notYet > 0 {
+		t.Errorf("%d alarms in fixtures mode say they are not recorded yet: the fixture world must record every alarm it shows", notYet)
+	}
+	t.Logf("%d acknowledge forms on %d pages, every one accepted", offered, len(pages))
+}

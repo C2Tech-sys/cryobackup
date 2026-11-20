@@ -10,6 +10,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
+	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
@@ -57,6 +58,11 @@ type AlarmRow struct {
 	Chip Chip
 	Ack  *AckLine
 	Form AckForm
+	// Recorded: the console holds an open episode of this alarm, so the API accepts an
+	// acknowledgement of it. An alarm shown before the evaluator recorded it is not offered one.
+	Recorded bool
+	// NotYet is the line shown instead of the button while the alarm is not recorded.
+	NotYet string
 }
 
 // AckLine is an acknowledgement or snooze in force.
@@ -153,6 +159,23 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 		v.Err = &Note{"crit", "Acknowledgements could not be read.", "Whether these alarms are acknowledged is unknown: this is an alarm, not \"none\". Reload the page to try again."}
 		acks.Acks = nil
 	}
+	// Which alarms can be acknowledged now: the API's ack-create accepts an alarm with an open episode
+	// of the same subject and state (store.CreateAck). The same store read decides here, so the page
+	// never offers an Acknowledge that would answer "not open".
+	recorded := map[string]bool{}
+	if eps, err := s.Store.ListOpenEpisodes(r.Context(), p.Scope); err != nil {
+		v.Err = &Note{"crit", "Open alarms could not be checked.", "Whether these alarms can be acknowledged now is unknown. Reload the page to try again."}
+	} else {
+		for _, e := range eps {
+			if e.SubjectType == subjectType && e.SubjectID == subjectID {
+				recorded[e.AlarmType] = true
+			}
+		}
+	}
+	notYet := "Not recorded yet: it can be acknowledged after the console's next alarm check, within about " + durText(jobs.AlarmEvaluatorEvery.Milliseconds()) + "."
+	if s.Fixtures {
+		notYet = "Not recorded yet: it can be acknowledged after the console's next alarm check. Fixtures mode runs none."
+	}
 	byType := map[string]adminapi.AckJSON{}
 	for _, a := range acks.Acks {
 		if a.SubjectType == subjectType && a.SubjectID == subjectID {
@@ -172,7 +195,11 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 		if alarm == store.AlarmMissing {
 			label, class = "MISSING", ClassCrit
 		}
-		row := AlarmRow{Chip: Chip{ID: "al-" + subjectID + "-" + t, Label: label, Class: class}, Form: ackForm(subjectType, subjectID, t, label+" on "+host, c, v.Zone)}
+		row := AlarmRow{Chip: Chip{ID: "al-" + subjectID + "-" + t, Label: label, Class: class}, Form: ackForm(subjectType, subjectID, t, label+" on "+host, c, v.Zone),
+			Recorded: recorded[alarm]}
+		if !row.Recorded {
+			row.NotYet = notYet
+		}
 		if a, ok := byType[t]; ok {
 			row.Ack = ackLine(a, c, s, r)
 		}
@@ -194,14 +221,15 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 	return v
 }
 
-// deviceAlarms are the device's flags that can be acknowledged (the alarm types of an episode).
+// deviceAlarms are the device's alarms that an episode records: its alarm flags (the flags the
+// evaluator syncs into episodes, notify.episodeKeys) of an episode alarm type.
 func deviceAlarms(ds state.DeviceState) []string {
 	open := map[string]bool{}
 	for _, a := range store.EpisodeAlarmTypes(store.EpisodeDevice) {
 		open[a] = true
 	}
 	var out []string
-	for _, f := range ds.Flags {
+	for _, f := range ds.AlarmFlags {
 		if open[string(f)] {
 			out = append(out, string(f))
 		}

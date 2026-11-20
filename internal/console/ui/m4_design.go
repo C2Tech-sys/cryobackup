@@ -191,14 +191,15 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 	partChip := Chip{ID: "da-p", Label: "PARTIAL", Class: ClassWarn}
 	missChip := Chip{ID: "da-m", Label: "MISSING", Class: ClassCrit}
 	d.Alarms = []designAlarms{
-		{"Not acknowledged (critical and alarm level)", AlarmsView{CanAck: true, Rows: []AlarmRow{{Chip: failedChip, Form: form("failed", "FAILED")}, {Chip: partChip, Form: form("partial", "PARTIAL")}}}},
+		{"Not acknowledged (critical and alarm level)", AlarmsView{CanAck: true, Rows: []AlarmRow{{Chip: failedChip, Form: form("failed", "FAILED"), Recorded: true}, {Chip: partChip, Form: form("partial", "PARTIAL"), Recorded: true}}}},
+		{"Shown before the console recorded it: no Acknowledge yet, one plain line", AlarmsView{CanAck: true, Rows: []AlarmRow{{Chip: staleChip, NotYet: "Not recorded yet: it can be acknowledged after the console's next alarm check, within about 1 min."}}}},
 		{"Acknowledged, with its note; snoozed to a date; snoozed to the next success", AlarmsView{CanAck: true, Notice: &Note{"ok", "Alarm acknowledged.", "E-mail for this alarm is muted. The alarm stays on the board, marked ACK, until its cause clears."},
-			Rows: []AlarmRow{{Chip: failedChip, Ack: ack, Form: form("failed", "FAILED")}, {Chip: staleChip, Ack: snooze, Form: form("stale", "STALE")}, {Chip: partChip, Ack: nextOK, Form: form("partial", "PARTIAL")}}}},
-		{"Read-only: the line, no buttons, the reason", AlarmsView{Why: "Acknowledging or snoozing an alarm needs the operator role.", Rows: []AlarmRow{{Chip: missChip, Ack: ack}}}},
+			Rows: []AlarmRow{{Chip: failedChip, Ack: ack, Recorded: true, Form: form("failed", "FAILED")}, {Chip: staleChip, Ack: snooze, Recorded: true, Form: form("stale", "STALE")}, {Chip: partChip, Ack: nextOK, Recorded: true, Form: form("partial", "PARTIAL")}}}},
+		{"Read-only: the line, no buttons, the reason", AlarmsView{Why: "Acknowledging or snoozing an alarm needs the operator role.", Rows: []AlarmRow{{Chip: missChip, Ack: ack, Recorded: true}}}},
 		{"The alarm was not open (a plain message, not an error page)", AlarmsView{CanAck: true, Notice: &Note{"info", "This alarm is not open.", "It may have cleared since the page was loaded, or the console has not recorded it yet. Nothing was changed."},
-			Rows: []AlarmRow{{Chip: missChip, Form: ackForm(store.EpisodeCustomer, "sample-c", "missing_customer", "MISSING on Blue Ridge Accounting", c, s.zone(ctx))}}}},
+			Rows: []AlarmRow{{Chip: missChip, Recorded: true, Form: ackForm(store.EpisodeCustomer, "sample-c", "missing_customer", "MISSING on Blue Ridge Accounting", c, s.zone(ctx))}}}},
 		{"Acknowledgements could not be read", AlarmsView{CanAck: true, Err: &Note{"crit", "Acknowledgements could not be read.", "Whether these alarms are acknowledged is unknown: this is an alarm, not \"none\". Reload the page to try again."},
-			Rows: []AlarmRow{{Chip: failedChip, Form: form("failed", "FAILED")}}}},
+			Rows: []AlarmRow{{Chip: failedChip, Recorded: true, Form: form("failed", "FAILED")}}}},
 	}
 	return d
 }

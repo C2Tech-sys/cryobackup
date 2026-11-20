@@ -1284,6 +1284,7 @@ table.fleet.dlog td.state-cell { white-space: nowrap; }
 .alarms { display: grid; gap: 10px; margin-bottom: var(--space-4); scroll-margin-top: 72px; }
 .alarms .mailhead .meta-mono { flex: 1; min-width: 0; }
 .alarms > p { margin: 0; }
+.notyet { display: inline-flex; gap: 8px; align-items: baseline; color: var(--text-muted); }
 ul.alarmlist:empty { display: none; }
 ul.alarmlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 li.alarm { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--danger); border-radius: var(--radius-md); background: var(--surface); }

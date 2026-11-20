@@ -299,6 +299,15 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		digest = &notify.Digester{Store: a.Store, Dispatch: a.Dispatch, Configured: true, Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log,
 			View: func(ctx context.Context) (state.FleetView, error) { f, err := fleet.Alarms(ctx); return f.View, err }}
 	}
+	if fix {
+		// P20-W3B F2: no evaluator runs in fixtures mode, so record an open episode for every alarm the
+		// fixture pages show, once, by the evaluator's own rule: the sync step of its notifier pass (with
+		// mail switched off it syncs the episodes and sends nothing). Every Acknowledge a fixture page
+		// offers then works. (It lives here, not in package fixtures: notify's tests import fixtures.)
+		if err := syncFixtureEpisodes(ctx, a, fleet); err != nil {
+			return nil, errors.New("cli: cannot load the fixtures")
+		}
+	}
 	a.Admin.Mail = mailSvc // the pages' in-process API holds the same one
 	if digest != nil {
 		a.Admin.Mail.Digest = digest // never a typed nil in the interface
@@ -417,4 +426,14 @@ func (p *Probe) Status() health.MaintainStatus {
 		st.LastOK = t
 	}
 	return st
+}
+
+// syncFixtureEpisodes records the open episodes of the fixture fleet as one evaluator pass would.
+func syncFixtureEpisodes(ctx context.Context, a *App, fleet *health.Evaluator) error {
+	f, err := fleet.Alarms(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = (&notify.Notifier{Store: a.Store, Log: a.log}).Pass(ctx, f.View)
+	return err
 }

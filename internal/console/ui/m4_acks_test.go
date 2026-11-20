@@ -127,17 +127,33 @@ func TestP20W3B_AcknowledgeSnoozePresetsAndClear(t *testing.T) {
 }
 
 func TestP20W3B_AnAlarmThatIsNotOpenIsAPlainMessage(t *testing.T) {
-	e := newM4Env(t)
+	e := newEnv(t) // no evaluator pass: RECEPTION-2's PARTIAL has no episode yet
 	e.login()
-	id := e.dev["RECEPTION-2"] // PARTIAL, and no episode recorded: the evaluator does not run in tests
+	id := e.dev["RECEPTION-2"]
 	block := alarmsBlock(t, e.page("/devices/"+id, 200))
-	mustContain(t, "not acked", block, "PARTIAL", "Acknowledge…", "Snooze until tomorrow 8:00 AM", `type="datetime-local"`)
+	// F2: an alarm the console has not recorded keeps its chip and gets one plain line, not a button
+	mustContain(t, "not recorded", block, "PARTIAL", "Not recorded yet: it can be acknowledged after the console", "next alarm check. Fixtures mode runs none.")
+	if strings.Contains(block, "Acknowledge…") || strings.Contains(block, `action="/ui/acks"`) {
+		t.Error("an Acknowledge is offered for an alarm with no open episode: it would answer not open")
+	}
+	e.svc.Fixtures = false // outside fixtures mode the evaluator runs every minute, and the line says so
+	mustContain(t, "production line", alarmsBlock(t, e.page("/devices/"+id, 200)), "within about 1 min.")
+	e.svc.Fixtures = true
+	// a form posted anyway (an old page) answers with the plain message, not an error page
 	res, _ := e.post("/ui/acks", url.Values{"subject_type": {"device"}, "subject_id": {id}, "alarm_type": {"partial"}, "mode": {"ack"}}, false)
 	if res.StatusCode != http.StatusSeeOther || !strings.Contains(e.location(res), "ack=not_open") {
 		t.Fatalf("not open: %d %s", res.StatusCode, e.location(res))
 	}
 	body := e.page(e.location(res), 200)
 	mustContain(t, "not open page", body, "This alarm is not open.", `class="banner info dense"`)
+	// after the evaluator's pass records it, the same alarm is offered and the form works
+	e.syncEpisodes()
+	block = alarmsBlock(t, e.page("/devices/"+id, 200))
+	mustContain(t, "recorded", block, "Acknowledge…", "Snooze until tomorrow 8:00 AM", `type="datetime-local"`)
+	res, _ = e.post("/ui/acks", url.Values{"subject_type": {"device"}, "subject_id": {id}, "alarm_type": {"partial"}, "mode": {"ack"}}, false)
+	if !strings.Contains(e.location(res), "ack=acked") {
+		t.Fatalf("after the sync: %s", e.location(res))
+	}
 	// another customer's device, or a device that does not exist, is a 404 page before anything else
 	if res, _ := e.post("/ui/acks", url.Values{"subject_type": {"device"}, "subject_id": {"01NOSUCHDEVICE0000000000000"}, "alarm_type": {"stale"}, "mode": {"ack"}}, false); res.StatusCode != http.StatusNotFound {
 		t.Errorf("an unknown device: %d", res.StatusCode)

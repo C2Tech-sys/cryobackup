@@ -11,6 +11,7 @@ import (
 
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
+	"github.com/c2tech-sys/cryobackup/internal/console/notify"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
@@ -24,7 +25,21 @@ func newM4Env(t *testing.T) *env {
 	if err := fixtures.SeedM4(context.Background(), e.st, e.now); err != nil {
 		t.Fatal(err)
 	}
+	e.syncEpisodes() // as the fixtures app does at start (cli syncFixtureEpisodes)
 	return e
+}
+
+// syncEpisodes records the open episodes of the fleet as one evaluator pass would (its notifier's
+// sync step, mail off), so every alarm the pages show can be acknowledged.
+func (e *env) syncEpisodes() {
+	e.t.Helper()
+	f, err := e.svc.Fleet.Alarms(context.Background())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := (&notify.Notifier{Store: e.st}).Pass(context.Background(), f.View); err != nil {
+		e.t.Fatal(err)
+	}
 }
 
 func (e *env) recipientID(name string) string {
