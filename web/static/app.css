@@ -1281,7 +1281,9 @@ table.fleet.dlog td.who .rname { font-weight: 600; overflow-wrap: anywhere; }
 table.fleet.dlog td.att { font: 500 12px/1 var(--font-mono); text-align: center; }
 table.fleet.dlog td.att .att-w { display: none; }
 /* /settings: the digest rows' "Edit in e-mail settings" wraps instead of running past a phone (F4). */
-@media (max-width: 640px) { table.fleet.settable td.wrap { min-width: 0; } table.fleet.settable td { white-space: normal; overflow-wrap: anywhere; } }
+/* G1: on a phone the label and status cells may shrink and wrap (a word breaks only when it alone is wider than the
+   cell); a value cell never breaks inside a word or a number: it wraps at spaces only. */
+@media (max-width: 640px) { table.fleet.settable td.wrap { min-width: 0; overflow-wrap: break-word; } table.fleet.settable td.val { overflow-wrap: normal; word-break: keep-all; } }
 table.fleet.compact td .btn.editlink { white-space: normal; height: auto; min-height: 26px; padding-top: 4px; padding-bottom: 4px; line-height: 1.25; text-align: left; max-width: 100%; }
 table.fleet.dlog td.detail { white-space: normal; min-width: 180px; }
 table.fleet.dlog td.state-cell { white-space: nowrap; }

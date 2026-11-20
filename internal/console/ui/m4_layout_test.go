@@ -133,7 +133,7 @@ return out;`
 		t.Errorf("at 390 px the edit links end %.0f px past the table, which scrolls %.0f px (page overflow %.0f)", got["past"], got["scroll"], got["overflow"])
 	}
 	mutant := strings.Replace(css, "table.fleet.compact td .btn.editlink { white-space: normal;", "table.fleet.compact td .btn.editlink { white-space: nowrap;", 1)
-	mutant = strings.Replace(mutant, "@media (max-width: 640px) { table.fleet.settable td.wrap { min-width: 0; } table.fleet.settable td { white-space: normal; overflow-wrap: anywhere; } }", "", 1)
+	mutant = strings.Replace(mutant, g1Rule, "", 1)
 	if strings.Contains(mutant, "editlink { white-space: normal;") || strings.Contains(mutant, "table.fleet.settable td.wrap") {
 		t.Fatal("the F4 rules are not where the test expects them")
 	}
@@ -156,5 +156,44 @@ return out;`
 	// the fixture log's first page holds two rows past their first attempt (attempt 2 and attempt 4)
 	if got["shown"] != 2 || got["text"] != 2 || got["hidden"] < 20 {
 		t.Errorf("at 390 px: %v attempt cells shown (%v reading \"attempt N\"), %v hidden; want the 2 later attempts shown", got["shown"], got["text"], got["hidden"])
+	}
+}
+
+// g1Rule is the phone rule of the /settings table (G1).
+const g1Rule = "@media (max-width: 640px) { table.fleet.settable td.wrap { min-width: 0; overflow-wrap: break-word; } table.fleet.settable td.val { overflow-wrap: normal; word-break: keep-all; } }"
+
+// G1: at 390 px, with the house fonts and with wide-font metrics, no /settings value breaks inside a word
+// or a number: each value cell occupies no more lines than it has space-separated words. And nothing
+// overflows sideways, neither the page nor the table's own box. The F4 rule that broke values ("40/0/da/ys")
+// is the mutant.
+func TestP20W3B_G1_SettingsValuesNeverBreakInsideAWord(t *testing.T) {
+	chromeOrSkip(t)
+	e := newEnv(t)
+	e.login()
+	base := e.appCSS(t)
+	if !strings.Contains(base, g1Rule) {
+		t.Fatal("the G1 rule is not where the test expects it")
+	}
+	probe := `var tw = document.querySelector('table.settable').closest('.table-wrap');
+var out = {iw: innerWidth, rows: 0, broken: 0, scroll: tw.scrollWidth - tw.clientWidth, overflow: document.documentElement.scrollWidth - innerWidth};
+document.querySelectorAll('table.settable td.val').forEach(function (td) {
+  out.rows++;
+  var words = td.textContent.trim().split(/\s+/).length, r = document.createRange(); r.selectNodeContents(td);
+  var tops = {}; Array.prototype.forEach.call(r.getClientRects(), function (q) { if (q.width > 0) tops[Math.round(q.top)] = 1; });
+  if (Object.keys(tops).length > words) out.broken++;
+});
+return out;`
+	for _, m := range []struct{ name, css string }{{"house", ""}, {"wide", wideMetrics}} {
+		got := e.layout(t, layoutOpts{Path: "/settings", CSS: base + m.css, W: 390, H: 900, Probe: probe})
+		if got["rows"] < 4 {
+			t.Fatalf("%s: %v value cells: the probe measures nothing", m.name, got["rows"])
+		}
+		if got["broken"] > 0 || got["scroll"] > 0.5 || got["overflow"] > 0.5 {
+			t.Errorf("%s fonts at 390 px: %v values break inside a word; the table scrolls %.0f px; the page overflows %.0f px", m.name, got["broken"], got["scroll"], got["overflow"])
+		}
+	}
+	old := strings.Replace(base, g1Rule, "@media (max-width: 640px) { table.fleet.settable td.wrap { min-width: 0; } table.fleet.settable td { white-space: normal; overflow-wrap: anywhere; } }", 1)
+	if bad := e.layout(t, layoutOpts{Path: "/settings", CSS: old, W: 390, H: 900, Probe: probe}); bad["broken"] == 0 {
+		t.Errorf("the probe does not see the values the F4 rule broke: %v", bad)
 	}
 }

@@ -141,6 +141,7 @@ func TestP20W3B_Screenshots(t *testing.T) {
 		name, path, js string
 		h              int
 	}{
+		{"settings_general", "/settings", "", 0},
 		{"settings_email", "/settings/email", "", 0},
 		{"settings_email_preview", "/settings/email?preview=1", "", 0},
 		{"device_acked", "/devices/" + e.dev["FRONTDESK-01"], "", 0},
