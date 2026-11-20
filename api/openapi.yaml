@@ -48,6 +48,7 @@ tags:
   - name: fleet
   - name: views
   - name: monitoring
+  - name: notifications
   - name: agent
 paths:
   /api/v1/agent/enroll:
@@ -1634,7 +1635,7 @@ paths:
       operationId: putSetting
       tags: [settings]
       summary: Set a setting
-      description: M2 edits `display_timezone` and `refresh_interval_s` only (ADR 0012). The change applies to the next request on either transport. A save that changes nothing writes no audit row.
+      description: Edits `display_timezone` and `refresh_interval_s` (ADR 0012) and, since M4, `digest_enabled` (true or false; on while nothing is stored) and `digest_local_time` (HH:MM on a 24-hour clock in the display zone). The change applies to the next request on either transport. A save that changes nothing writes no audit row.
       x-min-role: OW
       parameters:
         - {name: key, in: path, required: true, schema: {type: string}}
@@ -2158,6 +2159,250 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '503': {$ref: '#/components/responses/Unavailable'}
+  # ---- M4 (ADR 0020, P20-W3A): recipients, delivery log, SMTP status and test, acknowledgements, digest ----
+  /api/v1/notification-rules:
+    get:
+      operationId: listRecipients
+      tags: [notifications]
+      summary: Mail recipients
+      description: The global e-mail notification rules (ADR 0020 decision 3) by name, with what each receives, and how many receive alerts and the digest. `no_alert_recipient` true (with `notice`) is the condition of banner C18 when a relay is configured. Console-wide; 403 for a caller limited to some customers.
+      x-min-role: AD
+      responses:
+        '200':
+          description: The recipients.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecipientsResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: createRecipient
+      tags: [notifications]
+      summary: Add a mail recipient
+      description: Name and address are required; a switch left out is on. The address must be one plain address (no display name, no quoting, no address literal); a refused name or address is 400 with the field and the rule, never the input. An address another recipient has is 409 with reason `address_taken`. One `recipient.create` audit row with the switches only, never the address or the name.
+      x-min-role: OW
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RecipientRequest'}
+      responses:
+        '201':
+          description: The recipient, and who receives what now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecipientResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/M4Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/notification-rules/{id}:
+    patch:
+      operationId: patchRecipient
+      tags: [notifications]
+      summary: Edit a mail recipient
+      description: Every field is optional; what is left out keeps its value. Saving what is stored writes nothing and no audit row; a change writes one `recipient.update` row (switches only). Turning off the last alerts switch is allowed and the answer says so (`no_alert_recipient`, `notice`).
+      x-min-role: OW
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RecipientRequest'}
+      responses:
+        '200':
+          description: The recipient, and who receives what now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecipientResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/M4Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+    delete:
+      operationId: deleteRecipient
+      tags: [notifications]
+      summary: Delete a mail recipient
+      description: The recipient's delivery-log rows stay. Deleting the last recipient with the alerts switch is allowed, and the answer says that the console now mails alarms to nobody (`no_alert_recipient`, `notice`; banner C18). One `recipient.delete` audit row.
+      x-min-role: OW
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '200':
+          description: Deleted; who receives what now.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecipientDeleteResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/notification-log:
+    get:
+      operationId: listDeliveries
+      tags: [notifications]
+      summary: Delivery log
+      description: Every message the console sent, failed to send or decided not to send (ADR 0020 decision 9), newest attempt first, one page at a time. The log keeps no address, subject or body, so a row is a kind, an outcome, the attempt number, the class word of the newest failure (with its fixed hint), a suppress reason and times; the recipient's name is looked up from its rule while the rule exists. Console-wide; 403 for a caller limited to some customers.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: kind, in: query, required: false, schema: {type: string, enum: [alert, recovery, nag, digest, report, test, event]}}
+        - {name: outcome, in: query, required: false, schema: {type: string, enum: [queued, sent, failed, suppressed]}}
+      responses:
+        '200':
+          description: One page of the log.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeliveryLogResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/settings/smtp:
+    get:
+      operationId: getSMTPStatus
+      tags: [settings]
+      summary: Mail configuration (read-only)
+      description: The smtp block of the console configuration as the e-mail settings page shows it (ADR 0020 decision 2 keeps it in config.json). The relay host and the user name are host configuration and are not shown, only whether each is set; the password file is reported as named and readable or not, never read into the answer. `config_error` is the class word of a configuration that cannot send. In fixtures mode `configured` and `fixtures` are true and messages never leave the process. 503 when the console was built without its mail side.
+      x-min-role: AD
+      responses:
+        '200':
+          description: The mail configuration.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SMTPStatusResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/settings/smtp/test:
+    post:
+      operationId: sendTestMail
+      tags: [settings]
+      summary: Send a test message
+      description: One message to the address in `to` (default the caller's own account address), validated by the recipients' address rule, sent at once under the sender's own deadline (ADR 0020 decision 11). The answer is 200 whether the relay accepted it or not, with the outcome per recipient and, for a failure, its stage (connect, tls, auth, sender, recipient, data, config) and class word with a fixed hint; never the relay's own reply, the host, the user name or the password. The message is a delivery-log row of kind test, never retried and never counted among the real sends. No relay configured is 409 with reason `smtp_not_configured`; one test per 10 seconds per console, 429 with Retry-After otherwise. One `smtp.test` audit row is written before the send; if it cannot be written nothing is sent.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SMTPTestRequest'}
+      responses:
+        '200':
+          description: The test was attempted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SMTPTestResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/M4Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/acks:
+    get:
+      operationId: listAcks
+      tags: [notifications]
+      summary: Acknowledgements and snoozes in force
+      description: The acknowledgements in force inside the caller's scope, newest first (not cleared, with their alarm still open, not past their snooze end). `note` is the operator's free text, shown here and nowhere else (never mailed, logged or audited). Optional `subject_id` narrows to one device or customer.
+      x-min-role: RO
+      parameters:
+        - {name: subject_id, in: query, required: false, schema: {type: string}}
+      responses:
+        '200':
+          description: The acknowledgements.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AcksResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      operationId: createAck
+      tags: [notifications]
+      summary: Acknowledge or snooze an alarm
+      description: Mutes mail for one alarm of a device or customer and labels its row; the state does not change (DH8). Kind `acknowledge` lasts until cleared; kind `snooze` takes `snooze_until` (in the future, at most 366 days ahead, the store's limit) or `until_next_success`. An alarm that is not open is 409 with reason `alarm_not_open`; an active acknowledgement of the same alarm is replaced. The note is at most 500 characters. One `alarm_ack.create` audit row with ids and switches, never the note.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateAckRequest'}
+      responses:
+        '201':
+          description: The acknowledgement.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AckResponse'}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/M4Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/acks/{id}:
+    delete:
+      operationId: clearAck
+      tags: [notifications]
+      summary: Clear an acknowledgement
+      description: Ends an acknowledgement or snooze; a still-open alarm is mailed again by the next evaluator pass. Clearing one that is already cleared changes nothing and writes no audit row; otherwise one `alarm_ack.clear` row.
+      x-min-role: OP
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '204': {description: Cleared.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/digest/preview:
+    get:
+      operationId: previewDigest
+      tags: [notifications]
+      summary: Preview the daily digest
+      description: The digest as it would be sent now (subject, text and HTML parts), rendered from the current fleet view; nothing is sent or recorded. It names every customer, so it is console-wide; 403 for a caller limited to some customers. 503 when the console was built without a digester. The digest's schedule is the settings `digest_enabled` and `digest_local_time` (`/api/v1/settings`).
+      x-min-role: AD
+      responses:
+        '200':
+          description: The digest.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DigestPreviewResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/digest/send:
+    post:
+      operationId: sendDigest
+      tags: [notifications]
+      summary: Send the digest now
+      description: Without `force`, sends today's digest under today's key to each recipient with the digest switch that has not had it (a no-op for those that have; their outcome says why). With `force`, sends to every such recipient under a key of its own that does not count as today's digest. The answer lists each recipient's outcome (sent, failed, already_sent, in_retry, gave_up, recipient_gone, deferred), or `skipped` (no_recipient). No relay configured is 409 with reason `smtp_not_configured`. One `digest.send` audit row is written before anything is sent; if it cannot be written nothing is sent.
+      x-min-role: OW
+      parameters:
+        - {$ref: '#/components/parameters/CsrfToken'}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DigestSendRequest'}
+      responses:
+        '200':
+          description: What was done.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DigestSendResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/M4Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
 security:
   - sessionCookie: []
   - apiToken: []
@@ -2282,6 +2527,11 @@ components:
       content:
         application/problem+json:
           schema: {$ref: '#/components/schemas/Problem'}
+    M4Conflict:
+      description: The request conflicts with the current state (`conflict`). `reason` says which (`address_taken`, `alarm_not_open`, `smtp_not_configured`) and `detail` is its fixed sentence.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/M4Problem'}
   schemas:
     Timestamp:
       type: string
@@ -3230,7 +3480,7 @@ components:
       required: [value]
       additionalProperties: false
       properties:
-        value: {description: The new value, JSON. The zone is an IANA name; the refresh interval is whole seconds.}
+        value: {description: 'The new value, JSON. The zone is an IANA name; the refresh interval is whole seconds; digest_enabled is true or false; digest_local_time is "HH:MM".'}
     PutSettingResponse:
       allOf:
         - $ref: '#/components/schemas/Setting'
@@ -4182,3 +4432,214 @@ components:
             reachable: {type: boolean}
             version: {type: string}
             master_key_loaded: {type: boolean}
+
+    # ---- M4 (ADR 0020, P20-W3A) ----
+    M4Problem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            reason: {type: string, description: 'A stable machine reason: address_taken, alarm_not_open, smtp_not_configured, test_too_soon.'}
+            detail: {type: string, description: A fixed sentence; never a host, an address or a name.}
+    Recipient:
+      type: object
+      required: [id, name, address, alerts, recoveries, digest, created_at, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        address: {type: string}
+        alerts: {type: boolean, description: Immediate mail when an alarm opens.}
+        recoveries: {type: boolean, description: One notice when an alarm ends.}
+        digest: {type: boolean, description: The daily digest.}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    RecipientCounts:
+      type: object
+      required: [alert_recipients, digest_recipients, no_alert_recipient]
+      properties:
+        alert_recipients: {type: integer}
+        digest_recipients: {type: integer}
+        no_alert_recipient: {type: boolean, description: No recipient receives alerts (banner C18 when a relay is configured).}
+        notice: {type: string, description: Present with no_alert_recipient; a fixed sentence.}
+    RecipientsResponse:
+      allOf:
+        - $ref: '#/components/schemas/RecipientCounts'
+        - type: object
+          required: [computed_at, recipients]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            recipients:
+              type: array
+              items: {$ref: '#/components/schemas/Recipient'}
+    RecipientRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string, maxLength: 100}
+        address: {type: string, maxLength: 254}
+        alerts: {type: boolean}
+        recoveries: {type: boolean}
+        digest: {type: boolean}
+    RecipientResponse:
+      allOf:
+        - $ref: '#/components/schemas/RecipientCounts'
+        - type: object
+          required: [computed_at, recipient]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            recipient: {$ref: '#/components/schemas/Recipient'}
+    RecipientDeleteResponse:
+      allOf:
+        - $ref: '#/components/schemas/RecipientCounts'
+        - type: object
+          required: [computed_at, id]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+            id: {type: string}
+    Delivery:
+      type: object
+      required: [id, at, at_local, queued_at, kind, outcome, attempt]
+      properties:
+        id: {type: string}
+        at: {$ref: '#/components/schemas/Timestamp'}
+        at_local: {type: string, description: The same instant in the display zone.}
+        queued_at: {$ref: '#/components/schemas/Timestamp'}
+        kind: {type: string, enum: [alert, recovery, nag, digest, report, test, event]}
+        recipient_id: {type: string}
+        recipient: {type: string, description: The recipient's name while its rule exists.}
+        recipient_deleted: {type: boolean}
+        outcome: {type: string, enum: [queued, sent, failed, suppressed]}
+        attempt: {type: integer}
+        error_class: {type: string, description: Class word of the newest failure; never the relay's text.}
+        error_hint: {type: string}
+        suppress_reason: {type: string}
+        next_retry_at: {$ref: '#/components/schemas/Timestamp'}
+    DeliveryLogResponse:
+      type: object
+      required: [computed_at, display_timezone, truncated, deliveries]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        display_timezone: {type: string}
+        truncated: {type: boolean}
+        next_cursor: {type: string}
+        deliveries:
+          type: array
+          items: {$ref: '#/components/schemas/Delivery'}
+    SMTPStatusResponse:
+      type: object
+      required: [computed_at, configured, fixtures, host_set, allow_plaintext, username_set, password_file_set, password_file_readable]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        configured: {type: boolean}
+        fixtures: {type: boolean}
+        host_set: {type: boolean}
+        security: {type: string, enum: [starttls, tls, plain]}
+        port: {type: integer}
+        allow_plaintext: {type: boolean}
+        username_set: {type: boolean}
+        password_file_set: {type: boolean}
+        password_file_readable: {type: boolean}
+        from: {type: string}
+        config_error: {type: string}
+        config_hint: {type: string}
+    SMTPTestRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        to: {type: string, description: One plain address; empty means the caller's own account address.}
+    SMTPTestResponse:
+      type: object
+      required: [computed_at, sent, delivery_id, recipients]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        sent: {type: boolean}
+        delivery_id: {type: string}
+        recipients:
+          type: array
+          items:
+            type: object
+            required: [to, outcome]
+            properties:
+              to: {type: string}
+              outcome: {type: string, enum: [sent, failed]}
+              stage: {type: string, enum: [connect, tls, auth, sender, recipient, data, config]}
+              class: {type: string}
+              temporary: {type: boolean}
+              hint: {type: string}
+    Ack:
+      type: object
+      required: [id, subject_type, subject_id, customer_id, alarm_type, kind, until_next_success, note, acknowledged_at]
+      properties:
+        id: {type: string}
+        subject_type: {type: string, enum: [device, customer]}
+        subject_id: {type: string}
+        customer_id: {type: string}
+        alarm_type: {type: string}
+        kind: {type: string, enum: [acknowledge, snooze]}
+        snooze_until: {$ref: '#/components/schemas/Timestamp'}
+        until_next_success: {type: boolean}
+        note: {type: string}
+        acknowledged_by: {type: string}
+        acknowledged_by_name: {type: string}
+        acknowledged_at: {$ref: '#/components/schemas/Timestamp'}
+        cleared_at: {$ref: '#/components/schemas/Timestamp'}
+    AckResponse:
+      allOf:
+        - $ref: '#/components/schemas/Ack'
+        - type: object
+          required: [computed_at]
+          properties:
+            computed_at: {$ref: '#/components/schemas/Timestamp'}
+    AcksResponse:
+      type: object
+      required: [computed_at, display_timezone, acks]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        display_timezone: {type: string}
+        acks:
+          type: array
+          items: {$ref: '#/components/schemas/Ack'}
+    CreateAckRequest:
+      type: object
+      required: [subject_type, subject_id, alarm_type, kind]
+      additionalProperties: false
+      properties:
+        subject_type: {type: string, enum: [device, customer]}
+        subject_id: {type: string}
+        alarm_type: {type: string, description: 'A device: blank, stuck, failed, partial, unseen, stale, maintenance, escrow, identity, outdated, unknown_state. A customer: missing_customer.'}
+        kind: {type: string, enum: [acknowledge, snooze]}
+        snooze_until: {$ref: '#/components/schemas/Timestamp'}
+        until_next_success: {type: boolean}
+        note: {type: string, maxLength: 500}
+    DigestPreviewResponse:
+      type: object
+      required: [computed_at, subject, text, html]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        subject: {type: string}
+        text: {type: string}
+        html: {type: string}
+    DigestSendRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        force: {type: boolean}
+    DigestSendResponse:
+      type: object
+      required: [computed_at, forced, sent, failed, recipients]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        date: {type: string, description: The local date of the digest in the display zone.}
+        forced: {type: boolean}
+        skipped: {type: string, enum: [no_recipient, not_configured, disabled, not_due, already_sent]}
+        sent: {type: integer}
+        failed: {type: integer}
+        recipients:
+          type: array
+          items:
+            type: object
+            required: [id, outcome]
+            properties:
+              id: {type: string}
+              name: {type: string}
+              outcome: {type: string, enum: [sent, failed, already_sent, in_retry, gave_up, recipient_gone, deferred]}

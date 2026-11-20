@@ -57,6 +57,7 @@ func Patterns() []string {
 	p = append(p, settingsPatterns()...)   // M2-W3A: console settings (settings.go)
 	p = append(p, m3Patterns()...)         // M3-T3: state, fleet, runs, views, system, status, events, metrics (m3*.go)
 	p = append(p, purgePatterns()...)      // ADR 0019: step-up, device purge, customer delete (purge_adr19.go)
+	p = append(p, m4Patterns()...)         // P20-W3A: recipients, delivery log, SMTP, acks, digest (m4_*.go)
 	return p
 }
 
@@ -133,6 +134,9 @@ type Service struct {
 	apiGen atomic.Uint64
 	// gate is what serve's shutdown needs of the manual job runs and POST probes (m3_system.go).
 	gate shutdownGate
+	// Mail is the mail side of the M4 routes (m4_mail.go): test mail, digest, SMTP status. Nil
+	// answers those routes with 503.
+	Mail *MailService
 }
 
 func (s *Service) now() time.Time {
@@ -165,6 +169,7 @@ func (s *Service) Register(r httpx.Registrar) {
 	s.registerSettings(r) // M2-W3A (settings.go)
 	s.registerM3(r)       // M3-T3 (m3.go)
 	s.registerPurge(r)    // ADR 0019 (purge_adr19.go)
+	s.registerM4(r)       // P20-W3A (m4_mail.go)
 }
 
 // display is one consistent reading of the display zone (the live preference,

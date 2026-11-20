@@ -15,6 +15,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
+	"github.com/c2tech-sys/cryobackup/internal/console/mail"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
@@ -710,6 +711,65 @@ func auditMutationCases() map[string]mutation {
 				e.withDisplay("UTC")
 				return func() call {
 					return call{method: "PUT", path: "/api/v1/settings/display_timezone", body: map[string]any{"value": "America/Denver"}}
+				}
+			},
+		},
+		// ---- M4 (P20-W3A): recipients, test mail, acknowledgements, digest ----
+		PatternRecipientCreate: {
+			status: 201,
+			build: func(e *env, s *session) func() call {
+				return func() call {
+					return call{method: "POST", path: "/api/v1/notification-rules", body: map[string]any{"name": "Night desk", "address": "ops@example.com"}}
+				}
+			},
+		},
+		PatternRecipientPatch: {
+			build: func(e *env, s *session) func() call {
+				rc := decode[RecipientResponse](e.t, e.mustReq("POST", "/api/v1/notification-rules", s, map[string]any{"name": "Night desk", "address": "ops@example.com"}, 201))
+				return func() call {
+					return call{method: "PATCH", path: "/api/v1/notification-rules/" + rc.Recipient.ID, body: map[string]any{"name": "Day desk", "digest": false}}
+				}
+			},
+		},
+		PatternRecipientDelete: {
+			build: func(e *env, s *session) func() call {
+				rc := decode[RecipientResponse](e.t, e.mustReq("POST", "/api/v1/notification-rules", s, map[string]any{"name": "Night desk", "address": "ops@example.com"}, 201))
+				return func() call { return call{method: "DELETE", path: "/api/v1/notification-rules/" + rc.Recipient.ID} }
+			},
+		},
+		PatternSMTPTest: {
+			// smtp.test is written before the send: with the audit table refusing, nothing is sent or logged.
+			build: func(e *env, s *session) func() call {
+				e.withMail(mail.NewFakeSender())
+				return func() call {
+					return call{method: "POST", path: "/api/v1/settings/smtp/test", body: SMTPTestRequest{To: "ops@example.com"}}
+				}
+			},
+		},
+		PatternAckCreate: {
+			status: 201,
+			build: func(e *env, s *session) func() call {
+				e.openEpisode(e.dev.ID, "FAILED")
+				return func() call {
+					return call{method: "POST", path: "/api/v1/acks", body: CreateAckRequest{SubjectType: "device", SubjectID: e.dev.ID, AlarmType: "failed", Kind: AckKindAcknowledge, Note: "audit test"}}
+				}
+			},
+		},
+		PatternAckClear: {
+			status: 204,
+			build: func(e *env, s *session) func() call {
+				e.openEpisode(e.dev.ID, "FAILED")
+				a := decode[AckResponse](e.t, e.mustReq("POST", "/api/v1/acks", s, CreateAckRequest{SubjectType: "device", SubjectID: e.dev.ID, AlarmType: "failed", Kind: AckKindAcknowledge}, 201))
+				return func() call { return call{method: "DELETE", path: "/api/v1/acks/" + a.ID} }
+			},
+		},
+		PatternDigestSend: {
+			// digest.send is written before anything is sent: with the audit table refusing, no delivery row appears.
+			build: func(e *env, s *session) func() call {
+				e.withMail(mail.NewFakeSender())
+				e.mustReq("POST", "/api/v1/notification-rules", s, map[string]any{"name": "Morning", "address": "morning@example.com"}, 201)
+				return func() call {
+					return call{method: "POST", path: "/api/v1/digest/send", body: DigestSendRequest{Force: true}}
 				}
 			},
 		},

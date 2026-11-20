@@ -61,6 +61,15 @@ var fleetMutationRoutes = map[string]bool{
 	PatternDevicePurge:          true, // ADR 0019
 	PatternCustomerDelete:       true,
 	PatternCustomerPurgeRetired: true,
+	// P20-W3A: recipients feed banners C18 and C20, acknowledgements the acknowledged label, and the
+	// delivery rows of a test or a digest the mail facts of C03, C14 and C21.
+	PatternRecipientCreate: true,
+	PatternRecipientPatch:  true,
+	PatternRecipientDelete: true,
+	PatternSMTPTest:        true,
+	PatternAckCreate:       true,
+	PatternAckClear:        true,
+	PatternDigestSend:      true,
 }
 
 func TestEveryFleetMutationAdvancesTheChangeGeneration(t *testing.T) { // r4 MEDIUM-1

@@ -64,7 +64,8 @@ type PutSettingResponse struct {
 
 // effectiveValue is the value a setting runs on: the live display prefs for the
 // two display settings (the stored row can differ from them only after a failed
-// load, which the settings page reports), the stored row otherwise.
+// load, which the settings page reports), the stored row otherwise, and for
+// digest_enabled with no row its default, true.
 func (s *Service) effectiveValue(v store.SettingValue) (json.RawMessage, bool) {
 	if s.Display != nil {
 		snap := s.Display.Snapshot()
@@ -77,6 +78,9 @@ func (s *Service) effectiveValue(v store.SettingValue) (json.RawMessage, bool) {
 		}
 	}
 	if v.Stored == nil {
+		if v.Key == store.SettingDigestEnabled {
+			return json.RawMessage("true"), false // P20-W3A: the digest is on while nothing is stored (store.ReadDigestSettings)
+		}
 		return json.RawMessage("null"), false
 	}
 	return v.Stored, true
