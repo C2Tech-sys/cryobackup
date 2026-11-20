@@ -186,6 +186,14 @@ func addM4Matrix(m map[string]matrixCase) {
 		_, err = w.s.UpdateRecipient(w.ctx, sc, r.ID, RecipientInput{Name: r.Name, Address: r.Address, Alerts: false, Digest: true}, actorOf(w))
 		return nil, err
 	}}
+	m["PatchRecipient"] = matrixCase{kind: globalWrite, call: func(w *world, sc Scope, t *target) ([]string, error) {
+		r, err := newRecipient(w)
+		if err != nil {
+			return nil, err
+		}
+		_, err = w.s.PatchRecipient(w.ctx, sc, r.ID, RecipientPatch{Name: ptr(uniq("Ops"))}, actorOf(w))
+		return nil, err
+	}}
 	m["DeleteRecipient"] = matrixCase{kind: globalWrite, call: func(w *world, sc Scope, t *target) ([]string, error) {
 		r, err := newRecipient(w)
 		if err != nil {
