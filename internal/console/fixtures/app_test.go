@@ -208,10 +208,16 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 			t.Errorf("fixtures mode reads %s OK with no evidence", id)
 		}
 	}
-	for _, id := range []string{"release_manifest", "storage_quota", "digest", "self_backup"} {
+	for _, id := range []string{"release_manifest", "storage_quota", "self_backup"} {
 		if got := row(sys, id); got != "NOT IN THIS BUILD" {
 			t.Errorf("fixtures mode reads %s %q, want NOT IN THIS BUILD", id, got)
 		}
+	}
+	// The daily digest is in this build (ADR 0020), and the fixtures' probe source
+	// (health.FixtureProbes) has the day's digest sent an hour ago: the row is OK on
+	// that evidence, and nothing raises C14 or C14b until every banner is asked for.
+	if got := row(sys, "digest"); got != "OK" {
+		t.Errorf("fixtures mode reads digest %q, want OK (the fixtures send the day's digest)", got)
 	}
 	// every banner, on request, on every page
 	if strings.Contains(sys, "RELEASE MANIFEST NOT CHECKED") && !fixtures.AllBannersOn() {
@@ -240,9 +246,19 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 	c.page("/fixtures?banners=all")
 	all := c.page("/system")
 	for _, b := range fixtures.AllBanners(fixtures.Now()) {
-		if label := bannerLabel(b.ID); !strings.Contains(all, label) {
+		label := bannerLabel(b.ID)
+		if label == "" {
+			t.Errorf("banner %s has no label in this test: it would be found on any page", b.ID)
+			continue
+		}
+		if !strings.Contains(all, label) {
 			t.Errorf("banner %s (%s) is not shown with every banner on", b.ID, label)
 		}
+	}
+	// A row is never OK while a banner mapped to it is raised: with C14 and C14b on, the
+	// digest row that read OK above does not.
+	if got := row(all, "digest"); got == "OK" {
+		t.Error("with C14 and C14b raised the digest row still reads OK")
 	}
 	if !strings.Contains(c.page("/runs"), "GATEWAY NOT CHECKED") {
 		t.Error("the banners are not on the runs page")
@@ -250,12 +266,13 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 }
 
 // bannerLabel is the strip's label of a banner id (ui.BannerLabel, spelled out so this
-// test does not import the UI).
+// test does not import the UI). C14b reads DIGEST NOT SENDING since it also covers a
+// digest that cannot go out because e-mail is not set up (ADR 0020).
 func bannerLabel(id string) string {
 	labels := map[string]string{"C00": "SELF-CHECKS NOT WIRED", "C01": "GATEWAY UNREACHABLE", "C02": "STORAGE PROBE FAILED", "C03": "EMAIL NOT DELIVERING", "C04": "AGENT API UNREACHABLE",
 		"C05": "CERTIFICATE EXPIRING", "C06": "ALERTING STALLED", "C07": "MAINTENANCE WORKER DOWN", "C08": "NO ACTIVE DEVICES", "C09": "PARTIAL DATA", "C10": "LIVE UPDATES DISCONNECTED",
 		"C11": "DATABASE NEEDS ATTENTION", "C12": "MASTER KEY UNAVAILABLE", "C13": "CLOCK SUSPECT", "C14": "DIGEST NOT SENT", "C15": "STORAGE QUOTA", "C16": "RELEASE MANIFEST REJECTED", "C17": "GATEWAY LOGIN NOT REMOVED", "C17b": "GATEWAY LOGIN NOT CHECKED",
 		"C01b": "GATEWAY NOT CHECKED", "C02b": "STORAGE NOT CHECKED", "C03b": "EMAIL NOT CHECKED", "C04b": "AGENT API NOT CHECKED", "C05b": "CERTIFICATE NOT CHECKED", "C06b": "ALERTING NOT CHECKED",
-		"C07b": "MAINTENANCE WORKER NOT CHECKED", "C12b": "MASTER KEY NOT CHECKED", "C14b": "DIGEST NOT CHECKED", "C15b": "STORAGE QUOTA NOT CHECKED", "C16b": "RELEASE MANIFEST NOT CHECKED"}
+		"C07b": "MAINTENANCE WORKER NOT CHECKED", "C12b": "MASTER KEY NOT CHECKED", "C14b": "DIGEST NOT SENDING", "C15b": "STORAGE QUOTA NOT CHECKED", "C16b": "RELEASE MANIFEST NOT CHECKED"}
 	return labels[id]
 }
