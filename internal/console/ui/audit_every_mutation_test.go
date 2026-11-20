@@ -875,6 +875,83 @@ func uiMutationCases() map[string]uiMutation {
 				}
 			},
 		},
+		// ---- P20-W3B: /settings/email and acknowledgements, through the admin API's handlers (the API's audit actions) ----
+		"POST /ui/settings/email/recipients": { // recipient.create
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				return func() (*http.Response, string) {
+					return e.post("/ui/settings/email/recipients", vals("name", "Audit desk", "address", "audit-desk@example.test", "alerts", "1"), false)
+				}
+			},
+		},
+		"POST /ui/settings/email/recipients/{id}": { // recipient.update
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.m4Recipient("Audit desk", "audit-desk@example.test")
+				return func() (*http.Response, string) {
+					return e.post("/ui/settings/email/recipients/"+id, vals("name", "Audit desk", "address", "audit-desk@example.test", "digest", "1"), false)
+				}
+			},
+		},
+		"POST /ui/settings/email/recipients/{id}/delete": { // recipient.delete
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.m4Recipient("Audit desk", "audit-desk@example.test")
+				return func() (*http.Response, string) {
+					return e.post("/ui/settings/email/recipients/"+id+"/delete", vals(), false)
+				}
+			},
+		},
+		"POST /ui/settings/email/test": { // smtp.test, written before the message is recorded or sent
+			ok: []int{http.StatusOK},
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				return func() (*http.Response, string) {
+					return e.post("/ui/settings/email/test", vals("to", "audit-desk@example.test"), false)
+				}
+			},
+		},
+		"POST /ui/settings/email/digest": { // settings.update, one row per stored key: a fresh database has an operator value for neither
+			audits: 2,
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				return func() (*http.Response, string) {
+					return e.post("/ui/settings/email/digest", vals("digest_enabled", "1", "digest_local_time", "06:15"), false)
+				}
+			},
+		},
+		"POST /ui/settings/email/digest/send": { // digest.send, written before anything is sent
+			ok: []int{http.StatusOK},
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				e.m4Recipient("Audit desk", "audit-desk@example.test")
+				return func() (*http.Response, string) {
+					return e.post("/ui/settings/email/digest/send", vals("force", "1"), false)
+				}
+			},
+		},
+		"POST /ui/acks": { // alarm_ack.create (replacing the fixture's snooze of LT-OPTOM-04)
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.dev["LT-OPTOM-04"]
+				return func() (*http.Response, string) {
+					return e.post("/ui/acks", vals("subject_type", "device", "subject_id", id, "alarm_type", "stale", "mode", "ack", "note", "audit check"), false)
+				}
+			},
+		},
+		"POST /ui/acks/{id}/clear": { // alarm_ack.clear
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.dev["LT-OPTOM-04"]
+				ack := e.activeAck(id)
+				if ack == nil {
+					e.t.Fatal("the fixture snooze of LT-OPTOM-04 is not in force")
+				}
+				return func() (*http.Response, string) {
+					return e.post("/ui/acks/"+ack.ID+"/clear", vals("subject_type", "device", "subject_id", id), false)
+				}
+			},
+		},
 		// ---- M3-T4: the System page's "Run now" (written by the admin API's own handler, one row) ----
 		"POST /ui/system/jobs/{name}/run": {
 			build: func(e *env) func() (*http.Response, string) {

@@ -42,6 +42,7 @@ type DevPanelPage struct {
 	Saved    string
 	Actions  *ActionBar   // M2-W2C: the action menu in the header (commands.go)
 	Commands *CmdListView // M2-W2C: the Commands tab (commands.go)
+	Alarms   *AlarmsView  // P20-W3B: the open alarms and their acknowledgements, Summary tab (m4_acks.go)
 }
 
 // ---- history ----
@@ -495,6 +496,11 @@ func (s *Service) devicePanel(w http.ResponseWriter, r *http.Request) {
 	if ds, ok := deviceState(fleet, id); ok { // M2-W2C: the action menu on every tab
 		bar := s.actionBar(r, p, fleet, dev, ds)
 		pg.Actions = &bar
+	}
+	if cur == "summary" && dev.RetiredAt == nil { // P20-W3B: acknowledge and snooze where the alarm is explained
+		if ds, ok := deviceState(fleet, id); ok {
+			pg.Alarms = s.alarmsView(r, p, store.EpisodeDevice, id, ds.Hostname, deviceAlarms(ds), c)
+		}
 	}
 	switch cur {
 	case "commands": // M2-W2C

@@ -15,12 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/escrow"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
+	"github.com/c2tech-sys/cryobackup/internal/console/mail"
+	"github.com/c2tech-sys/cryobackup/internal/console/notify"
 	"github.com/c2tech-sys/cryobackup/internal/console/restores"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -48,6 +51,9 @@ type env struct {
 	// wakes records the devices the pages' private API woke.
 	apiWakeMu sync.Mutex
 	apiWakes  []string
+	// mail is the sender of the pages' MailService (P20-W3B): every message lands here, nothing leaves the test.
+	mail    *mail.FakeSender
+	mailSvc *adminapi.MailService
 }
 
 type muxReg struct{ m *http.ServeMux }
@@ -83,7 +89,13 @@ func newEnv(t *testing.T) *env {
 	}
 	fleet := &health.Evaluator{Store: st, Clock: clock, MasterLoaded: mk.Loaded, Maintain: maintain}
 	e.hub = NewHub(30*time.Second, nil)
-	svc, err := New(&Service{Auth: am, Store: st, Fleet: fleet, Restores: rest, Backend: e.be, Hub: e.hub, Clock: clock, Loc: loc, Zone: "America/Chicago",
+	// P20-W3B: the e-mail page's test mail, preview and send-now, through a FakeSender (as fixtures mode wires it).
+	e.mail = mail.NewFakeSender()
+	disp := &notify.Dispatcher{Store: st, Sender: e.mail, From: "console@example.test"}
+	e.mailSvc = &adminapi.MailService{Test: &notify.TestMailer{Dispatch: disp, Configured: true, Loc: func() *time.Location { return loc }}, Configured: true, Fixtures: true,
+		Digest: &notify.Digester{Store: st, Dispatch: disp, Configured: true, Loc: func() *time.Location { return loc },
+			View: func(ctx context.Context) (state.FleetView, error) { f, err := fleet.Alarms(ctx); return f.View, err }}}
+	svc, err := New(&Service{Mail: e.mailSvc, Auth: am, Store: st, Fleet: fleet, Restores: rest, Backend: e.be, Hub: e.hub, Clock: clock, Loc: loc, Zone: "America/Chicago",
 		Refresh: 30, Fixtures: true, MasterLoaded: mk.Loaded, Maintain: maintain,
 		SyncGateway: func() {},
 		CheckGatewayLogins: func(context.Context) jobs.LoginFileCheck {

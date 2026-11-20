@@ -386,6 +386,8 @@ type CustomerPage struct {
 	Saved    string
 	// Delete is the "Delete customer" section of the Overview tab, owner only (ADR 0019, purge_adr19.go).
 	Delete *CustDeleteView
+	// Alarms is the MISSING alarm and its acknowledgement, Overview tab (P20-W3B, m4_acks.go).
+	Alarms *AlarmsView
 }
 
 // custTabs lists the customer page's tabs. The Policy tab (S17, admin) is shown
@@ -487,6 +489,13 @@ func (s *Service) customerOverview(w http.ResponseWriter, r *http.Request) {
 	pg := CustomerPage{Page: s.page(r.Context(), p, fleet, row.Name, "customers", "/ui/events"), H: s.custHead(p, row, cs, c, "overview"), Tab: "overview", Saved: savedText(r.URL.Query().Get("saved"))}
 	pg.Overview = s.overview(r.Context(), p, fleet, row, cs, c)
 	pg.Delete = s.custDeleteView(r, p, row) // ADR 0019
+	if cs != nil {                          // P20-W3B: acknowledge the MISSING alarm here
+		var open []string
+		if cs.Status == state.CustomerMissing {
+			open = []string{store.AlarmMissing}
+		}
+		pg.Alarms = s.alarmsView(r, p, store.EpisodeCustomer, row.ID, row.Name, open, c)
+	}
 	s.render(w, r, http.StatusOK, "customer", "base", pg)
 }
 

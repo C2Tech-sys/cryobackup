@@ -42,6 +42,9 @@ func (s *Service) registerAuditSettings(r httpx.Registrar) {
 // SettingRowV is a setting that is shown but not editable here.
 type SettingRowV struct {
 	Label, Help, Value, Since string
+	// Href is where the setting is changed when that is another page (P20-W3B: the digest settings
+	// are edited in the digest block of /settings/email).
+	Href string
 }
 
 // SettingsPage is /settings.
@@ -128,6 +131,12 @@ func (s *Service) settingsData(r *http.Request, p *auth.Principal) SettingsPage 
 			d.RefreshBy = by
 		default:
 			row := SettingRowV{Label: v.Label, Help: v.Help, Since: v.Since, Value: settingText(v)}
+			if v.Key == store.SettingDigestEnabled || v.Key == store.SettingDigestLocalTime {
+				row.Href = emailPath + "#" + anchorDigest
+				if v.Key == store.SettingDigestEnabled && v.Stored == nil {
+					row.Value = "yes" // on while nothing is stored (store.ReadDigestSettings)
+				}
+			}
 			d.Others = append(d.Others, row)
 		}
 	}

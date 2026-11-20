@@ -20,6 +20,7 @@ import (
 	_ "time/tzdata" // the display zone must resolve on hosts without an OS zone database
 
 	"github.com/c2tech-sys/cryobackup/internal/buildinfo"
+	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
@@ -81,6 +82,12 @@ type Service struct {
 	// job table (M3-T4, m3t4.go). cli sets it once the runner exists, before the
 	// first request; nil leaves "Run now" disabled and says so.
 	Jobs jobRunner
+
+	// Mail is the mail side of the console for the pages' in-process admin API (P20-W3B): the
+	// e-mail settings page sends its test mail, preview and send-now through the same handlers as
+	// /api/v1, with the console's one TestMailer. cli shares the App's MailService; nil answers
+	// those routes 503 and the page says the console was started without mail.
+	Mail *adminapi.MailService
 
 	templates map[string]*template.Template
 	assets    map[string]string
@@ -187,6 +194,10 @@ func (s *Service) funcs() template.FuncMap {
 		"urlq":    url.QueryEscape,
 		"copybtn": copyButton, // M2-W3A (copy.go)
 		"viewrow": viewRow,    // M3-T5 (m3t5_views.go)
+		// P20-W3B (m4_email.go, m4_acks.go)
+		"plural":   plural,
+		"rcptform": func(f RecipientForm, prefix string) rcptFormData { return rcptFormData{F: f, P: prefix} },
+		"ackform":  func(f AckForm, csrf string) ackFormData { return ackFormData{AckForm: f, CSRF: csrf} },
 	}
 }
 
@@ -226,6 +237,7 @@ func (s *Service) Register(reg httpx.Registrar) {
 	s.registerM3T4(r)       // M3-T4: runs, activity, overdue, unseen, system (m3t4.go)
 	s.registerPolicies(r)   // M2-W2A: policies, customer Policy tab, device overrides (policy_routes.go)
 	s.registerCommandsUI(r) // M2-W2C (commands.go)
+	s.registerM4(r)         // P20-W3B: /settings/email, acknowledge and snooze (m4_email.go, m4_acks.go)
 	r.Handle("GET /devices/{id}/restore", op(s.restorePage))
 	r.Handle("POST /ui/devices/{id}/restore", op(s.restorePost))
 	r.Handle("GET /restores/{id}", op(s.restoreStatus))
@@ -257,6 +269,7 @@ func Patterns(fixtures bool) []string {
 	p = append(p, enrollUIPatterns()...)  // M2-W2B
 	p = append(p, auditUIPatterns()...)   // M2-W3A
 	p = append(p, settingsUIPatterns()...)
+	p = append(p, m4UIPatterns()...) // P20-W3B
 	if fixtures {
 		p = append(p, "GET /design", "GET /design/{component}")
 		p = append(p, fixturesM3Patterns()...) // M3-T4
