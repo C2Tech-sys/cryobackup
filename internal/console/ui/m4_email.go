@@ -946,9 +946,10 @@ func (s *Service) emailTest(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// A 500 from the test route is an audit row that could not be written (nothing was sent), a store
-	// failure before the send, or a message that went out and could not be recorded: the answer does not
-	// say which (the house problem body marks none of them), so the page says only what is true of all (G2).
+	// A 500 from the test route is an audit row that could not be written (nothing was sent) or a store
+	// failure before the send: the answer does not say which (the house problem body marks neither), so
+	// the page says only what is true of both (G2). A message that went out but could not be recorded is
+	// not a 500: it is a 200 with recorded false, shown as SENT with the warning below.
 	if err == nil && status == http.StatusInternalServerError {
 		s.log().Error("ui: test mail failed in the admin API", logx.Class("render"), logx.Int("status", status))
 		s.renderEmail(w, r, http.StatusInternalServerError, func(d *EmailPage) {

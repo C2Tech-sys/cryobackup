@@ -129,7 +129,13 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 	notime := base
 	notime.Time, notime.TimeErr, notime.FormErr = "25:99", "Use a time of day as HH:MM on a 24-hour clock, such as 07:00.", &Note{"crit", "Not saved.", "Fix the time marked below."}
 	notime.CanSend, notime.SendWhy = false, "No recipient has the digest switch on, so there is nobody to send it to."
-	d.Digests = []designDigest{{"On; today's went out; Send now answered", today}, {"Off; sent once on request, one recipient failed (every outcome)", off}, {"Read-only (admin)", ro}, {"A time refused; nobody receives it", notime}}
+	partly := base
+	partly.Result = &DigestSendView{Note: incompleteNote(1, 1, 1), Rows: []DigestSendRow{{"Night desk", digestOutcome("sent")}, {"Service manager", digestOutcome("failed")}}}
+	failedAll := base
+	failedAll.Result = &DigestSendView{Note: couldNotComplete}
+	d.Digests = []designDigest{{"On; today's went out; Send now answered", today}, {"Off; sent once on request, one recipient failed (every outcome)", off},
+		{"Incomplete: one sent, one failed, and for one the outcome could not be recorded (only what is known)", partly},
+		{"The API answered 500: nothing is claimed either way", failedAll}, {"Read-only (admin)", ro}, {"A time refused; nobody receives it", notime}}
 	if ct, err := notify.RenderDigest(fleet, nil, notify.Options{Loc: s.loc(ctx)}); err == nil {
 		d.Preview = &DigestPreviewView{Subject: ct.Subject, HTML: ct.HTML, Text: ct.Text}
 	}
@@ -199,8 +205,9 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 		{"Read-only: the line, no buttons, the reason", AlarmsView{Why: "Acknowledging or snoozing an alarm needs the operator role.", Rows: []AlarmRow{{Chip: missChip, Ack: ack, Recorded: true}}}},
 		{"The alarm was not open (a plain message, not an error page)", AlarmsView{CanAck: true, Notice: &Note{"info", "This alarm is not open.", "It may have cleared since the page was loaded, or the console has not recorded it yet. Nothing was changed."},
 			Rows: []AlarmRow{{Chip: missChip, Recorded: true, Form: ackForm(store.EpisodeCustomer, "sample-c", "missing_customer", "MISSING on Blue Ridge Accounting", c, s.zone(ctx))}}}},
-		{"Acknowledgements could not be read", AlarmsView{CanAck: true, Err: &Note{"crit", "Acknowledgements could not be read.", "Whether these alarms are acknowledged is unknown: this is an alarm, not \"none\". Reload the page to try again."},
-			Rows: []AlarmRow{{Chip: failedChip, Recorded: true, Form: form("failed", "FAILED")}}}},
+		{"Both reads failed: both are reported, and no row states what was not read", AlarmsView{CanAck: true, Err: &Note{"crit", "Not everything about these alarms could be read.",
+			"The acknowledgements could not be read, so whether these alarms are acknowledged is unknown; and the open alarms could not be checked, so whether they can be acknowledged now is unknown. This is an alarm, not \"none\". Reload the page to try again."},
+			Rows: []AlarmRow{{Chip: failedChip, NotYet: "Could not be checked: reload the page."}, {Chip: partChip, NotYet: "Could not be checked: reload the page."}}}},
 	}
 	return d
 }

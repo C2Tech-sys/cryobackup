@@ -16,7 +16,9 @@
 {{with .Preview}}<div><p class="meta-mono">The preview frame: sandboxed, no script, no remote content (the fixture fleet, rendered as the real preview renders it)</p><div class="card mailcard">{{template "m4_preview" .}}</div></div>{{end}}</div>
 
 <div class="stack" id="d-mail-log"><h3 class="h-label">Delivery log: each outcome and each suppress label</h3>
-{{template "m4_log_table" .Log}}</div>
+{{template "m4_log_table" .Log}}
+<div class="card compact"><p class="meta-mono">At 640 px and below each row stacks into a card; a row past its first attempt adds a line labelled like its siblings, shown here as it reads there:</p>
+<p class="ui"><span class="label-mono">Kind:</span> Alert · <span class="label-mono">Attempt:</span> 4 · <span class="label-mono">Detail:</span> <code class="cls">recipient_rejected</code></p></div></div>
 
 <div class="stack" id="d-mail-acks"><h3 class="h-label">Acknowledged and snoozed alarms</h3>
 {{range .Alarms}}<div><p class="meta-mono">{{.Name}}</p>{{template "m4_alarms" .V}}</div>{{end}}</div>

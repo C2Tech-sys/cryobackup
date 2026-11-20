@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -164,7 +166,7 @@ return out;`
 // g1Rule is the phone rule of the /settings table (G1).
 const g1Rule = "@media (max-width: 640px) { table.fleet.settable td.wrap { min-width: 0; overflow-wrap: break-word; } table.fleet.settable td.val { overflow-wrap: normal; word-break: keep-all; } }"
 
-// G1: at 390 px, with the house fonts and with wide-font metrics, no /settings value breaks inside a word
+// G1, H4: at 390 px, with the system fallback fonts, the real house fonts and wide-font metrics, no /settings value breaks inside a word
 // or a number: each value cell occupies no more lines than it has space-separated words. And nothing
 // overflows sideways, neither the page nor the table's own box. The F4 rule that broke values ("40/0/da/ys")
 // is the mutant.
@@ -177,7 +179,8 @@ func TestP20W3B_G1_SettingsValuesNeverBreakInsideAWord(t *testing.T) {
 		t.Fatal("the G1 rule is not where the test expects it")
 	}
 	probe := `var tw = document.querySelector('table.settable').closest('.table-wrap');
-var out = {iw: innerWidth, rows: 0, broken: 0, scroll: tw.scrollWidth - tw.clientWidth, overflow: document.documentElement.scrollWidth - innerWidth};
+var out = {iw: innerWidth, rows: 0, broken: 0, scroll: tw.scrollWidth - tw.clientWidth, overflow: document.documentElement.scrollWidth - innerWidth,
+  plex: document.fonts.check('12px "IBM Plex Sans"') && Array.from(document.fonts).some(function (f) { return f.family.indexOf('IBM Plex Sans') >= 0 && f.status === 'loaded'; }) ? 1 : 0};
 document.querySelectorAll('table.settable td.val').forEach(function (td) {
   out.rows++;
   var words = td.textContent.trim().split(/\s+/).length, r = document.createRange(); r.selectNodeContents(td);
@@ -185,10 +188,13 @@ document.querySelectorAll('table.settable td.val').forEach(function (td) {
   if (Object.keys(tops).length > words) out.broken++;
 });
 return out;`
-	for _, m := range []struct{ name, css string }{{"house", ""}, {"wide", wideMetrics}} {
+	for _, m := range []struct{ name, css string }{{"system", ""}, {"house", e.houseFontsCSS(t)}, {"wide", wideMetrics}} {
 		got := e.layout(t, layoutOpts{Path: "/settings", CSS: base + m.css, W: 390, H: 900, Probe: probe})
 		if got["rows"] < 4 {
 			t.Fatalf("%s: %v value cells: the probe measures nothing", m.name, got["rows"])
+		}
+		if m.name == "house" && got["plex"] != 1 {
+			t.Fatalf("the house fonts did not load: the house case would measure the fallback fonts")
 		}
 		if got["broken"] > 0 || got["scroll"] > 0.5 || got["overflow"] > 0.5 {
 			t.Errorf("%s fonts at 390 px: %v values break inside a word; the table scrolls %.0f px; the page overflows %.0f px", m.name, got["broken"], got["scroll"], got["overflow"])
@@ -200,28 +206,32 @@ return out;`
 	}
 }
 
-// G4: the acknowledge popover's contents fit inside its content box, at 390 px and desktop width, with the
-// house fonts and with wide-font metrics: every descendant's right edge is inside the popover's padding.
+// G4, H4: the acknowledge popover's contents fit inside its content box, at 390 px and desktop width, with
+// the system fallback fonts, the real house fonts and wide-font metrics: every descendant is inside the
+// popover's padding on all four sides.
 func TestP20W3B_G4_TheAcknowledgePopoverHoldsItsOptions(t *testing.T) {
 	chromeOrSkip(t)
 	e := newM4Env(t)
 	e.login()
 	probe := `var d = document.querySelector('details.ackmenu'); if (!d) return {error: 'no acknowledge menu'}; d.open = true;
 var p = d.querySelector('.rowmenu-pop'), r = p.getBoundingClientRect(), cs = getComputedStyle(p);
-var right = r.right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth), out = {iw: innerWidth, kids: 0, past: 0};
-p.querySelectorAll('*').forEach(function (el) { var q = el.getBoundingClientRect(); if (q.width === 0) return; out.kids++; out.past = Math.max(out.past, q.right - right); });
+var right = r.right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth), left = r.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth);
+var top = r.top + parseFloat(cs.paddingTop) + parseFloat(cs.borderTopWidth), bottom = r.bottom - parseFloat(cs.paddingBottom) - parseFloat(cs.borderBottomWidth);
+var out = {iw: innerWidth, kids: 0, past: 0};
+p.querySelectorAll('*').forEach(function (el) { var q = el.getBoundingClientRect(); if (q.width === 0) return; out.kids++;
+  out.past = Math.max(out.past, q.right - right, left - q.left, top - q.top, q.bottom - bottom); });
 return out;`
-	base := e.appCSS(t)
+	base, fonts := e.appCSS(t), e.houseFontsCSS(t)
 	pages := map[string]string{"device": "/devices/" + e.dev["RECEPTION-2"], "customer": "/customers/" + e.customerID("Blue Ridge Accounting")}
 	for name, path := range pages {
 		for _, w := range []int{390, 1360} {
-			for _, m := range []struct{ name, css string }{{"house", ""}, {"wide", wideMetrics}} {
+			for _, m := range []struct{ name, css string }{{"system", ""}, {"house", fonts}, {"wide", wideMetrics}} {
 				got := e.layout(t, layoutOpts{Path: path, CSS: base + m.css, W: w, H: 900, Probe: probe})
 				if msg, bad := got["error"]; bad {
 					t.Fatalf("%s: %v", name, msg)
 				}
 				if got["kids"] < 20 || got["past"] > 0.5 {
-					t.Errorf("%s %d px %s fonts: something ends %.1f px past the popover's content box (%v elements)", name, w, m.name, got["past"], got["kids"])
+					t.Errorf("%s %d px %s fonts: something reaches %.1f px outside the popover's content box, on some side (%v elements)", name, w, m.name, got["past"], got["kids"])
 				}
 			}
 		}
@@ -235,4 +245,26 @@ return out;`
 	if bad := e.layout(t, layoutOpts{Path: pages["device"], CSS: mutant, W: 390, H: 900, Probe: probe}); bad["past"] <= 0.5 {
 		t.Errorf("the probe does not see the options that ran past the popover: %v", bad)
 	}
+}
+
+// houseFontsCSS is the console's fonts.css with every font file inlined as a data URL: the layout harness
+// serves only app.css and tokens.css, so without it a page is laid out in the system's fallback fonts (H4).
+func (e *env) houseFontsCSS(t *testing.T) string {
+	t.Helper()
+	_, css := e.do("GET", "/static/fonts.css", nil)
+	re := regexp.MustCompile(`url\('(/static/fonts/[^'?]+)(\?v=[0-9a-f]+)?'\)`)
+	n := 0
+	out := re.ReplaceAllStringFunc(css, func(m string) string {
+		path := re.FindStringSubmatch(m)[1]
+		res, body := e.do("GET", path, nil)
+		if res.StatusCode != 200 || len(body) < 1000 {
+			t.Fatalf("font %s: %d", path, res.StatusCode)
+		}
+		n++
+		return "url('data:font/woff2;base64," + base64.StdEncoding.EncodeToString([]byte(body)) + "')"
+	})
+	if n < 3 {
+		t.Fatalf("fonts.css names %d font files, want the three house faces", n)
+	}
+	return out
 }
