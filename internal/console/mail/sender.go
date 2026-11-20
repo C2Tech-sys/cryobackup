@@ -241,6 +241,7 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 		return replyFailure(ctx, StageConnect, ClassProtocol, err)
 	}
 	defer c.Close()
+	filterReplies(c) // a bare reply code is a reply (reply.go)
 	_ = conn.SetDeadline(overall)
 
 	helo := set.HeloName
@@ -257,6 +258,7 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 		if err := c.StartTLS(tcfg); err != nil {
 			return tlsFailure(ctx, err)
 		}
+		filterReplies(c) // StartTLS made a new reader
 		encrypted = true
 	}
 

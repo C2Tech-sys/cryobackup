@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -232,19 +233,44 @@ func notSMTP(err error) bool {
 
 // bareCode returns the code of a reply that is nothing but three digits. net/smtp
 // reads replies with net/textproto, which treats a line shorter than four
-// characters as a protocol error ("short response: "250""), so the code has to
-// be read back from that error. A test pins the text.
+// characters as a protocol error, so the code has to be read back from that
+// error. Its text differs between Go versions: Go 1.26 writes the line as it is
+// (short response: 250), Go 1.27 quotes it (short response: "250"). Which form
+// this binary's textproto writes is measured once (shortQuoted), so a reply
+// that merely looks like the other form is not mistaken for a code;
+// TestBareCodeReadsBothErrorForms pins both texts. Most replies never get here:
+// replyLines (reply.go) pads a bare code before textproto sees it.
 func bareCode(err error) (int, bool) {
 	var pe textproto.ProtocolError
 	if !errors.As(err, &pe) {
 		return 0, false
 	}
-	quoted, ok := strings.CutPrefix(string(pe), "short response: ")
+	return bareCodeText(string(pe), shortQuoted)
+}
+
+// shortQuoted reports whether this binary's net/textproto quotes the line in a
+// "short response" error (Go 1.27 and later) rather than writing it as it is.
+var shortQuoted = func() bool {
+	_, _, err := textproto.NewReader(bufio.NewReader(strings.NewReader("250\r\n"))).ReadResponse(0)
+	var pe textproto.ProtocolError
+	return errors.As(err, &pe) && string(pe) == `short response: "250"`
+}()
+
+// bareCodeText is bareCode on the text of the error, in the quoted or the
+// as-is form.
+func bareCodeText(text string, quoted bool) (int, bool) {
+	line, ok := strings.CutPrefix(text, "short response: ")
 	if !ok {
 		return 0, false
 	}
-	line, uerr := strconv.Unquote(quoted)
-	if uerr != nil || len(line) != 3 {
+	if quoted {
+		unq, uerr := strconv.Unquote(line)
+		if uerr != nil {
+			return 0, false
+		}
+		line = unq
+	}
+	if len(line) != 3 {
 		return 0, false
 	}
 	code, aerr := strconv.Atoi(line)
