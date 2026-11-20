@@ -1221,7 +1221,8 @@ func unlisted(listed, digestRecipients int) int {
 	return 0
 }
 
-// incompleteNote is the note of an incomplete send-now (H1): what is known, and nothing more.
+// incompleteNote is the note of an incomplete send-now (H1): what is known, and nothing more, as an
+// alert (J2).
 func incompleteNote(sent, failed, unknown int) Note {
 	text := ""
 	if failed > 0 {
@@ -1233,7 +1234,8 @@ func incompleteNote(sent, failed, unknown int) Note {
 	case unknown < 0:
 		text += "For some recipients the outcome could not be recorded: they may or may not have received it. "
 	}
-	return Note{"warn", "Sent to " + plural(sent, "recipient", "recipients") + ".", text + "Check the delivery log below before sending again."}
+	// Always critical (J2, foreman ruling): the console does not know who received the digest.
+	return Note{"crit", "Sent to " + plural(sent, "recipient", "recipients") + ".", text + "Check the delivery log below before sending again."}
 }
 
 // recipientsBefore is the number of recipients with the digest switch, read for an incomplete send;

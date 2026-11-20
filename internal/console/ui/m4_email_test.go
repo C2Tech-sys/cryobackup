@@ -462,3 +462,25 @@ func TestP20W3B_H1_AnUnrecordedOutcomeIsNotCalledNotSent(t *testing.T) {
 		})
 	}
 }
+
+// J2: an incomplete send-now is always critical (red, role="alert"): the console does not know who
+// received the digest. Every variant of the note, and the page that shows one.
+func TestP20W3B_J2_AnIncompleteSendIsAlwaysAnAlert(t *testing.T) {
+	e := newM4Env(t)
+	for name, n := range map[string]Note{"sent 0": incompleteNote(0, 1, 1), "failed only": incompleteNote(1, 1, 0), "unlisted only": incompleteNote(1, 0, 1),
+		"count unreadable": incompleteNote(1, 0, -1)} {
+		out, err := e.svc.renderString("settings_email", "acct_note", &n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n.Class != ClassCrit || !strings.Contains(out, `class="banner crit dense" role="alert"`) {
+			t.Errorf("%s: %q renders %q", name, n.Class, out)
+		}
+	}
+	e.login()
+	e.mailSvc.Digest = uiDigestDouble{notify.DigestResult{Sent: 1, Recipients: []notify.DigestRecipient{{RuleID: e.recipientID(fixtures.RecipientNightDesk), Outcome: notify.DigestSent}}}, context.DeadlineExceeded}
+	_, body := e.post("/ui/settings/email/digest/send", url.Values{"force": {"1"}}, false)
+	if !strings.Contains(body, `<div class="banner crit dense" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><span class="sr-only">Error: </span><b>Sent to 1 recipient.</b>`) {
+		t.Error("the page does not show the incomplete send as an alert")
+	}
+}
