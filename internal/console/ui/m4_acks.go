@@ -170,9 +170,10 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 	// Which alarms can be acknowledged now: the API's ack-create accepts an alarm with an open episode
 	// of the same subject and state (store.CreateAck). The same store read decides here, so the page
 	// never offers an Acknowledge that would answer "not open".
-	recorded := map[string]bool{}
+	recorded, unchecked := map[string]bool{}, false
 	if eps, err := s.Store.ListOpenEpisodes(r.Context(), p.Scope); err != nil {
 		readErrs = append(readErrs, "the open alarms could not be checked, so whether they can be acknowledged now is unknown")
+		unchecked = true
 	} else {
 		for _, e := range eps {
 			if e.SubjectType == subjectType && e.SubjectID == subjectID {
@@ -186,6 +187,9 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 	notYet := "Not recorded yet: it can be acknowledged after the console's next alarm check, within about " + durText(jobs.AlarmEvaluatorEvery.Milliseconds()) + "."
 	if s.Fixtures {
 		notYet = "Not recorded yet: it can be acknowledged after the console's next alarm check. Fixtures mode runs none."
+	}
+	if unchecked { // H3: what was not read is not stated as fact; no form is offered for it either
+		notYet = "Could not be checked: reload the page."
 	}
 	byType := map[string]adminapi.AckJSON{}
 	for _, a := range acks.Acks {

@@ -420,3 +420,25 @@ func TestP20W3B_H2_ASnoozeEndShowsItsZone(t *testing.T) {
 		mustContain(t, c.zone+" badge", body, "SNOOZED until Sun 1:30 AM "+c.zone)
 	}
 }
+
+// H3: when the open episodes cannot be read, no row says "Not recorded yet" (that was not read either):
+// each says it could not be checked, and no acknowledge form is offered.
+func TestP20W3B_H3_AnUncheckedAlarmIsNotCalledUnrecorded(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE alarm_episodes RENAME TO alarm_episodes_gone`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, body := e.do("GET", "/devices/"+e.dev["RECEPTION-2"], nil)
+	if res.StatusCode != 200 {
+		t.Fatalf("device page: %d", res.StatusCode)
+	}
+	block := alarmsBlock(t, body)
+	mustContain(t, "unchecked", block, "Could not be checked: reload the page.")
+	if strings.Contains(block, "Not recorded yet") || strings.Contains(block, `action="/ui/acks`) {
+		t.Error("an alarm whose episode could not be read is called unrecorded, or offered a form")
+	}
+}
