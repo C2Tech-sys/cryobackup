@@ -2286,7 +2286,7 @@ paths:
       operationId: sendTestMail
       tags: [settings]
       summary: Send a test message
-      description: One message to the address in `to` (default the caller's own account address), validated by the recipients' address rule, sent at once under the sender's own deadline (ADR 0020 decision 11). The answer is 200 whether the relay accepted it or not, with the outcome per recipient and, for a failure, its stage (connect, tls, auth, sender, recipient, data, config) and class word with a fixed hint; never the relay's own reply, the host, the user name or the password. The message is a delivery-log row of kind test, never retried and never counted among the real sends. No relay configured is 409 with reason `smtp_not_configured`; one test per 10 seconds per console, 429 with Retry-After otherwise. One `smtp.test` audit row is written before the send; if it cannot be written nothing is sent.
+      description: One message to the address in `to` (default the caller's own account address), validated by the recipients' address rule, sent at once under the sender's own deadline (ADR 0020 decision 11). The answer is 200 whether the relay accepted it or not, with the outcome per recipient and, for a failure, its stage (connect, tls, auth, sender, recipient, data, config) and class word with a fixed hint; never the relay's own reply, the host, the user name or the password. The message is a delivery-log row of kind test, never retried and never counted among the real sends. No relay configured is 409 with reason `smtp_not_configured`; one test per 10 seconds per console, 429 with Retry-After otherwise. One `smtp.test` audit row is written before the send; if it cannot be written nothing is sent. When the test was attempted but its outcome could not be recorded in the delivery log, the answer is still 200 with the outcome and `recorded` false.
       x-min-role: AD
       parameters:
         - {$ref: '#/components/parameters/CsrfToken'}
@@ -2384,7 +2384,7 @@ paths:
       operationId: sendDigest
       tags: [notifications]
       summary: Send the digest now
-      description: Without `force`, sends today's digest under today's key to each recipient with the digest switch that has not had it (a no-op for those that have; their outcome says why). With `force`, sends to every such recipient under a key of its own that does not count as today's digest. The answer lists each recipient's outcome (sent, failed, already_sent, in_retry, gave_up, recipient_gone, deferred), or `skipped` (no_recipient). No relay configured is 409 with reason `smtp_not_configured`. One `digest.send` audit row is written before anything is sent; if it cannot be written nothing is sent.
+      description: Without `force`, sends today's digest under today's key to each recipient with the digest switch that has not had it (a no-op for those that have; their outcome says why). With `force`, sends to every such recipient under a key of its own that does not count as today's digest. The answer lists each recipient's outcome (sent, failed, already_sent, in_retry, gave_up, recipient_gone, deferred), or `skipped` (no_recipient). No relay configured is 409 with reason `smtp_not_configured`. One `digest.send` audit row is written before anything is sent; if it cannot be written nothing is sent. The send does not depend on the digest_enabled setting; `digest_enabled` in the answer says whether the daily digest is switched on.
       x-min-role: OW
       parameters:
         - {$ref: '#/components/parameters/CsrfToken'}
@@ -4549,10 +4549,11 @@ components:
         to: {type: string, description: One plain address; empty means the caller's own account address.}
     SMTPTestResponse:
       type: object
-      required: [computed_at, sent, delivery_id, recipients]
+      required: [computed_at, sent, recorded, delivery_id, recipients]
       properties:
         computed_at: {$ref: '#/components/schemas/Timestamp'}
         sent: {type: boolean}
+        recorded: {type: boolean, description: 'False when the outcome could not be written to the delivery log; the test was attempted (with `sent`, delivered) all the same and `delivery_id` names its queued row.'}
         delivery_id: {type: string}
         recipients:
           type: array
@@ -4626,11 +4627,12 @@ components:
         force: {type: boolean}
     DigestSendResponse:
       type: object
-      required: [computed_at, forced, sent, failed, recipients]
+      required: [computed_at, forced, digest_enabled, sent, failed, recipients]
       properties:
         computed_at: {$ref: '#/components/schemas/Timestamp'}
         date: {type: string, description: The local date of the digest in the display zone.}
         forced: {type: boolean}
+        digest_enabled: {type: boolean, description: 'The digest_enabled setting after the send. False means the daily digest is switched off and this one was sent once on request; a setting that cannot be read is false too (the daily job does not send then either).'}
         skipped: {type: string, enum: [no_recipient, not_configured, disabled, not_due, already_sent]}
         sent: {type: integer}
         failed: {type: integer}

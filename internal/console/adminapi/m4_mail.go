@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/api"
@@ -206,7 +207,9 @@ func (s *Service) audit(ctx context.Context, r *http.Request, p *auth.Principal,
 		ev.Details = b
 	}
 	if _, err := s.Store.AppendAudit(ctx, ev); err != nil {
-		s.log().Error("admin api: change refused, not audited", logx.Class("audit"), logx.Str("action", action))
+		// The log field helper refuses a dot followed by a letter ("smtp.test" would log as
+		// "invalid"): the action is logged with underscores, the form of these routes' names.
+		s.log().Error("admin api: change refused, not audited", logx.Class("audit"), logx.Str("action", strings.ReplaceAll(action, ".", "_")))
 		return errNotAudited
 	}
 	return nil
@@ -293,8 +296,11 @@ type SMTPTestRecipientJSON struct {
 
 // SMTPTestResponse is the answer of a test that was attempted, delivered or not.
 type SMTPTestResponse struct {
-	ComputedAt time.Time               `json:"computed_at"`
-	Sent       bool                    `json:"sent"`
+	ComputedAt time.Time `json:"computed_at"`
+	Sent       bool      `json:"sent"`
+	// Recorded is false when the outcome could not be written to the delivery log: the test was
+	// attempted (and, with Sent, delivered) all the same, and DeliveryID names its queued row.
+	Recorded   bool                    `json:"recorded"`
 	DeliveryID string                  `json:"delivery_id"`
 	Recipients []SMTPTestRecipientJSON `json:"recipients"`
 }
@@ -332,6 +338,7 @@ func (s *Service) smtpTest(w http.ResponseWriter, r *http.Request) {
 		return s.audit(ctx, r, p, "smtp.test", "smtp", "", map[string]any{"recipient": recipient})
 	})
 	var soon *notify.TestMailTooSoonError
+	recorded := true
 	switch {
 	case errors.As(err, &soon):
 		m4Fail(w, r, api.CodeRateLimited, "test_too_soon", detailTooSoon, soon.RetryAfter)
@@ -342,6 +349,12 @@ func (s *Service) smtpTest(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errNotAudited):
 		notAudited(w, r)
 		return
+	case err != nil && (res.Sent || res.Failure != nil):
+		// The relay was asked (and with Sent accepted the message); only recording the outcome
+		// failed. A 500 would invite a second test for a message that went out: the answer is the
+		// outcome, with recorded false.
+		s.log().Error("admin api: test mail outcome not recorded", logx.Str("route", "smtp_test"), logx.Class(errClass(err)))
+		recorded = false
 	case err != nil:
 		s.failM4(w, r, "smtp_test", err)
 		return
@@ -350,7 +363,7 @@ func (s *Service) smtpTest(w http.ResponseWriter, r *http.Request) {
 	if f := res.Failure; f != nil {
 		one = SMTPTestRecipientJSON{To: res.To, Outcome: "failed", Stage: string(f.Stage), Class: string(f.Class), Temporary: f.Temporary, Hint: f.Hint()}
 	}
-	httpx.WriteJSON(w, http.StatusOK, SMTPTestResponse{ComputedAt: s.now(), Sent: res.Sent, DeliveryID: res.Delivery.ID, Recipients: []SMTPTestRecipientJSON{one}})
+	httpx.WriteJSON(w, http.StatusOK, SMTPTestResponse{ComputedAt: s.now(), Sent: res.Sent, Recorded: recorded, DeliveryID: res.Delivery.ID, Recipients: []SMTPTestRecipientJSON{one}})
 }
 
 // ---- digest ----
@@ -404,10 +417,14 @@ type DigestSendResponse struct {
 	Date   string `json:"date,omitempty"`
 	Forced bool   `json:"forced"`
 	// Skipped says why nothing was attempted (notify.DigestSkipped* words); empty when recipients were looked at.
-	Skipped    string                    `json:"skipped,omitempty"`
-	Sent       int                       `json:"sent"`
-	Failed     int                       `json:"failed"`
-	Recipients []DigestSendRecipientJSON `json:"recipients"`
+	Skipped string `json:"skipped,omitempty"`
+	// DigestEnabled is the digest_enabled setting after the send: false means the daily digest is
+	// switched off and this one was sent once on request. A setting that cannot be read is false
+	// too (the daily job does not send then either) and is logged.
+	DigestEnabled bool                      `json:"digest_enabled"`
+	Sent          int                       `json:"sent"`
+	Failed        int                       `json:"failed"`
+	Recipients    []DigestSendRecipientJSON `json:"recipients"`
 }
 
 func (s *Service) digestSend(w http.ResponseWriter, r *http.Request) {
@@ -447,7 +464,13 @@ func (s *Service) digestSend(w http.ResponseWriter, r *http.Request) {
 			names[rc.ID] = rc.Name
 		}
 	} // the names are a convenience: the outcome is answered without them
-	out := DigestSendResponse{ComputedAt: s.now(), Date: res.Date, Forced: res.Forced, Skipped: res.Skipped, Sent: res.Sent, Failed: res.Failed,
+	enabled := false
+	if set, err := s.Store.ReadDigestSettings(r.Context(), p.Scope); err != nil {
+		s.log().Warn("admin api: digest setting not read", logx.Str("route", "digest_send"), logx.Class(errClass(err)))
+	} else {
+		enabled = set.Enabled
+	}
+	out := DigestSendResponse{ComputedAt: s.now(), Date: res.Date, Forced: res.Forced, Skipped: res.Skipped, DigestEnabled: enabled, Sent: res.Sent, Failed: res.Failed,
 		Recipients: make([]DigestSendRecipientJSON, 0, len(res.Recipients))}
 	for _, rc := range res.Recipients {
 		out.Recipients = append(out.Recipients, DigestSendRecipientJSON{ID: rc.RuleID, Name: names[rc.RuleID], Outcome: rc.Outcome})

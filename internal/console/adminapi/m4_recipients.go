@@ -172,15 +172,10 @@ func (s *Service) patchRecipient(w http.ResponseWriter, r *http.Request) {
 	if !decodeBodyMax(w, r, 4<<10, &req) {
 		return
 	}
-	id := r.PathValue("id")
-	cur, err := s.Store.GetRecipient(r.Context(), p.Scope, id)
-	if err != nil {
-		s.failRecipient(w, r, "recipient_patch", err)
-		return
-	}
-	in := store.RecipientInput{Name: orStr(req.Name, cur.Name), Address: orStr(req.Address, cur.Address),
-		Alerts: orBool(req.Alerts, cur.Alerts), Recoveries: orBool(req.Recoveries, cur.Recoveries), Digest: orBool(req.Digest, cur.Digest)}
-	rc, err := s.Store.UpdateRecipient(r.Context(), p.Scope, id, in, actorOf(r, p))
+	// One store call applies the named fields in one transaction: two edits at the same moment
+	// that name different fields both stand.
+	patch := store.RecipientPatch{Name: req.Name, Address: req.Address, Alerts: req.Alerts, Recoveries: req.Recoveries, Digest: req.Digest}
+	rc, err := s.Store.PatchRecipient(r.Context(), p.Scope, r.PathValue("id"), patch, actorOf(r, p))
 	if err != nil {
 		s.failRecipient(w, r, "recipient_patch", err)
 		return
