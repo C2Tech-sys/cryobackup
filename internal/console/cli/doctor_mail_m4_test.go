@@ -634,13 +634,12 @@ func TestDoctorHeartbeatLine(t *testing.T) {
 }
 
 // ADDED after the fifth blind check of P20-W2BF: an unreadable -wal is named as the cause, and an
-// open failure with no visible cause blames nothing. The open failure comes from an unusable -shm
-// (a directory at its name) or is injected (openNoMigrate), as the existing tests do.
+// open failure with no visible cause blames nothing. The open failure is injected (openNoMigrate)
+// and so is the unreadable -wal (openForReading): P20-W3D 5, the fault held on every OS only
+// then (a directory at the -shm name does not fail the open on Linux).
 func TestDoctorNamesAnUnreadableWAL(t *testing.T) {
 	cfgPath, db := doctorRig(t)
-	if err := os.Mkdir(db+"-shm", 0o755); err != nil {
-		t.Fatal(err)
-	}
+	injectOpenError(t, "store: open: unable to open database file: out of memory (14)")
 	if err := os.WriteFile(db+"-wal", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
