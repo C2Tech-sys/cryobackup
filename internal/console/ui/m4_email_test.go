@@ -484,3 +484,35 @@ func TestP20W3B_J2_AnIncompleteSendIsAlwaysAnAlert(t *testing.T) {
 		t.Error("the page does not show the incomplete send as an alert")
 	}
 }
+
+// J3: the recipient count of an incomplete send-now is the one before the send: a recipient removed
+// while it runs is still one whose outcome is unknown.
+type removingDigest struct {
+	remove func()
+	res    notify.DigestResult
+}
+
+func (d removingDigest) PreviewDigest(context.Context) (notify.Content, error) {
+	return notify.Content{}, context.Canceled
+}
+
+func (d removingDigest) SendDigestNow(context.Context, bool) (notify.DigestResult, error) {
+	d.remove()
+	return d.res, context.DeadlineExceeded
+}
+
+func TestP20W3B_J3_ARecipientRemovedMidSendIsStillUnknown(t *testing.T) {
+	e := newM4Env(t) // Night desk and Service manager have the digest switch
+	e.login()
+	manager := e.recipientID(fixtures.RecipientManager)
+	e.mailSvc.Digest = removingDigest{
+		remove: func() {
+			if err := e.st.DeleteRecipient(context.Background(), store.ScopeAll(), manager, store.AuditActor{AdminID: e.adminID("admin"), Username: "admin"}); err != nil {
+				t.Error(err)
+			}
+		},
+		res: notify.DigestResult{Sent: 1, Recipients: []notify.DigestRecipient{{RuleID: e.recipientID(fixtures.RecipientNightDesk), Outcome: notify.DigestSent}}},
+	}
+	_, body := e.post("/ui/settings/email/digest/send", url.Values{"force": {"1"}}, false)
+	mustContain(t, "removed mid-send", body, "<b>Sent to 1 recipient.</b> For 1 more the outcome could not be recorded: they may or may not have received it.")
+}

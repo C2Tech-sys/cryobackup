@@ -1107,6 +1107,9 @@ func (s *Service) emailDigestSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := r.PostFormValue("force") == "1"
+	// Who has the digest switch, read before the send (J3): a recipient removed while it runs must not
+	// shrink the count of recipients whose outcome is unknown. -1 when it cannot be read.
+	before := recipientsBefore(r, s)
 	status, resp, err := s.apiSend(r, http.MethodPost, "/api/v1/digest/send", adminapi.DigestSendRequest{Force: force})
 	if err == nil && status == http.StatusServiceUnavailable {
 		s.renderEmail(w, r, http.StatusServiceUnavailable, func(d *EmailPage) {
@@ -1147,7 +1150,7 @@ func (s *Service) emailDigestSend(w http.ResponseWriter, r *http.Request) {
 		case ds.Incomplete:
 			// An error was met for some recipients: say only what is known (H1). The ones the answer does not
 			// list may or may not have received it (not queued, sent but not recorded, failed unrecorded).
-			v.Note = incompleteNote(ds.Sent, ds.Failed, unlisted(len(ds.Recipients), recipientsBefore(r, s)))
+			v.Note = incompleteNote(ds.Sent, ds.Failed, unlisted(len(ds.Recipients), before))
 		case ds.Skipped == "not_configured":
 			v.Note = Note{"warn", "Nothing was sent: e-mail is not set up.", "The smtp block of the console configuration names no relay."}
 		case ds.Skipped == "no_recipient":
@@ -1238,8 +1241,9 @@ func incompleteNote(sent, failed, unknown int) Note {
 	return Note{"crit", "Sent to " + plural(sent, "recipient", "recipients") + ".", text + "Check the delivery log below before sending again."}
 }
 
-// recipientsBefore is the number of recipients with the digest switch, read for an incomplete send;
-// -1 when it cannot be read (the note then says "some recipients").
+// recipientsBefore is the number of recipients with the digest switch, read before a send-now so an
+// incomplete one can say how many are unaccounted for; -1 when it cannot be read (the note then says
+// "some recipients").
 func recipientsBefore(r *http.Request, s *Service) int {
 	var rs adminapi.RecipientsResponse
 	if s.apiGet(r, "/api/v1/notification-rules", &rs) != nil {
