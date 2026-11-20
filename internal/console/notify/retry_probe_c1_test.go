@@ -33,8 +33,18 @@ import (
 //  4. an alarm muted before the pass and never unmuted is never alerted (dev0; dev1 too when the
 //     mute is a suspended customer).
 //
-// Cells: 741 ((2 x 6 + 1) row shapes x 19 mute cases x 3 close times).
-const probeFullCells = 741
+// Cells (P20-W2BF D1): the full matrix, 741 cells ((2 x 6 + 1) row shapes x 19 mute cases x 3
+// close times), runs in a build without the race detector (about 0.4 s a cell). A race build takes
+// about 4 s a cell, so the whole matrix would not fit the race gate's timeout: it runs the fixed
+// subset probeCover chooses, 46 cells (5 of them residual), which hits every interleaving class at
+// least once. With -short either build runs the smaller subset of 39 cells. The switch is the
+// build-tagged constant raceBuild (probe_race_m4_test.go, probe_norace_m4_test.go); the counts are
+// asserted, so a change to the matrix that moves them fails until this comment says so.
+const (
+	probeFullCells  = 741
+	probeRaceCells  = 46
+	probeShortCells = 39
+)
 
 type probeCell struct {
 	aFirst, bFirst, mute, muteAt, unmute, close string
@@ -92,10 +102,82 @@ func probeCells() []probeCell {
 	return cells
 }
 
+// probeCover is the subset of cells the race and short runs take: the greedy cover, in cell order
+// (the first cell wins a tie), of these classes, each of which some cell of the subset hits:
+//   - every (A's first send, B's row shape, close time) with dev0 in the batch: every interleaving
+//     of the sends, the in-flight window, the deferral, the restart and the close, including every
+//     residual way in;
+//
+// and, unless short:
+//   - every (mute kind, mute time, unmute): every mute interleaving, including invariant 4's cells;
+//   - every pair of values of any two of the six dimensions.
+func probeCover(cells []probeCell, short bool) []probeCell {
+	classes := func(c probeCell) []string {
+		var ks []string
+		if c.inBatch() {
+			ks = append(ks, "abc/"+c.aFirst+"/"+c.bFirst+"/"+c.close)
+		}
+		if short {
+			return ks
+		}
+		ks = append(ks, "mute/"+c.mute+"/"+c.muteAt+"/"+c.unmute)
+		dims := []string{c.aFirst, c.bFirst, c.mute, c.muteAt, c.unmute, c.close}
+		for i := range dims {
+			for j := i + 1; j < len(dims); j++ {
+				ks = append(ks, fmt.Sprintf("pair/%d=%s/%d=%s", i, dims[i], j, dims[j]))
+			}
+		}
+		return ks
+	}
+	todo := map[string]bool{}
+	for _, c := range cells {
+		for _, k := range classes(c) {
+			todo[k] = true
+		}
+	}
+	var out []probeCell
+	taken := make([]bool, len(cells))
+	for len(todo) > 0 {
+		best, gain := -1, 0
+		for i, c := range cells {
+			if taken[i] {
+				continue
+			}
+			g := 0
+			for _, k := range classes(c) {
+				if todo[k] {
+					g++
+				}
+			}
+			if g > gain {
+				best, gain = i, g
+			}
+		}
+		taken[best] = true
+		for _, k := range classes(cells[best]) {
+			delete(todo, k)
+		}
+		out = append(out, cells[best])
+	}
+	return out
+}
+
 func TestC1InvariantProbe(t *testing.T) {
 	cells := probeCells()
 	if len(cells) != probeFullCells {
 		t.Fatalf("the full matrix has %d cells; its doc comment says %d", len(cells), probeFullCells)
+	}
+	mode, want := "full", probeFullCells
+	switch {
+	case testing.Short():
+		mode, want = "short", probeShortCells
+		cells = probeCover(cells, true)
+	case raceBuild:
+		mode, want = "race subset", probeRaceCells
+		cells = probeCover(cells, false)
+	}
+	if len(cells) != want {
+		t.Fatalf("the %s run has %d cells; its doc comment says %d", mode, len(cells), want)
 	}
 	violations, residuals, spurious := 0, 0, 0
 	for _, c := range cells {
@@ -113,8 +195,8 @@ func TestC1InvariantProbe(t *testing.T) {
 			}
 		})
 	}
-	t.Logf("C1 invariant probe: %d cells, %d violations, %d residual cells, %d of them with a spurious recovery",
-		len(cells), violations, residuals, spurious)
+	t.Logf("C1 invariant probe (%s): %d cells, %d violations, %d residual cells, %d of them with a spurious recovery",
+		mode, len(cells), violations, residuals, spurious)
 }
 
 // runProbeCell plays one cell and returns its violations, and whether it ended with a recovery
