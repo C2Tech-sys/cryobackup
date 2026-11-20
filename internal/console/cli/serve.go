@@ -84,7 +84,7 @@ func runServe(args []string, io IO) int {
 	ctx, stop := serveContext()
 	defer stop()
 	suppliedPassword := os.Getenv("CRYO_FIXTURES_PASSWORD")
-	app, err := Build(ctx, cfg, BuildOptions{FixturesPassword: suppliedPassword})
+	app, err := Build(ctx, cfg, BuildOptions{FixturesPassword: suppliedPassword, FixtureMailWorld: true}) // P20-W3B: fixtures mode shows the mail world
 	if err != nil {
 		fmt.Fprintln(io.Stderr, "cryo-console serve:", sanitize(err))
 		return ExitFailed

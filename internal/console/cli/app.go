@@ -41,6 +41,10 @@ type BuildOptions struct {
 	Log *logx.Logger
 	// FixturesPassword is the fixture admin's password; empty generates one.
 	FixturesPassword string
+	// FixtureMailWorld (fixtures mode only) adds the mail world of fixtures.SeedM4: recipients, a
+	// delivery log of every outcome and an acknowledged alarm (P20-W3B). serve sets it; tests that
+	// count the base fixture world leave it off.
+	FixtureMailWorld bool
 }
 
 // App is a fully wired console: the store, the two route sets behind their
@@ -177,6 +181,11 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		if err := fixtures.SeedM3(ctx, a.Store, a.clock()); err != nil {
 			return nil, errors.New("cli: cannot load the fixtures")
 		}
+		if o.FixtureMailWorld {
+			if err := fixtures.SeedM4(ctx, a.Store, a.clock()); err != nil {
+				return nil, errors.New("cli: cannot load the fixtures")
+			}
+		}
 	}
 
 	// M2-W3A, ADR 0012: the display zone and the refresh interval are settings an
@@ -201,6 +210,10 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	smtpSet := mail.SettingsFromConfig(cfg.SMTP)
 	mailOn := fix || smtpSet.Configured() // fixtures: the FakeSender is the relay and nothing leaves the process
 	a.TestMail = &notify.TestMailer{Dispatch: a.Dispatch, Configured: mailOn, Loc: disp.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}
+	// One MailService for the admin API and the pages' in-process API (P20-W3B): the same TestMailer,
+	// so its one-test-every-10-s limit is the console's whichever of the two asks. Its Digest is set
+	// below, once the digester exists; no request is served before Build returns.
+	mailSvc := &adminapi.MailService{Test: a.TestMail, SMTP: smtpSet, Configured: mailOn, Fixtures: fix}
 
 	a.Endpoint = newEndpointProbe(cfg, a.clock, a.log)
 	if !fix {
@@ -242,7 +255,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		Events: a.Hub, MaxEventStreams: cfg.RateLimits.EventStreamsMax, MaxEventStreamsPerPrincipal: cfg.RateLimits.EventStreamsPerAccount}
 	u, err := ui.New(&ui.Service{Auth: a.Auth, Store: a.Store, Fleet: fleet, Restores: a.Restores, Backend: a.Backend, Hub: a.Hub, Clock: a.clock, Loc: disp.Loc(), Display: disp,
 		Zone: disp.Zone(), Refresh: disp.RefreshS(), Fixtures: fix, Log: a.log, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status,
-		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify, CheckGatewayLogins: checkLogins})
+		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify, CheckGatewayLogins: checkLogins, Mail: mailSvc})
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +299,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		digest = &notify.Digester{Store: a.Store, Dispatch: a.Dispatch, Configured: true, Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log,
 			View: func(ctx context.Context) (state.FleetView, error) { f, err := fleet.Alarms(ctx); return f.View, err }}
 	}
-	a.Admin.Mail = &adminapi.MailService{Test: a.TestMail, SMTP: smtpSet, Configured: mailOn, Fixtures: fix}
+	a.Admin.Mail = mailSvc // the pages' in-process API holds the same one
 	if digest != nil {
 		a.Admin.Mail.Digest = digest // never a typed nil in the interface
 	}
