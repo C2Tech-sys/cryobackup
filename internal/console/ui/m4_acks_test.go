@@ -235,3 +235,22 @@ func TestP20W3B_NewPagesLeakNothing(t *testing.T) {
 		t.Errorf("the e-mail page shows a path: %q", m)
 	}
 }
+
+// F1: every outcome of an acknowledgement is shown, also on a page with no open alarm (the alarm just
+// cleared, the acknowledgement was the last one): on the device panel and on the customer page.
+func TestP20W3B_F1_AckOutcomesShowWithNoOpenAlarm(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	pages := map[string]string{"device": "/devices/" + e.dev["LEGAL-PC-01"], "customer": "/customers/" + e.customerID("Pinecrest Legal")}
+	for where, base := range pages {
+		if strings.Contains(e.page(base, 200), `id="alarms"`) {
+			t.Fatalf("%s: a healthy subject shows the alarms block with nothing to say", where)
+		}
+		for code, n := range ackNotices {
+			body := e.page(base+"?ack="+code, 200)
+			if !strings.Contains(body, `id="alarms"`) || !strings.Contains(body, n.Title) || !strings.Contains(body, "No open alarm here now.") {
+				t.Errorf("%s ?ack=%s: the notice %q is not shown", where, code, n.Title)
+			}
+		}
+	}
+}

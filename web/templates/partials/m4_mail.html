@@ -187,10 +187,11 @@
 <div class="mailhead"><h3 id="h-alarms" class="h-label">Open alarms <span class="count">{{len .Rows}}</span></h3><span class="meta-mono">acknowledge to mute e-mail; the state does not change</span></div>
 {{with .Notice}}{{template "acct_note" .}}{{end}}
 {{with .Err}}{{template "acct_note" .}}{{end}}
+{{if not .Rows}}<p class="ui muted noalarm">No open alarm here now.</p>{{end}}
 <ul class="alarmlist">{{range .Rows}}<li class="alarm {{.Chip.Class}}{{if .Ack}} acked{{end}}">
   <div class="alarm-main">{{template "chip" .Chip}}{{if .Ack}}{{template "m4_ackline" .Ack}}{{else}}<span class="muted ui">Not acknowledged: each new episode of it is mailed.</span>{{end}}</div>
   {{if $.CanAck}}<div class="alarm-acts">{{if .Ack}}<form method="post" action="{{.Ack.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="subject_type" value="{{.Form.SubjectType}}"><input type="hidden" name="subject_id" value="{{.Form.SubjectID}}"><button class="btn sm" type="submit" aria-label="Clear the acknowledgement of {{.Form.Label}}">Clear</button></form>{{end}}
     <details class="rowmenu ackmenu"><summary class="btn sm{{if not .Ack}} primary{{end}}" aria-label="{{if .Ack}}Change the acknowledgement of{{else}}Acknowledge{{end}} {{.Form.Label}}">{{if .Ack}}Change…{{else}}Acknowledge…{{end}}</summary>{{template "m4_ackform" (ackform .Form $.CSRF)}}</details></div>{{end}}
 </li>{{end}}</ul>
-{{if not .CanAck}}<p class="meta-mono why">{{.Why}}</p>{{end}}
+{{if and (not .CanAck) .Rows}}<p class="meta-mono why">{{.Why}}</p>{{end}}
 </section>{{end}}

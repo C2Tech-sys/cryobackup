@@ -186,7 +186,9 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 			add(alarm)
 		}
 	}
-	if len(v.Rows) == 0 && v.Err == nil {
+	// Nothing to show only when there is no alarm, no read error and no answer to report: the outcome of
+	// an acknowledgement (not_open, cleared, a refusal) is shown even when no alarm is open any more.
+	if len(v.Rows) == 0 && v.Err == nil && v.Notice == nil {
 		return nil
 	}
 	return v
