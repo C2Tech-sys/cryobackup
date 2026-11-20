@@ -140,12 +140,25 @@ func runDoctor(args []string, io IO) int {
 	return ExitOK
 }
 
+// openForReading opens the file at path for reading and closes it again: whether this account can
+// read the database's main file at all. A variable so that a test can inject the failure where
+// making a file unreadable (an ACL on Windows) cannot be done hermetically.
+var openForReading = func(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 // checkDatabase opens the database without applying migrations or writing anything
 // (store.OpenNoMigrate). A database older than this binary is not a failure: doctor
 // says which version it records, which version the first start of this binary will
 // migrate it to and the migrations that will run, and the checks that read the
 // current schema (the default policy and storage target) are NOT CHECKED until
-// then, never passed. A database newer than the binary fails, as the console would.
+// then, never passed. A database newer than the binary fails, as the console would. A database that
+// cannot be opened fails with its cause: a main file this account cannot read (checked first), or
+// else, for SQLite's "unable to open database file", the -shm index it cannot set up.
 func checkDatabase(path string, report func(level, name, detail string)) {
 	ctx := context.Background()
 	st, pending, err := store.OpenNoMigrate(ctx, store.Options{Path: path})
@@ -154,6 +167,12 @@ func checkDatabase(path string, report func(level, name, detail string)) {
 		return
 	}
 	if err != nil {
+		if openForReading(path) != nil {
+			// The file exists (OpenNoMigrate looked) but this account cannot even open it for reading:
+			// that, not the directory or the -shm index, is why SQLite could not open it.
+			report("FAIL", "database", "database file is not readable by this user")
+			return
+		}
 		if strings.Contains(err.Error(), "unable to open database file") {
 			// The file exists (OpenNoMigrate looked), so what failed is the read-only open itself: to
 			// read a WAL database SQLite must create or open its -shm index next to it.

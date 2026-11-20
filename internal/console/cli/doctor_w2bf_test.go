@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -328,7 +329,52 @@ func TestDoctorExplainsAnUnwritableShm(t *testing.T) {
 	}
 	code, out, _ := run(t, "", "doctor", "--config", cfgPath)
 	if code != ExitFailed || !strings.Contains(out, doctorLine("FAIL", "database")) || strings.Contains(out, "unable to open database file") ||
-		!strings.Contains(out, "-shm") || !strings.Contains(out, "service account") {
+		!strings.Contains(out, "-shm") || !strings.Contains(out, "service account") || strings.Contains(out, "not readable by this user") {
 		t.Fatalf("doctor with no usable -shm: %d\n%s", code, out)
+	}
+}
+
+// P20-W2BF D5: when the main file itself cannot be opened for reading, doctor says so and does not
+// blame the directory or the -shm index. The open error is injected (openForReading): the same
+// unusable -shm makes SQLite's open fail, and the readability check that comes first names the
+// real cause.
+func TestDoctorNamesAnUnreadableMainFile(t *testing.T) {
+	cfgPath, db := doctorRig(t)
+	if err := os.Mkdir(db+"-shm", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prev := openForReading
+	t.Cleanup(func() { openForReading = prev })
+	openForReading = func(path string) error {
+		if path != db {
+			t.Errorf("readability checked on %q, not the database file", path)
+		}
+		return os.ErrPermission
+	}
+	code, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	want := fmt.Sprintf("%-11s %-22s %s\n", "FAIL", "database", "database file is not readable by this user") // the whole line: no other detail
+	if code != ExitFailed || !strings.Contains(out, want) || strings.Contains(out, "-shm") {
+		t.Fatalf("doctor on an unreadable main file: %d\n%s", code, out)
+	}
+}
+
+// D5 with a real permission: a main file mode 0000. Skipped on Windows, where making a file
+// unreadable needs an ACL edit (icacls) that a test cannot make and undo hermetically, and for
+// root, who reads it anyway; the branch is covered there by TestDoctorNamesAnUnreadableMainFile.
+func TestDoctorNamesAnUnreadableMainFileByMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("an unreadable file on Windows needs an ACL edit that cannot be made hermetic; the injected test covers the branch")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode 0000 file")
+	}
+	cfgPath, db := doctorRig(t)
+	if err := os.Chmod(db, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(db, 0o600) })
+	code, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	if code != ExitFailed || !strings.Contains(out, "database file is not readable by this user") || strings.Contains(out, "-shm") {
+		t.Fatalf("doctor on a mode 0000 main file: %d\n%s", code, out)
 	}
 }
