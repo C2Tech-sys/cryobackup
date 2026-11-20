@@ -1311,6 +1311,9 @@ q.acknote { flex-basis: 100%; padding: 4px 0 0 10px; border-left: 2px solid var(
 .ackpop .opt label > div { min-width: 0; overflow-wrap: break-word; }
 .opt .untilopt div { display: grid; gap: 6px; width: 100%; }
 .opt .untilopt input.input { width: 100%; min-width: 0; max-width: 230px; height: 32px; margin: 0; accent-color: auto; }
+/* K1: the custom end names the zone it is read in, beside the field; on a narrow popover the name wraps under it. */
+.opt .untilzone { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.opt .untilzone .zone { font-size: 11.5px; color: var(--text-muted); overflow-wrap: anywhere; min-width: 0; }
 .d-mail .stack > div > .meta-mono { margin: 0 0 6px; }
 .d-mail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: var(--space-4); align-items: start; }
 .d-mail-grid > * { min-width: 0; }

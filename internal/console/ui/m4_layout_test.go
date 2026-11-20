@@ -244,6 +244,7 @@ return out;`
 	mutant := strings.Replace(base, ".ackpop .opt { grid-template-columns: minmax(0, 1fr); }", "", 1)
 	mutant = strings.Replace(mutant, ".ackpop .opt label > div { min-width: 0; overflow-wrap: break-word; }", "", 1)
 	mutant = strings.Replace(mutant, "width: 100%; min-width: 0; max-width: 230px;", "width: 100%; max-width: 230px;", 1)
+	mutant = strings.Replace(mutant, ".opt .untilzone { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }", "", 1) // K1's wrapper shrinks too
 	if mutant == base || strings.Contains(mutant, ".ackpop .opt") {
 		t.Fatal("the G4 rules are not where the test expects them")
 	}

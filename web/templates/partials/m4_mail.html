@@ -175,7 +175,7 @@
     <label><input type="radio" name="mode" value="3d"{{if eq .Mode "3d"}} checked{{end}}><div><b>Snooze 3 days</b></div></label>
     <label><input type="radio" name="mode" value="1w"{{if eq .Mode "1w"}} checked{{end}}><div><b>Snooze 1 week</b></div></label>
     <label><input type="radio" name="mode" value="next"{{if eq .Mode "next"}} checked{{end}}><div><b>Snooze {{lower .NextLabel}}</b></div></label>
-    <label class="untilopt"><input type="radio" name="mode" value="until"{{if eq .Mode "until"}} checked{{end}}><div><b>Snooze until</b><input class="input mono" type="datetime-local" name="until" value="{{.Until}}" min="{{.Min}}" max="{{.Max}}" aria-label="Snooze until, in the display time zone"></div></label>
+    <label class="untilopt"><input type="radio" name="mode" value="until"{{if eq .Mode "until"}} checked{{end}}><div><b>Snooze until</b><span class="untilzone"><input class="input mono" type="datetime-local" name="until" value="{{.Until}}" min="{{.Min}}" max="{{.Max}}" aria-label="Snooze until, a date and time in {{.Zone}}"><span class="zone mono">{{.Zone}}</span></span></div></label>
   </div></fieldset>
   <div class="field"><label for="{{.PopID}}-note">Note <span class="muted">(optional)</span></label><textarea class="input" id="{{.PopID}}-note" name="note" rows="2" maxlength="500">{{.Note}}</textarea>
     <span class="help">Shown on this page to everyone who can see the alarm; never mailed and never in the audit log.</span></div>

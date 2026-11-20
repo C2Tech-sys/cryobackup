@@ -460,3 +460,11 @@ func TestP20W3B_J1_TheExplainTooltipShowsTheSnoozeZone(t *testing.T) {
 		mustContain(t, "explain "+c.zone, e.page("/ui/devices/"+id+"/explain", 200), "Snoozed until Sun 1 Nov, 1:30 AM "+c.zone+".")
 	}
 }
+
+// K1: the acknowledge form's custom end names the zone it is read in, beside the field and in its label.
+func TestP20W3B_K1_TheCustomEndNamesItsZone(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	block := alarmsBlock(t, e.page("/devices/"+e.dev["RECEPTION-2"], 200))
+	mustContain(t, "zone", block, `aria-label="Snooze until, a date and time in America/Chicago"`, `<span class="zone mono">America/Chicago</span>`)
+}

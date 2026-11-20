@@ -94,6 +94,8 @@ type AckForm struct {
 	Until  string
 	Note   string
 	Change bool
+	// Zone is the display zone the custom end is read in, named beside the field (K1).
+	Zone string
 }
 
 // ackTypeRE is the shape of an alarm_acks.alarm_type word.
@@ -119,7 +121,7 @@ func ackForm(subjectType, subjectID, alarm, what string, c fmtCtx, zone string) 
 	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 8, 0, 0, 0, c.loc())
 	f := AckForm{Action: "/ui/acks", Label: what, SubjectType: subjectType, SubjectID: subjectID, AlarmType: alarm, PopID: "ack-" + subjectID + "-" + alarm,
 		Tomorrow: snoozeEndText(c, tomorrow), Min: now.Add(time.Minute).Format(datetimeLocal), Max: now.Add(store.MaxSnooze - time.Hour).Format(datetimeLocal),
-		NextLabel: "Until the next successful backup", Mode: "ack"}
+		NextLabel: "Until the next successful backup", Mode: "ack", Zone: zone}
 	if subjectType == store.EpisodeCustomer {
 		f.NextLabel = "Until the alarm ends"
 	}
