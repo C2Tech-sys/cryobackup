@@ -296,12 +296,12 @@ func (g *Digester) SendDigestNow(ctx context.Context, force bool) (DigestResult,
 			}
 		}
 		if len(send) == 0 {
-			g.logResult("digest send-now", res)
+			g.logResult("digest send now", res)
 			return res, nil
 		}
 	}
 	err = g.send(ctx, send, keyOf, res.Date, &res)
-	g.logResult("digest send-now", res)
+	g.logResult("digest send now", res)
 	return res, err
 }
 
