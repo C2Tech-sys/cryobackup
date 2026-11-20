@@ -237,6 +237,24 @@ func deviceAlarms(ds state.DeviceState) []string {
 	return out
 }
 
+// snoozeEnd is the end of a snooze preset at now in the operator's zone loc: one hour on, tomorrow at
+// 8:00 AM, or the same local time of day 3 or 7 days on (the wall clock is kept across a change to or
+// from daylight saving time, so "3 days" ends at the hour the operator expects, not 72 hours on).
+func snoozeEnd(mode string, now time.Time, loc *time.Location) (time.Time, bool) {
+	l := now.In(loc)
+	switch mode {
+	case "1h":
+		return now.Add(time.Hour), true
+	case "tomorrow":
+		return time.Date(l.Year(), l.Month(), l.Day()+1, 8, 0, 0, 0, loc), true
+	case "3d":
+		return time.Date(l.Year(), l.Month(), l.Day()+3, l.Hour(), l.Minute(), l.Second(), l.Nanosecond(), loc), true
+	case "1w":
+		return time.Date(l.Year(), l.Month(), l.Day()+7, l.Hour(), l.Minute(), l.Second(), l.Nanosecond(), loc), true
+	}
+	return time.Time{}, false
+}
+
 // ---- writes ----
 
 // ackBack returns to the page of the subject: the device panel or the customer page, never a URL
@@ -295,17 +313,12 @@ func (s *Service) ackCreate(w http.ResponseWriter, r *http.Request) {
 	c := s.fc(r.Context())
 	now := c.Now.In(c.loc())
 	until := func(t time.Time) { u := t.UTC(); body.SnoozeUntil = &u }
-	switch r.PostFormValue("mode") {
+	switch mode := r.PostFormValue("mode"); mode {
 	case "ack":
 		body.Kind = adminapi.AckKindAcknowledge
-	case "1h":
-		until(now.Add(time.Hour))
-	case "tomorrow":
-		until(time.Date(now.Year(), now.Month(), now.Day()+1, 8, 0, 0, 0, c.loc()))
-	case "3d":
-		until(now.Add(3 * 24 * time.Hour))
-	case "1w":
-		until(now.Add(7 * 24 * time.Hour))
+	case "1h", "tomorrow", "3d", "1w":
+		end, _ := snoozeEnd(mode, now, c.loc())
+		until(end)
 	case "next":
 		body.UntilNextSuccess = true
 	case "until":

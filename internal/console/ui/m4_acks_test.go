@@ -270,3 +270,35 @@ func TestP20W3B_F1_AckOutcomesShowWithNoOpenAlarm(t *testing.T) {
 		}
 	}
 }
+
+// F5: "3 days" and "1 week" keep the local time of day across both changes of daylight saving time.
+func TestP20W3B_F5_SnoozePresetsKeepTheWallClock(t *testing.T) {
+	loc, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(s string) time.Time {
+		tm, err := time.ParseInLocation("2006-01-02 15:04", s, loc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tm
+	}
+	for _, c := range []struct {
+		mode, now, want string
+		hours           float64
+	}{
+		{"3d", "2026-10-30 10:00", "2026-11-02 10:00", 73},  // across the fall change (1 Nov 2026)
+		{"1w", "2026-10-28 10:00", "2026-11-04 10:00", 169}, // the week across it
+		{"3d", "2027-03-12 10:00", "2027-03-15 10:00", 71},  // across the spring change (14 Mar 2027)
+		{"1w", "2027-03-10 10:00", "2027-03-17 10:00", 167},
+		{"tomorrow", "2027-03-13 22:15", "2027-03-14 08:00", 8.75},
+		{"1h", "2026-11-01 01:30", "2026-11-01 01:30", 1}, // an hour on is an hour: 1:30 CDT becomes 1:30 CST
+	} {
+		now := at(c.now)
+		got, ok := snoozeEnd(c.mode, now, loc)
+		if !ok || got.In(loc).Format("2006-01-02 15:04") != c.want || got.Sub(now).Hours() != c.hours {
+			t.Errorf("%s from %s: %s (%.2f h), want %s (%.2f h)", c.mode, c.now, got.In(loc).Format("2006-01-02 15:04 MST"), got.Sub(now).Hours(), c.want, c.hours)
+		}
+	}
+}
