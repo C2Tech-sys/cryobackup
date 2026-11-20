@@ -142,20 +142,22 @@ return out;`
 	}
 }
 
-// F4: on a phone the delivery log hides the Attempt column, so a row past its first attempt says
-// "attempt N" in its stacked card; a first attempt says nothing.
+// F4, G5: on a phone the delivery log hides the Attempt column, so a row past its first attempt says
+// "ATTEMPT: N" in its stacked card, labelled like its siblings ("KIND:", "TO:"); a first attempt says nothing.
 func TestP20W3B_F4_PhoneDeliveryRowsShowTheirAttempt(t *testing.T) {
 	chromeOrSkip(t)
 	e := newM4Env(t)
 	e.login()
 	probe := `var out = {iw: innerWidth, shown: 0, hidden: 0, text: 0};
 document.querySelectorAll('table.dlog td.att').forEach(function (td) {
-  var vis = td.checkVisibility(); if (vis) { out.shown++; if (/^attempt \d+$/.test(td.innerText.trim())) out.text++; } else out.hidden++; });
+  var vis = td.checkVisibility(); if (!vis) { out.hidden++; return; } out.shown++;
+  var before = getComputedStyle(td, '::before'), kind = getComputedStyle(td.parentNode.querySelector('td.kind-cell'), '::before');
+  if (before.content === '"Attempt: "' && before.textTransform === kind.textTransform && before.fontFamily === kind.fontFamily && /^\d+$/.test(td.innerText.trim().replace(/^Attempt:\s*/i, ''))) out.text++; });
 return out;`
 	got := e.layout(t, layoutOpts{Path: "/settings/email", CSS: e.appCSS(t), W: 390, H: 900, Probe: probe})
 	// the fixture log's first page holds two rows past their first attempt (attempt 2 and attempt 4)
 	if got["shown"] != 2 || got["text"] != 2 || got["hidden"] < 20 {
-		t.Errorf("at 390 px: %v attempt cells shown (%v reading \"attempt N\"), %v hidden; want the 2 later attempts shown", got["shown"], got["text"], got["hidden"])
+		t.Errorf("at 390 px: %v attempt cells shown (%v labelled like KIND:), %v hidden; want the 2 later attempts shown", got["shown"], got["text"], got["hidden"])
 	}
 }
 

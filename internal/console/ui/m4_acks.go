@@ -160,9 +160,11 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 	if n, ok := ackNotices[r.URL.Query().Get("ack")]; ok {
 		v.Notice = &n
 	}
+	// Every read that failed is reported, each in its own words: one never hides another (G5).
+	var readErrs []string
 	var acks adminapi.AcksResponse
 	if err := s.apiGet(r, "/api/v1/acks?subject_id="+url.QueryEscape(subjectID), &acks); err != nil {
-		v.Err = &Note{"crit", "Acknowledgements could not be read.", "Whether these alarms are acknowledged is unknown: this is an alarm, not \"none\". Reload the page to try again."}
+		readErrs = append(readErrs, "the acknowledgements could not be read, so whether these alarms are acknowledged is unknown")
 		acks.Acks = nil
 	}
 	// Which alarms can be acknowledged now: the API's ack-create accepts an alarm with an open episode
@@ -170,13 +172,16 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 	// never offers an Acknowledge that would answer "not open".
 	recorded := map[string]bool{}
 	if eps, err := s.Store.ListOpenEpisodes(r.Context(), p.Scope); err != nil {
-		v.Err = &Note{"crit", "Open alarms could not be checked.", "Whether these alarms can be acknowledged now is unknown. Reload the page to try again."}
+		readErrs = append(readErrs, "the open alarms could not be checked, so whether they can be acknowledged now is unknown")
 	} else {
 		for _, e := range eps {
 			if e.SubjectType == subjectType && e.SubjectID == subjectID {
 				recorded[e.AlarmType] = true
 			}
 		}
+	}
+	if len(readErrs) > 0 {
+		v.Err = &Note{"crit", "Not everything about these alarms could be read.", capFirst(strings.Join(readErrs, "; and ")) + ". This is an alarm, not \"none\". Reload the page to try again."}
 	}
 	notYet := "Not recorded yet: it can be acknowledged after the console's next alarm check, within about " + durText(jobs.AlarmEvaluatorEvery.Milliseconds()) + "."
 	if s.Fixtures {

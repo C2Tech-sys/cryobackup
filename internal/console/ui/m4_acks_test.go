@@ -380,3 +380,22 @@ func TestP20W3B_G3_SnoozeEndsOnTransitionDays(t *testing.T) {
 		check("a week from the first 01:30", first, "1w", z.ambEndDate, 7)
 	}
 }
+
+// G5: when both reads behind the alarms block fail, both are reported: the open-episodes failure does not
+// overwrite the acknowledgements failure. (Both read alarm_episodes; renaming it fails them together.)
+func TestP20W3B_G5_BothReadFailuresAreReported(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE alarm_episodes RENAME TO alarm_episodes_gone`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, body := e.do("GET", "/devices/"+e.dev[fixtures.AckedHost], nil)
+	if res.StatusCode != 200 {
+		t.Skipf("the device page itself needs the episodes (%d): the two failures cannot be seen apart here", res.StatusCode)
+	}
+	block := alarmsBlock(t, body)
+	mustContain(t, "both", block, "Not everything about these alarms could be read.", "The acknowledgements could not be read", "and the open alarms could not be checked")
+}
