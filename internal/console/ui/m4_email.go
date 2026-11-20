@@ -1114,7 +1114,8 @@ func (s *Service) emailDigestSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A 500 from send-now is an audit row that could not be written, or an error before any recipient was
-	// attempted (a send that stopped halfway answers 200, incomplete): the answer does not say which (G2).
+	// attempted (an error met after some recipients were attempted answers 200, incomplete): the answer
+	// does not say which (G2).
 	if err == nil && status == http.StatusInternalServerError {
 		s.log().Error("ui: digest send failed in the admin API", logx.Class("render"), logx.Int("status", status))
 		s.renderEmail(w, r, http.StatusInternalServerError, func(d *EmailPage) {
@@ -1143,9 +1144,9 @@ func (s *Service) emailDigestSend(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case ds.Incomplete:
-			// The send stopped on an error after some recipients: say what went out, and how many did not.
-			v.Note = Note{"crit", "Sent to " + plural(ds.Sent, "recipient", "recipients") + "; " + strconv.Itoa(notSent(ds.Failed, len(ds.Recipients), recipientsBefore(r, s))) +
-				" could not be sent: see the delivery log below.", "Check the log before sending again: a second send mails those who had it once more."}
+			// An error was met for some recipients: say only what is known (H1). The ones the answer does not
+			// list may or may not have received it (not queued, sent but not recorded, failed unrecorded).
+			v.Note = incompleteNote(ds.Sent, ds.Failed, unlisted(len(ds.Recipients), recipientsBefore(r, s)))
 		case ds.Skipped == "not_configured":
 			v.Note = Note{"warn", "Nothing was sent: e-mail is not set up.", "The smtp block of the console configuration names no relay."}
 		case ds.Skipped == "no_recipient":
@@ -1207,22 +1208,39 @@ var mailBannerActions = map[string]struct{ anchor, label, owner, row string }{
 // whether anything went out, so the page says only what is true either way (G2).
 var couldNotComplete = Note{"crit", "The console could not complete this.", "Check the delivery log before sending again."}
 
-// notSent is how many recipients an incomplete send-now did not reach: those that failed, plus those
-// the error stopped before they were attempted (the digest recipients the answer does not list).
-func notSent(failed, listed, digestRecipients int) int {
-	n := failed
-	if gone := digestRecipients - listed; gone > 0 {
-		n += gone
+// unlisted is how many recipients with the digest switch an incomplete send-now does not list: the
+// ones it met an error on, whose outcome is unknown. -1 when the recipients could not be counted.
+func unlisted(listed, digestRecipients int) int {
+	if digestRecipients < 0 {
+		return -1
 	}
-	return n
+	if n := digestRecipients - listed; n > 0 {
+		return n
+	}
+	return 0
+}
+
+// incompleteNote is the note of an incomplete send-now (H1): what is known, and nothing more.
+func incompleteNote(sent, failed, unknown int) Note {
+	text := ""
+	if failed > 0 {
+		text = strconv.Itoa(failed) + " could not be sent. "
+	}
+	switch {
+	case unknown > 0:
+		text += "For " + strconv.Itoa(unknown) + " more the outcome could not be recorded: they may or may not have received it. "
+	case unknown < 0:
+		text += "For some recipients the outcome could not be recorded: they may or may not have received it. "
+	}
+	return Note{"warn", "Sent to " + plural(sent, "recipient", "recipients") + ".", text + "Check the delivery log below before sending again."}
 }
 
 // recipientsBefore is the number of recipients with the digest switch, read for an incomplete send;
-// 0 when it cannot be read (the failed count alone is then reported).
+// -1 when it cannot be read (the note then says "some recipients").
 func recipientsBefore(r *http.Request, s *Service) int {
 	var rs adminapi.RecipientsResponse
 	if s.apiGet(r, "/api/v1/notification-rules", &rs) != nil {
-		return 0
+		return -1
 	}
 	return rs.DigestRecipients
 }

@@ -2384,7 +2384,7 @@ paths:
       operationId: sendDigest
       tags: [notifications]
       summary: Send the digest now
-      description: Without `force`, sends today's digest under today's key to each recipient with the digest switch that has not had it (a no-op for those that have; their outcome says why). With `force`, sends to every such recipient under a key of its own that does not count as today's digest. The answer lists each recipient's outcome (sent, failed, already_sent, in_retry, gave_up, recipient_gone, deferred), or `skipped` (no_recipient). No relay configured is 409 with reason `smtp_not_configured`. One `digest.send` audit row is written before anything is sent; if it cannot be written nothing is sent. An error after at least one recipient was attempted answers 200 with `incomplete` true and the counts, never a 500 that would read as nothing sent. The send does not depend on the digest_enabled setting; `digest_enabled` in the answer says whether the daily digest is switched on.
+      description: Without `force`, sends today's digest under today's key to each recipient with the digest switch that has not had it (a no-op for those that have; their outcome says why). With `force`, sends to every such recipient under a key of its own that does not count as today's digest. The answer lists each recipient's outcome (sent, failed, already_sent, in_retry, gave_up, recipient_gone, deferred), or `skipped` (no_recipient). No relay configured is 409 with reason `smtp_not_configured`. One `digest.send` audit row is written before anything is sent; if it cannot be written nothing is sent. An error met after at least one recipient was attempted answers 200 with `incomplete` true and the counts that are known, never a 500 that would read as nothing sent. The send does not depend on the digest_enabled setting; `digest_enabled` in the answer says whether the daily digest is switched on.
       x-min-role: OW
       parameters:
         - {$ref: '#/components/parameters/CsrfToken'}
@@ -4634,7 +4634,7 @@ components:
         forced: {type: boolean}
         digest_enabled: {type: boolean, description: 'The digest_enabled setting after the send. False means the daily digest is switched off and this one was sent once on request; a setting that cannot be read is false too (the daily job does not send then either).'}
         skipped: {type: string, enum: [no_recipient, not_configured, disabled, not_due, already_sent]}
-        incomplete: {type: boolean, description: 'True when the send stopped on an error after it had attempted at least one recipient (sent or failed above zero). The counts say what went out; the recipients the error stopped are in neither count. Check the delivery log before sending again. An error before any recipient was attempted is a 500.'}
+        incomplete: {type: boolean, description: 'True when the send met an error for one or more recipients after it had attempted at least one (sent or failed above zero). The send goes on to the other recipients; a recipient it met the error on is in neither count, and its message may or may not have gone out (not queued, sent without its delivery row being updated, or failed unrecorded). The counts are what is known: check the delivery log before sending again. An error with nothing attempted is a 500.'}
         sent: {type: integer}
         failed: {type: integer}
         recipients:

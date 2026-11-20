@@ -389,7 +389,7 @@ func TestP20W3B_F6_UnauditedSendSaysItWasNotRecorded(t *testing.T) {
 	}
 }
 
-// G2: a send-now that stopped on an error after some recipients says what went out, never "Not sent".
+// G2, H1: a send-now that met an error for some recipients says only what is known, never "Not sent".
 type uiDigestDouble struct {
 	res notify.DigestResult
 	err error
@@ -413,10 +413,10 @@ func TestP20W3B_G2_AnIncompleteSendSaysWhatWentOut(t *testing.T) {
 		code int
 		want string
 	}{
-		{"one sent, the other stopped", uiDigestDouble{notify.DigestResult{Sent: 1, Recipients: []notify.DigestRecipient{{RuleID: e.recipientID(fixtures.RecipientNightDesk), Outcome: notify.DigestSent}}}, boom},
-			200, "Sent to 1 recipient; 1 could not be sent: see the delivery log below."},
+		{"one sent, the other unknown", uiDigestDouble{notify.DigestResult{Sent: 1, Recipients: []notify.DigestRecipient{{RuleID: e.recipientID(fixtures.RecipientNightDesk), Outcome: notify.DigestSent}}}, boom},
+			200, "<b>Sent to 1 recipient.</b> For 1 more the outcome could not be recorded: they may or may not have received it. Check the delivery log below before sending again."},
 		{"both failed, then the error", uiDigestDouble{notify.DigestResult{Failed: 2, Recipients: []notify.DigestRecipient{{RuleID: "a", Outcome: notify.DigestFailed}, {RuleID: "b", Outcome: notify.DigestFailed}}}, boom},
-			200, "Sent to 0 recipients; 2 could not be sent: see the delivery log below."},
+			200, "<b>Sent to 0 recipients.</b> 2 could not be sent. Check the delivery log below before sending again."},
 		{"nothing attempted", uiDigestDouble{notify.DigestResult{}, boom}, 500, "The console could not complete this."},
 	} {
 		e.mailSvc.Digest = c.d
@@ -424,5 +424,41 @@ func TestP20W3B_G2_AnIncompleteSendSaysWhatWentOut(t *testing.T) {
 		if res.StatusCode != c.code || !strings.Contains(body, c.want) || strings.Contains(body, "could not record the action") {
 			t.Errorf("%s: %d, want %d with %q", c.name, res.StatusCode, c.code, c.want)
 		}
+	}
+}
+
+// H1, reproduced against the real digester: of the two digest recipients, one's delivery row cannot be
+// updated after its message went out (or cannot be written at all). Both messages, or the one, leave
+// the console; the page claims one sent and one unknown, never "could not be sent" for the other.
+func TestP20W3B_H1_AnUnrecordedOutcomeIsNotCalledNotSent(t *testing.T) {
+	for _, c := range []struct {
+		name, trigger string
+		messages      int
+	}{
+		{"the row of a delivered message cannot be updated", `CREATE TRIGGER h1 BEFORE UPDATE ON notification_log WHEN NEW.rule_id = '%s' AND NEW.result = 'sent'
+			BEGIN SELECT RAISE(ABORT, 'refused by the test'); END`, 2},
+		{"the row cannot be written, nothing is queued for that recipient", `CREATE TRIGGER h1 BEFORE INSERT ON notification_log WHEN NEW.rule_id = '%s'
+			BEGIN SELECT RAISE(ABORT, 'refused by the test'); END`, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newM4Env(t) // two recipients have the digest switch: Night desk and Service manager
+			e.login()
+			id := e.recipientID(fixtures.RecipientManager)
+			if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+				_, err := tx.Exec(strings.Replace(c.trigger, "%s", id, 1))
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			n := len(e.mail.Sent())
+			res, body := e.post("/ui/settings/email/digest/send", url.Values{"force": {"1"}}, false)
+			if got := len(e.mail.Sent()) - n; got != c.messages {
+				t.Fatalf("%d messages left the console, want %d", got, c.messages)
+			}
+			want := "<b>Sent to 1 recipient.</b> For 1 more the outcome could not be recorded: they may or may not have received it. Check the delivery log below before sending again."
+			if res.StatusCode != 200 || !strings.Contains(body, want) || strings.Contains(body, "could not be sent") || strings.Contains(body, "could not record the action") {
+				t.Errorf("%d: the page does not say exactly what is known", res.StatusCode)
+			}
+		})
 	}
 }

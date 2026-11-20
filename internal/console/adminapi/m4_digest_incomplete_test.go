@@ -9,7 +9,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/notify"
 )
 
-// P20-W3B G2: a send-now that stops on an error after some recipients were attempted answers 200 with
+// P20-W3B G2, H1: a send-now that met an error after some recipients were attempted answers 200 with
 // the counts and incomplete true; only an error before anything was attempted is a 500.
 
 type digestDouble struct {
