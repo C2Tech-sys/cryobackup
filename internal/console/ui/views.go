@@ -84,6 +84,9 @@ type Link struct {
 	// Fallback, when set, is what forRole offers a role that cannot open an Admin destination,
 	// instead of dropping the action (P20-W3B: the e-mail banners fall back to System health).
 	Fallback *Link
+	// OwnerLabel, when set, is the label forRole gives an owner, who can do what it says ("Add a
+	// recipient"); everyone else reads Label ("See recipients").
+	OwnerLabel string
 }
 
 // BannerView is a rendered condition banner.
@@ -188,7 +191,7 @@ func bannerViewIn(b state.Banner, now time.Time, loc *time.Location) BannerView 
 // updates) is client-side and has none.
 func bannerAction(id string) *Link {
 	if a, ok := mailBannerActions[id]; ok {
-		return &Link{Href: emailPath + "#" + a.anchor, Label: a.label, Admin: true, Fallback: &Link{Href: "/system#comp-" + a.row, Label: "Open System health"}}
+		return &Link{Href: emailPath + "#" + a.anchor, Label: a.label, OwnerLabel: a.owner, Admin: true, Fallback: &Link{Href: "/system#comp-" + a.row, Label: "Open System health"}}
 	}
 	switch id {
 	case "C19", "C19b":
@@ -209,14 +212,17 @@ func bannerAction(id string) *Link {
 // forRole drops the actions a role cannot open: a read-only or operator account
 // is never offered a link that answers 403.
 func (v BannersView) forRole(role auth.Role) BannersView {
-	if role >= auth.RoleAdmin {
-		return v
-	}
 	strip := func(in []BannerView) []BannerView {
 		out := make([]BannerView, len(in))
 		for i, b := range in {
-			if b.Action != nil && b.Action.Admin {
-				b.Action = b.Action.Fallback // nil for most: the action is dropped
+			switch a := b.Action; {
+			case a == nil:
+			case a.Admin && role < auth.RoleAdmin:
+				b.Action = a.Fallback // nil for most: the action is dropped
+			case a.OwnerLabel != "" && role >= auth.RoleOwner:
+				own := *a
+				own.Label = a.OwnerLabel
+				b.Action = &own
 			}
 			out[i] = b
 		}

@@ -169,18 +169,18 @@
   <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="subject_type" value="{{.SubjectType}}"><input type="hidden" name="subject_id" value="{{.SubjectID}}"><input type="hidden" name="alarm_type" value="{{.AlarmType}}">
   <fieldset class="plain"><legend class="h-label">After acknowledging</legend>
   <div class="opt dense">
-    <label><input type="radio" name="mode" value="ack" checked><div><b>Acknowledge</b><span>Until you clear it or the alarm ends.</span></div></label>
-    <label><input type="radio" name="mode" value="1h"><div><b>Snooze 1 hour</b></div></label>
-    <label><input type="radio" name="mode" value="tomorrow"><div><b>Snooze until tomorrow 8:00 AM</b><span>{{.Tomorrow}}</span></div></label>
-    <label><input type="radio" name="mode" value="3d"><div><b>Snooze 3 days</b></div></label>
-    <label><input type="radio" name="mode" value="1w"><div><b>Snooze 1 week</b></div></label>
-    <label><input type="radio" name="mode" value="next"><div><b>Snooze {{lower .NextLabel}}</b></div></label>
-    <label class="untilopt"><input type="radio" name="mode" value="until"><div><b>Snooze until</b><input class="input mono" type="datetime-local" name="until" min="{{.Min}}" max="{{.Max}}" aria-label="Snooze until, in the display time zone"></div></label>
+    <label><input type="radio" name="mode" value="ack"{{if eq .Mode "ack"}} checked{{end}}><div><b>Acknowledge</b><span>Until you clear it or the alarm ends.</span></div></label>
+    <label><input type="radio" name="mode" value="1h"{{if eq .Mode "1h"}} checked{{end}}><div><b>Snooze 1 hour</b></div></label>
+    <label><input type="radio" name="mode" value="tomorrow"{{if eq .Mode "tomorrow"}} checked{{end}}><div><b>Snooze until tomorrow 8:00 AM</b><span>{{.Tomorrow}}</span></div></label>
+    <label><input type="radio" name="mode" value="3d"{{if eq .Mode "3d"}} checked{{end}}><div><b>Snooze 3 days</b></div></label>
+    <label><input type="radio" name="mode" value="1w"{{if eq .Mode "1w"}} checked{{end}}><div><b>Snooze 1 week</b></div></label>
+    <label><input type="radio" name="mode" value="next"{{if eq .Mode "next"}} checked{{end}}><div><b>Snooze {{lower .NextLabel}}</b></div></label>
+    <label class="untilopt"><input type="radio" name="mode" value="until"{{if eq .Mode "until"}} checked{{end}}><div><b>Snooze until</b><input class="input mono" type="datetime-local" name="until" value="{{.Until}}" min="{{.Min}}" max="{{.Max}}" aria-label="Snooze until, in the display time zone"></div></label>
   </div></fieldset>
-  <div class="field"><label for="{{.PopID}}-note">Note <span class="muted">(optional)</span></label><textarea class="input" id="{{.PopID}}-note" name="note" rows="2" maxlength="500"></textarea>
+  <div class="field"><label for="{{.PopID}}-note">Note <span class="muted">(optional)</span></label><textarea class="input" id="{{.PopID}}-note" name="note" rows="2" maxlength="500">{{.Note}}</textarea>
     <span class="help">Shown on this page to everyone who can see the alarm; never mailed and never in the audit log.</span></div>
   <p class="ui muted">Mutes e-mail for this alarm. The alarm stays visible until its cause clears.</p>
-  <div class="actions"><button class="btn sm primary" type="submit">Acknowledge</button></div>
+  <div class="actions"><button class="btn sm primary" type="submit">{{if .Change}}Save{{else}}Acknowledge{{end}}</button></div>
 </form></div>{{end}}
 
 {{define "m4_alarms"}}<section class="card alarms" id="alarms" aria-labelledby="h-alarms">

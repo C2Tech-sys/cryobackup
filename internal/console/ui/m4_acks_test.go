@@ -233,8 +233,11 @@ func TestP20W3B_NewPagesLeakNothing(t *testing.T) {
 	// the typed note: on its device's page, inside the note element, and nowhere else
 	dev := pages["device"]
 	want := `<q class="acknote">see \\fileserver\scans\intake for Jane Q. Patient</q>`
-	if strings.Count(dev, "fileserver") != 1 || !strings.Contains(dev, want) {
-		t.Errorf("the typed note is not shown exactly once in its element")
+	// (twice: the line that shows it, and the "Change…" form that edits it; both inside the alarms block)
+	block := alarmsBlock(t, dev)
+	if strings.Count(dev, "fileserver") != 2 || strings.Count(block, "fileserver") != 2 || !strings.Contains(block, want) ||
+		!strings.Contains(block, ">"+typed+"</textarea>") {
+		t.Errorf("the typed note is not shown only in its line and its Change form")
 	}
 	for name, body := range pages {
 		if name != "device" && strings.Contains(body, "fileserver") {
@@ -301,4 +304,19 @@ func TestP20W3B_F5_SnoozePresetsKeepTheWallClock(t *testing.T) {
 			t.Errorf("%s from %s: %s (%.2f h), want %s (%.2f h)", c.mode, c.now, got.In(loc).Format("2006-01-02 15:04 MST"), got.Sub(now).Hours(), c.want, c.hours)
 		}
 	}
+}
+
+// F6: "Change…" opens with the acknowledgement in force: its kind, end and note.
+func TestP20W3B_F6_ChangeOpensWithWhatIsInForce(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	acked := alarmsBlock(t, e.page("/devices/"+e.dev[fixtures.AckedHost], 200))
+	mustContain(t, "plain ack", acked, `value="ack" checked`, `>`+fixtures.AckNote+`</textarea>`, ">Save</button>")
+	sn := alarmsBlock(t, e.page("/devices/"+e.dev[fixtures.SnoozedHost], 200))
+	// LoadFixtures snoozes LT-OPTOM-04 for 24 hours from the fixture clock: Wed 21 Oct, 1:42 PM in Chicago
+	mustContain(t, "dated snooze", sn, `value="until" checked`, `value="2026-10-21T13:42"`, `>laptop is at the customer&#39;s other site</textarea>`)
+	// a new acknowledgement opens on "Acknowledge" with an empty note
+	e.mustPost("/ui/acks/"+e.activeAck(e.dev[fixtures.SnoozedHost]).ID+"/clear", url.Values{"subject_type": {"device"}, "subject_id": {e.dev[fixtures.SnoozedHost]}}, http.StatusSeeOther)
+	fresh := alarmsBlock(t, e.page("/devices/"+e.dev[fixtures.SnoozedHost], 200))
+	mustContain(t, "new", fresh, `value="ack" checked`, `maxlength="500"></textarea>`, ">Acknowledge</button>")
 }

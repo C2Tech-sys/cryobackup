@@ -946,6 +946,13 @@ func (s *Service) emailTest(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if err == nil && status == http.StatusInternalServerError { // the audit row (or the record) could not be written: nothing was sent
+		s.log().Error("ui: test mail refused by the admin API", logx.Class("render"), logx.Int("status", status))
+		s.renderEmail(w, r, http.StatusInternalServerError, func(d *EmailPage) {
+			d.Test.To, d.Test.Note = to, &Note{"crit", "Not sent: the console could not record the action.", "Check the database and the console log, then try again."}
+		})
+		return
+	}
 	if s.writeFailed(w, r, p, status, err) {
 		return
 	}
@@ -1103,6 +1110,13 @@ func (s *Service) emailDigestSend(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if err == nil && status == http.StatusInternalServerError { // digest.send is audited before anything is sent
+		s.log().Error("ui: digest send refused by the admin API", logx.Class("render"), logx.Int("status", status))
+		s.renderEmail(w, r, http.StatusInternalServerError, func(d *EmailPage) {
+			d.Digest.Result = &DigestSendView{Note: Note{"crit", "Not sent: the console could not record the action.", "Check the database and the console log, then try again."}}
+		})
+		return
+	}
 	if s.writeFailed(w, r, p, status, err) {
 		return
 	}
@@ -1170,12 +1184,12 @@ type ackFormData struct {
 
 // mailBannerActions are the M4 banners and the part of /settings/email that fixes each, with the
 // System health row (adminapi healthRowBanners) that a role without the page is offered instead.
-var mailBannerActions = map[string]struct{ anchor, label, row string }{
-	"C03":  {anchorStatus, "Open e-mail settings", "smtp"},
-	"C03b": {anchorStatus, "Open e-mail settings", "smtp"},
-	"C18":  {anchorRecipients, "Add a recipient", "smtp"},
-	"C21":  {anchorDeliveries, "Open the delivery log", "smtp"},
-	"C14":  {anchorDigest, "Open the digest settings", "digest"},
-	"C14b": {anchorDigest, "Open the digest settings", "digest"},
-	"C20":  {anchorRecipients, "Choose digest recipients", "digest"},
+var mailBannerActions = map[string]struct{ anchor, label, owner, row string }{
+	"C03":  {anchorStatus, "Open e-mail settings", "", "smtp"},
+	"C03b": {anchorStatus, "Open e-mail settings", "", "smtp"},
+	"C18":  {anchorRecipients, "See recipients", "Add a recipient", "smtp"}, // only an owner adds one
+	"C21":  {anchorDeliveries, "Open the delivery log", "", "smtp"},
+	"C14":  {anchorDigest, "Open the digest settings", "", "digest"},
+	"C14b": {anchorDigest, "Open the digest settings", "", "digest"},
+	"C20":  {anchorRecipients, "See recipients", "Choose digest recipients", "digest"},
 }

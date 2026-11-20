@@ -9,10 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
+	"github.com/c2tech-sys/cryobackup/internal/console/health"
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
 	"github.com/c2tech-sys/cryobackup/internal/console/notify"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // P20-W3B: /settings/email. Every read and write goes through the admin API's handlers in
@@ -344,5 +347,43 @@ func TestP20W3B_F3_SuppressLabelsSayOnlyWhatWasRecorded(t *testing.T) {
 		if got := suppressLabel(word); got != want {
 			t.Errorf("suppressLabel(%q) = %q, want %q", word, got, want)
 		}
+	}
+}
+
+// F6: only an owner is told to add a recipient; an admin sees them; another role is sent to System health.
+func TestP20W3B_F6_BannerActionsSayWhatTheRoleCanDo(t *testing.T) {
+	f := health.Fleet{View: state.FleetView{Banners: []state.Banner{{ID: "C18", Severity: state.SeverityAlarm, Text: "Alert e-mail has no recipient."},
+		{ID: "C20", Severity: state.SeverityAlarm, Text: "The daily digest has no recipient."}}}}
+	for role, want := range map[auth.Role][2]string{auth.RoleOwner: {"Add a recipient", "Choose digest recipients"}, auth.RoleAdmin: {"See recipients", "See recipients"},
+		auth.RoleOperator: {"Open System health", "Open System health"}} {
+		bv := buildBanners(f, false).forRole(role)
+		for i, b := range bv.Warn {
+			if b.Action == nil || b.Action.Label != want[i] {
+				t.Errorf("%s, %s: action %+v, want %q", role, b.ID, b.Action, want[i])
+			}
+		}
+	}
+	// forRole copies: the owner's label does not leak into the shared view
+	bv := buildBanners(f, false)
+	_ = bv.forRole(auth.RoleOwner)
+	if bv.Warn[0].Action.Label != "See recipients" {
+		t.Error("forRole changed the view it was given")
+	}
+}
+
+// F6: a test mail or a send-now whose audit row cannot be written says so, not "nothing was changed".
+func TestP20W3B_F6_UnauditedSendSaysItWasNotRecorded(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	e.mutRefuseAudits(true)
+	for path, form := range map[string]url.Values{"/ui/settings/email/test": {"to": {"desk@example.test"}}, "/ui/settings/email/digest/send": {"force": {"1"}}} {
+		res, body := e.post(path, form, false)
+		if res.StatusCode != http.StatusInternalServerError || !strings.Contains(body, "Not sent: the console could not record the action.") || strings.Contains(body, "audit refused") {
+			t.Errorf("%s with the audit table refusing: %d", path, res.StatusCode)
+		}
+	}
+	e.mutRefuseAudits(false)
+	if len(e.mail.Sent()) != 0 {
+		t.Error("a message went out although its audit row could not be written")
 	}
 }

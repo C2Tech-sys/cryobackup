@@ -88,6 +88,12 @@ type AckForm struct {
 	Tomorrow    string
 	Min, Max    string
 	NextLabel   string
+	// Mode, Until and Note are what the form opens with: "ack" and empty for a new acknowledgement,
+	// the existing kind, end and note for "Change…" (F6). Change is true for the latter.
+	Mode   string
+	Until  string
+	Note   string
+	Change bool
 }
 
 // ackTypeRE is the shape of an alarm_acks.alarm_type word.
@@ -113,7 +119,7 @@ func ackForm(subjectType, subjectID, alarm, what string, c fmtCtx, zone string) 
 	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 8, 0, 0, 0, c.loc())
 	f := AckForm{Action: "/ui/acks", Label: what, SubjectType: subjectType, SubjectID: subjectID, AlarmType: alarm, PopID: "ack-" + subjectID + "-" + alarm,
 		Tomorrow: tomorrow.Format("Mon 2 Jan, 3:04 PM"), Min: now.Add(time.Minute).Format(datetimeLocal), Max: now.Add(store.MaxSnooze - time.Hour).Format(datetimeLocal),
-		NextLabel: "Until the next successful backup"}
+		NextLabel: "Until the next successful backup", Mode: "ack"}
 	if subjectType == store.EpisodeCustomer {
 		f.NextLabel = "Until the alarm ends"
 	}
@@ -202,6 +208,13 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 		}
 		if a, ok := byType[t]; ok {
 			row.Ack = ackLine(a, c, s, r)
+			row.Form.Change, row.Form.Note = true, a.Note // "Change…" opens with what is in force
+			switch {
+			case a.Kind == adminapi.AckKindSnooze && a.SnoozeUntil != nil:
+				row.Form.Mode, row.Form.Until = "until", a.SnoozeUntil.In(c.loc()).Format(datetimeLocal)
+			case a.Kind == adminapi.AckKindSnooze:
+				row.Form.Mode = "next"
+			}
 		}
 		v.Rows = append(v.Rows, row)
 	}
