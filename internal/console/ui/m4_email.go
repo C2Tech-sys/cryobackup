@@ -465,6 +465,12 @@ func (s *Service) emailData(r *http.Request, p *auth.Principal) EmailPage {
 		d.Test.Enabled, d.Test.Why = false, "E-mail is not set up: the smtp block of the console configuration names no relay."
 	}
 
+	if !d.Test.Enabled { // no "Use for test" beside a recipient when the test cannot be sent: no dead links
+		for i := range d.Rcpt.Rows {
+			d.Rcpt.Rows[i].UseHref = ""
+		}
+	}
+
 	// digest
 	d.Digest = DigestView{CanEdit: d.CanOwn, CSRF: p.CSRF, Zone: s.zone(r.Context()), ZoneNow: zoneNow(s.now(), s.loc(r.Context()))}
 	if setErr != nil {

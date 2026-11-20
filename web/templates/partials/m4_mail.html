@@ -31,7 +31,7 @@
   <div class="field"><label for="test-to">Send to</label>
     <input class="input mono" id="test-to" name="to" type="email" value="{{.To}}" maxlength="254" autocomplete="off" spellcheck="false"{{if not .Enabled}} readonly aria-readonly="true"{{end}}{{if .ToErr}} aria-invalid="true" aria-describedby="test-to-help test-to-err"{{else}} aria-describedby="test-to-help"{{end}}>
     {{with .ToErr}}<span class="err" id="test-to-err">{{.}}</span>{{end}}
-    <span class="help" id="test-to-help">{{if .Own}}Your own address is filled in. {{end}}Use "Use for test" beside a recipient to fill in theirs.</span></div>
+    <span class="help" id="test-to-help">{{if .Own}}Your own address is filled in. {{end}}{{if .Enabled}}Use "Use for test" beside a recipient to fill in theirs.{{end}}</span></div>
   <div class="actions">{{if .Enabled}}<button class="btn primary" type="submit">Send test mail</button>{{else}}<span class="btn" role="button" aria-disabled="true" aria-describedby="test-why">Send test mail</span>{{end}}</div>
   {{if not .Enabled}}<p class="meta-mono why" id="test-why">{{.Why}}</p>{{end}}
 </form>{{end}}
@@ -61,7 +61,7 @@
 <td class="sw-cell" data-label="Alerts">{{template "m4_onoff" .Alerts}}</td>
 <td class="sw-cell" data-label="Recoveries">{{template "m4_onoff" .Recoveries}}</td>
 <td class="sw-cell" data-label="Digest">{{template "m4_onoff" .Digest}}</td>
-<td class="act"><span class="rcpt-acts"><a class="btn sm ghost" href="{{.UseHref}}" aria-label="Use {{.Name}}'s address for the test mail">Use for test</a>
+<td class="act"><span class="rcpt-acts">{{if .UseHref}}<a class="btn sm ghost" href="{{.UseHref}}" aria-label="Use {{.Name}}'s address for the test mail">Use for test</a>{{end}}
 {{if $.CanEdit}}<details class="rowmenu rcpt-menu"{{if .Open}} open{{end}}><summary class="btn sm" aria-label="Edit {{.Name}}">Edit…</summary>
   <div class="rowmenu-pop" role="group" aria-label="Edit {{.Name}}">
     <form method="post" action="{{.Form.Action}}" class="stack" novalidate><input type="hidden" name="csrf_token" value="{{$.CSRF}}">

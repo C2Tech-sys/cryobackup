@@ -230,8 +230,8 @@ func TestP20W3B_SMTPNotConfiguredDisablesTheTestWithItsReason(t *testing.T) {
 	body := e.page("/settings/email", 200)
 	mustContain(t, "not configured", body, "NOT CONFIGURED", `aria-disabled="true" aria-describedby="test-why"`, "E-mail is not set up: the smtp block",
 		`aria-describedby="dg-send-why"`, "E-mail is not set up, so the digest cannot be sent.")
-	if strings.Contains(body, `<button class="btn primary" type="submit">Send test mail</button>`) {
-		t.Error("a dead Send button is offered")
+	if strings.Contains(body, `<button class="btn primary" type="submit">Send test mail</button>`) || strings.Contains(body, ">Use for test</a>") {
+		t.Error("a dead Send button or Use for test link is offered")
 	}
 	res, body := e.post("/ui/settings/email/test", url.Values{"to": {"desk@example.test"}}, false)
 	if res.StatusCode != http.StatusConflict || !strings.Contains(body, "Not sent: e-mail is not set up.") {
