@@ -1306,8 +1306,12 @@ q.acknote { flex-basis: 100%; padding: 4px 0 0 10px; border-left: 2px solid var(
 .ackpop { width: 360px; }
 .opt.dense { gap: 6px; }
 .opt.dense label { padding: 7px 10px; }
+/* G4: the popover's options fit its box at 390 px: one track as wide as the popover, and nothing inside a tile
+   (the date input included) asks for more than the tile has. */
+.ackpop .opt { grid-template-columns: minmax(0, 1fr); }
+.ackpop .opt label > div { min-width: 0; overflow-wrap: break-word; }
 .opt .untilopt div { display: grid; gap: 6px; width: 100%; }
-.opt .untilopt input.input { width: 100%; max-width: 230px; height: 32px; margin: 0; accent-color: auto; }
+.opt .untilopt input.input { width: 100%; min-width: 0; max-width: 230px; height: 32px; margin: 0; accent-color: auto; }
 .d-mail .stack > div > .meta-mono { margin: 0 0 6px; }
 .d-mail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: var(--space-4); align-items: start; }
 .d-mail-grid > * { min-width: 0; }

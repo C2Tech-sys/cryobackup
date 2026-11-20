@@ -197,3 +197,40 @@ return out;`
 		t.Errorf("the probe does not see the values the F4 rule broke: %v", bad)
 	}
 }
+
+// G4: the acknowledge popover's contents fit inside its content box, at 390 px and desktop width, with the
+// house fonts and with wide-font metrics: every descendant's right edge is inside the popover's padding.
+func TestP20W3B_G4_TheAcknowledgePopoverHoldsItsOptions(t *testing.T) {
+	chromeOrSkip(t)
+	e := newM4Env(t)
+	e.login()
+	probe := `var d = document.querySelector('details.ackmenu'); if (!d) return {error: 'no acknowledge menu'}; d.open = true;
+var p = d.querySelector('.rowmenu-pop'), r = p.getBoundingClientRect(), cs = getComputedStyle(p);
+var right = r.right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth), out = {iw: innerWidth, kids: 0, past: 0};
+p.querySelectorAll('*').forEach(function (el) { var q = el.getBoundingClientRect(); if (q.width === 0) return; out.kids++; out.past = Math.max(out.past, q.right - right); });
+return out;`
+	base := e.appCSS(t)
+	pages := map[string]string{"device": "/devices/" + e.dev["RECEPTION-2"], "customer": "/customers/" + e.customerID("Blue Ridge Accounting")}
+	for name, path := range pages {
+		for _, w := range []int{390, 1360} {
+			for _, m := range []struct{ name, css string }{{"house", ""}, {"wide", wideMetrics}} {
+				got := e.layout(t, layoutOpts{Path: path, CSS: base + m.css, W: w, H: 900, Probe: probe})
+				if msg, bad := got["error"]; bad {
+					t.Fatalf("%s: %v", name, msg)
+				}
+				if got["kids"] < 20 || got["past"] > 0.5 {
+					t.Errorf("%s %d px %s fonts: something ends %.1f px past the popover's content box (%v elements)", name, w, m.name, got["past"], got["kids"])
+				}
+			}
+		}
+	}
+	mutant := strings.Replace(base, ".ackpop .opt { grid-template-columns: minmax(0, 1fr); }", "", 1)
+	mutant = strings.Replace(mutant, ".ackpop .opt label > div { min-width: 0; overflow-wrap: break-word; }", "", 1)
+	mutant = strings.Replace(mutant, "width: 100%; min-width: 0; max-width: 230px;", "width: 100%; max-width: 230px;", 1)
+	if mutant == base || strings.Contains(mutant, ".ackpop .opt") {
+		t.Fatal("the G4 rules are not where the test expects them")
+	}
+	if bad := e.layout(t, layoutOpts{Path: pages["device"], CSS: mutant, W: 390, H: 900, Probe: probe}); bad["past"] <= 0.5 {
+		t.Errorf("the probe does not see the options that ran past the popover: %v", bad)
+	}
+}
