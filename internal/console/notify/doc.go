@@ -35,7 +35,7 @@
 // fails, plus a close inside that window, can produce a recovery notice for an alarm that recipient
 // was not mailed. It is a spurious "resolved", never a lost alert, and telling it apart would need
 // the delivery log to record which episodes each message carried.
-
+//
 // # Batches and crash safety
 //
 // A batch is the episodes one pass mails together. Its id is the time the pass marks them
