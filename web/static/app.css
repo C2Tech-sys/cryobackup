@@ -1279,6 +1279,10 @@ table.fleet.dlog td.when time { font: 500 12px/1 var(--font-mono); color: var(--
 table.fleet.dlog td.who { white-space: normal; min-width: 140px; }
 table.fleet.dlog td.who .rname { font-weight: 600; overflow-wrap: anywhere; }
 table.fleet.dlog td.att { font: 500 12px/1 var(--font-mono); text-align: center; }
+table.fleet.dlog td.att .att-w { display: none; }
+/* /settings: the digest rows' "Edit in e-mail settings" wraps instead of running past a phone (F4). */
+@media (max-width: 640px) { table.fleet.settable td.wrap { min-width: 0; } table.fleet.settable td { white-space: normal; overflow-wrap: anywhere; } }
+table.fleet.compact td .btn.editlink { white-space: normal; height: auto; min-height: 26px; padding-top: 4px; padding-bottom: 4px; line-height: 1.25; text-align: left; max-width: 100%; }
 table.fleet.dlog td.detail { white-space: normal; min-width: 180px; }
 table.fleet.dlog td.state-cell { white-space: nowrap; }
 .alarms { display: grid; gap: 10px; margin-bottom: var(--space-4); scroll-margin-top: 72px; }
@@ -1323,7 +1327,9 @@ q.acknote { flex-basis: 100%; padding: 4px 0 0 10px; border-left: 2px solid var(
   table.fleet.dlog td.when { grid-column: 1; grid-row: 1; }
   table.fleet.dlog td.state-cell { grid-column: 2; grid-row: 1; }
   table.fleet.dlog td.kind-cell, table.fleet.dlog td.who, table.fleet.dlog td.detail { grid-column: 1 / -1; }
-  table.fleet.dlog td.att { display: none; }
+  table.fleet.dlog td.att:not(.multi) { display: none; }
+  table.fleet.dlog td.att.multi { grid-column: 1 / -1; text-align: left; color: var(--warning); }
+  table.fleet.dlog td.att.multi .att-w { display: inline; }
   li.alarm { flex-direction: column; }
   .alarm-acts { flex-wrap: wrap; width: 100%; }
   .dpreview .frame iframe { height: 460px; }

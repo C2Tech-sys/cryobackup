@@ -32,9 +32,9 @@
 
 <section class="stack" aria-labelledby="set-others">
   <h3 class="h-label" id="set-others">Retention and schedule <span class="count">{{len .Others}}</span></h3>
-  <div class="table-wrap" role="region" aria-label="Other settings" tabindex="0"><table class="fleet compact"><caption class="sr-only">Settings that are shown but not editable yet</caption>
+  <div class="table-wrap" role="region" aria-label="Other settings" tabindex="0"><table class="fleet compact settable"><caption class="sr-only">Settings that are shown but not editable yet</caption>
     <thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead>
-    <tbody>{{range .Others}}<tr><td class="wrap"><b>{{.Label}}</b><small>{{.Help}}</small></td><td class="mono">{{.Value}}</td><td class="wrap">{{if .Href}}<a class="btn sm" href="{{.Href}}">Edit in e-mail settings</a>{{else if eq .Since "system"}}<span class="st neutral sm"><i aria-hidden="true"></i>SET BY THE CONSOLE</span>{{else}}<span class="st neutral sm"><i aria-hidden="true"></i>NOT EDITABLE YET</span><small>Becomes effective with milestone {{.Since}}</small>{{end}}</td></tr>{{end}}</tbody></table></div>
+    <tbody>{{range .Others}}<tr><td class="wrap"><b>{{.Label}}</b><small>{{.Help}}</small></td><td class="mono">{{.Value}}</td><td class="wrap">{{if .Href}}<a class="btn sm editlink" href="{{.Href}}">Edit in e-mail settings</a>{{else if eq .Since "system"}}<span class="st neutral sm"><i aria-hidden="true"></i>SET BY THE CONSOLE</span>{{else}}<span class="st neutral sm"><i aria-hidden="true"></i>NOT EDITABLE YET</span><small>Becomes effective with milestone {{.Since}}</small>{{end}}</td></tr>{{end}}</tbody></table></div>
 </section>
 
 <section class="stack" aria-labelledby="set-more"><h3 class="h-label" id="set-more">Elsewhere</h3>

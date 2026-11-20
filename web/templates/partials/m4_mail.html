@@ -133,7 +133,7 @@
 <td class="kind-cell" data-label="Kind">{{.Kind}}</td>
 <td class="who" data-label="To">{{if .Recipient}}<span class="rname">{{.Recipient}}</span>{{else}}<span class="muted">{{.RecipientNote}}</span>{{end}}</td>
 <td class="state-cell">{{template "chip" .Chip}}</td>
-<td class="att" data-label="Attempt">{{.Attempt}}</td>
+<td class="att{{if gt .Attempt 1}} multi{{end}}"><span class="att-w">attempt </span>{{.Attempt}}</td>
 <td class="detail" data-label="Detail">{{if .DetailMono}}<code class="cls"{{with .DetailHint}} title="{{.}}"{{end}}>{{.Detail}}</code>{{with .DetailHint}}<small>{{.}}</small>{{end}}{{else}}{{.Detail}}{{end}}</td>
 </tr>{{end}}{{end}}
 

@@ -112,3 +112,49 @@ func TestP20W3B_TheStripHoldsWithTheM4BannersAt390AndDesktop(t *testing.T) {
 		}
 	}
 }
+
+// F4: /settings at 390 px with wide font metrics: the digest rows' "Edit in e-mail settings" end inside
+// the table's visible box, and nothing of the table needs a sideways scroll. The mutant without the
+// F4 rules is seen by the same probe.
+func TestP20W3B_F4_SettingsEditLinksFitAPhone(t *testing.T) {
+	chromeOrSkip(t)
+	e := newEnv(t)
+	e.login()
+	css := e.appCSS(t) + wideMetrics
+	probe := `var tw = document.querySelector('.settingsform ~ section .table-wrap') || document.querySelectorAll('.table-wrap')[0];
+var box = tw.getBoundingClientRect(), out = {iw: innerWidth, links: 0, past: 0, scroll: tw.scrollWidth - tw.clientWidth, overflow: document.documentElement.scrollWidth - innerWidth};
+document.querySelectorAll('a.editlink').forEach(function (a) { var r = a.getBoundingClientRect(); out.links++; out.past = Math.max(out.past, r.right - box.right); });
+return out;`
+	got := e.layout(t, layoutOpts{Path: "/settings", CSS: css, W: 390, H: 900, Probe: probe})
+	if got["links"] != 2 {
+		t.Fatalf("%v edit links on /settings, want the two digest rows'", got["links"])
+	}
+	if got["past"] > 0.5 || got["scroll"] > 0.5 || got["overflow"] > 0.5 {
+		t.Errorf("at 390 px the edit links end %.0f px past the table, which scrolls %.0f px (page overflow %.0f)", got["past"], got["scroll"], got["overflow"])
+	}
+	mutant := strings.Replace(css, "table.fleet.compact td .btn.editlink { white-space: normal;", "table.fleet.compact td .btn.editlink { white-space: nowrap;", 1)
+	mutant = strings.Replace(mutant, "@media (max-width: 640px) { table.fleet.settable td.wrap { min-width: 0; } table.fleet.settable td { white-space: normal; overflow-wrap: anywhere; } }", "", 1)
+	if strings.Contains(mutant, "editlink { white-space: normal;") || strings.Contains(mutant, "table.fleet.settable td.wrap") {
+		t.Fatal("the F4 rules are not where the test expects them")
+	}
+	if bad := e.layout(t, layoutOpts{Path: "/settings", CSS: mutant, W: 390, H: 900, Probe: probe}); bad["past"] <= 0.5 && bad["scroll"] <= 0.5 {
+		t.Errorf("the probe cannot tell links that run past the table from ones that wrap: %v", bad)
+	}
+}
+
+// F4: on a phone the delivery log hides the Attempt column, so a row past its first attempt says
+// "attempt N" in its stacked card; a first attempt says nothing.
+func TestP20W3B_F4_PhoneDeliveryRowsShowTheirAttempt(t *testing.T) {
+	chromeOrSkip(t)
+	e := newM4Env(t)
+	e.login()
+	probe := `var out = {iw: innerWidth, shown: 0, hidden: 0, text: 0};
+document.querySelectorAll('table.dlog td.att').forEach(function (td) {
+  var vis = td.checkVisibility(); if (vis) { out.shown++; if (/^attempt \d+$/.test(td.innerText.trim())) out.text++; } else out.hidden++; });
+return out;`
+	got := e.layout(t, layoutOpts{Path: "/settings/email", CSS: e.appCSS(t), W: 390, H: 900, Probe: probe})
+	// the fixture log's first page holds two rows past their first attempt (attempt 2 and attempt 4)
+	if got["shown"] != 2 || got["text"] != 2 || got["hidden"] < 20 {
+		t.Errorf("at 390 px: %v attempt cells shown (%v reading \"attempt N\"), %v hidden; want the 2 later attempts shown", got["shown"], got["text"], got["hidden"])
+	}
+}
