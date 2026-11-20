@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/migrations"
+	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
 // olderDatabase writes, at path, a database as the release with the first upTo migrations left it:
@@ -322,27 +324,54 @@ func TestDoctorOnACleanWALDatabaseCreatesOnlyEmptyFiles(t *testing.T) {
 // P20-W2BF C3: when SQLite cannot set up the -shm index it needs to read a WAL database (here a
 // directory stands where the -shm file must go; in the field, a directory this account may not
 // write in), doctor says so and what to do, not a bare "unable to open database file (14)".
+//
+// P20-W3D 5: the "injected" case holds on every OS: the directory at the -shm name is real and
+// SQLite's open error is injected (openNoMigrate). The "real open" case lets SQLite itself fail
+// and runs on Windows only: on the Linux CI runner a directory at the -shm name does not make the
+// read-only open fail (doctor printed the database OK line), which by reading is the unix VFS
+// falling back to a read-only, then an in-memory shm index when the -shm cannot be opened
+// read-write and no -wal exists. That fallback was not verified on a Unix machine here.
 func TestDoctorExplainsAnUnwritableShm(t *testing.T) {
-	cfgPath, db := doctorRig(t)
-	if err := os.Mkdir(db+"-shm", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	code, out, _ := run(t, "", "doctor", "--config", cfgPath)
-	if code != ExitFailed || !strings.Contains(out, doctorLine("FAIL", "database")) || strings.Contains(out, "unable to open database file") ||
-		!strings.Contains(out, "-shm") || !strings.Contains(out, "service account") || strings.Contains(out, "not readable by this user") {
-		t.Fatalf("doctor with no usable -shm: %d\n%s", code, out)
+	for _, tc := range []struct {
+		name     string
+		injected bool
+	}{{"injected", true}, {"real open", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.injected && runtime.GOOS != "windows" {
+				t.Skip("a directory at the -shm name does not fail SQLite's read-only open outside Windows (unix VFS shm fallback); the injected case covers the branch")
+			}
+			cfgPath, db := doctorRig(t)
+			_ = os.Remove(db + "-shm")
+			if err := os.Mkdir(db+"-shm", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tc.injected {
+				injectOpenError(t, "store: open: unable to open database file: out of memory (14)")
+			}
+			code, out, _ := run(t, "", "doctor", "--config", cfgPath)
+			if code != ExitFailed || !strings.Contains(out, doctorLine("FAIL", "database")) || strings.Contains(out, "unable to open database file") ||
+				!strings.Contains(out, "-shm") || !strings.Contains(out, "service account") || strings.Contains(out, "not readable by this user") {
+				t.Fatalf("doctor with no usable -shm: %d\n%s", code, out)
+			}
+		})
 	}
 }
 
+// injectOpenError makes doctor's read-only open fail with msg (openNoMigrate), on every OS.
+func injectOpenError(t *testing.T, msg string) {
+	t.Helper()
+	prev := openNoMigrate
+	t.Cleanup(func() { openNoMigrate = prev })
+	openNoMigrate = func(context.Context, store.Options) (*store.Store, []string, error) { return nil, nil, errors.New(msg) }
+}
+
 // P20-W2BF D5: when the main file itself cannot be opened for reading, doctor says so and does not
-// blame the directory or the -shm index. The open error is injected (openForReading): the same
-// unusable -shm makes SQLite's open fail, and the readability check that comes first names the
-// real cause.
+// blame the directory or the -shm index. Both the open error (openNoMigrate) and the unreadable
+// main file (openForReading) are injected, so the fault holds on every OS (P20-W3D 5: it relied
+// on a directory at the -shm name failing the open, which it does not on Linux).
 func TestDoctorNamesAnUnreadableMainFile(t *testing.T) {
 	cfgPath, db := doctorRig(t)
-	if err := os.Mkdir(db+"-shm", 0o755); err != nil {
-		t.Fatal(err)
-	}
+	injectOpenError(t, "store: open: unable to open database file: out of memory (14)")
 	prev := openForReading
 	t.Cleanup(func() { openForReading = prev })
 	openForReading = func(path string) error {

@@ -87,8 +87,8 @@ func TestProbeImplicitTLSAndPlain(t *testing.T) {
 }
 
 // The probe and Send open a connection the same way: for every failure that happens before the
-// envelope, both report the same stage, class and temporariness (session in probe_m4.go mirrors
-// the opening half of deliver; this pins the pair).
+// envelope, both report the same stage, class and temporariness, and where the opening succeeds
+// both succeed (both run session in sender.go; this pins the pair).
 func TestProbeOpensAsDeliverDoes(t *testing.T) {
 	p := testPKI(t)
 	cases := []struct {
@@ -114,6 +114,11 @@ func TestProbeOpensAsDeliverDoes(t *testing.T) {
 		{"EHLO refused", fakeCfg{reply: map[string]string{"EHLO": "500 5.5.1 no LEAK-REPLY-TEXT"}}, "plain", "", "", func(s *Settings) { s.AllowPlaintext = true }, StageConnect, ClassProtocol, false},
 		{"silent relay", fakeCfg{noGreeting: true}, "plain", "", "", func(s *Settings) { s.AllowPlaintext = true; s.GreetingTimeout = 150 * time.Millisecond }, StageConnect, ClassTimeout, true},
 		{"hangs on AUTH", fakeCfg{cert: &p.good, startTLS: true, authMech: "PLAIN", hang: map[string]bool{"AUTH": true}}, "starttls", "svc", "pw", func(s *Settings) { s.Timeout = 300 * time.Millisecond }, StageAuth, ClassTimeout, true},
+		// Success paths (no class): both sign in, and Send delivers.
+		{"STARTTLS with AUTH", fakeCfg{cert: &p.good, startTLS: true, authMech: "PLAIN LOGIN", user: "svc", pass: "pw"}, "starttls", "svc", "pw", nil, "", "", false},
+		{"implicit TLS, bare EHLO last line, bare AUTH success", fakeCfg{cert: &p.good, implicit: true, authMech: "PLAIN",
+			reply: map[string]string{"EHLO": "250-" + testHost + "\n250-AUTH PLAIN\n250", "AUTH": "235"}},
+			"tls", "svc", "pw", func(s *Settings) { s.Timeout = 5 * time.Second }, "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,10 +136,54 @@ func TestProbeOpensAsDeliverDoes(t *testing.T) {
 					errs[i] = probeWith(t, srv, set)
 				} else {
 					errs[i] = sendWith(t, set, testMsg())
+					if tc.class == "" && len(srv.captured()) != 1 {
+						t.Fatalf("send: the relay kept %d messages, want 1", len(srv.captured()))
+					}
 				}
+			}
+			if tc.class == "" {
+				if errs[0] != nil || errs[1] != nil {
+					t.Fatalf("probe: %v; send: %v; want both to succeed", errs[0], errs[1])
+				}
+				return
 			}
 			wantErr(t, errs[0], tc.stage, tc.class, tc.temp)
 			wantErr(t, errs[1], tc.stage, tc.class, tc.temp)
+		})
+	}
+}
+
+// RFC 5321 4.2.1: the text of a reply is optional. The probe reads a bare code as a reply on
+// every path a Send does (the filter of reply.go installed after NewClient and after STARTTLS):
+// a bare "250" as the whole EHLO reply or as its last line, and a bare AUTH success code.
+func TestProbeReadsBareReplyCodes(t *testing.T) {
+	p := testPKI(t)
+	for _, tc := range []struct {
+		name     string
+		cfg      fakeCfg
+		security string
+		user     string
+	}{
+		{"bare 250 as the whole EHLO reply", fakeCfg{reply: map[string]string{"EHLO": "250"}}, "plain", ""},
+		{"multi-line EHLO with a bare last line", fakeCfg{reply: map[string]string{"EHLO": "250-" + testHost + "\n250-8BITMIME\n250"}}, "plain", ""},
+		{"multi-line EHLO with a bare last line, implicit TLS and AUTH", fakeCfg{cert: &p.good, implicit: true,
+			reply: map[string]string{"EHLO": "250-" + testHost + "\n250-AUTH PLAIN\n250"}, authMech: "PLAIN", user: "svc", pass: "pw"}, "tls", "svc"},
+		{"bare AUTH success after STARTTLS", fakeCfg{cert: &p.good, startTLS: true, authMech: "PLAIN", reply: map[string]string{"AUTH": "235"}}, "starttls", "svc"},
+		{"bare AUTH success, implicit TLS, LOGIN", fakeCfg{cert: &p.good, implicit: true, authMech: "LOGIN", reply: map[string]string{"AUTH": "235"}}, "tls", "svc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := startFake(t, tc.cfg)
+			set := srv.settings(tc.security)
+			set.AllowPlaintext = tc.security == "plain"
+			if tc.user != "" {
+				set.Username, set.PasswordFile = tc.user, pwFile(t, "pw")
+			}
+			// A reply net/textproto cannot end shows as a timeout within seconds.
+			set.Timeout = 5 * time.Second
+			if err := probeWith(t, srv, set); err != nil {
+				t.Fatalf("probe: %v", err)
+			}
+			waitQuit(t, srv)
 		})
 	}
 }

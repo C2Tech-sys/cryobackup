@@ -194,14 +194,43 @@ func orDefault(d, def time.Duration) time.Duration {
 	return d
 }
 
-func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password string) error {
+// smtpSession is an open, greeted, encrypted-as-configured and signed-in
+// connection: the opening half of a send, which Probe (probe_m4.go) runs too.
+type smtpSession struct {
+	c    *smtp.Client
+	conn net.Conn // the TCP connection under c, for the deadlines of closing
+	// ctx is the caller's context bounded by overall; it closes conn when it ends,
+	// and the failure classifiers read the cause from it.
+	ctx     context.Context
+	overall time.Time
+	release func()
+}
+
+// session opens a connection to the relay, up to and including AUTH: the three
+// clocks, dial, greeting, implicit TLS or STARTTLS as configured with the reply
+// filter of reply.go on every reader net/smtp makes, EHLO, the plaintext guard
+// and the sign-in when a user name is configured. It is the one opening of both
+// deliver and Probe. On error every resource is already released and the error
+// is a *SendError; on success the caller calls release.
+func (s *SMTPSender) session(ctx context.Context, password string) (out smtpSession, err error) {
 	set := s.set
 	overall := time.Now().Add(orDefault(set.Timeout, DefaultTimeout))
 	if dl, ok := ctx.Deadline(); ok && dl.Before(overall) {
 		overall = dl
 	}
 	ctx, cancel := context.WithDeadline(ctx, overall)
-	defer cancel()
+	var cleanup []func()
+	release := func() {
+		for i := len(cleanup) - 1; i >= 0; i-- {
+			cleanup[i]()
+		}
+		cancel()
+	}
+	defer func() {
+		if err != nil {
+			release()
+		}
+	}()
 
 	dial := set.Dial
 	if dial == nil {
@@ -209,16 +238,16 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 		dial = d.DialContext
 	}
 	dctx, dcancel := context.WithTimeout(ctx, orDefault(set.DialTimeout, DefaultDialTimeout))
-	conn, err := dial(dctx, "tcp", net.JoinHostPort(set.Host, strconv.Itoa(set.Port)))
+	conn, derr := dial(dctx, "tcp", net.JoinHostPort(set.Host, strconv.Itoa(set.Port)))
 	dcancel()
-	if err != nil {
-		return netFailure(ctx, StageConnect, err)
+	if derr != nil {
+		return smtpSession{}, netFailure(ctx, StageConnect, derr)
 	}
-	defer conn.Close()
+	cleanup = append(cleanup, func() { _ = conn.Close() })
 	// A cancelled or expired context closes the connection under whatever read
 	// or write is blocked; netFailure then reads the cause from the context.
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
+	cleanup = append(cleanup, func() { stop() })
 
 	greet := time.Now().Add(orDefault(set.GreetingTimeout, DefaultGreetingTimeout))
 	if greet.After(overall) {
@@ -231,16 +260,16 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 	encrypted := false
 	if set.Security == "tls" {
 		tc := tls.Client(conn, tcfg)
-		if err := tc.HandshakeContext(ctx); err != nil {
-			return tlsFailure(ctx, err)
+		if herr := tc.HandshakeContext(ctx); herr != nil {
+			return smtpSession{}, tlsFailure(ctx, herr)
 		}
 		nc, encrypted = tc, true
 	}
-	c, err := smtp.NewClient(nc, set.Host)
-	if err != nil {
-		return replyFailure(ctx, StageConnect, ClassProtocol, err)
+	c, cerr := smtp.NewClient(nc, set.Host)
+	if cerr != nil {
+		return smtpSession{}, replyFailure(ctx, StageConnect, ClassProtocol, cerr)
 	}
-	defer c.Close()
+	cleanup = append(cleanup, func() { _ = c.Close() })
 	filterReplies(c) // a bare reply code is a reply (reply.go)
 	_ = conn.SetDeadline(overall)
 
@@ -248,15 +277,15 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 	if helo == "" {
 		helo = "localhost"
 	}
-	if err := c.Hello(helo); err != nil {
-		return replyFailure(ctx, StageConnect, ClassProtocol, err)
+	if herr := c.Hello(helo); herr != nil {
+		return smtpSession{}, replyFailure(ctx, StageConnect, ClassProtocol, herr)
 	}
 	if set.Security == "starttls" {
 		if ok, _ := c.Extension("STARTTLS"); !ok {
-			return newErr(StageTLS, ClassStartTLSMissing, false)
+			return smtpSession{}, newErr(StageTLS, ClassStartTLSMissing, false)
 		}
-		if err := c.StartTLS(tcfg); err != nil {
-			return tlsFailure(ctx, err)
+		if terr := c.StartTLS(tcfg); terr != nil {
+			return smtpSession{}, tlsFailure(ctx, terr)
 		}
 		filterReplies(c) // StartTLS made a new reader
 		encrypted = true
@@ -266,19 +295,30 @@ func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password
 		// Defence in depth: Validate already refuses plain with a user name, and
 		// nothing here authenticates before the connection is encrypted.
 		if !encrypted {
-			return newErr(StageAuth, ClassPlaintextRefused, false)
+			return smtpSession{}, newErr(StageAuth, ClassPlaintextRefused, false)
 		}
-		auth := pickAuth(c, set.Host, set.Username, password)
-		if auth == nil {
-			return newErr(StageAuth, ClassAuthUnsupported, false)
+		a := pickAuth(c, set.Host, set.Username, password)
+		if a == nil {
+			return smtpSession{}, newErr(StageAuth, ClassAuthUnsupported, false)
 		}
-		if err := c.Auth(auth); err != nil {
-			if errors.Is(err, errLoginChallenge) {
-				return newErr(StageAuth, ClassProtocol, false)
+		if aerr := c.Auth(a); aerr != nil {
+			if errors.Is(aerr, errLoginChallenge) {
+				return smtpSession{}, newErr(StageAuth, ClassProtocol, false)
 			}
-			return replyFailure(ctx, StageAuth, ClassAuthRejected, err)
+			return smtpSession{}, replyFailure(ctx, StageAuth, ClassAuthRejected, aerr)
 		}
 	}
+	return smtpSession{c: c, conn: conn, ctx: ctx, overall: overall, release: release}, nil
+}
+
+func (s *SMTPSender) deliver(ctx context.Context, a addrs, data []byte, password string) error {
+	ss, err := s.session(ctx, password)
+	if err != nil {
+		return err
+	}
+	defer ss.release()
+	c, conn, overall := ss.c, ss.conn, ss.overall
+	ctx = ss.ctx
 
 	// The envelope is checked again here, one address at a time, immediately
 	// before it is written: whatever built addrs, nothing but a plain address

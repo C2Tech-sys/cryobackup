@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -159,6 +160,21 @@ var openForReading = func(path string) error {
 	return f.Close()
 }
 
+// dirWritable reports whether this account can create a file in dir, by creating an empty
+// temporary file there and removing it again (there is no portable access check: on Windows an
+// ACL decides). Doctor tests the directory this way before it blames it, and only on the failure
+// path. A variable so that a test can inject an unwritable directory.
+var dirWritable = func(dir string) bool {
+	f, err := os.CreateTemp(dir, ".cryo-doctor-probe-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
+}
+
 // openNoMigrate is store.OpenNoMigrate; a variable so that a test can inject an open failure
 // whose cause the real file system cannot produce hermetically.
 var openNoMigrate = store.OpenNoMigrate
@@ -226,29 +242,36 @@ func openCheckedDatabase(path string, report func(level, name, detail string)) (
 
 // dbOpenFailure is the FAIL detail of a database file that exists (OpenNoMigrate looked) but could
 // not be opened read-only. It names a cause only where doctor can see one, in this order: a main
-// file this account cannot read; a -wal file beside it that this account cannot read; and, for
-// SQLite's "unable to open database file", the -shm index: a -shm that is not a regular file or
-// that this account cannot read, or no -shm at all, which SQLite had to create next to the database
-// and could not (the directory is not writable for this account). With none of those it says
-// neutrally that the read-only open failed and blames nothing.
+// file this account cannot read; a -wal beside it that is not a regular file (a directory at its
+// name) or that this account cannot read; a -shm that is not a regular file; and, for SQLite's
+// "unable to open database file", a -shm this account cannot read, or no -shm at all in a
+// directory this account has been tested not to be able to create a file in (SQLite had to create
+// the -shm there and could not). With none of those it says neutrally that the read-only open
+// failed and blames nothing.
 func dbOpenFailure(path string, err error) string {
 	if openForReading(path) != nil {
 		return "database file is not readable by this user"
 	}
-	if _, serr := os.Lstat(path + "-wal"); serr == nil && openForReading(path+"-wal") != nil {
-		return "database -wal file is not readable by this user"
+	if fi, serr := os.Lstat(path + "-wal"); serr == nil {
+		if !fi.Mode().IsRegular() {
+			return "database -wal file is not a regular file"
+		}
+		if openForReading(path+"-wal") != nil {
+			return "database -wal file is not readable by this user"
+		}
+	}
+	const asService = "; run doctor as the service account cryo-console serve runs as"
+	fi, serr := os.Lstat(path + "-shm")
+	if serr == nil && !fi.Mode().IsRegular() {
+		return "cannot be read: to read the database SQLite must open its -shm index file next to it, and what stands at that name is not a regular file" + asService
 	}
 	if !strings.Contains(err.Error(), "unable to open database file") {
 		return fmt.Sprint(sanitize(err))
 	}
-	const asService = "; run doctor as the service account cryo-console serve runs as"
-	fi, serr := os.Lstat(path + "-shm")
 	switch {
-	case serr == nil && !fi.Mode().IsRegular():
-		return "cannot be read: to read the database SQLite must open its -shm index file next to it, and what stands at that name is not a regular file" + asService
 	case serr == nil && openForReading(path+"-shm") != nil:
 		return "database -shm file is not readable by this user" + asService
-	case errors.Is(serr, os.ErrNotExist):
+	case errors.Is(serr, os.ErrNotExist) && !dirWritable(filepath.Dir(path)):
 		return "cannot be read: to read the database SQLite must create its -shm index file next to it, and this account cannot (the directory is not writable for it)" + asService
 	}
 	return "database could not be opened read-only" + asService

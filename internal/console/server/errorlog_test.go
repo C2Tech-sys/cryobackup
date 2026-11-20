@@ -27,12 +27,49 @@ import (
 type lockedBuf struct {
 	mu sync.Mutex
 	b  bytes.Buffer
+	// wrote is closed (and dropped) at the next Write, so waitFor wakes on every new line.
+	wrote chan struct{}
 }
 
 func (l *lockedBuf) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.b.Write(p)
+	n, err := l.b.Write(p)
+	if l.wrote != nil {
+		close(l.wrote)
+		l.wrote = nil
+	}
+	return n, err
+}
+
+// next returns a channel that is closed at the next Write.
+func (l *lockedBuf) next() <-chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.wrote == nil {
+		l.wrote = make(chan struct{})
+	}
+	return l.wrote
+}
+
+// waitFor waits until ok holds for the records logged so far, checking again at every write, and
+// gives up after limit. It reports whether ok held. The channel is taken before the records are
+// read, so a line written between the read and the wait is not missed.
+func (l *lockedBuf) waitFor(t *testing.T, limit time.Duration, ok func(recs []map[string]any) bool) bool {
+	t.Helper()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	for {
+		wrote := l.next()
+		if ok(l.records(t)) {
+			return true
+		}
+		select {
+		case <-wrote:
+		case <-timer.C:
+			return ok(l.records(t))
+		}
+	}
 }
 
 func (l *lockedBuf) String() string {
@@ -179,24 +216,36 @@ func TestScannerHandshakesOnTheAgentListenerLogTyped(t *testing.T) {
 		_ = c.Close()
 		t.Fatal("a self-signed certificate must not verify")
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if a, _ := s.TLSHandshakeFailures(); a >= probes+2 || time.Now().After(deadline) {
-			break
+	// The server logs each failed handshake on its own goroutine, after the client has seen the
+	// outcome: wait for the lines. Each failure is counted, then logged at DEBUG, then (first of its
+	// kind) summarised at WARN, so the wait is for every DEBUG line and for the WARN lines of the
+	// kinds checked below; a DEBUG line of a kind does not mean its WARN line is written yet.
+	certKind := func(k any) bool {
+		switch k {
+		case "bad_certificate", "unknown_ca", "unknown_certificate", "certificate_expired":
+			return true
 		}
-		time.Sleep(10 * time.Millisecond)
+		return false
 	}
+	buf.waitFor(t, 10*time.Second, func(recs []map[string]any) bool {
+		events, version, cert := 0, false, false
+		for _, rec := range recs {
+			if rec["class"] != ClassTLSHandshakeFailed {
+				continue
+			}
+			switch rec["level"] {
+			case "DEBUG":
+				events++
+			case "WARN":
+				version = version || rec["kind"] == "unsupported_version"
+				cert = cert || certKind(rec["kind"])
+			}
+		}
+		return events >= probes+2 && version && cert
+	})
 	agent, admin := s.TLSHandshakeFailures()
 	if agent < probes+2 || admin != 0 {
 		t.Fatalf("handshake failures: agent %d (want >= %d), admin %d", agent, probes+2, admin)
-	}
-	// The counter moves before the WARN line is written: wait for the line of the last probe.
-	for until := time.Now().Add(5 * time.Second); time.Now().Before(until); time.Sleep(10 * time.Millisecond) {
-		o := buf.String()
-		if strings.Contains(o, `"kind":"unsupported_version"`) && (strings.Contains(o, `"kind":"bad_certificate"`) || strings.Contains(o, `"kind":"unknown_ca"`) ||
-			strings.Contains(o, `"kind":"unknown_certificate"`) || strings.Contains(o, `"kind":"certificate_expired"`)) {
-			break
-		}
 	}
 	out := buf.String()
 	if !strings.Contains(out, `"class":"`+ClassTLSHandshakeFailed+`"`) {
