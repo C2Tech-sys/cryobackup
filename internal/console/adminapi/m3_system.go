@@ -551,7 +551,7 @@ func (f healthFacts) smtpAttempts() []attempt {
 	if sm.LastTestFailed {
 		bad("the latest test e-mail failed")
 	}
-	if sm.PendingAlerts > 0 && (sm.LastSendOKAt == 0 || f.Now.Sub(millisTime(sm.LastSendOKAt)) > state.SMTPPendingWithoutSend) {
+	if sm.PendingAlerts > 0 && (sm.LastSendOKAt == 0 || f.Now.Sub(millisTime(sm.LastSendOKAt)) > state.SMTPPendingWithoutSend) && pendingOldEnough(sm, f.Now) {
 		bad("alert e-mail is waiting to go out and none has been delivered recently")
 	}
 	return out
