@@ -18,6 +18,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/cli"
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
+	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
 // M3-T4 delta, item 2: the real fixtures-mode App (cli.Build, the same one `cryo-console
@@ -277,4 +278,71 @@ func bannerLabel(id string) string {
 		// M4 (ADR 0020): the mail and heartbeat conditions (P20-W3B).
 		"C18": "NO ALERT RECIPIENT", "C19": "HEARTBEAT PING FAILING", "C19b": "HEARTBEAT NOT CHECKED", "C20": "NO DIGEST RECIPIENT", "C21": "MAIL UNDELIVERED"}
 	return labels[id]
+}
+
+// P20-W3B: serve's fixtures mode (FixtureMailWorld) shows the mail world on /settings/email, the
+// pages and the admin API share one MailService and one TestMailer (its 10 s limit is the
+// console's, whichever of the two asks), and every message lands in the FakeSender.
+func TestTheRealFixturesAppShowsTheMailWorld(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Resolve()
+	cfg.Fixtures = true
+	cfg.AdminListen = "127.0.0.1:0"
+	app, err := cli.Build(ctx, cfg, cli.BuildOptions{FixturesPassword: "fixtures-pass-1", FixtureMailWorld: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	if app.UI.Mail == nil || app.UI.Mail != app.Admin.Mail || app.UI.Mail.Test != app.TestMail || app.UI.Mail.Digest == nil {
+		t.Fatalf("the pages' MailService is not the console's: ui %+v, admin %+v", app.UI.Mail, app.Admin.Mail)
+	}
+	srv := httptest.NewServer(app.Server.AdminRouter)
+	t.Cleanup(srv.Close)
+	c := &client{t: t, base: srv.URL}
+	c.login("fixtures-pass-1")
+	page := c.page("/settings/email")
+	for _, want := range []string{fixtures.RecipientNightDesk, fixtures.RecipientLongAddress, "FIXTURES", "RETRYING", "NOT SENT", "Alarm already resolved", "Older"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the e-mail page of fixtures mode lacks %q", want)
+		}
+	}
+	if dev := c.page("/devices/" + deviceID(t, app, fixtures.AckedHost)); !strings.Contains(dev, fixtures.AckNote) {
+		t.Error("the acknowledged alarm of the fixture world is not on its device page")
+	}
+	res, body := c.do("POST", "/ui/settings/email/test", url.Values{"to": {"desk@example.test"}, "csrf_token": {c.csrf}})
+	if res.StatusCode != 200 || !strings.Contains(body, "The relay accepted the message.") {
+		t.Fatalf("test mail from the page: %d", res.StatusCode)
+	}
+	// the API asks the same TestMailer at once: refused by the one limit
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/settings/smtp/test", strings.NewReader(`{"to":"desk@example.test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", srv.URL)
+	req.Header.Set(auth.CSRFHeader, c.csrf)
+	for _, ck := range c.cs {
+		req.AddCookie(ck)
+	}
+	ar, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar.Body.Close()
+	if ar.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("a test through the API right after one from the page: %d, want 429 (one limit per console)", ar.StatusCode)
+	}
+}
+
+func deviceID(t *testing.T, app *cli.App, host string) string {
+	t.Helper()
+	l, err := app.Store.ListDevices(context.Background(), store.ScopeAll(), store.ListDevicesOptions{Page: store.Page{Limit: 500}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range l.Items {
+		if d.Hostname == host {
+			return d.ID
+		}
+	}
+	t.Fatalf("no device %s", host)
+	return ""
 }

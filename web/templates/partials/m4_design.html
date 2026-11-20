@@ -1,0 +1,23 @@
+{{/* design_mail: the M4 section of /design (P20-W3B). Each component of /settings/email and of the acknowledge control in
+     its states, from the same partials the pages render (m4_mail.html), with fixed sample values. */}}
+{{define "design_mail"}}<section class="d-section d-mail" id="mail" aria-labelledby="d-mail"><header><h2 id="d-mail">Alert e-mail</h2><span class="used">ADR 0020: e-mail status, recipients, test mail, the digest and its preview, the delivery log, acknowledge and snooze (S27 B07 B08)</span></header>
+<div class="stack" id="d-mail-status"><h3 class="h-label">Delivery status</h3>
+<div class="d-mail-grid">{{range .Statuses}}<div><p class="meta-mono">{{.Name}}</p><div class="card mailcard">{{template "m4_status" .V}}</div></div>{{end}}</div></div>
+
+<div class="stack" id="d-mail-recipients"><h3 class="h-label">Recipients table</h3>
+{{range .Recipients}}<div><p class="meta-mono">{{.Name}}</p><div class="stack mailsec">{{template "m4_recipients" .V}}</div></div>{{end}}</div>
+
+<div class="stack" id="d-mail-test"><h3 class="h-label">Test mail: the result of each class</h3>
+<div class="d-mail-grid">{{range .Tests}}<div><p class="meta-mono">{{.Name}}</p>{{template "m4_test_result" .V}}</div>{{end}}</div>
+<div><p class="meta-mono">Disabled, with its reason (e-mail not set up)</p><div class="card mailcard">{{template "m4_test" .TestOff}}</div></div></div>
+
+<div class="stack" id="d-mail-digest"><h3 class="h-label">Digest block</h3>
+{{range .Digests}}<div><p class="meta-mono">{{.Name}}</p><div class="card mailcard">{{template "m4_digest" .V}}</div></div>{{end}}
+{{with .Preview}}<div><p class="meta-mono">The preview frame: sandboxed, no script, no remote content (the fixture fleet, rendered as the real preview renders it)</p><div class="card mailcard">{{template "m4_preview" .}}</div></div>{{end}}</div>
+
+<div class="stack" id="d-mail-log"><h3 class="h-label">Delivery log: each outcome and each suppress label</h3>
+{{template "m4_log_table" .Log}}</div>
+
+<div class="stack" id="d-mail-acks"><h3 class="h-label">Acknowledged and snoozed alarms</h3>
+{{range .Alarms}}<div><p class="meta-mono">{{.Name}}</p>{{template "m4_alarms" .V}}</div>{{end}}</div>
+</section>{{end}}

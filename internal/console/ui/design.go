@@ -27,6 +27,7 @@ var designSections = []DesignSection{
 	{"runs", "Run views", "step 8 · B07 B17"},
 	{"shell", "App shell", "step 9 · every screen"},
 	{"purge", "Purge and delete", "ADR 0019 · B07 B08"},
+	{"mail", "Alert e-mail", "ADR 0020 · S27 B07 B08"}, // P20-W3B (m4_design.go)
 }
 
 // DesignSection names a /design section.
@@ -165,6 +166,7 @@ type DesignData struct {
 	Steps     []Step
 	Facts     []Fact
 	Purge     *DesignPurge // ADR 0019 (purge_adr19.go)
+	Mail      *DesignMail  // P20-W3B (m4_design.go)
 }
 
 func sampleStrip(panel bool, now time.Time) StripView {
@@ -314,6 +316,7 @@ func (s *Service) designData(ctx context.Context, only string) DesignData {
 	}
 	d.Steps = []Step{{1, "Snapshot", "done"}, {2, "Browse and select", "on"}, {3, "Mode", "todo"}, {4, "Progress", "todo"}}
 	d.Purge = s.designPurge(ctx, now)
+	d.Mail = s.designMail(ctx, now, live.View)
 	d.Facts = []Fact{{Key: "Policy", Value: "v12"}, {Key: "Schedule", Value: "every 4 h in Mon-Fri/7-19 · catch-up on", Mono: true}, {Key: "Repository", Value: "61 snapshots · latest 6 h ago", Mono: true}}
 	return d
 }
