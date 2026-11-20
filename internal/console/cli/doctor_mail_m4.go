@@ -232,6 +232,10 @@ func checkHeartbeat(cfg config.Config, report func(level, name, detail string)) 
 		report("NOT CHECKED", name, "healthcheck_ping.url is not valid (see config)")
 		return
 	}
+	host := u.Hostname()
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]" // an IPv6 literal, written as in a URL
+	}
 	report("NOT CHECKED", name, fmt.Sprintf("configured: %s://%s, %s every %d s; doctor does not ping it (a ping would tell the outside monitor the console is healthy)",
-		u.Scheme, u.Hostname(), hp.Method, hp.IntervalS))
+		u.Scheme, host, hp.Method, hp.IntervalS))
 }

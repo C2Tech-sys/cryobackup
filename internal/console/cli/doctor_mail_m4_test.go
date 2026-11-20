@@ -672,7 +672,13 @@ func TestDoctorOpenFailureCauses(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, "database could not be opened read-only", "directory"},
-		{"no -shm: SQLite had to create it", func(t *testing.T, db string) { _ = os.Remove(db + "-shm") },
+		{"no -shm: SQLite had to create it", func(t *testing.T, db string) {
+			_ = os.Remove(db + "-shm")
+			// P20-W3D: the directory is blamed only once doctor has tested it; here it cannot write in it.
+			prev := dirWritable
+			t.Cleanup(func() { dirWritable = prev })
+			dirWritable = func(string) bool { return false }
+		},
 			"must create its -shm index file next to it, and this account cannot (the directory is not writable for it)", "not readable"},
 		{"a -shm this account cannot read", func(t *testing.T, db string) {
 			if err := os.WriteFile(db+"-shm", nil, 0o600); err != nil {
