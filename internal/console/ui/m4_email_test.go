@@ -371,19 +371,58 @@ func TestP20W3B_F6_BannerActionsSayWhatTheRoleCanDo(t *testing.T) {
 	}
 }
 
-// F6: a test mail or a send-now whose audit row cannot be written says so, not "nothing was changed".
+// F6, G2: a test mail or a send-now the API answers 500 (here: its audit row cannot be written) says only
+// what is true whatever the cause: neither "nothing was changed" nor "Not sent".
 func TestP20W3B_F6_UnauditedSendSaysItWasNotRecorded(t *testing.T) {
 	e := newM4Env(t)
 	e.login()
 	e.mutRefuseAudits(true)
 	for path, form := range map[string]url.Values{"/ui/settings/email/test": {"to": {"desk@example.test"}}, "/ui/settings/email/digest/send": {"force": {"1"}}} {
 		res, body := e.post(path, form, false)
-		if res.StatusCode != http.StatusInternalServerError || !strings.Contains(body, "Not sent: the console could not record the action.") || strings.Contains(body, "audit refused") {
+		if res.StatusCode != http.StatusInternalServerError || !strings.Contains(body, "The console could not complete this.") || strings.Contains(body, "could not record the action") || strings.Contains(body, "audit refused") {
 			t.Errorf("%s with the audit table refusing: %d", path, res.StatusCode)
 		}
 	}
 	e.mutRefuseAudits(false)
 	if len(e.mail.Sent()) != 0 {
 		t.Error("a message went out although its audit row could not be written")
+	}
+}
+
+// G2: a send-now that stopped on an error after some recipients says what went out, never "Not sent".
+type uiDigestDouble struct {
+	res notify.DigestResult
+	err error
+}
+
+func (d uiDigestDouble) PreviewDigest(context.Context) (notify.Content, error) {
+	return notify.Content{}, context.Canceled
+}
+
+func (d uiDigestDouble) SendDigestNow(context.Context, bool) (notify.DigestResult, error) {
+	return d.res, d.err
+}
+
+func TestP20W3B_G2_AnIncompleteSendSaysWhatWentOut(t *testing.T) {
+	e := newM4Env(t) // two recipients have the digest switch
+	e.login()
+	boom := context.DeadlineExceeded
+	for _, c := range []struct {
+		name string
+		d    uiDigestDouble
+		code int
+		want string
+	}{
+		{"one sent, the other stopped", uiDigestDouble{notify.DigestResult{Sent: 1, Recipients: []notify.DigestRecipient{{RuleID: e.recipientID(fixtures.RecipientNightDesk), Outcome: notify.DigestSent}}}, boom},
+			200, "Sent to 1 recipient; 1 could not be sent: see the delivery log below."},
+		{"both failed, then the error", uiDigestDouble{notify.DigestResult{Failed: 2, Recipients: []notify.DigestRecipient{{RuleID: "a", Outcome: notify.DigestFailed}, {RuleID: "b", Outcome: notify.DigestFailed}}}, boom},
+			200, "Sent to 0 recipients; 2 could not be sent: see the delivery log below."},
+		{"nothing attempted", uiDigestDouble{notify.DigestResult{}, boom}, 500, "The console could not complete this."},
+	} {
+		e.mailSvc.Digest = c.d
+		res, body := e.post("/ui/settings/email/digest/send", url.Values{"force": {"1"}}, false)
+		if res.StatusCode != c.code || !strings.Contains(body, c.want) || strings.Contains(body, "could not record the action") {
+			t.Errorf("%s: %d, want %d with %q", c.name, res.StatusCode, c.code, c.want)
+		}
 	}
 }

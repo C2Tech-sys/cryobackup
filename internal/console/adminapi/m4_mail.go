@@ -421,10 +421,14 @@ type DigestSendResponse struct {
 	// DigestEnabled is the digest_enabled setting after the send: false means the daily digest is
 	// switched off and this one was sent once on request. A setting that cannot be read is false
 	// too (the daily job does not send then either) and is logged.
-	DigestEnabled bool                      `json:"digest_enabled"`
-	Sent          int                       `json:"sent"`
-	Failed        int                       `json:"failed"`
-	Recipients    []DigestSendRecipientJSON `json:"recipients"`
+	DigestEnabled bool `json:"digest_enabled"`
+	// Incomplete is true when the send stopped on an error after it had attempted at least one
+	// recipient (sent or failed above zero): the counts say what went out, and the recipients the
+	// error stopped are in neither count. Look at the delivery log before sending again.
+	Incomplete bool                      `json:"incomplete,omitempty"`
+	Sent       int                       `json:"sent"`
+	Failed     int                       `json:"failed"`
+	Recipients []DigestSendRecipientJSON `json:"recipients"`
 }
 
 func (s *Service) digestSend(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +458,15 @@ func (s *Service) digestSend(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := m.Digest.SendDigestNow(r.Context(), req.Force)
 	s.committed(r) // delivery rows may exist even when a later recipient failed
-	if err != nil {
+	incomplete := false
+	switch {
+	case err != nil && res.Sent+res.Failed > 0:
+		// Something went out before the error: answering 500 would say nothing was sent and invite a
+		// second send. Answer what happened, marked incomplete (P20-W3B G2).
+		s.log().Error("admin api: digest send stopped after some recipients", logx.Str("route", "digest_send"), logx.Class(errClass(err)),
+			logx.Count("sent", res.Sent), logx.Count("failed", res.Failed))
+		incomplete = true
+	case err != nil:
 		s.failM4(w, r, "digest_send", err)
 		return
 	}
@@ -470,7 +482,7 @@ func (s *Service) digestSend(w http.ResponseWriter, r *http.Request) {
 	} else {
 		enabled = set.Enabled
 	}
-	out := DigestSendResponse{ComputedAt: s.now(), Date: res.Date, Forced: res.Forced, Skipped: res.Skipped, DigestEnabled: enabled, Sent: res.Sent, Failed: res.Failed,
+	out := DigestSendResponse{ComputedAt: s.now(), Date: res.Date, Forced: res.Forced, Skipped: res.Skipped, DigestEnabled: enabled, Incomplete: incomplete, Sent: res.Sent, Failed: res.Failed,
 		Recipients: make([]DigestSendRecipientJSON, 0, len(res.Recipients))}
 	for _, rc := range res.Recipients {
 		out.Recipients = append(out.Recipients, DigestSendRecipientJSON{ID: rc.RuleID, Name: names[rc.RuleID], Outcome: rc.Outcome})

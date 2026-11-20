@@ -946,10 +946,13 @@ func (s *Service) emailTest(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err == nil && status == http.StatusInternalServerError { // the audit row (or the record) could not be written: nothing was sent
-		s.log().Error("ui: test mail refused by the admin API", logx.Class("render"), logx.Int("status", status))
+	// A 500 from the test route is an audit row that could not be written (nothing was sent), a store
+	// failure before the send, or a message that went out and could not be recorded: the answer does not
+	// say which (the house problem body marks none of them), so the page says only what is true of all (G2).
+	if err == nil && status == http.StatusInternalServerError {
+		s.log().Error("ui: test mail failed in the admin API", logx.Class("render"), logx.Int("status", status))
 		s.renderEmail(w, r, http.StatusInternalServerError, func(d *EmailPage) {
-			d.Test.To, d.Test.Note = to, &Note{"crit", "Not sent: the console could not record the action.", "Check the database and the console log, then try again."}
+			d.Test.To, d.Test.Note = to, &couldNotComplete
 		})
 		return
 	}
@@ -1110,10 +1113,12 @@ func (s *Service) emailDigestSend(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err == nil && status == http.StatusInternalServerError { // digest.send is audited before anything is sent
-		s.log().Error("ui: digest send refused by the admin API", logx.Class("render"), logx.Int("status", status))
+	// A 500 from send-now is an audit row that could not be written, or an error before any recipient was
+	// attempted (a send that stopped halfway answers 200, incomplete): the answer does not say which (G2).
+	if err == nil && status == http.StatusInternalServerError {
+		s.log().Error("ui: digest send failed in the admin API", logx.Class("render"), logx.Int("status", status))
 		s.renderEmail(w, r, http.StatusInternalServerError, func(d *EmailPage) {
-			d.Digest.Result = &DigestSendView{Note: Note{"crit", "Not sent: the console could not record the action.", "Check the database and the console log, then try again."}}
+			d.Digest.Result = &DigestSendView{Note: couldNotComplete}
 		})
 		return
 	}
@@ -1137,6 +1142,10 @@ func (s *Service) emailDigestSend(w http.ResponseWriter, r *http.Request) {
 			v.Rows = append(v.Rows, DigestSendRow{Name: name, Chip: digestOutcome(rc.Outcome)})
 		}
 		switch {
+		case ds.Incomplete:
+			// The send stopped on an error after some recipients: say what went out, and how many did not.
+			v.Note = Note{"crit", "Sent to " + plural(ds.Sent, "recipient", "recipients") + "; " + strconv.Itoa(notSent(ds.Failed, len(ds.Recipients), recipientsBefore(r, s))) +
+				" could not be sent: see the delivery log below.", "Check the log before sending again: a second send mails those who had it once more."}
 		case ds.Skipped == "not_configured":
 			v.Note = Note{"warn", "Nothing was sent: e-mail is not set up.", "The smtp block of the console configuration names no relay."}
 		case ds.Skipped == "no_recipient":
@@ -1192,4 +1201,28 @@ var mailBannerActions = map[string]struct{ anchor, label, owner, row string }{
 	"C14":  {anchorDigest, "Open the digest settings", "", "digest"},
 	"C14b": {anchorDigest, "Open the digest settings", "", "digest"},
 	"C20":  {anchorRecipients, "See recipients", "Choose digest recipients", "digest"},
+}
+
+// couldNotComplete is the note of a test or send-now the admin API answered 500: the answer does not say
+// whether anything went out, so the page says only what is true either way (G2).
+var couldNotComplete = Note{"crit", "The console could not complete this.", "Check the delivery log before sending again."}
+
+// notSent is how many recipients an incomplete send-now did not reach: those that failed, plus those
+// the error stopped before they were attempted (the digest recipients the answer does not list).
+func notSent(failed, listed, digestRecipients int) int {
+	n := failed
+	if gone := digestRecipients - listed; gone > 0 {
+		n += gone
+	}
+	return n
+}
+
+// recipientsBefore is the number of recipients with the digest switch, read for an incomplete send;
+// 0 when it cannot be read (the failed count alone is then reported).
+func recipientsBefore(r *http.Request, s *Service) int {
+	var rs adminapi.RecipientsResponse
+	if s.apiGet(r, "/api/v1/notification-rules", &rs) != nil {
+		return 0
+	}
+	return rs.DigestRecipients
 }
