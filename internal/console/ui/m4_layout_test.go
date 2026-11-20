@@ -217,7 +217,8 @@ func TestP20W3B_G4_TheAcknowledgePopoverHoldsItsOptions(t *testing.T) {
 var p = d.querySelector('.rowmenu-pop'), r = p.getBoundingClientRect(), cs = getComputedStyle(p);
 var right = r.right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth), left = r.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth);
 var top = r.top + parseFloat(cs.paddingTop) + parseFloat(cs.borderTopWidth), bottom = r.bottom - parseFloat(cs.paddingBottom) - parseFloat(cs.borderBottomWidth);
-var out = {iw: innerWidth, kids: 0, past: 0};
+var out = {iw: innerWidth, kids: 0, past: 0,
+  plex: Array.from(document.fonts).some(function (f) { return f.family.indexOf('IBM Plex Sans') >= 0 && f.status === 'loaded'; }) ? 1 : 0};
 p.querySelectorAll('*').forEach(function (el) { var q = el.getBoundingClientRect(); if (q.width === 0) return; out.kids++;
   out.past = Math.max(out.past, q.right - right, left - q.left, top - q.top, q.bottom - bottom); });
 return out;`
@@ -229,6 +230,10 @@ return out;`
 				got := e.layout(t, layoutOpts{Path: path, CSS: base + m.css, W: w, H: 900, Probe: probe})
 				if msg, bad := got["error"]; bad {
 					t.Fatalf("%s: %v", name, msg)
+				}
+				// J5: the house case measures the house fonts, and the system case is known not to (so the check can tell)
+				if (m.name == "house") != (got["plex"] == 1) {
+					t.Fatalf("%s %d px %s fonts: IBM Plex Sans loaded = %v", name, w, m.name, got["plex"])
 				}
 				if got["kids"] < 20 || got["past"] > 0.5 {
 					t.Errorf("%s %d px %s fonts: something reaches %.1f px outside the popover's content box, on some side (%v elements)", name, w, m.name, got["past"], got["kids"])

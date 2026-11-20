@@ -25,7 +25,7 @@ func (d digestDouble) SendDigestNow(context.Context, bool) (notify.DigestResult,
 	return d.res, d.err
 }
 
-func TestM4DigestSendStoppedHalfwayIsIncompleteNot500(t *testing.T) {
+func TestM4DigestSendWithAnErrorAfterSomeRecipientsIsIncompleteNot500(t *testing.T) {
 	e := newEnv(t)
 	owner := e.login("admin", pw)
 	m := e.withMail(mail.NewFakeSender())
