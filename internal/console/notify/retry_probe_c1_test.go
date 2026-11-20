@@ -2,28 +2,39 @@ package notify
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
-	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
-// The invariant probe of P20-W2BF C1, in the style of the cell tables of the earlier fix rounds:
-// every combination of how each recipient's first send goes, whether another recipient's send is
-// still in flight when a retry runs, a mute of dev0 (acknowledgement, snooze, suspended customer),
-// when it comes, whether it ends, and when dev0 closes. dev1 fails throughout and is never muted,
-// so every cell forms a batch. The relay accepts everything after the first pass (B's in-flight
-// send in the inflightFail cells excepted), so at least one recipient's relay accepts mail.
+// The invariant probe of P20-W2BF C1 and D3, in the style of the cell tables of the earlier fix
+// rounds: every combination of how A's first send goes, the shape of B's row of the batch, a mute
+// of dev0 (acknowledgement, snooze, suspended customer), when it comes, whether it ends, and when
+// dev0 closes. dev1 fails throughout and is never muted by an acknowledgement, so every cell that is
+// not suspended before the pass forms a batch. The relay accepts everything after the first pass
+// (B's in-flight send in the inflightFail cells excepted), so at least one recipient's relay accepts
+// mail.
+//
+// B's row shapes, each made the way the product makes it (retry_c1_test.go): sent (ok), failed
+// with a retry (temp), failed for good (perm), in flight past A's retry and then sent (inflightOK)
+// or failed with a retry (inflightFail), deferred because A's send used up the pass's send budget
+// (deferred), and both rows left queued by a pass that stopped between its marks and its sends, a
+// restart there (restart; A's first send does not happen, so a is "-").
 //
 // Over every cell:
 //  1. an alarm open and unmuted at the end has at least one delivered alert;
 //  2. no recipient is alerted twice about one episode, except after a snooze that lapsed while the
 //     alarm persisted (ADR 0020 decision 7 re-raises it), and none gets two recoveries;
-//  3. no recovery names dev0 when no delivered alert ever named it, except in the residual cells the
-//     package doc names (B's in-flight send fails after A's retry left dev0 out because it closed).
+//  3. no recovery names dev0 when no delivered alert ever named it, unless the cell is in the
+//     residual class of the package doc (probeCell.residual): there it is counted as residual,
+//     never as a violation, and outside it it is a violation, so no such outcome goes unclassified;
+//  4. an alarm muted before the pass and never unmuted is never alerted (dev0; dev1 too when the
+//     mute is a suspended customer).
+//
+// Cells: 741 ((2 x 6 + 1) row shapes x 19 mute cases x 3 close times).
+const probeFullCells = 741
 
 type probeCell struct {
 	aFirst, bFirst, mute, muteAt, unmute, close string
@@ -33,17 +44,39 @@ func (c probeCell) String() string {
 	return fmt.Sprintf("a=%s b=%s mute=%s at=%s unmute=%s close=%s", c.aFirst, c.bFirst, c.mute, c.muteAt, c.unmute, c.close)
 }
 
-// residual reports whether the cell is the accepted residual case: dev0 was in the batch (not
-// muted when it formed), B's send was in flight and then failed, and dev0 closed before A's retry.
+// inBatch reports whether dev0 is in the batch: it was not muted when the batch formed.
+func (c probeCell) inBatch() bool { return c.mute == "none" || c.muteAt != "beforePass" }
+
+// residual reports whether the cell is in the residual class the package doc accepts: dev0 closes
+// while its alert is still undelivered to every recipient and at least one row of the batch is
+// still queued and has never been attempted. Then each recipient with the recoveries switch can
+// get a "resolved" for dev0 although nobody was mailed it. The three ways in:
+//   - restart: both rows stay queued until the retry job takes them (store.QueuedStaleAfter), so a
+//     close before or after the first retry run falls inside;
+//   - inflightOK, inflightFail, deferred: B's row is queued, never attempted, while A's first send
+//     failed (A delivered dev0 otherwise) and dev0 closes before A's retry delivers it.
 func (c probeCell) residual() bool {
-	inBatch := c.mute == "none" || c.muteAt != "beforePass"
-	return inBatch && c.bFirst == "inflightFail" && c.close == "beforeRetry"
+	if !c.inBatch() {
+		return false
+	}
+	switch c.bFirst {
+	case "restart":
+		return c.close != "never"
+	case "inflightOK", "inflightFail", "deferred":
+		return c.aFirst == "temp" && c.close == "beforeRetry"
+	}
+	return false
 }
 
+// probeCells is the full matrix, in a fixed order.
 func probeCells() []probeCell {
 	var cells []probeCell
-	for _, a := range []string{"ok", "temp"} {
-		for _, b := range []string{"ok", "temp", "perm", "inflightOK", "inflightFail"} {
+	for _, b := range []string{"ok", "temp", "perm", "inflightOK", "inflightFail", "deferred", "restart"} {
+		as := []string{"ok", "temp"}
+		if b == "restart" {
+			as = []string{"-"}
+		}
+		for _, a := range as {
 			for _, cl := range []string{"never", "beforeRetry", "afterRetry"} {
 				cells = append(cells, probeCell{a, b, "none", "-", "-", cl})
 				for _, m := range []string{"ack", "snooze", "suspend"} {
@@ -61,20 +94,32 @@ func probeCells() []probeCell {
 
 func TestC1InvariantProbe(t *testing.T) {
 	cells := probeCells()
-	violations, residuals := 0, 0
+	if len(cells) != probeFullCells {
+		t.Fatalf("the full matrix has %d cells; its doc comment says %d", len(cells), probeFullCells)
+	}
+	violations, residuals, spurious := 0, 0, 0
 	for _, c := range cells {
 		if c.residual() {
 			residuals++
 		}
-		for _, v := range runProbeCell(t, c) {
-			violations++
-			t.Errorf("%s: %s", c, v)
-		}
+		t.Run(c.String(), func(t *testing.T) {
+			vs, sp := runProbeCell(t, c)
+			if sp {
+				spurious++
+			}
+			for _, v := range vs {
+				violations++
+				t.Errorf("%s: %s", c, v)
+			}
+		})
 	}
-	t.Logf("C1 invariant probe: %d cells, %d violations, %d residual cells", len(cells), violations, residuals)
+	t.Logf("C1 invariant probe: %d cells, %d violations, %d residual cells, %d of them with a spurious recovery",
+		len(cells), violations, residuals, spurious)
 }
 
-func runProbeCell(t *testing.T, c probeCell) []string {
+// runProbeCell plays one cell and returns its violations, and whether it ended with a recovery
+// naming dev0 that no delivered alert named (always a residual cell when there is no violation).
+func runProbeCell(t *testing.T, c probeCell) ([]string, bool) {
 	t.Helper()
 	w := newWorld(t)
 	w.recipient(addrA, true, true)
@@ -117,7 +162,6 @@ func runProbeCell(t *testing.T, c probeCell) []string {
 		}
 		muted = false
 	}
-	temp := &mail.SendError{Stage: mail.StageConnect, Class: mail.ClassTimeout, Temporary: true}
 	perm := &mail.SendError{Stage: mail.StageRecipient, Class: mail.ClassRecipientRejected}
 
 	if c.muteAt == "beforePass" {
@@ -130,37 +174,46 @@ func runProbeCell(t *testing.T, c probeCell) []string {
 	w.fake.FailWhen(func(m mail.Message) *mail.SendError {
 		switch {
 		case m.To[0] == addrA && c.aFirst == "temp":
-			return temp
+			return temporary()
 		case m.To[0] == addrB && c.bFirst == "perm":
 			return perm
-		case m.To[0] == addrB && c.bFirst != "ok":
-			return temp
+		case m.To[0] == addrB && c.bFirst == "temp":
+			return temporary()
 		}
 		return nil
 	})
 	w.set(state.StateFailed, site...)
-	w.pass()
-	w.fake.FailWhen(nil)
-	inflight := strings.HasPrefix(c.bFirst, "inflight")
-	var row store.Delivery
-	if inflight {
-		// No row when the whole batch was muted at formation (a suspended customer): nothing in flight.
-		row, inflight = w.inFlightRow(addrB)
+	var f *inFlight
+	inflight := false
+	switch c.bFirst {
+	case "inflightOK", "inflightFail":
+		// Not in flight when the whole batch was muted at formation (a suspended customer): no row.
+		f, inflight = w.passInFlight(addrB)
+		if !inflight {
+			f.finish()
+		}
+	case "deferred":
+		w.passDeferring(addrA)
+	case "restart":
+		w.passStoppingBeforeSend()
+	default:
+		w.pass()
 	}
+	w.fake.FailWhen(nil)
 	if c.muteAt == "beforeRetry" {
 		mute()
 	}
 	if c.close == "beforeRetry" {
 		w.set(state.StateOK, dev0)
-		w.pass()
+		w.pass() // beside the pass in flight, when there is one
 	}
 	w.clk.Advance(time.Minute)
 	w.retry()
 	if inflight {
 		if c.bFirst == "inflightFail" {
-			w.fake.FailWhen(func(mail.Message) *mail.SendError { return temp })
+			w.fake.FailWhen(func(mail.Message) *mail.SendError { return temporary() })
 		}
-		w.finishInFlight(row, addrB)
+		f.finish()
 		w.fake.FailWhen(nil)
 	}
 	if c.muteAt == "afterRetry" {
@@ -172,7 +225,7 @@ func runProbeCell(t *testing.T, c probeCell) []string {
 	w.clk.Advance(time.Minute)
 	w.pass()
 	unmute()
-	for i := 0; i < 4; i++ { // past the whole retry schedule (1, 5 and 15 minutes)
+	for i := 0; i < 4; i++ { // past the whole retry schedule (1, 5 and 15 minutes) and QueuedStaleAfter
 		w.clk.Advance(6 * time.Minute)
 		w.pass()
 		w.retry()
@@ -205,8 +258,17 @@ func runProbeCell(t *testing.T, c probeCell) []string {
 			out = append(out, fmt.Sprintf("(2) %s got %d recoveries for dev0", addr, n))
 		}
 	}
-	if sum(mail.KindRecovery, h0) > 0 && sum(mail.KindAlert, h0) == 0 && !c.residual() {
-		out = append(out, "(3) a recovery names dev0, and no delivered alert ever named it")
+	spurious := sum(mail.KindRecovery, h0) > 0 && sum(mail.KindAlert, h0) == 0
+	if spurious && !c.residual() {
+		out = append(out, "(3) a recovery names dev0, no delivered alert ever named it, and the cell is outside the residual class")
 	}
-	return out
+	if c.muteAt == "beforePass" && c.unmute == "no" {
+		if n := sum(mail.KindAlert, h0); n > 0 {
+			out = append(out, fmt.Sprintf("(4) dev0 was muted before the pass and never unmuted, and was alerted %d times", n))
+		}
+		if n := sum(mail.KindAlert, h1); c.mute == "suspend" && n > 0 {
+			out = append(out, fmt.Sprintf("(4) dev1's customer was suspended before the pass and never resumed, and dev1 was alerted %d times", n))
+		}
+	}
+	return out, spurious
 }

@@ -29,12 +29,15 @@
 // that is still open, whether or not it has been acknowledged, snoozed or its customer suspended
 // since (the mute rules apply when a batch is formed, never to a retry). Closing is the only reason
 // an episode is left out of a retry, and its recovery is then settled without a message, unless
-// another row of the batch is sent or still in flight from the pass that formed it.
+// another row of the batch is sent, or queued and never attempted (it may still carry the episode).
 //
-// One residual case is accepted. A send held in flight past another recipient's retry that then
-// fails, plus a close inside that window, can produce a recovery notice for an alarm that recipient
-// was not mailed. It is a spurious "resolved", never a lost alert, and telling it apart would need
-// the delivery log to record which episodes each message carried.
+// One residual class is accepted: if an alarm closes while its alert is still undelivered to every
+// recipient, and at least one of those rows is still queued and has never been attempted, each
+// recipient with the recoveries switch can receive a resolved notice for an alarm nobody was
+// mailed. Three ways in are known: a send held in flight that then fails, a restart between the
+// pass's mark and its send, and a row deferred by the pass's send budget. It is a spurious
+// "resolved", never a lost alert; every narrower rule tried lost alerts, and telling these cases
+// apart would need the delivery log to record which episodes each message carried.
 //
 // # Batches and crash safety
 //

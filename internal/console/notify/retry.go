@@ -287,9 +287,10 @@ func (r *Retrier) rerender(ctx context.Context, d store.Delivery, rv *retryView,
 
 // settleClosed settles, without a message, the recovery of the closed episodes the retried alert
 // row retried of batch at leaves out (store.SettleClosedLeftOut, one transaction with the check of
-// the batch's rows): unless another row of the batch is sent, or queued and never attempted (still
-// in flight from the pass, with them in it). It runs before the send; the mark takes a free batch
-// id, like Notifier's silent marks.
+// the batch's rows): unless another row of the batch is sent, or queued and never attempted (in
+// flight from the pass with them in it, left by a pass that stopped before sending, or deferred by
+// its send budget: the residual class of the package doc). It runs before the send; the mark takes
+// a free batch id, like Notifier's silent marks.
 func (r *Retrier) settleClosed(ctx context.Context, at time.Time, retried string, closed []store.Episode, res *RetryResult) error {
 	if len(closed) == 0 {
 		return nil

@@ -28,7 +28,7 @@ func TestPackageCommentIsWhole(t *testing.T) {
 	for _, want := range []string{
 		"# What a message says",
 		"A retried alert is the original notification, delayed",
-		"One residual case is accepted",
+		"One residual class is accepted",
 		"# Batches and crash safety",
 		"# Failing loudly",
 	} {

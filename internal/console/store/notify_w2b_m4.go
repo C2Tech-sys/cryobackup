@@ -12,10 +12,21 @@ import (
 // that is still open, so closing is the only reason one is left out, and closing is permanent.
 //
 // It reads the batch's delivery rows (dedupe key "alert:<ms of at>:") in the same transaction and
-// settles nothing when another row of the batch is sent, or is queued and never attempted (a send
-// still in flight from the pass that formed the batch, which rendered these episodes): then the
-// episodes stay as they are and the batch's recovery rule decides. A sibling that failed with a
-// retry scheduled cannot carry them (its retry leaves them out too) and does not count. An episode
+// settles nothing when another row of the batch is sent, or is queued and never attempted (it may
+// still carry these episodes: a send in flight from the pass that formed the batch, which rendered
+// them): then the episodes stay as they are and the batch's recovery rule decides. A sibling that
+// failed with a retry scheduled cannot carry them (its retry leaves them out too) and does not
+// count.
+//
+// The accepted residual class this leaves (notify's package doc): if an alarm closes while its
+// alert is still undelivered to every recipient, and at least one of those rows is still queued and
+// has never been attempted, each recipient with the recoveries switch can receive a resolved notice
+// for an alarm nobody was mailed. A queued row looks the same whatever left it queued, so the three
+// known ways in all land here: a send held in flight that then fails, a restart between the pass's
+// mark and its send, and a row deferred by the pass's send budget. A spurious "resolved", never a
+// lost alert.
+//
+// An episode
 // that is open, no longer marked at at, or already settled is left alone. It returns how many
 // episodes were settled. An id that does not exist, or lies outside scope, is ErrNotFound and
 // nothing is changed.
