@@ -215,7 +215,7 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 			Rows: []AlarmRow{{Chip: missChip, Recorded: true, Form: ackForm(store.EpisodeCustomer, "sample-c", "missing_customer", "MISSING on Blue Ridge Accounting", c, s.zone(ctx))}}}},
 		{"Both reads failed: both are reported, and no row states what was not read", AlarmsView{CanAck: true, Err: &Note{"crit", "Not everything about these alarms could be read.",
 			"The acknowledgements could not be read, so whether these alarms are acknowledged is unknown; and the open alarms could not be checked, so whether they can be acknowledged now is unknown. This is an alarm, not \"none\". Reload the page to try again."},
-			Rows: []AlarmRow{{Chip: failedChip, NotYet: "Could not be checked: reload the page."}, {Chip: partChip, NotYet: "Could not be checked: reload the page."}}}},
+			Rows: []AlarmRow{{Chip: failedChip, NotYet: uncheckedText}, {Chip: partChip, NotYet: uncheckedText}}}},
 	}
 	return d
 }

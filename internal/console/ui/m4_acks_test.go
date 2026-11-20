@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -500,4 +501,23 @@ func TestP20W3B_K2_AChangeFormKeepsItsEndAndNeverGuesses(t *testing.T) {
 	if after := e.activeAck(id); after == nil || after.ID != before.ID || !after.SnoozeUntil.Equal(cst) || e.mutAuditCount() != audits {
 		t.Error("a refused end changed the acknowledgement or wrote an audit row")
 	}
+}
+
+// K3: "Could not be checked: reload the page." is written once, as uncheckedText, which the page and the
+// design samples both use; and the page shows it.
+func TestP20W3B_K3_TheUncheckedLineIsOneConstant(t *testing.T) {
+	n := 0
+	for _, f := range []string{"m4_acks.go", "m4_design.go", "m4_email.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += strings.Count(string(b), `"`+uncheckedText+`"`)
+	}
+	if n != 1 {
+		t.Errorf("the unchecked line is written %d times in the source, want once (the constant)", n)
+	}
+	e := newM4Env(t)
+	e.login()
+	mustContain(t, "design", e.page("/design/mail", 200), uncheckedText)
 }

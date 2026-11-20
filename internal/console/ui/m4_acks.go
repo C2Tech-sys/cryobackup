@@ -191,7 +191,7 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 	}
 	notYet := notRecordedText(s.Fixtures)
 	if unchecked { // H3: what was not read is not stated as fact; no form is offered for it either
-		notYet = "Could not be checked: reload the page."
+		notYet = uncheckedText
 	}
 	byType := map[string]adminapi.AckJSON{}
 	for _, a := range acks.Acks {
@@ -303,10 +303,20 @@ func notRecordedText(fixtures bool) string {
 	return "Not recorded yet: it can be acknowledged after the console's next alarm check, within about " + durText(evaluatorEvery.Milliseconds()) + "."
 }
 
+// uncheckedText is the line of an alarm whose open episode could not be read (H3), on the page and in
+// the design samples (K3).
+const uncheckedText = "Could not be checked: reload the page."
+
 // snoozeEndText is a snooze end as every page shows it: the day, the clock and the zone abbreviation,
 // so an end in the hour the clocks repeat says which of the two it is (H2). It is the one formatter of a
-// snooze end (J1): the acknowledgement line, the SNOOZED badge (chips.go), the explain tooltip
-// (m3t5_board.go), the "tomorrow 8:00 AM" preset of the acknowledge form and the design samples.
+// snooze end shown as text (J1): the acknowledgement line, the SNOOZED badge (chips.go), the explain
+// tooltip (m3t5_board.go), the "tomorrow 8:00 AM" preset of the acknowledge form and the design samples.
+//
+// One more place carries a snooze end and does not use it: the pre-filled value of the "Change…" form's
+// custom end (alarmsView, Form.Until). That is a datetime-local input value, which the browser accepts
+// only as YYYY-MM-DDTHH:MM with no zone, so the zone is named beside the field instead (K1), and a value
+// posted back unchanged keeps the stored instant rather than being re-read as a wall clock (K2,
+// snoozeEndOf); a new value is resolved by resolveLocal, never guessed.
 func snoozeEndText(c fmtCtx, t time.Time) string {
 	return c.dayClock(t) + " " + c.zoneAbbr(t)
 }
