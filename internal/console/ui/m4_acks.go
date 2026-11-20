@@ -94,6 +94,8 @@ type AckForm struct {
 	Until  string
 	Note   string
 	Change bool
+	// Open: the form is shown open, with a refused value kept (K2).
+	Open bool
 	// Zone is the display zone the custom end is read in, named beside the field (K1).
 	Zone string
 }
@@ -109,7 +111,8 @@ var ackNotices = map[string]Note{
 	"ack_gone":  {"info", "That acknowledgement had already ended.", "Nothing was changed."},
 	"err_mode":  {"crit", "Not acknowledged.", "Choose how long: acknowledge until cleared, a snooze preset, a date, or until the next success."},
 	"err_until": {"crit", "Not snoozed.", "The end must be in the future and at most a year away."},
-	"err_gap":   {"crit", "Not snoozed.", "That time does not exist on that day: the clocks skip it in the display time zone. Choose a time outside the skipped hour."},
+	"err_gap":   {"crit", "Not snoozed.", "That time does not exist on that night, when the clocks go forward. Choose another time."},
+	"err_twice": {"crit", "Not snoozed.", "That time happens twice on that night, when the clocks go back. Choose a time before or after the repeated hour."},
 	"err_note":  {"crit", "Not acknowledged.", "The note can have at most 500 characters of plain text."},
 	"err_type":  {"crit", "Not acknowledged.", "That alarm cannot be acknowledged here."},
 	"err_fail":  {"crit", "Not acknowledged.", "The console could not record the acknowledgement. Nothing was changed."},
@@ -224,6 +227,13 @@ func (s *Service) alarmsView(r *http.Request, p *auth.Principal, subjectType, su
 				row.Form.Mode = "next"
 			}
 		}
+		// A refused custom end (K2): the form opens again on "Snooze until" with what was typed.
+		if q := r.URL.Query(); q.Get("alarm") == t && (q.Get("ack") == "err_twice" || q.Get("ack") == "err_gap" || q.Get("ack") == "err_until") {
+			row.Form.Open, row.Form.Mode = true, "until"
+			if raw := q.Get("until"); localInputRE.MatchString(raw) {
+				row.Form.Until = raw
+			}
+		}
 		v.Rows = append(v.Rows, row)
 	}
 	for _, a := range alarms {
@@ -305,6 +315,37 @@ func snoozeEndText(c fmtCtx, t time.Time) string {
 
 // ackBack returns to the page of the subject: the device panel or the customer page, never a URL
 // the form names.
+// ackBackForm is ackBack for a refused custom end: the page opens that alarm's form again on "Snooze
+// until" with the date-time that was typed (never the note: operator text goes in no URL).
+func ackBackForm(w http.ResponseWriter, r *http.Request, subjectType, subjectID, code, alarm, raw string) {
+	base := "/devices/"
+	if subjectType == store.EpisodeCustomer {
+		base = "/customers/"
+	}
+	v := url.Values{"ack": {code}, "alarm": {alarm}}
+	if raw != "" && localInputRE.MatchString(raw) {
+		v.Set("until", raw)
+	}
+	http.Redirect(w, r, base+url.PathEscape(subjectID)+"?"+v.Encode()+"#alarms", http.StatusSeeOther)
+}
+
+// localInputRE is the shape of a datetime-local value carried back to a form.
+var localInputRE = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$`)
+
+// snoozeEndOf is the end of the dated snooze in force for the alarm, read as the page reads it.
+func (s *Service) snoozeEndOf(r *http.Request, subjectType, subjectID, alarm string, c fmtCtx) (time.Time, bool) {
+	var acks adminapi.AcksResponse
+	if s.apiGet(r, "/api/v1/acks?subject_id="+url.QueryEscape(subjectID), &acks) != nil {
+		return time.Time{}, false
+	}
+	for _, a := range acks.Acks {
+		if a.SubjectType == subjectType && a.AlarmType == alarm && a.SnoozeUntil != nil {
+			return a.SnoozeUntil.In(c.loc()), true
+		}
+	}
+	return time.Time{}, false
+}
+
 func ackBack(w http.ResponseWriter, r *http.Request, subjectType, subjectID, code string) {
 	base := "/devices/"
 	if subjectType == store.EpisodeCustomer {
@@ -369,13 +410,22 @@ func (s *Service) ackCreate(w http.ResponseWriter, r *http.Request) {
 		body.UntilNextSuccess = true
 	case "until":
 		raw := strings.TrimSpace(r.PostFormValue("until"))
-		t, err := time.ParseInLocation(datetimeLocal, raw, c.loc())
-		if err != nil {
-			ackBack(w, r, typ, id, "err_until")
-			return
+		// The pre-filled "Change…" value posted back unchanged keeps the end it shows, to the instant:
+		// re-reading it as a wall clock would move an end in a repeated hour by an hour (K2).
+		if prev, ok := s.snoozeEndOf(r, typ, id, alarm, c); ok && prev.Format(datetimeLocal) == raw {
+			until(prev)
+			break
 		}
-		if t.Format(datetimeLocal) != raw { // a time the clocks skip: ask again (as the park dialog does)
-			ackBack(w, r, typ, id, "err_gap")
+		t, res := resolveLocal(datetimeLocal, raw, c.loc())
+		switch res {
+		case localInvalid:
+			ackBackForm(w, r, typ, id, "err_until", alarm, "")
+			return
+		case localMissing: // never guessed (K2): the form comes back with what was typed
+			ackBackForm(w, r, typ, id, "err_gap", alarm, raw)
+			return
+		case localRepeated:
+			ackBackForm(w, r, typ, id, "err_twice", alarm, raw)
 			return
 		}
 		until(t)

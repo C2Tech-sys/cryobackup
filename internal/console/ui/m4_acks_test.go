@@ -468,3 +468,36 @@ func TestP20W3B_K1_TheCustomEndNamesItsZone(t *testing.T) {
 	block := alarmsBlock(t, e.page("/devices/"+e.dev["RECEPTION-2"], 200))
 	mustContain(t, "zone", block, `aria-label="Snooze until, a date and time in America/Chicago"`, `<span class="zone mono">America/Chicago</span>`)
 }
+
+// K2: the pre-filled "Change…" form posted back unchanged keeps its end to the instant, also in the hour
+// the clocks repeat; a new end in that hour, or in the hour they skip, is refused with the form open on
+// what was typed, and nothing is stored or audited.
+func TestP20W3B_K2_AChangeFormKeepsItsEndAndNeverGuesses(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	id := e.dev[fixtures.SnoozedHost]
+	cst := time.Date(2026, 11, 1, 7, 30, 0, 0, time.UTC) // 1:30 AM CST, the second 1:30 of that night
+	if _, err := e.st.CreateAck(context.Background(), store.ScopeAll(), store.AckInput{SubjectType: store.EpisodeDevice, SubjectID: id, AlarmType: "stale", SnoozeUntil: &cst},
+		store.AuditActor{AdminID: e.adminID("admin"), Username: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	block := alarmsBlock(t, e.page("/devices/"+id, 200))
+	mustContain(t, "prefilled", block, `value="2026-11-01T01:30"`)
+	e.mustPost("/ui/acks", url.Values{"subject_type": {"device"}, "subject_id": {id}, "alarm_type": {"stale"}, "mode": {"until"}, "until": {"2026-11-01T01:30"}}, http.StatusSeeOther)
+	if a := e.activeAck(id); a == nil || a.SnoozeUntil == nil || !a.SnoozeUntil.Equal(cst) {
+		t.Fatalf("an unchanged re-post moved the end: %+v", a)
+	}
+	// a new end in the repeated hour, and one in the skipped hour, are refused with the form open on what was typed
+	before, audits := e.activeAck(id), e.mutAuditCount()
+	for raw, code := range map[string]string{"2026-11-01T01:15": "err_twice", "2027-03-14T02:30": "err_gap"} {
+		res, _ := e.post("/ui/acks", url.Values{"subject_type": {"device"}, "subject_id": {id}, "alarm_type": {"stale"}, "mode": {"until"}, "until": {raw}, "note": {"x"}}, false)
+		if res.StatusCode != http.StatusSeeOther || !strings.Contains(e.location(res), "ack="+code) {
+			t.Fatalf("%s: %d %s", raw, res.StatusCode, e.location(res))
+		}
+		page := alarmsBlock(t, e.page(e.location(res), 200))
+		mustContain(t, raw, page, ackNotices[code].Text, `<details class="rowmenu ackmenu" open>`, `value="until" checked`, `value="`+raw+`"`)
+	}
+	if after := e.activeAck(id); after == nil || after.ID != before.ID || !after.SnoozeUntil.Equal(cst) || e.mutAuditCount() != audits {
+		t.Error("a refused end changed the acknowledgement or wrote an audit row")
+	}
+}

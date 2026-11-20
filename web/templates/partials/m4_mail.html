@@ -191,7 +191,7 @@
 <ul class="alarmlist">{{range .Rows}}<li class="alarm {{.Chip.Class}}{{if .Ack}} acked{{end}}">
   <div class="alarm-main">{{template "chip" .Chip}}{{if .Ack}}{{template "m4_ackline" .Ack}}{{else if .Recorded}}<span class="muted ui">Not acknowledged: each new episode of it is mailed.</span>{{else}}<span class="ui notyet"><i class="g g-info" aria-hidden="true"></i>{{.NotYet}}</span>{{end}}</div>
   {{if and $.CanAck (or .Ack .Recorded)}}<div class="alarm-acts">{{if .Ack}}<form method="post" action="{{.Ack.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="subject_type" value="{{.Form.SubjectType}}"><input type="hidden" name="subject_id" value="{{.Form.SubjectID}}"><button class="btn sm" type="submit" aria-label="Clear the acknowledgement of {{.Form.Label}}">Clear</button></form>{{end}}
-    <details class="rowmenu ackmenu"><summary class="btn sm{{if not .Ack}} primary{{end}}" aria-label="{{if .Ack}}Change the acknowledgement of{{else}}Acknowledge{{end}} {{.Form.Label}}">{{if .Ack}}Change…{{else}}Acknowledge…{{end}}</summary>{{template "m4_ackform" (ackform .Form $.CSRF)}}</details></div>{{end}}
+    <details class="rowmenu ackmenu"{{if .Form.Open}} open{{end}}><summary class="btn sm{{if not .Ack}} primary{{end}}" aria-label="{{if .Ack}}Change the acknowledgement of{{else}}Acknowledge{{end}} {{.Form.Label}}">{{if .Ack}}Change…{{else}}Acknowledge…{{end}}</summary>{{template "m4_ackform" (ackform .Form $.CSRF)}}</details></div>{{end}}
 </li>{{end}}</ul>
 {{if and (not .CanAck) .Rows}}<p class="meta-mono why">{{.Why}}</p>{{end}}
 </section>{{end}}
