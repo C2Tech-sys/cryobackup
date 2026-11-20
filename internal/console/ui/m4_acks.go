@@ -118,7 +118,7 @@ func ackForm(subjectType, subjectID, alarm, what string, c fmtCtx, zone string) 
 	now := c.Now.In(c.loc())
 	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 8, 0, 0, 0, c.loc())
 	f := AckForm{Action: "/ui/acks", Label: what, SubjectType: subjectType, SubjectID: subjectID, AlarmType: alarm, PopID: "ack-" + subjectID + "-" + alarm,
-		Tomorrow: tomorrow.Format("Mon 2 Jan, 3:04 PM"), Min: now.Add(time.Minute).Format(datetimeLocal), Max: now.Add(store.MaxSnooze - time.Hour).Format(datetimeLocal),
+		Tomorrow: snoozeEndText(c, tomorrow), Min: now.Add(time.Minute).Format(datetimeLocal), Max: now.Add(store.MaxSnooze - time.Hour).Format(datetimeLocal),
 		NextLabel: "Until the next successful backup", Mode: "ack"}
 	if subjectType == store.EpisodeCustomer {
 		f.NextLabel = "Until the alarm ends"
@@ -281,8 +281,10 @@ func snoozeEnd(mode string, now time.Time, loc *time.Location) (time.Time, bool)
 	return time.Time{}, false
 }
 
-// snoozeEndText is a snooze or acknowledgement end as every page shows it: the day, the clock and the
-// zone abbreviation, so an end in the hour the clocks repeat says which of the two it is (H2).
+// snoozeEndText is a snooze end as every page shows it: the day, the clock and the zone abbreviation,
+// so an end in the hour the clocks repeat says which of the two it is (H2). It is the one formatter of a
+// snooze end (J1): the acknowledgement line, the SNOOZED badge (chips.go), the explain tooltip
+// (m3t5_board.go), the "tomorrow 8:00 AM" preset of the acknowledge form and the design samples.
 func snoozeEndText(c fmtCtx, t time.Time) string {
 	return c.dayClock(t) + " " + c.zoneAbbr(t)
 }

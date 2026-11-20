@@ -417,7 +417,7 @@ func TestP20W3B_H2_ASnoozeEndShowsItsZone(t *testing.T) {
 		}
 		body := e.page("/devices/"+id, 200)
 		mustContain(t, c.zone, alarmsBlock(t, body), "until Sun 1 Nov, 1:30 AM "+c.zone)
-		mustContain(t, c.zone+" badge", body, "SNOOZED until Sun 1:30 AM "+c.zone)
+		mustContain(t, c.zone+" badge", body, "SNOOZED until Sun 1 Nov, 1:30 AM "+c.zone)
 	}
 }
 
@@ -440,5 +440,23 @@ func TestP20W3B_H3_AnUncheckedAlarmIsNotCalledUnrecorded(t *testing.T) {
 	mustContain(t, "unchecked", block, "Could not be checked: reload the page.")
 	if strings.Contains(block, "Not recorded yet") || strings.Contains(block, `action="/ui/acks`) {
 		t.Error("an alarm whose episode could not be read is called unrecorded, or offered a form")
+	}
+}
+
+// J1: the state chip's explain tooltip shows a snooze end with its zone, like the line and the badge.
+func TestP20W3B_J1_TheExplainTooltipShowsTheSnoozeZone(t *testing.T) {
+	e := newM4Env(t)
+	e.login()
+	id := e.dev[fixtures.SnoozedHost]
+	for _, c := range []struct {
+		utc  time.Time
+		zone string
+	}{{time.Date(2026, 11, 1, 7, 30, 0, 0, time.UTC), "CST"}, {time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC), "CDT"}} {
+		u := c.utc
+		if _, err := e.st.CreateAck(context.Background(), store.ScopeAll(), store.AckInput{SubjectType: store.EpisodeDevice, SubjectID: id, AlarmType: "stale", SnoozeUntil: &u},
+			store.AuditActor{AdminID: e.adminID("admin"), Username: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+		mustContain(t, "explain "+c.zone, e.page("/ui/devices/"+id+"/explain", 200), "Snoozed until Sun 1 Nov, 1:30 AM "+c.zone+".")
 	}
 }
