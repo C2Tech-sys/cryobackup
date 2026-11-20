@@ -271,20 +271,22 @@ func deliveryKindLabel(k string) string {
 	return k
 }
 
-// suppressLabel words why a message was not sent. The store keeps the schema's reason words only
-// (acknowledged, snoozed, paused, deduped, customer_suspended, below_threshold); notify records the
-// precise case beside "deduped" in its log line, not in the row. So:
+// suppressLabel words why a message was not sent, saying only what the row records. The store keeps
+// the schema's reason words (acknowledged, snoozed, paused, deduped, customer_suspended,
+// below_threshold); notify writes the precise case of a "deduped" only in its log line, so the row
+// cannot tell a duplicate key from a recipient switched off or removed, a digest switched off, a test
+// that is never retried or a batch muted mid-pass, and a label read from the console's present state
+// would change after the fact. So:
 //
 //	acknowledged        "Acknowledged"
 //	snoozed             "Snoozed"
-//	paused              "Device parked"
+//	paused              "Device parked" (the schema's word; the notifier never writes it today)
 //	customer_suspended  "Customer suspended"
 //	below_threshold     "Alarm already resolved" (notify's word for an alert whose alarms all ended first)
-//	deduped             "Recipient removed" when the row's recipient no longer exists;
-//	                    "Digest turned off" for a digest row while the digest is off;
-//	                    "Duplicate" otherwise (an overlapping pass, a key already decided)
-//	anything else       the raw word, never blank
-func suppressLabel(reason, kind string, recipientGone, digestOff bool) string {
+//	deduped             "Not sent: duplicate, switched off or removed"
+//	""                  "no reason recorded"
+//	anything else       the raw word
+func suppressLabel(reason string) string {
 	switch reason {
 	case "acknowledged":
 		return "Acknowledged"
@@ -297,13 +299,9 @@ func suppressLabel(reason, kind string, recipientGone, digestOff bool) string {
 	case "below_threshold":
 		return "Alarm already resolved"
 	case "deduped":
-		switch {
-		case recipientGone:
-			return "Recipient removed"
-		case kind == store.DeliveryDigest && digestOff:
-			return "Digest turned off"
-		}
-		return "Duplicate"
+		return "Not sent: duplicate, switched off or removed"
+	case "":
+		return "no reason recorded"
 	}
 	return reason
 }
@@ -507,7 +505,7 @@ func (s *Service) emailData(r *http.Request, p *auth.Principal) EmailPage {
 	}
 
 	// delivery log
-	d.Log = s.deliveryLog(r, c, !digestOn && setErr == nil)
+	d.Log = s.deliveryLog(r, c)
 	return d
 }
 
@@ -637,7 +635,7 @@ const deliveryPageSize = 25
 
 var deliveryOutcomeWords = []struct{ v, l string }{{store.DeliverySent, "Sent"}, {store.DeliveryFailed, "Failed or retrying"}, {store.DeliveryQueued, "Queued"}, {store.DeliverySuppressed, "Not sent"}}
 
-func (s *Service) deliveryLog(r *http.Request, c fmtCtx, digestOff bool) DeliveryLogView {
+func (s *Service) deliveryLog(r *http.Request, c fmtCtx) DeliveryLogView {
 	q := r.URL.Query()
 	kind, outcome := q.Get("kind"), q.Get("outcome")
 	if deliveryKindLabel(kind) == kind {
@@ -725,10 +723,7 @@ func (s *Service) deliveryLog(r *http.Request, c fmtCtx, digestOff bool) Deliver
 				row.Detail, row.DetailMono = "no class recorded", false
 			}
 		case store.DeliverySuppressed:
-			row.Detail = suppressLabel(x.SuppressReason, x.Kind, x.RecipientDeleted, digestOff)
-			if row.Detail == "" {
-				row.Detail = "no reason recorded"
-			}
+			row.Detail = suppressLabel(x.SuppressReason)
 		case store.DeliveryQueued:
 			row.Detail = "waiting to be sent"
 		case store.DeliverySent:

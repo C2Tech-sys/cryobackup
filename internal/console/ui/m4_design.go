@@ -155,8 +155,9 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 	}
 	rows = append(rows, dl{"alert", "", "recipient removed since", store.DeliverySuppressed, "deduped", "", 1, false, true},
 		dl{"digest", "Night desk", "", store.DeliverySuppressed, "deduped", "", 1, false, false},
-		dl{"event", "Night desk", "", store.DeliverySuppressed, "a_future_word", "", 1, false, false})
-	d.Log = DeliveryLogView{Zone: s.zone(ctx), Summary: "Showing entries 1-17, newest first; the oldest entry is the last row"}
+		dl{"event", "Night desk", "", store.DeliverySuppressed, "a_future_word", "", 1, false, false},
+		dl{"alert", "Night desk", "", store.DeliverySuppressed, "", "", 1, false, false})
+	d.Log = DeliveryLogView{Zone: s.zone(ctx), Summary: "Showing entries 1-18, newest first; the oldest entry is the last row"}
 	for i, r := range rows {
 		var nx *time.Time
 		if r.retry {
@@ -168,7 +169,7 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 		case store.DeliveryFailed:
 			row.Detail, row.DetailMono, row.DetailHint = r.class, true, mail.Hint(mail.Class(r.class))
 		case store.DeliverySuppressed:
-			row.Detail = suppressLabel(r.reason, r.kind, r.gone, true)
+			row.Detail = suppressLabel(r.reason)
 		case store.DeliveryQueued:
 			row.Detail = "waiting to be sent"
 		default:

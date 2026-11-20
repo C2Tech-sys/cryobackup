@@ -86,9 +86,10 @@ func TestP20W3B_EmailPageShowsTheFixtureWorld(t *testing.T) {
 		`id="digest"`, "Send the daily digest", `name="digest_local_time"`, "Preview", "Send now", "Send again…",
 		// the delivery log: every outcome and every suppress label
 		`id="deliveries"`, ">SENT<", ">FAILED<", "RETRYING · next", ">QUEUED<", ">NOT SENT<",
-		"Acknowledged", "Snoozed", "Device parked", "Customer suspended", "Alarm already resolved", "Duplicate", "recipient removed since", "an address typed for a test",
+		"Acknowledged", "Snoozed", "Device parked", "Customer suspended", "Alarm already resolved", "Not sent: duplicate, switched off or removed", "recipient removed since", "an address typed for a test",
 		"recipient_rejected", "auth_rejected", "timeout", "Older")
-	for _, bad := range []string{"ZgotmplZ", `type="password"`, "NOT EDITABLE YET"} {
+	// F3: a deduped row says only what the store recorded, never a cause read from the console's present state
+	for _, bad := range []string{"ZgotmplZ", `type="password"`, "NOT EDITABLE YET", ">Duplicate<", ">Recipient removed<", ">Digest turned off<"} {
 		if strings.Contains(body, bad) {
 			t.Errorf("the e-mail page contains %q", bad)
 		}
@@ -334,4 +335,14 @@ func TestP20W3B_RolesMatchTheAPI(t *testing.T) {
 		t.Errorf("an operator opens the e-mail page: %d", res.StatusCode)
 	}
 	// (a scoped account is an operator or read-only one: the schema allows no scoped admin)
+}
+
+// F3: the suppress labels are fixed per recorded word.
+func TestP20W3B_F3_SuppressLabelsSayOnlyWhatWasRecorded(t *testing.T) {
+	for word, want := range map[string]string{"acknowledged": "Acknowledged", "snoozed": "Snoozed", "paused": "Device parked", "customer_suspended": "Customer suspended",
+		"below_threshold": "Alarm already resolved", "deduped": "Not sent: duplicate, switched off or removed", "": "no reason recorded", "a_future_word": "a_future_word"} {
+		if got := suppressLabel(word); got != want {
+			t.Errorf("suppressLabel(%q) = %q, want %q", word, got, want)
+		}
+	}
 }
