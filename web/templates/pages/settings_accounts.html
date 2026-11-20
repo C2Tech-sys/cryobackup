@@ -6,6 +6,7 @@
   <div class="t"><h2>Accounts and roles</h2><span class="meta-mono">{{len .Rows}} account{{if ne (len .Rows) 1}}s{{end}} · {{.Owners}} enabled owner{{if ne .Owners 1}}s{{end}}</span></div>
   <div class="sub"><span>Owner: everything, including accounts. Admin: configuration and keys. Operator: day-to-day actions. Read-only: view. Operators and read-only accounts can be limited to customers.</span></div>
 </div>
+{{template "settings_tabs" "accounts"}}
 {{template "acct_note" .Notice}}
 {{if not .CanEdit}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>View only.</b> Changing accounts needs the owner role.</div></div>{{end}}
 

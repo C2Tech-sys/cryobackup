@@ -4,6 +4,7 @@
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <span>Settings</span></nav>
 <div class="page-head"><div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-file"/></svg><h2>Settings</h2><span class="meta-mono">Console-wide</span></div>
   <div class="sub"><span>Non-secret values only. Credentials live in the environment or in mounted files, never here.</span></div></div>
+{{template "settings_tabs" "general"}}
 {{template "acct_note" .Notice}}
 {{if .PrefsNote}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>Stored display settings were not used.</b> {{.PrefsNote}} Save a valid value below to repair it.</div></div>{{end}}
 {{range .ConfigNotes}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>The saved value wins.</b> {{.}} Editing config.json does not change it; save a value here instead.</div></div>{{end}}
@@ -31,13 +32,14 @@
 
 <section class="stack" aria-labelledby="set-others">
   <h3 class="h-label" id="set-others">Retention and schedule <span class="count">{{len .Others}}</span></h3>
-  <div class="table-wrap" role="region" aria-label="Other settings" tabindex="0"><table class="fleet compact"><caption class="sr-only">Settings that are shown but not editable yet</caption>
+  <div class="table-wrap" role="region" aria-label="Other settings" tabindex="0"><table class="fleet compact settable"><caption class="sr-only">Settings that are shown but not editable yet</caption>
     <thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead>
-    <tbody>{{range .Others}}<tr><td class="wrap"><b>{{.Label}}</b><small>{{.Help}}</small></td><td class="mono">{{.Value}}</td><td class="wrap">{{if eq .Since "system"}}<span class="st neutral sm"><i aria-hidden="true"></i>SET BY THE CONSOLE</span>{{else}}<span class="st neutral sm"><i aria-hidden="true"></i>NOT EDITABLE YET</span><small>Becomes effective with milestone {{.Since}}</small>{{end}}</td></tr>{{end}}</tbody></table></div>
+    <tbody>{{range .Others}}<tr><td class="wrap"><b>{{.Label}}</b><small>{{.Help}}</small></td><td class="mono val">{{.Value}}</td><td class="wrap">{{if .Href}}<a class="btn sm editlink" href="{{.Href}}">Edit in e-mail settings</a>{{else if eq .Since "system"}}<span class="st neutral sm"><i aria-hidden="true"></i>SET BY THE CONSOLE</span>{{else}}<span class="st neutral sm"><i aria-hidden="true"></i>NOT EDITABLE YET</span><small>Becomes effective with milestone {{.Since}}</small>{{end}}</td></tr>{{end}}</tbody></table></div>
 </section>
 
 <section class="stack" aria-labelledby="set-more"><h3 class="h-label" id="set-more">Elsewhere</h3>
-  <ul class="notes"><li><a href="/audit">Audit log</a>: every change made on this page is one row there.</li>
+  <ul class="notes"><li><a href="/settings/email">E-mail</a>: recipients, the test mail, the daily digest and the delivery log.</li>
+  <li><a href="/audit">Audit log</a>: every change made on this page is one row there.</li>
   <li><a href="/settings/accounts">Accounts and roles</a>: who can change settings (owners) and who can read them (admins).</li></ul></section>
 {{end}}
 {{end}}

@@ -451,6 +451,14 @@ func TestM3T5A_BannerActionsAndLabels(t *testing.T) {
 			if v.Action != nil {
 				t.Errorf("C10 is client-side and has no action: %+v", v.Action)
 			}
+		case "C03", "C03b", "C14", "C14b", "C18", "C20", "C21": // P20-W3B: the part of /settings/email that fixes it, System health for the others
+			if v.Action == nil || !strings.HasPrefix(v.Action.Href, "/settings/email#") || !v.Action.Admin || v.Action.Fallback == nil || !strings.HasPrefix(v.Action.Fallback.Href, "/system#comp-") {
+				t.Errorf("%s action: %+v", b.ID, v.Action)
+			}
+		case "C19", "C19b": // P20-W3B: the outbound heartbeat ping is the jobs row of System health
+			if v.Action == nil || v.Action.Href != "/system#comp-jobs" {
+				t.Errorf("%s action: %+v", b.ID, v.Action)
+			}
 		default:
 			if v.Action == nil || v.Action.Href != "/system" || v.Action.Label != "Open System health" {
 				t.Errorf("%s (%s): action %+v, want Open System health", b.ID, v.Label, v.Action)

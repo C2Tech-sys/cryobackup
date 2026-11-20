@@ -18,6 +18,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/cli"
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
+	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
 
 // M3-T4 delta, item 2: the real fixtures-mode App (cli.Build, the same one `cryo-console
@@ -273,6 +274,134 @@ func bannerLabel(id string) string {
 		"C05": "CERTIFICATE EXPIRING", "C06": "ALERTING STALLED", "C07": "MAINTENANCE WORKER DOWN", "C08": "NO ACTIVE DEVICES", "C09": "PARTIAL DATA", "C10": "LIVE UPDATES DISCONNECTED",
 		"C11": "DATABASE NEEDS ATTENTION", "C12": "MASTER KEY UNAVAILABLE", "C13": "CLOCK SUSPECT", "C14": "DIGEST NOT SENT", "C15": "STORAGE QUOTA", "C16": "RELEASE MANIFEST REJECTED", "C17": "GATEWAY LOGIN NOT REMOVED", "C17b": "GATEWAY LOGIN NOT CHECKED",
 		"C01b": "GATEWAY NOT CHECKED", "C02b": "STORAGE NOT CHECKED", "C03b": "EMAIL NOT CHECKED", "C04b": "AGENT API NOT CHECKED", "C05b": "CERTIFICATE NOT CHECKED", "C06b": "ALERTING NOT CHECKED",
-		"C07b": "MAINTENANCE WORKER NOT CHECKED", "C12b": "MASTER KEY NOT CHECKED", "C14b": "DIGEST NOT SENDING", "C15b": "STORAGE QUOTA NOT CHECKED", "C16b": "RELEASE MANIFEST NOT CHECKED"}
+		"C07b": "MAINTENANCE WORKER NOT CHECKED", "C12b": "MASTER KEY NOT CHECKED", "C14b": "DIGEST NOT SENDING", "C15b": "STORAGE QUOTA NOT CHECKED", "C16b": "RELEASE MANIFEST NOT CHECKED",
+		// M4 (ADR 0020): the mail and heartbeat conditions (P20-W3B).
+		"C18": "NO ALERT RECIPIENT", "C19": "HEARTBEAT PING FAILING", "C19b": "HEARTBEAT NOT CHECKED", "C20": "NO DIGEST RECIPIENT", "C21": "MAIL UNDELIVERED"}
 	return labels[id]
+}
+
+// P20-W3B: serve's fixtures mode (FixtureMailWorld) shows the mail world on /settings/email, the
+// pages and the admin API share one MailService and one TestMailer (its 10 s limit is the
+// console's, whichever of the two asks), and every message lands in the FakeSender.
+func TestTheRealFixturesAppShowsTheMailWorld(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Resolve()
+	cfg.Fixtures = true
+	cfg.AdminListen = "127.0.0.1:0"
+	app, err := cli.Build(ctx, cfg, cli.BuildOptions{FixturesPassword: "fixtures-pass-1", FixtureMailWorld: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	if app.UI.Mail == nil || app.UI.Mail != app.Admin.Mail || app.UI.Mail.Test != app.TestMail || app.UI.Mail.Digest == nil {
+		t.Fatalf("the pages' MailService is not the console's: ui %+v, admin %+v", app.UI.Mail, app.Admin.Mail)
+	}
+	srv := httptest.NewServer(app.Server.AdminRouter)
+	t.Cleanup(srv.Close)
+	c := &client{t: t, base: srv.URL}
+	c.login("fixtures-pass-1")
+	page := c.page("/settings/email")
+	for _, want := range []string{fixtures.RecipientNightDesk, fixtures.RecipientLongAddress, "FIXTURES", "RETRYING", "NOT SENT", "Alarm already resolved", "Older"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the e-mail page of fixtures mode lacks %q", want)
+		}
+	}
+	if dev := c.page("/devices/" + deviceID(t, app, fixtures.AckedHost)); !strings.Contains(dev, fixtures.AckNote) {
+		t.Error("the acknowledged alarm of the fixture world is not on its device page")
+	}
+	res, body := c.do("POST", "/ui/settings/email/test", url.Values{"to": {"desk@example.test"}, "csrf_token": {c.csrf}})
+	if res.StatusCode != 200 || !strings.Contains(body, "The relay accepted the message.") {
+		t.Fatalf("test mail from the page: %d", res.StatusCode)
+	}
+	// the API asks the same TestMailer at once: refused by the one limit
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/settings/smtp/test", strings.NewReader(`{"to":"desk@example.test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", srv.URL)
+	req.Header.Set(auth.CSRFHeader, c.csrf)
+	for _, ck := range c.cs {
+		req.AddCookie(ck)
+	}
+	ar, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ar.Body.Close()
+	if ar.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("a test through the API right after one from the page: %d, want 429 (one limit per console)", ar.StatusCode)
+	}
+}
+
+func deviceID(t *testing.T, app *cli.App, host string) string {
+	t.Helper()
+	l, err := app.Store.ListDevices(context.Background(), store.ScopeAll(), store.ListDevicesOptions{Page: store.Page{Limit: 500}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range l.Items {
+		if d.Hostname == host {
+			return d.ID
+		}
+	}
+	t.Fatalf("no device %s", host)
+	return ""
+}
+
+// P20-W3B F2: every Acknowledge the fixtures app offers works. Walk every device and customer page,
+// post every acknowledge form on it as it stands, and require the console to accept each one.
+func TestEveryAcknowledgeTheFixturesAppOffersWorks(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Resolve()
+	cfg.Fixtures = true
+	cfg.AdminListen = "127.0.0.1:0"
+	app, err := cli.Build(ctx, cfg, cli.BuildOptions{FixturesPassword: "fixtures-pass-1", FixtureMailWorld: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	srv := httptest.NewServer(app.Server.AdminRouter)
+	t.Cleanup(srv.Close)
+	c := &client{t: t, base: srv.URL}
+	c.login("fixtures-pass-1")
+	var pages []string
+	devs, err := app.Store.ListDevices(ctx, store.ScopeAll(), store.ListDevicesOptions{Page: store.Page{Limit: 500}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range devs.Items {
+		pages = append(pages, "/devices/"+d.ID)
+	}
+	custs, err := app.Store.ListCustomers(ctx, store.ScopeAll())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cu := range custs {
+		pages = append(pages, "/customers/"+cu.ID)
+	}
+	formRE := regexp.MustCompile(`(?s)<form method="post" action="/ui/acks" class="stack">(.*?)</form>`)
+	hidden := regexp.MustCompile(`<input type="hidden" name="([a-z_]+)" value="([^"]*)">`)
+	offered, notYet := 0, 0
+	for _, path := range pages {
+		body := c.page(path)
+		notYet += strings.Count(body, "Not recorded yet")
+		for _, f := range formRE.FindAllStringSubmatch(body, -1) {
+			v := url.Values{"mode": {"ack"}, "note": {"fixtures walk"}}
+			for _, h := range hidden.FindAllStringSubmatch(f[1], -1) {
+				v.Set(h[1], h[2])
+			}
+			offered++
+			res, _ := c.do("POST", "/ui/acks", v)
+			if res.StatusCode != http.StatusSeeOther || !strings.Contains(res.Header.Get("Location"), "ack=acked") {
+				t.Errorf("%s: the Acknowledge offered for %s answered %d %s", path, v.Get("alarm_type"), res.StatusCode, res.Header.Get("Location"))
+			}
+		}
+	}
+	if offered < 5 {
+		t.Fatalf("only %d Acknowledge forms on %d pages: the walk measures nothing", offered, len(pages))
+	}
+	if notYet > 0 {
+		t.Errorf("%d alarms in fixtures mode say they are not recorded yet: the fixture world must record every alarm it shows", notYet)
+	}
+	t.Logf("%d acknowledge forms on %d pages, every one accepted", offered, len(pages))
 }

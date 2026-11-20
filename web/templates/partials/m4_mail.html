@@ -1,0 +1,197 @@
+{{/* m4_mail.html - the components of M4 (ADR 0020, P20-W3B): the e-mail status, the recipients table and its forms,
+     the test mail and its result, the digest block with its sandboxed preview, the delivery log, and the
+     acknowledge / snooze block of an alarm (components 7.2). /settings/email, the device panel, the customer
+     page and /design render them from the same partials. No script; every form posts and the page answers. */}}
+
+{{define "settings_tabs"}}<nav class="tabs settabs" aria-label="Settings sections"><a href="/settings"{{if eq . "general"}} aria-current="page"{{end}}>Display and retention</a><a href="/settings/email"{{if eq . "email"}} aria-current="page"{{end}}>E-mail</a><a href="/settings/accounts"{{if eq . "accounts"}} aria-current="page"{{end}}>Accounts and roles</a></nav>{{end}}
+
+{{define "m4_onoff"}}{{if .}}<span class="swstate on"><svg width="11" height="11" aria-hidden="true"><use href="#i-check"/></svg>On</span>{{else}}<span class="swstate off"><i aria-hidden="true"></i>Off</span>{{end}}{{end}}
+
+{{define "m4_status"}}{{if .Err}}{{template "panel_state" .Err}}{{else}}
+<div class="mailhead"><h3 id="h-status">Delivery</h3>{{template "chipbtn" .Chip}}</div>
+{{with .Problem}}{{template "acct_note" .}}{{end}}
+<dl class="kv mailkv">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}
+<dt>Last send</dt><dd>{{if .LastErr}}<span class="age bad"><i class="g g-crit" aria-hidden="true"></i>could not be read</span>{{else if .Last}}<span class="lastsend">{{template "chip" .Last.Chip}} <span>{{.Last.Kind}}</span> <time datetime="{{.Last.When.ISO}}" title="{{.Last.When.Text}}">{{.Last.When.Short}}</time>{{if .Last.Class}} <code class="cls">{{.Last.Class}}</code>{{end}}</span>{{with .Last.Hint}}<small class="hint">{{.}}</small>{{end}}{{else}}<span class="muted">nothing sent yet</span>{{end}}</dd></dl>
+<p class="fixednote"><svg width="13" height="13" aria-hidden="true"><use href="#i-file"/></svg><span>The relay, its port and security, the sender address and the sign-in live in the <code>smtp</code> block of <code>config.json</code>, and the password in the file <code>smtp.password_file</code> names. The console never accepts a password in a form.</span></p>
+{{end}}{{end}}
+
+{{define "m4_test_result"}}<div class="testres {{if .Sent}}ok{{else}}crit{{end}}" role="status" aria-live="polite">
+<div class="row">{{template "chip" .Chip}}<span class="mono addr">{{.To}}</span></div>
+{{if .Sent}}<p>The relay accepted the message. If it does not arrive within a few minutes, look in the recipient's spam folder and at the relay's own log.</p>
+{{else}}<dl class="kv compact"><dt>Stage</dt><dd>{{.StageLabel}}{{if .Stage}} <code class="cls">{{.Stage}}</code>{{end}}</dd><dt>Class</dt><dd><code class="cls">{{.Class}}</code>{{if .Temporary}} <span class="muted">· temporary</span>{{end}}</dd></dl>
+{{with .Hint}}<p class="advice"><b>What to check:</b> {{.}}</p>{{end}}{{end}}
+</div>{{end}}
+
+{{define "m4_test"}}<div class="mailhead"><h3 id="h-test">Send test mail</h3></div>
+<p class="muted ui">One message, at once, to the address below. It is a row in the delivery log like every other message and is never retried.</p>
+{{with .Note}}{{template "acct_note" .}}{{end}}
+{{with .Result}}{{template "m4_test_result" .}}{{end}}
+<form method="post" action="/ui/settings/email/test" class="stack testform" novalidate>
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <div class="field"><label for="test-to">Send to</label>
+    <input class="input mono" id="test-to" name="to" type="email" value="{{.To}}" maxlength="254" autocomplete="off" spellcheck="false"{{if not .Enabled}} readonly aria-readonly="true"{{end}}{{if .ToErr}} aria-invalid="true" aria-describedby="test-to-help test-to-err"{{else}} aria-describedby="test-to-help"{{end}}>
+    {{with .ToErr}}<span class="err" id="test-to-err">{{.}}</span>{{end}}
+    <span class="help" id="test-to-help">{{if .Own}}Your own address is filled in. {{end}}{{if .Enabled}}Use "Use for test" beside a recipient to fill in theirs.{{end}}</span></div>
+  <div class="actions">{{if .Enabled}}<button class="btn primary" type="submit">Send test mail</button>{{else}}<span class="btn" role="button" aria-disabled="true" aria-describedby="test-why">Send test mail</span>{{end}}</div>
+  {{if not .Enabled}}<p class="meta-mono why" id="test-why">{{.Why}}</p>{{end}}
+</form>{{end}}
+
+{{define "m4_rcpt_fields"}}{{/* the fields of a recipient form; .P is the id prefix */}}
+{{with .F.Err}}{{template "acct_note" .}}{{end}}
+<div class="frow">
+  <div class="field"><label for="{{.P}}-name">Name</label><input class="input" id="{{.P}}-name" name="name" type="text" maxlength="100" value="{{.F.Name}}" autocomplete="off" required{{if .F.NameErr}} aria-invalid="true" aria-describedby="{{.P}}-name-err"{{end}}>{{with .F.NameErr}}<span class="err" id="{{$.P}}-name-err">{{.}}</span>{{end}}</div>
+  <div class="field"><label for="{{.P}}-addr">Address</label><input class="input mono" id="{{.P}}-addr" name="address" type="email" maxlength="254" value="{{.F.Address}}" autocomplete="off" spellcheck="false" required{{if .F.AddrErr}} aria-invalid="true" aria-describedby="{{.P}}-addr-err"{{end}}>{{with .F.AddrErr}}<span class="err" id="{{$.P}}-addr-err">{{.}}</span>{{end}}</div>
+</div>
+<fieldset class="plain switches"><legend class="h-label">Receives</legend>
+  <label class="switch"><input type="checkbox" role="switch" name="alerts" value="1"{{if .F.Alerts}} checked{{end}}><span>Alerts</span><span class="onoff" aria-hidden="true"></span></label>
+  <label class="switch"><input type="checkbox" role="switch" name="recoveries" value="1"{{if .F.Recoveries}} checked{{end}}><span>Recoveries</span><span class="onoff" aria-hidden="true"></span></label>
+  <label class="switch"><input type="checkbox" role="switch" name="digest" value="1"{{if .F.Digest}} checked{{end}}><span>Daily digest</span><span class="onoff" aria-hidden="true"></span></label>
+</fieldset>{{end}}
+
+{{define "m4_recipients"}}<div class="mailhead"><h3 id="h-rcpt" class="h-label">Recipients{{if not .Err}} <span class="count">{{len .Rows}}</span>{{end}}</h3>{{with .Counts}}<span class="meta-mono">{{.}}</span>{{end}}</div>
+{{if .Err}}{{template "panel_state" .Err}}{{else}}
+{{with .Notice}}{{template "acct_note" .}}{{end}}
+{{with .Empty}}{{template "panel_state" .}}{{end}}
+{{if .Rows}}<div class="table-wrap" role="region" aria-label="Recipients" tabindex="0">
+<table class="fleet rcpts">
+<caption>Mail recipients, by name, with what each one receives</caption>
+<thead><tr><th scope="col">Recipient</th><th scope="col">Alerts</th><th scope="col">Recoveries</th><th scope="col">Digest</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+<tbody>{{range .Rows}}<tr id="rcpt-{{.ID}}" class="rcpt">
+<td class="rcpt-cell"><b class="rname">{{.Name}}</b><span class="raddr mono">{{.Address}}</span><small>{{.Since}}</small></td>
+<td class="sw-cell" data-label="Alerts">{{template "m4_onoff" .Alerts}}</td>
+<td class="sw-cell" data-label="Recoveries">{{template "m4_onoff" .Recoveries}}</td>
+<td class="sw-cell" data-label="Digest">{{template "m4_onoff" .Digest}}</td>
+<td class="act"><span class="rcpt-acts">{{if .UseHref}}<a class="btn sm ghost" href="{{.UseHref}}" aria-label="Use {{.Name}}'s address for the test mail">Use for test</a>{{end}}
+{{if $.CanEdit}}<details class="rowmenu rcpt-menu"{{if .Open}} open{{end}}><summary class="btn sm" aria-label="Edit {{.Name}}">Edit…</summary>
+  <div class="rowmenu-pop" role="group" aria-label="Edit {{.Name}}">
+    <form method="post" action="{{.Form.Action}}" class="stack" novalidate><input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+      {{template "m4_rcpt_fields" (rcptform .Form (print "e-" .ID))}}
+      <div class="actions"><button class="btn sm primary" type="submit" aria-label="Save {{.Name}}">Save</button></div>
+    </form>
+    <form method="post" action="{{.Form.Action}}/delete" class="danger-zone stack"><input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+      <p class="ui muted">Removing a recipient keeps its rows in the delivery log.</p>
+      <div class="actions"><button class="btn sm danger" type="submit" aria-label="Remove {{.Name}}">Remove recipient</button></div>
+    </form>
+  </div></details>{{end}}</span></td>
+</tr>{{end}}</tbody></table></div>{{end}}
+{{if .CanEdit}}<details class="card addrcpt"{{if or .AddOpen (not .Rows)}} open{{end}}><summary><span class="btn sm">+ Add a recipient</span></summary>
+  <form method="post" action="{{.Add.Action}}" class="stack" novalidate><input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    {{template "m4_rcpt_fields" (rcptform .Add "add")}}
+    <p class="ui muted">Alerts are one message per evaluator pass for everything that became critical; a recovery is one notice when an alarm ends; the digest goes out every day, also on all-green days.</p>
+    <div class="actions"><button class="btn primary" type="submit">Add recipient</button></div>
+  </form></details>
+{{else}}<p class="meta-mono why">{{.Why}}</p>{{end}}
+{{end}}{{end}}
+
+{{define "m4_preview"}}<div class="dpreview" id="digest-preview">
+<div class="mailhead"><h4 class="h-label">Preview <span class="meta-mono">as it would go out now; nothing was sent</span></h4></div>
+<p class="subject"><span class="label-mono">Subject</span> <b>{{.Subject}}</b></p>
+<div class="frame"><span class="ribbon" aria-hidden="true">PREVIEW</span><iframe title="Digest preview: the HTML part" sandbox="" referrerpolicy="no-referrer" srcdoc="{{.HTML}}"></iframe></div>
+<details class="textpart"><summary class="h-label">The plain-text part</summary><pre class="code" tabindex="0">{{.Text}}</pre></details>
+</div>{{end}}
+
+{{define "m4_digest"}}<div class="mailhead"><h3 id="h-digest">Daily digest</h3>{{if not .Err}}{{if .Enabled}}<span class="st ok"><i aria-hidden="true"></i>ON</span>{{else}}<span class="st warn"><i aria-hidden="true"></i>OFF</span>{{end}}{{end}}</div>
+{{if .Err}}{{template "panel_state" .Err}}{{else}}
+<p class="muted ui">Sent every day at the time below, also when everything is green: a digest that only came on bad days could not be told apart from a console that has stopped.</p>
+{{with .FormErr}}{{template "acct_note" .}}{{end}}
+{{with .Result}}<div class="stack dresult" role="status">{{template "acct_note" .Note}}{{with .OffNote}}<p class="ui offnote"><i class="g g-warn" aria-hidden="true"></i>{{.}}</p>{{end}}
+{{if .Rows}}<ul class="dsent">{{range .Rows}}<li><span class="rname">{{.Name}}</span>{{template "chip" .Chip}}</li>{{end}}</ul>{{end}}</div>{{end}}
+<div class="dgrid">
+<form method="post" action="/ui/settings/email/digest" class="stack" novalidate aria-labelledby="h-digest">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <fieldset class="plain stack"{{if not .CanEdit}} disabled{{end}}>
+    <label class="switch"><input type="checkbox" role="switch" name="digest_enabled" value="1"{{if .Enabled}} checked{{end}}><span>Send the daily digest</span><span class="onoff" aria-hidden="true"></span></label>
+    <div class="field"><label for="dg-time">Time of day</label>
+      <div class="timezone"><input class="input mono" id="dg-time" name="digest_local_time" type="text" inputmode="numeric" maxlength="5" placeholder="07:00" autocomplete="off" value="{{.Time}}"{{if .TimeErr}} aria-invalid="true" aria-describedby="dg-time-help dg-time-err"{{else}} aria-describedby="dg-time-help"{{end}}><span class="zone mono">{{.Zone}}</span></div>
+      {{with .TimeErr}}<span class="err" id="dg-time-err">{{.}}</span>{{end}}
+      <span class="help" id="dg-time-help">24-hour clock, in the display time zone. It is now {{.ZoneNow}} there.{{if not .Time}} No time is set, so no digest is due.{{end}}</span></div>
+  </fieldset>
+  {{if .CanEdit}}<div class="actions"><button class="btn primary" type="submit">Save digest settings</button></div>{{else}}<p class="meta-mono why">{{.Why}}</p>{{end}}
+</form>
+<div class="stack dsend">
+  <dl class="kv compact"><dt>Recipients</dt><dd>{{plural .Recipients "recipient has" "recipients have"}} the digest switch on</dd>
+  <dt>Last sent</dt><dd>{{if .LastSent}}{{.LastSent}}{{else}}<span class="muted">never</span>{{end}}</dd></dl>
+  {{with .SentToday}}<p class="ui sentnote"><i class="g g-ok" aria-hidden="true"></i>Today's digest went out {{.}}. Send now sends it only to a recipient who has not had it today.</p>{{end}}
+  <div class="actions"><a class="btn" href="/settings/email?preview=1#digest-preview">Preview</a>
+  {{if .CanSend}}<form method="post" action="/ui/settings/email/digest/send"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn primary" type="submit">Send now</button></form>
+  <details class="rowmenu act-confirm"><summary class="btn ghost">Send again…</summary>
+    <div class="rowmenu-pop" role="group" aria-label="Send the digest again">
+      <form method="post" action="/ui/settings/email/digest/send" class="stack"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="force" value="1">
+        <p>Send a second copy of the digest to every recipient now, even to those who had today's? It does not count as today's digest: the daily one still goes out at its time. One audit entry is written.</p>
+        <div class="actions"><button class="btn sm primary" type="submit">Send again now</button></div>
+      </form></div></details>
+  {{else}}<span class="btn" role="button" aria-disabled="true" aria-describedby="dg-send-why">Send now</span>{{end}}</div>
+  {{if not .CanSend}}<p class="meta-mono why" id="dg-send-why">{{.SendWhy}}</p>{{end}}
+</div>
+</div>
+{{with .PreviewErr}}{{template "acct_note" .}}{{end}}
+{{with .Preview}}{{template "m4_preview" .}}{{end}}
+{{end}}{{end}}
+
+{{define "m4_log_rows"}}{{range .}}<tr id="dl-{{.ID}}" class="dl">
+<td class="when"><time datetime="{{.When.ISO}}" title="{{.When.Text}}">{{.When.Short}}</time></td>
+<td class="kind-cell" data-label="Kind">{{.Kind}}</td>
+<td class="who" data-label="To">{{if .Recipient}}<span class="rname">{{.Recipient}}</span>{{else}}<span class="muted">{{.RecipientNote}}</span>{{end}}</td>
+<td class="state-cell">{{template "chip" .Chip}}</td>
+<td class="att{{if gt .Attempt 1}} multi{{end}}" data-label="Attempt">{{.Attempt}}</td>
+<td class="detail" data-label="Detail">{{if .DetailMono}}<code class="cls"{{with .DetailHint}} title="{{.}}"{{end}}>{{.Detail}}</code>{{with .DetailHint}}<small>{{.}}</small>{{end}}{{else}}{{.Detail}}{{end}}</td>
+</tr>{{end}}{{end}}
+
+{{define "m4_log_table"}}<div class="table-wrap" role="region" aria-label="Delivery log" tabindex="0">
+<table class="fleet dlog">
+<caption>Delivery log, newest first{{with .Summary}}: {{.}}{{end}}</caption>
+<thead><tr><th scope="col">When</th><th scope="col">Kind</th><th scope="col">To</th><th scope="col">Outcome</th><th scope="col">Attempt</th><th scope="col">Detail</th></tr></thead>
+<tbody>{{template "m4_log_rows" .Rows}}</tbody></table></div>{{end}}
+
+{{define "m4_log"}}<div class="mailhead"><h3 id="h-log" class="h-label">Delivery log</h3><span class="meta-mono">times in {{.Zone}}</span></div>
+<form class="filters" method="get" action="/settings/email#deliveries" role="search" aria-label="Filter the delivery log">
+  <div class="field"><label for="dl-kind">Kind</label><select class="input" id="dl-kind" name="kind">{{range .Kinds}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <div class="field"><label for="dl-outcome">Outcome</label><select class="input" id="dl-outcome" name="outcome">{{range .Outcomes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></div>
+  <button class="btn sm" type="submit">Apply</button>
+</form>
+{{if .Chips}}<div class="chipbar" role="status"><span>Filtered</span>{{range .Chips}}<span class="fchip">{{.Label}}<a href="{{.Href}}" aria-label="Remove filter: {{.Label}}"><svg width="10" height="10" aria-hidden="true"><use href="#i-x"/></svg></a></span>{{end}}<a class="btn ghost sm" href="{{.Clear}}">Clear all</a></div>{{end}}
+{{if .Err}}{{template "panel_state" .Err}}{{else}}
+{{with .Empty}}{{template "panel_state" .}}{{end}}
+{{if .Rows}}{{template "m4_log_table" .}}{{end}}
+{{if or .Summary .Newer .Older}}<nav class="pager" aria-label="Delivery log pages"><span class="pg-text" role="status">{{.Summary}}</span>
+<ul>{{if .Newer}}<li><a class="pg" href="{{.Newer}}" aria-label="Newer entries">Newer</a></li>{{else}}<li><span class="pg disabled" aria-disabled="true" aria-label="Newer entries">Newer</span></li>{{end}}
+{{if .Older}}<li><a class="pg" href="{{.Older}}" aria-label="Older entries">Older</a></li>{{else}}<li><span class="pg disabled" aria-disabled="true" aria-label="Older entries">Older</span></li>{{end}}</ul></nav>{{end}}
+{{end}}{{end}}
+
+{{define "m4_ackline"}}<div class="ackline">{{/* an acknowledged alarm keeps its chip: this line is beside it, never instead of it */}}
+<span class="badge {{.Badge.Class}}"><i aria-hidden="true"></i>{{.Badge.Text}}</span>
+<span class="ackwho"><b>{{.Lead}}</b> by {{.By}} · <time datetime="{{.At.ISO}}" title="{{.At.Text}}">{{.At.Short}}</time> · {{.Until}}</span>
+{{with .Note}}<q class="acknote">{{.}}</q>{{end}}
+</div>{{end}}
+
+{{define "m4_ackform"}}<div class="rowmenu-pop ackpop" role="dialog" aria-label="Acknowledge {{.Label}}">
+<form method="post" action="{{.Action}}" class="stack">
+  <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="subject_type" value="{{.SubjectType}}"><input type="hidden" name="subject_id" value="{{.SubjectID}}"><input type="hidden" name="alarm_type" value="{{.AlarmType}}">
+  <fieldset class="plain"><legend class="h-label">After acknowledging</legend>
+  <div class="opt dense">
+    <label><input type="radio" name="mode" value="ack"{{if eq .Mode "ack"}} checked{{end}}><div><b>Acknowledge</b><span>Until you clear it or the alarm ends.</span></div></label>
+    <label><input type="radio" name="mode" value="1h"{{if eq .Mode "1h"}} checked{{end}}><div><b>Snooze 1 hour</b></div></label>
+    <label><input type="radio" name="mode" value="tomorrow"{{if eq .Mode "tomorrow"}} checked{{end}}><div><b>Snooze until tomorrow 8:00 AM</b><span>{{.Tomorrow}}</span></div></label>
+    <label><input type="radio" name="mode" value="3d"{{if eq .Mode "3d"}} checked{{end}}><div><b>Snooze 3 days</b></div></label>
+    <label><input type="radio" name="mode" value="1w"{{if eq .Mode "1w"}} checked{{end}}><div><b>Snooze 1 week</b></div></label>
+    <label><input type="radio" name="mode" value="next"{{if eq .Mode "next"}} checked{{end}}><div><b>Snooze {{lower .NextLabel}}</b></div></label>
+    <label class="untilopt"><input type="radio" name="mode" value="until"{{if eq .Mode "until"}} checked{{end}}><div><b>Snooze until</b><span class="untilzone"><input class="input mono" type="datetime-local" name="until" value="{{.Until}}" min="{{.Min}}" max="{{.Max}}" aria-label="Snooze until, a date and time in {{.Zone}}"><span class="zone mono">{{.Zone}}</span></span></div></label>
+  </div></fieldset>
+  <div class="field"><label for="{{.PopID}}-note">Note <span class="muted">(optional)</span></label><textarea class="input" id="{{.PopID}}-note" name="note" rows="2" maxlength="500">{{.Note}}</textarea>
+    <span class="help">Shown on this page to everyone who can see the alarm; never mailed and never in the audit log.</span></div>
+  <p class="ui muted">Mutes e-mail for this alarm. The alarm stays visible until its cause clears.</p>
+  <div class="actions"><button class="btn sm primary" type="submit">{{if .Change}}Save{{else}}Acknowledge{{end}}</button></div>
+</form></div>{{end}}
+
+{{define "m4_alarms"}}<section class="card alarms" id="alarms" aria-labelledby="h-alarms">
+<div class="mailhead"><h3 id="h-alarms" class="h-label">Open alarms <span class="count">{{len .Rows}}</span></h3><span class="meta-mono">acknowledge to mute e-mail; the state does not change</span></div>
+{{with .Notice}}{{template "acct_note" .}}{{end}}
+{{with .Err}}{{template "acct_note" .}}{{end}}
+{{if not .Rows}}<p class="ui muted noalarm">No open alarm here now.</p>{{end}}
+<ul class="alarmlist">{{range .Rows}}<li class="alarm {{.Chip.Class}}{{if .Ack}} acked{{end}}">
+  <div class="alarm-main">{{template "chip" .Chip}}{{if .Ack}}{{template "m4_ackline" .Ack}}{{else if .Recorded}}<span class="muted ui">Not acknowledged: each new episode of it is mailed.</span>{{else}}<span class="ui notyet"><i class="g g-info" aria-hidden="true"></i>{{.NotYet}}</span>{{end}}</div>
+  {{if and $.CanAck (or .Ack .Recorded)}}<div class="alarm-acts">{{if .Ack}}<form method="post" action="{{.Ack.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="subject_type" value="{{.Form.SubjectType}}"><input type="hidden" name="subject_id" value="{{.Form.SubjectID}}"><button class="btn sm" type="submit" aria-label="Clear the acknowledgement of {{.Form.Label}}">Clear</button></form>{{end}}
+    <details class="rowmenu ackmenu"{{if .Form.Open}} open{{end}}><summary class="btn sm{{if not .Ack}} primary{{end}}" aria-label="{{if .Ack}}Change the acknowledgement of{{else}}Acknowledge{{end}} {{.Form.Label}}">{{if .Ack}}Change…{{else}}Acknowledge…{{end}}</summary>{{template "m4_ackform" (ackform .Form $.CSRF)}}</details></div>{{end}}
+</li>{{end}}</ul>
+{{if and (not .CanAck) .Rows}}<p class="meta-mono why">{{.Why}}</p>{{end}}
+</section>{{end}}

@@ -47,7 +47,7 @@ func ExtraBannersIn(now time.Time, loc *time.Location) []state.Banner {
 	return AllBannersIn(now, loc)
 }
 
-// AllBanners is every condition the console can raise: C01 to C16 (C11 at its
+// AllBanners is every condition the console can raise: C01 to C21 (C11 at its
 // critical severity), C00 (the self-checks are not wired) and every "b"
 // not-checked warning. Timestamps are relative to now.
 func AllBanners(now time.Time) []state.Banner { return AllBannersIn(now, Zone()) }
@@ -65,6 +65,13 @@ func AllBannersIn(now time.Time, loc *time.Location) []state.Banner {
 	out = append(out, state.Banner{ID: "C17", Severity: state.SeverityCritical,
 		Text: "The gateway login of a retired device is still in the gateway file: the gateway may still accept it until the sync succeeds."})
 	out = append(out, state.Banner{ID: "C00", Severity: warn, Text: "Console self-checks are not wired: gateway, storage, e-mail and job health are not being monitored."})
+	// M4 (ADR 0020, P20-W3B): the mail and heartbeat conditions, worded as internal/state words them.
+	out = append(out,
+		state.Banner{ID: "C18", Severity: warn, Text: "Alert e-mail has no recipient: alarms are not mailed to anyone."},
+		state.Banner{ID: "C19", Severity: warn, Count: 4, Text: "The external heartbeat ping is failing (timeout): an outside monitor may report this console as down."},
+		state.Banner{ID: "C20", Severity: warn, Text: "The daily digest has no recipient: it is not mailed to anyone."},
+		state.Banner{ID: "C21", Severity: warn, Count: 2, Text: "2 e-mail messages could not be delivered in the last 24 hours: see the delivery log."},
+		state.Banner{ID: "C19b", Severity: warn, Text: "External heartbeat ping not checked: its failure count is garbled, so a failing ping would go unnoticed."})
 	for _, b := range []struct{ id, what string }{{"C01b", "Gateway"}, {"C02b", "Storage"}, {"C03b", "Alert e-mail"}, {"C04b", "Agent API"}, {"C05b", "Certificate"},
 		{"C06b", "Alerting"}, {"C07b", "Maintenance worker"}, {"C12b", "Master key"}, {"C14b", "Digest"}, {"C15b", "Storage quota"}, {"C16b", "Release manifest"}, {"C17b", "Gateway login removal"}} {
 		out = append(out, state.Banner{ID: b.id, Severity: warn, Text: b.what + " has not been checked: a problem here would go unnoticed."})

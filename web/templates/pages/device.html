@@ -96,7 +96,7 @@
     <nav class="tabs" aria-label="Device sections">{{range $i, $t := .Tabs}}<a href="{{$t.Href}}"{{if ge $i 3}} class="tab-ov"{{end}}{{if $t.Current}} aria-current="page"{{end}}>{{$t.Label}}</a>{{end}}<details class="tab-more"{{if $more}} data-current="true"{{end}}><summary{{if $more}} aria-current="page"{{end}}>More</summary><div class="tab-more-pop">{{range $i, $t := .Tabs}}{{if ge $i 3}}<a href="{{$t.Href}}"{{if $t.Current}} aria-current="page"{{end}}>{{$t.Label}}</a>{{end}}{{end}}</div></details></nav>
   </header>
   <div class="mt">
-  {{if eq .Tab "summary"}}{{template "device_live" .}}
+  {{if eq .Tab "summary"}}{{with .Alarms}}{{template "m4_alarms" .}}{{end}}{{template "device_live" .}}
   {{else if eq .Tab "history"}}{{template "device_history" .History}}
   {{else if eq .Tab "commands"}}{{template "device_commands" .Commands}}
   {{else if eq .Tab "settings"}}{{template "device_settings" .Settings}}

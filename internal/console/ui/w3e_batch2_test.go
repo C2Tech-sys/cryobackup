@@ -65,7 +65,7 @@ func TestW3ETimesAreTwelveHourEverywhere(t *testing.T) {
 	e := newEnv(t)
 	e.login()
 	board := e.page("/", 200)
-	if !strings.Contains(board, "SNOOZED until Wed 1:42 PM") {
+	if !strings.Contains(board, "SNOOZED until Wed 21 Oct, 1:42 PM CDT") {
 		t.Errorf("snooze time not on a 12-hour clock")
 	}
 	dev := e.dev["FRONTDESK-01"]

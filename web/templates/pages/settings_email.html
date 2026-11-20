@@ -1,0 +1,18 @@
+{{/* S27 - e-mail settings (ADR 0020, P20-W3B). An admin page: delivery status, test mail, recipients, the daily digest
+     and the delivery log. Every read and write goes through the admin API's handlers in process; the smtp block and its
+     password stay in config.json and a file, never in a form. The components are partials/m4_mail.html. */}}
+{{define "title"}}E-mail settings{{end}}
+{{define "content"}}
+<nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <a href="/settings">Settings</a> / <span>E-mail</span></nav>
+<div class="page-head"><div class="t"><svg width="22" height="22" aria-hidden="true"><use href="#i-mail"/></svg><h2>E-mail</h2><span class="meta-mono">Alerts, recoveries and the daily digest</span></div>
+  <div class="sub"><span>Who is mailed, how the last send went, and every message the console sent or held back.</span></div></div>
+{{template "settings_tabs" "email"}}
+{{template "acct_note" .Notice}}
+<div class="mailgrid">
+  <section class="card mailcard" id="status" aria-labelledby="h-status">{{template "m4_status" .Status}}</section>
+  <section class="card mailcard" id="test" aria-labelledby="h-test">{{template "m4_test" .Test}}</section>
+</div>
+<section class="stack mailsec" id="recipients" aria-labelledby="h-rcpt">{{template "m4_recipients" .Rcpt}}</section>
+<section class="card mailcard" id="digest" aria-labelledby="h-digest">{{template "m4_digest" .Digest}}</section>
+<section class="stack mailsec" id="deliveries" aria-labelledby="h-log">{{template "m4_log" .Log}}</section>
+{{end}}

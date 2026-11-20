@@ -304,7 +304,7 @@ func (s *Service) explainOf(ctx context.Context, st adminapi.DeviceStateResponse
 	if st.Acknowledged {
 		v.Note = "Acknowledged: the alarm stays visible until the cause clears."
 		if st.SnoozedUntil != nil {
-			v.Note = "Snoozed until " + c.dayClock(*st.SnoozedUntil) + ". The alarm stays visible until the cause clears."
+			v.Note = "Snoozed until " + snoozeEndText(c, *st.SnoozedUntil) + ". The alarm stays visible until the cause clears." // J1: the one snooze-end formatter
 		}
 	}
 	return v

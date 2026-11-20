@@ -81,6 +81,12 @@ type Link struct {
 	Label string
 	// Admin marks a destination only an admin may open (forRole drops it for the others).
 	Admin bool
+	// Fallback, when set, is what forRole offers a role that cannot open an Admin destination,
+	// instead of dropping the action (P20-W3B: the e-mail banners fall back to System health).
+	Fallback *Link
+	// OwnerLabel, when set, is the label forRole gives an owner, who can do what it says ("Add a
+	// recipient"); everyone else reads Label ("See recipients").
+	OwnerLabel string
 }
 
 // BannerView is a rendered condition banner.
@@ -178,11 +184,18 @@ func bannerViewIn(b state.Banner, now time.Time, loc *time.Location) BannerView 
 // bannerAction is the action of a console banner (components 9.2). Every banner
 // the engine raises has a row on the System page (adminapi healthRowBanners),
 // so "Open System health" is where each one is explained, including C00 and the
-// "b" not-checked warnings. The spec names "Open email settings" for C03 and
-// C14; there is no mail settings page yet, so they open the System row that
-// carries their evidence. C10 (live updates) is client-side and has none.
+// "b" not-checked warnings. The mail banners of M4 open the part of
+// /settings/email that fixes them (P20-W3B, mailBannerActions); that page is an
+// admin page, so another role is offered the System row instead. C19 and C19b
+// (the outbound heartbeat ping) open the System page's jobs row. C10 (live
+// updates) is client-side and has none.
 func bannerAction(id string) *Link {
+	if a, ok := mailBannerActions[id]; ok {
+		return &Link{Href: emailPath + "#" + a.anchor, Label: a.label, OwnerLabel: a.owner, Admin: true, Fallback: &Link{Href: "/system#comp-" + a.row, Label: "Open System health"}}
+	}
 	switch id {
+	case "C19", "C19b":
+		return &Link{Href: "/system#comp-jobs", Label: "Open System health"}
 	case "C09":
 		return &Link{Href: "/?state=UNKNOWN", Label: "Show UNKNOWN devices"}
 	case "C08":
@@ -199,14 +212,17 @@ func bannerAction(id string) *Link {
 // forRole drops the actions a role cannot open: a read-only or operator account
 // is never offered a link that answers 403.
 func (v BannersView) forRole(role auth.Role) BannersView {
-	if role >= auth.RoleAdmin {
-		return v
-	}
 	strip := func(in []BannerView) []BannerView {
 		out := make([]BannerView, len(in))
 		for i, b := range in {
-			if b.Action != nil && b.Action.Admin {
-				b.Action = nil
+			switch a := b.Action; {
+			case a == nil:
+			case a.Admin && role < auth.RoleAdmin:
+				b.Action = a.Fallback // nil for most: the action is dropped
+			case a.OwnerLabel != "" && role >= auth.RoleOwner:
+				own := *a
+				own.Label = a.OwnerLabel
+				b.Action = &own
 			}
 			out[i] = b
 		}

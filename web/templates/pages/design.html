@@ -119,5 +119,7 @@
 
 {{if or (not $o) (eq $o "purge")}}{{with .Purge}}{{template "design_purge" .}}{{end}}{{end}}
 
+{{if or (not $o) (eq $o "mail")}}{{with .Mail}}{{template "design_mail" .}}{{end}}{{end}}
+
 </div>
 {{end}}
