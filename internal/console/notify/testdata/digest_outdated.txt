@@ -1,5 +1,5 @@
 CryoBackup daily digest, Tue 17 Nov
-1 of 1 devices backed up. 1 on an outdated agent.
+No devices backed up: 1 on an outdated agent.
 Polled Tue 17 Nov 2026, 3:04 PM CST
 
 Console
@@ -14,7 +14,7 @@ Warnings
 Parked and long-deferred devices
   None. 1 device checked.
 
-Totals: 1 device: 1 backed up, 1 on an outdated agent. Exceptions: 0 critical, 0 warnings, 0 parked or deferred. 1 customer, 0 missing.
+Totals: 1 device: 0 backed up, 1 on an outdated agent. Exceptions: 0 critical, 0 warnings, 0 parked or deferred. 1 customer, 0 missing.
 
 Open the console to see the details.
 

@@ -107,16 +107,24 @@ func digestByState(v state.FleetView) map[state.State]int {
 	return m
 }
 
-// digestBackedUp counts the devices a digest speaks for that have a current backup
-// (state.DeviceState.CurrentBackup: the engine's own freshness verdict, not a list of states).
-func digestBackedUp(v state.FleetView) int {
-	n := 0
+// digestBackedUp splits the OK devices a digest speaks for (primary state OK: in none of the engine's
+// exception states, which are every other state of state.Precedence, each counted under its own
+// name by digestByState) into those with a current backup (state.DeviceState.CurrentBackup, the
+// engine's freshness verdict): backed up; and those without one, notCurrent. The engine does not
+// make an OK device without a current backup (no success is PENDING_FIRST or BLANK, an old one
+// STALE), but if it ever did the device would be counted and said, never hidden in the backed-up
+// number. With digestByState this counts every device exactly once.
+func digestBackedUp(v state.FleetView) (backedUp, notCurrent int) {
 	for i := range v.Devices {
-		if d := &v.Devices[i]; d.Primary != state.StateRetired && !d.DigestExcluded && d.CurrentBackup {
-			n++
+		if d := &v.Devices[i]; d.Primary == state.StateOK && !d.DigestExcluded {
+			if d.CurrentBackup {
+				backedUp++
+			} else {
+				notCurrent++
+			}
 		}
 	}
-	return n
+	return backedUp, notCurrent
 }
 
 // stateWords is how a count of devices in a state reads ("1 paused", "3 awaiting first backup").
@@ -290,12 +298,19 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	p.CheckedAs = count(p.Checked, "device", "devices")
 	critDevices, warn, other := p.Sections[sectionCritical].Count-missing, p.Sections[sectionWarning].Count, p.Sections[sectionOther].Count
 	byState := digestByState(v)
-	backedUp := digestBackedUp(v) // the engine's freshness verdict, whatever the primary state
-	var rest []string             // the devices that are not backed up, by state: never inside the backed-up number
+	// The totals partition the devices: backed up (OK with a current backup), then every exception
+	// state of the engine's list under its own name, whatever the age of the device's last success,
+	// then an OK device without a current backup. Each device is counted once, so the numbers sum to
+	// p.Checked, and "backed up" in the headline is this same number.
+	backedUp, notCurrent := digestBackedUp(v)
+	var rest []string // the devices that are not backed up: never inside the backed-up number
 	for _, st := range state.Precedence() {
 		if n := byState[st]; n > 0 && st != state.StateOK {
 			rest = append(rest, strconv.Itoa(n)+" "+stateWords(st))
 		}
+	}
+	if notCurrent > 0 {
+		rest = append(rest, strconv.Itoa(notCurrent)+" without a current backup")
 	}
 	var left []string // what the policy leaves out: always said, so it cannot hide in an all-clear
 	if d.ExcludedCustomers > 0 {

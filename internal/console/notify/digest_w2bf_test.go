@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -178,22 +179,121 @@ func TestGoldenDigestHeadlines(t *testing.T) {
 	}
 }
 
-// P20-W2BF C4: a device whose backups are current counts as backed up whatever its primary state:
-// an outdated agent (not an alarm here) reads "1 of 1 devices backed up. 1 on an outdated agent.",
-// never "No devices backed up", and never "All clear" while there is any exception.
-func TestGoldenDigestOutdatedAgentIsBackedUp(t *testing.T) {
+// P20-W2BF C4, as D4 rules: a device in an exception state is counted under that exception only,
+// whatever the age of its last success. An outdated agent with current backups reads "No devices
+// backed up: 1 on an outdated agent." ("backed up" is the backed-up number of the Totals line, 0
+// here), never "All clear", and its Totals never count the one device twice.
+func TestGoldenDigestOutdatedAgentCountedUnderItsException(t *testing.T) {
 	v := greenView(1)
 	v.Devices[0].Primary, v.Devices[0].Flags = state.StateOutdated, []state.State{state.StateOutdated}
 	c, err := RenderDigest(v, nil, Options{Loc: cst})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: 1 of 1 devices backed up, 1 on an outdated agent" {
+	if c.Subject != "[CryoBackup] Backup digest Tue 17 Nov: no devices backed up, 1 on an outdated agent" {
 		t.Fatalf("subject %q", c.Subject)
 	}
-	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "1 of 1 devices backed up. 1 on an outdated agent." {
+	if first := strings.SplitN(c.Text, "\n", 3)[1]; first != "No devices backed up: 1 on an outdated agent." {
 		t.Fatalf("first line %q", first)
+	}
+	if !strings.Contains(c.Text, "\nTotals: 1 device: 0 backed up, 1 on an outdated agent.") {
+		t.Fatalf("totals:\n%s", c.Text)
 	}
 	golden(t, "digest_outdated.txt", c.Text)
 	golden(t, "digest_outdated.html", c.HTML)
+}
+
+// P20-W2BF D4: the Totals line partitions the devices. Every device the digest speaks for is
+// counted once: as backed up when it has a current backup and is in no exception state, otherwise
+// under its exception state only, whatever the age of its last success. Over every engine state
+// alone and mixed, with and without a current backup, the numbers before "Exceptions:" sum to the
+// device count, the backed-up number is exactly that count, and the headline keeps the batch 2
+// invariants over the same number (never "All clear" with an exception, never "No devices backed
+// up" when one is).
+func TestDigestTotalsPartitionTheDevices(t *testing.T) {
+	mk := func(i int, s state.State, current bool) state.DeviceState {
+		d := dev(fmt.Sprintf("01DEVPART%017d", i), custSummit, fmt.Sprintf("SUMMIT-PC-%02d", i+1), s, state.SeverityNone, time.Hour)
+		d.CurrentBackup = current
+		return d
+	}
+	type tc struct {
+		name string
+		devs []state.DeviceState
+	}
+	var cases []tc
+	all := state.Precedence()
+	for _, s := range all {
+		for _, current := range []bool{true, false} {
+			cases = append(cases, tc{fmt.Sprintf("%s current=%v", s, current), []state.DeviceState{mk(0, s, current)}})
+		}
+	}
+	for _, mix := range []string{"current", "not current", "alternating"} {
+		var ds []state.DeviceState
+		for i, s := range all {
+			ds = append(ds, mk(i, s, mix == "current" || mix == "alternating" && i%2 == 0))
+		}
+		cases = append(cases, tc{"all states " + mix, ds})
+		ds = append(append([]state.DeviceState(nil), ds...), mk(len(all), state.StateOK, true), mk(len(all)+1, state.StateOK, true))
+		cases = append(cases, tc{"all states " + mix + " and two OK", ds})
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := greenView(0)
+			v.Devices = c.devs
+			devices, backedUp, exception := 0, 0, false
+			for _, d := range c.devs {
+				if d.Primary == state.StateRetired {
+					continue
+				}
+				devices++
+				if d.Primary == state.StateOK && d.CurrentBackup {
+					backedUp++
+				} else {
+					exception = true
+				}
+			}
+			out, err := RenderDigest(v, nil, Options{Loc: cst})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var line string
+			for _, l := range strings.Split(out.Text, "\n") {
+				if strings.HasPrefix(l, "Totals: ") {
+					line = l
+				}
+			}
+			counts, _, ok := strings.Cut(strings.TrimPrefix(line, "Totals: "), ". Exceptions:")
+			head, parts, ok2 := strings.Cut(counts, ": ")
+			if !ok || !ok2 {
+				t.Fatalf("no Totals line:\n%s", out.Text)
+			}
+			var n, sum, shown int
+			if _, err := fmt.Sscanf(head, "%d", &n); err != nil || n != devices {
+				t.Fatalf("Totals speak for %q, want %d devices: %s", head, devices, line)
+			}
+			for i, p := range strings.Split(parts, ", ") {
+				var k int
+				if _, err := fmt.Sscanf(p, "%d", &k); err != nil {
+					t.Fatalf("part %q: %v", p, err)
+				}
+				if i == 0 {
+					if !strings.HasSuffix(p, " backed up") {
+						t.Fatalf("first part %q is not the backed-up number: %s", p, line)
+					}
+					shown = k
+				}
+				sum += k
+			}
+			if sum != devices || shown != backedUp {
+				t.Fatalf("Totals sum to %d (backed up %d), want %d devices (backed up %d): %s", sum, shown, devices, backedUp, line)
+			}
+			first := strings.SplitN(out.Text, "\n", 3)[1]
+			if exception && (strings.Contains(strings.ToLower(first), "all clear") || strings.HasPrefix(first, "All ") || strings.HasPrefix(first, "The 1 device")) {
+				t.Fatalf("headline %q with an exception", first)
+			}
+			if backedUp > 0 && strings.Contains(first, "No devices backed up") {
+				t.Fatalf("headline %q with %d backed up", first, backedUp)
+			}
+		})
+	}
 }
