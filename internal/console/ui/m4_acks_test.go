@@ -320,3 +320,63 @@ func TestP20W3B_F6_ChangeOpensWithWhatIsInForce(t *testing.T) {
 	fresh := alarmsBlock(t, e.page("/devices/"+e.dev[fixtures.SnoozedHost], 200))
 	mustContain(t, "new", fresh, `value="ack" checked`, `maxlength="500"></textarea>`, ">Acknowledge</button>")
 }
+
+// G3: snooze ends on a day where the local time does not exist or exists twice, in a zone that moves at
+// 02:00 (America/Chicago) and one that moves at 01:00 (Europe/London): the end falls on the right day,
+// never more than an hour from the local time asked for, and within an hour of N days on. Starts on an
+// ambiguous local time (the second 01:30 of a fall-back night) too.
+func TestP20W3B_G3_SnoozeEndsOnTransitionDays(t *testing.T) {
+	for _, z := range []struct {
+		zone                       string
+		springNow, springEnd       string // N days on lands in the skipped hour
+		fallNow, fallEnd           string // N days on lands in the repeated hour
+		ambiguousStart, ambEndDate string // the second occurrence of an ambiguous time, plus a week
+	}{
+		{"America/Chicago", "2027-03-11 02:30", "2027-03-14", "2026-10-29 01:30", "2026-11-01", "2026-11-01 01:30", "2026-11-08"},
+		{"Europe/London", "2027-03-25 01:30", "2027-03-28", "2026-10-22 01:30", "2026-10-25", "2026-10-25 01:30", "2026-11-01"},
+	} {
+		loc, err := time.LoadLocation(z.zone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parse := func(s string) time.Time {
+			tm, err := time.ParseInLocation("2006-01-02 15:04", s, loc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return tm
+		}
+		check := func(name string, now time.Time, mode, wantDate string, days int) {
+			got, ok := snoozeEnd(mode, now, loc)
+			if !ok {
+				t.Fatalf("%s %s: no end", z.zone, name)
+			}
+			l, n := got.In(loc), now.In(loc)
+			// the local clock asked for, compared as wall time (both read as UTC fields)
+			want := time.Date(n.Year(), n.Month(), n.Day()+days, n.Hour(), n.Minute(), 0, 0, time.UTC)
+			wall := time.Date(l.Year(), l.Month(), l.Day(), l.Hour(), l.Minute(), 0, 0, time.UTC)
+			if d := wall.Sub(want); d < -time.Hour || d > time.Hour {
+				t.Errorf("%s %s: ends %s local, %v from the %s asked for", z.zone, name, l.Format("2006-01-02 15:04 MST"), d, want.Format("2006-01-02 15:04"))
+			}
+			if el := got.Sub(now); el < time.Duration(days)*24*time.Hour-time.Hour || el > time.Duration(days)*24*time.Hour+time.Hour {
+				t.Errorf("%s %s: %v after the start, want %d days within an hour", z.zone, name, el, days)
+			}
+			if l.Format("2006-01-02") != wantDate && wall.Sub(want).Abs() < time.Hour {
+				t.Errorf("%s %s: ends on %s, want %s", z.zone, name, l.Format("2006-01-02"), wantDate)
+			}
+		}
+		check("3 days into the skipped hour", parse(z.springNow), "3d", z.springEnd, 3)
+		check("3 days into the repeated hour", parse(z.fallNow), "3d", z.fallEnd, 3)
+		// ParseInLocation picks one of the two occurrences, which one is not specified: find both
+		first, clock := parse(z.ambiguousStart), parse(z.ambiguousStart).In(loc).Format("15:04")
+		second := first.Add(time.Hour)
+		if second.In(loc).Format("15:04") != clock {
+			second, first = first, first.Add(-time.Hour)
+		}
+		if first.In(loc).Format("15:04") != clock || second.In(loc).Format("15:04") != clock {
+			t.Fatalf("%s: %s is not ambiguous", z.zone, z.ambiguousStart)
+		}
+		check("a week from the second 01:30", second, "1w", z.ambEndDate, 7)
+		check("a week from the first 01:30", first, "1w", z.ambEndDate, 7)
+	}
+}

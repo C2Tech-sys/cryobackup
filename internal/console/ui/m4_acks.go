@@ -251,8 +251,12 @@ func deviceAlarms(ds state.DeviceState) []string {
 }
 
 // snoozeEnd is the end of a snooze preset at now in the operator's zone loc: one hour on, tomorrow at
-// 8:00 AM, or the same local time of day 3 or 7 days on (the wall clock is kept across a change to or
-// from daylight saving time, so "3 days" ends at the hour the operator expects, not 72 hours on).
+// 8:00 AM, or the same local time of day 3 or 7 days on, so that across a change to or from daylight
+// saving time "3 days" ends at the hour the operator expects rather than 72 hours on. On a day where that
+// local time does not exist (the clocks jump over it) or exists twice (the clocks go back over it), Go's
+// time.Date picks one of the two offsets of the transition, which one is not specified: the end is then
+// never more than an hour from the local time asked for, and the page shows the stored end, so the
+// operator sees which it was.
 func snoozeEnd(mode string, now time.Time, loc *time.Location) (time.Time, bool) {
 	l := now.In(loc)
 	switch mode {
