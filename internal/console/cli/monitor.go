@@ -13,14 +13,15 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
 	"github.com/c2tech-sys/cryobackup/internal/console/notify"
 	"github.com/c2tech-sys/cryobackup/internal/console/probe"
+	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // The M3 monitoring wiring of serve: the health-prober, the alarm-evaluator
 // loop, the abandoned-run sweeper and the optional healthcheck ping
 // (architecture §5.7), and the World's probe facts (health.Evaluator.Probes).
-// M4 (ADR 0020): the operator mail sender, the evaluator's notify step and the
-// notification-retry job.
+// M4 (ADR 0020): the operator mail sender, the evaluator's notify step, the
+// daily-digest job and the notification-retry job.
 
 // fixturesFrom is the sender address of a fixture console without smtp.from: its FakeSender has no
 // settings to take one from, and nothing it accepts leaves the process.
@@ -98,11 +99,18 @@ func (a *App) addMonitorJobs(cfg config.Config, fleet *health.Evaluator) {
 	n := &notify.Notifier{Store: a.Store, Dispatch: a.Dispatch, Configured: mail.SettingsFromConfig(cfg.SMTP).Configured(),
 		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}
 	a.Runner.Add((&jobs.AlarmEvaluator{Store: a.Store, View: view, Notify: jobs.NotifyStep(n)}).Job())
+	// The daily digest (ADR 0020 decision 8): its job, and its re-render for the retry job.
+	a.Digest = &notify.Digester{Store: a.Store, Dispatch: a.Dispatch, View: view, Configured: mail.SettingsFromConfig(cfg.SMTP).Configured(),
+		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}
+	a.Runner.Add((&jobs.DailyDigest{Digester: a.Digest}).Job())
 	a.Runner.Add((&jobs.NotificationRetry{Retrier: &notify.Retrier{Store: a.Store, Dispatch: a.Dispatch, View: view,
-		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}}).Job())
+		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log,
+		Rerender: map[string]notify.RerenderFunc{store.DeliveryDigest: a.Digest.Rerender}}}).Job())
 	a.Runner.Add((&jobs.AbandonedRunSweeper{Store: a.Store}).Job())
-	if hp := cfg.HealthcheckPing; hp.URL != "" {
-		a.Runner.Add((&jobs.HealthcheckPing{Store: a.Store, URL: hp.URL, Method: hp.Method,
-			Every: time.Duration(hp.IntervalS) * time.Second, Started: a.clock().UTC()}).Job())
-	}
+	// The outbound heartbeat ping (ADR 0020 decision 12): registered only with a URL; its facts feed
+	// banner C19 through the prober either way (no URL: not configured, nothing raised).
+	hp := cfg.HealthcheckPing
+	ping := jobs.NewHeartbeatPing(a.Store, hp.URL, hp.Method, time.Duration(hp.IntervalS)*time.Second, a.clock().UTC())
+	a.Prober.Heartbeat = ping.Facts
+	jobs.RegisterHeartbeatPing(a.Runner, ping)
 }

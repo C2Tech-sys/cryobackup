@@ -1,0 +1,23 @@
+CryoBackup daily digest, {{.Date}}
+{{.Title}}
+Polled {{.Polled}}
+
+Console
+{{if .Banners}}{{range .Banners}}  [{{.Word}}] {{.Text}}
+{{end}}{{else}}  No console condition: every self-check passes.
+{{end}}{{range .Sections}}
+{{.Title}}
+{{if .Groups}}{{range .Groups}}  {{.Customer}}{{if .Muted}} (suspended: notifications muted){{end}}
+{{range .Lines}}    [{{.State}}] {{if .Host}}{{.Host}}{{else}}no active device{{end}}{{if .Since}} since {{.Since}}{{end}}{{if .Ack}} [{{.Ack}}]{{end}}{{if .Indefinite}}
+        paused with no end date{{end}}{{if .Also}}
+        also {{.Also}}{{end}}
+{{end}}{{end}}{{else}}  None. {{$.CheckedAs}} checked.
+{{end}}{{end}}
+Totals: {{.Totals}}
+
+{{if .ConsoleURL}}Open the console: {{.ConsoleURL}}{{else}}Open the console to see the details.{{end}}
+
+This digest is sent every day, also when everything is green: a day
+without it means the console or its mail has stopped.
+You receive this because this address receives the CryoBackup daily
+digest.

@@ -176,15 +176,17 @@ func TestC09ProberMailFacts(t *testing.T) {
 	run := state.ProbeRun{LastRunAt: state.Millis(clk.t.UnixMilli()), LastOKAt: state.Millis(clk.t.UnixMilli())}
 
 	smtp, digest := h.mailFacts(run)
-	if !smtp.NoAlertRecipient || smtp.NotRead != "" || smtp.Probe != run || digest == nil || !digest.NotInBuild {
+	// P20-W2B: the digest facts are live (no NotInBuild marker); with a relay and nobody receiving
+	// the digest, NoRecipient (C20).
+	if !smtp.NoAlertRecipient || smtp.NotRead != "" || smtp.Probe != run || digest == nil || digest.NotInBuild || !digest.NoRecipient || digest.MailNotSetUp {
 		t.Fatalf("no recipient: %+v %+v", smtp, digest)
 	}
 	actor := store.AuditActor{Username: "root", Method: "api"}
 	if _, err := st.CreateRecipient(ctx, store.ScopeAll(), store.RecipientInput{Name: "d", Address: "digest@example.test", Digest: true}, actor); err != nil {
 		t.Fatal(err)
 	}
-	if smtp, _ := h.mailFacts(run); !smtp.NoAlertRecipient {
-		t.Fatal("a digest-only recipient counts as an alert recipient")
+	if smtp, digest := h.mailFacts(run); !smtp.NoAlertRecipient || digest.NoRecipient {
+		t.Fatalf("a digest-only recipient: %+v %+v", smtp, digest)
 	}
 	if _, err := st.CreateRecipient(ctx, store.ScopeAll(), store.RecipientInput{Name: "o", Address: "ops@example.test", Alerts: true}, actor); err != nil {
 		t.Fatal(err)
@@ -204,8 +206,9 @@ func TestC09ProberMailFacts(t *testing.T) {
 		t.Fatalf("with an alert recipient and three failures: %+v", smtp)
 	}
 	// Unconfigured relay: the recipients are not judged (C03b says it).
-	if smtp, _ := (&HealthProber{Store: st}).mailFacts(state.ProbeRun{Unconfigured: "SMTP is not configured"}); smtp.NoAlertRecipient {
-		t.Fatal("NoAlertRecipient judged without a relay")
+	if smtp, digest := (&HealthProber{Store: st}).mailFacts(state.ProbeRun{Unconfigured: "SMTP is not configured"}); smtp.NoAlertRecipient ||
+		!digest.MailNotSetUp || digest.NoRecipient || digest.NotInBuild {
+		t.Fatalf("without a relay: %+v %+v", smtp, digest)
 	}
 	// A store that cannot be read: not checked, never healthy.
 	if err := st.Close(); err != nil {

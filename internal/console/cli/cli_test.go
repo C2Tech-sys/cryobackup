@@ -221,10 +221,10 @@ func TestDoctor(t *testing.T) {
 	cfg := filepath.Join(dir, "config.json")
 	code, out, _ := run(t, "", "doctor", "--config", cfg)
 	// The config has no TLS certificate yet, so config validation fails loudly.
-	if code != ExitFailed || !strings.Contains(out, "FAIL  config") || !strings.Contains(out, "tls.cert") {
+	if code != ExitFailed || !strings.Contains(out, doctorLine("FAIL", "config")) || !strings.Contains(out, "tls.cert") {
 		t.Fatalf("doctor on a config without TLS: %d\n%s", code, out)
 	}
-	for _, want := range []string{"OK    database", "OK    master key", "WARN  maintenance worker", "OK    gateway auth dir"} {
+	for _, want := range []string{doctorLine("OK", "database"), doctorLine("OK", "master key"), doctorLine("WARN", "maintenance worker"), doctorLine("OK", "gateway auth dir")} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor lacks %q:\n%s", want, out)
 		}

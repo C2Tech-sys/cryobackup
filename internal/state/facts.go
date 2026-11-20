@@ -133,6 +133,10 @@ type Thresholds struct {
 	WindowSlack time.Duration
 	// OutdatedIsAlarm makes OUTDATED an alarm (notification_overrides.outdated_alarm).
 	OutdatedIsAlarm bool
+	// DigestExcluded leaves the device out of the daily digest's exception lists
+	// (notification_overrides.digest_include set to false). It changes no state and no banner:
+	// the digest counts what it left out (DigestView.ExcludedCustomers, ExcludedDevices).
+	DigestExcluded bool
 }
 
 // DefaultThresholds returns the §3.6 sla defaults: stale 72 h, unseen 168 h,
@@ -297,6 +301,10 @@ type SMTPFacts struct {
 	// (ADR 0020 decision 10): the warning C18. It is not judged while the probe says SMTP is not
 	// configured (C03b already says so).
 	NoAlertRecipient bool
+	// Undelivered24h counts the alert, recovery and digest messages that became final without being
+	// sent in the last 24 hours (failed for good; suppressed and test sends are not counted): the
+	// warning C21, which stays visible while other recipients' mail goes out and C03 is quiet.
+	Undelivered24h int
 }
 
 // MaintainFacts is the maintenance worker (C07).
@@ -379,6 +387,12 @@ type DigestFacts struct {
 	// NotRead says why the digest settings or the delivery log could not be read ("" = they were),
 	// path-free. The digest is then "not checked" with this reason (C14b), never judged on empty facts.
 	NotRead string
+	// MailNotSetUp is true when no relay is configured: no digest can go out, which is the "not set
+	// up" warning C14b, not the red C14 about a send that was never possible.
+	MailNotSetUp bool
+	// NoRecipient is true when e-mail is set up and no recipient has the digest switch: the digest
+	// goes to nobody (warning C20). It is judged only while a relay is configured.
+	NoRecipient bool
 }
 
 // UsageSample is one usage_samples row of a storage target.
@@ -472,6 +486,9 @@ type ProbeFacts struct {
 	Release *ReleaseFacts
 	// LoginFile is the measurement of the gateway's login file against the retired devices (C17).
 	LoginFile *LoginFileFacts
+	// Heartbeat is the optional outbound heartbeat ping (C19, ADR 0020 decision 12). Nil means the
+	// loader does not supply it: the feature is optional, so that raises nothing (heartbeatBanners).
+	Heartbeat *HeartbeatFacts
 }
 
 // LoginFileFacts says what a read of the file the gateway reads found, and which devices are retired

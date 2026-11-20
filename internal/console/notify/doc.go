@@ -1,7 +1,8 @@
-// Package notify turns alarm episodes into operator mail (ADR 0020 decisions 4 to 7, 9 and 10):
-// the alert and recovery messages, the dispatcher that owns one delivery end to end, the
-// alerting step of every alarm-evaluator pass (Notifier) and the notification-retry job's work
-// (Retrier).
+// Package notify turns alarm episodes into operator mail (ADR 0020 decisions 4 to 10): the alert
+// and recovery messages, the daily digest, the dispatcher that owns one delivery end to end, the
+// alerting step of every alarm-evaluator pass (Notifier), the daily-digest job's work, send-now and
+// preview (Digester; its doc says how one digest per local date per recipient is kept) and the
+// notification-retry job's work (Retrier).
 //
 // # What a message says
 //
@@ -23,8 +24,20 @@
 // A recovery notice follows only an alert that reached someone: an episode closes owing one when a
 // delivery row of its alert batch was sent. When every row of the batch failed for good or was
 // suppressed, the recovery is settled without a message; while a row is still in retry, it waits.
-// A retry that re-renders the alert without the episodes that closed meanwhile settles their
-// recovery the same way before it sends, unless a row of the batch was already delivered.
+//
+// A retried alert is the original notification, delayed: it carries every episode of its batch
+// that is still open, whether or not it has been acknowledged, snoozed or its customer suspended
+// since (the mute rules apply when a batch is formed, never to a retry). Closing is the only reason
+// an episode is left out of a retry, and its recovery is then settled without a message, unless
+// another row of the batch is sent, or queued and never attempted (it may still carry the episode).
+//
+// One residual class is accepted: if an alarm closes while its alert is still undelivered to every
+// recipient, and at least one of those rows is still queued and has never been attempted, each
+// recipient with the recoveries switch can receive a resolved notice for an alarm nobody was
+// mailed. Three ways in are known: a send held in flight that then fails, a restart between the
+// pass's mark and its send, and a row deferred by the pass's send budget. It is a spurious
+// "resolved", never a lost alert; every narrower rule tried lost alerts, and telling these cases
+// apart would need the delivery log to record which episodes each message carried.
 //
 // # Batches and crash safety
 //

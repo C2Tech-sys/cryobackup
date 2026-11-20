@@ -60,7 +60,7 @@ func timeOrZero(m Millis) time.Time {
 func Classify(f DeviceFacts, now time.Time) DeviceState {
 	now = now.UTC()
 	th := normalize(f.Thresholds)
-	ds := DeviceState{ID: f.ID, CustomerID: f.CustomerID, Hostname: f.Hostname}
+	ds := DeviceState{ID: f.ID, CustomerID: f.CustomerID, Hostname: f.Hostname, DigestExcluded: f.Thresholds.DigestExcluded}
 
 	// Row 1: RETIRED suppresses everything, including an incomplete load.
 	if f.RetiredAt != 0 {
@@ -262,6 +262,7 @@ func Classify(f DeviceFacts, now time.Time) DeviceState {
 
 	// ---- row 11: STALE ----------------------------------------------------------------
 	rawStale := !noSuccess && now.Sub(succ) > th.StaleAfter
+	ds.CurrentBackup = !noSuccess && !rawStale
 	if rawStale {
 		set(StateStale, succ.Add(th.StaleAfter))
 	}

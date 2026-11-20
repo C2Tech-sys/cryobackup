@@ -53,6 +53,7 @@ func ThresholdsFromPolicy(p policy.Policy) state.Thresholds {
 		Interval:                      scheduleInterval(p.Schedule),
 		WindowSlack:                   0,
 		OutdatedIsAlarm:               p.NotificationOverrides.OutdatedAlarm,
+		DigestExcluded:                p.NotificationOverrides.DigestInclude != nil && !*p.NotificationOverrides.DigestInclude,
 	}
 }
 

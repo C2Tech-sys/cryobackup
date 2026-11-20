@@ -87,6 +87,14 @@ type DeviceState struct {
 	Ack *AckView
 	// Detail carries counts and labels for the UI.
 	Detail Detail
+	// CurrentBackup is the engine's freshness verdict, whatever the primary state: a success since
+	// the (re)enrollment that is not older than the stale threshold (the condition of row 11, STALE,
+	// before suppression). An outdated agent with fresh backups has one; a long-paused device whose
+	// newest success is old has not, although PAUSED suppresses its STALE. It changes no state.
+	CurrentBackup bool
+	// DigestExcluded is Thresholds.DigestExcluded: the policy leaves the device out of the daily
+	// digest's lists (DigestOf counts it instead). It is not a state and changes none.
+	DigestExcluded bool
 }
 
 // CustomerState is the §4.5 rollup of one customer.

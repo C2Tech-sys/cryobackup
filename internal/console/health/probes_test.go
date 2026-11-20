@@ -139,10 +139,29 @@ func TestNotInBuildMarkersApplied(t *testing.T) {
 	e, c := newEval(t)
 	e.Probes = FixtureProbes(c.now)
 	p := e.ProbeFacts(nil, nil, false)
-	if !p.Quota.NotInBuild || !p.Digest.NotInBuild || !p.Release.NotInBuild || !p.Database.SelfBackup.NotInBuild {
-		t.Fatalf("markers: quota %+v digest %+v release %+v self-backup %+v", p.Quota, p.Digest, p.Release, p.Database.SelfBackup)
+	if !p.Quota.NotInBuild || !p.Release.NotInBuild || !p.Database.SelfBackup.NotInBuild {
+		t.Fatalf("markers: quota %+v release %+v self-backup %+v", p.Quota, p.Release, p.Database.SelfBackup)
 	}
-	if len(NotInBuild) != 4 {
+	if len(NotInBuild) != 3 {
 		t.Fatalf("NotInBuild table %v", NotInBuild)
+	}
+}
+
+// P20-W2B: the daily-digest job exists, so the digest check carries no marker. A loader that does
+// not supply it leaves it nil (C14b "not checked" while wired), never a marker; fixtures mode
+// supplies a digest sent within the day, so its board earns no digest banner.
+func TestDigestIsLiveNotMarked(t *testing.T) {
+	if _, marked := NotInBuild["digest"]; marked {
+		t.Fatal("the digest is still marked not in this build")
+	}
+	e, c := newEval(t)
+	e.Probes = func() state.ProbeFacts { return state.ProbeFacts{Wired: true} }
+	if p := e.ProbeFacts(nil, nil, false); p.Digest != nil {
+		t.Fatalf("an unsupplied digest check became %+v", p.Digest)
+	}
+	e.Probes = FixtureProbes(c.now)
+	p := e.ProbeFacts(nil, nil, false)
+	if p.Digest == nil || p.Digest.NotInBuild || p.Digest.LocalTime == "" || p.Digest.LastSentAt == 0 {
+		t.Fatalf("fixture digest facts %+v", p.Digest)
 	}
 }

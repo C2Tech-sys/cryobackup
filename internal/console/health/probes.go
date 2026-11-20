@@ -15,12 +15,13 @@ import (
 // C07), the page the view (C10), and the checks whose producer is a later
 // milestone their NotInBuild marker, so no pointer is ever left nil and a fully
 // wired console can read all clear (internal/state doc.go "Not in this build").
+// The mail checks (C03, C14) come from the prober's delivery-log reads: a digest
+// check it could not supply stays nil, which the engine reports as not checked.
 
 // Check names of the NotInBuild markers (the facts type each one sits on).
 const (
 	CheckQuota      = "quota"       // state.QuotaFacts
 	CheckSelfBackup = "self-backup" // state.SelfBackupFacts
-	CheckDigest     = "digest"      // state.DigestFacts
 	CheckRelease    = "release"     // state.ReleaseFacts
 )
 
@@ -31,8 +32,9 @@ const (
 var NotInBuild = map[string]string{
 	CheckQuota:      "usage-sampler",  // M5, the provider-side listing
 	CheckSelfBackup: "db-self-backup", // M5
-	CheckDigest:     "daily-digest",   // M4
 	CheckRelease:    "release-check",  // M11
+	// The digest (M4) has its daily-digest job since P20-W2B: its facts come from the prober
+	// (store.MailFacts) and carry no marker.
 }
 
 // SchedulerJob is the job_state row of the maintenance scheduler (written by
@@ -98,9 +100,6 @@ func (e *Evaluator) ProbeFacts(jobs []store.JobState, jerr error, page bool) sta
 		d.SelfBackup = &state.SelfBackupFacts{NotInBuild: true}
 		p.Database = &d
 	}
-	if p.Digest == nil {
-		p.Digest = &state.DigestFacts{NotInBuild: true}
-	}
 	if p.Quota == nil {
 		p.Quota = &state.QuotaFacts{NotInBuild: true}
 	}
@@ -140,7 +139,9 @@ func FixtureProbes(clock func() time.Time) func() state.ProbeFacts {
 		return state.ProbeFacts{
 			Wired: true, StartedAt: at(24 * time.Hour), ProberInterval: state.DefaultProberInterval,
 			Gateway: &gw, Storage: &st,
-			SMTP:      &state.SMTPFacts{Probe: ok()},
+			SMTP: &state.SMTPFacts{Probe: ok()},
+			// The day's digest went out an hour ago: the newest due date's digest whatever the clock.
+			Digest:    &state.DigestFacts{LocalTime: "07:00", LastSentAt: at(time.Hour)},
 			Evaluator: &state.JobFacts{LastFinishedAt: at(30 * time.Second), Period: EvaluatorPeriod},
 			Maintain:  &state.MaintainFacts{RPC: ok(), Scheduler: &state.JobFacts{LastFinishedAt: at(time.Minute), Period: maintain.DefaultTickEvery}},
 			Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second),

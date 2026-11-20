@@ -137,7 +137,7 @@ func TestR3NotInBuildChecksSayTheirNameOnTheirRow(t *testing.T) { // M3-T4 r3 M1
 	for _, c := range e.health().Components {
 		rows[c.ID] = c
 	}
-	for _, id := range []string{"release_manifest", "storage_quota", "digest", "self_backup"} {
+	for _, id := range []string{"release_manifest", "storage_quota", "self_backup"} { // P20-W2B: the digest is in this build now
 		c, ok := rows[id]
 		if !ok || c.Status != "not_in_build" || !strings.Contains(c.Detail, "build") {
 			t.Errorf("%s = %+v (present %v), want not_in_build saying so", id, c, ok)

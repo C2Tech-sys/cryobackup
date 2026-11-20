@@ -27,11 +27,13 @@ func (c *clock) Advance(d time.Duration) {
 func memStore(t *testing.T, at time.Time) (*store.Store, *clock) {
 	t.Helper()
 	c := &clock{t: at}
-	st, err := store.OpenMemory(context.Background(), c.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := copyTemplate(t, at, c.Now) // a fresh store, migrated at at (memstore_m4_test.go)
 	t.Cleanup(func() { _ = st.Close() })
+	// Each test starts its batch ids at its own clock: the process-wide source would otherwise carry
+	// the last id of an earlier test (the tests of this package do not run in parallel).
+	processBatchIDs.mu.Lock()
+	processBatchIDs.last = 0
+	processBatchIDs.mu.Unlock()
 	return st, c
 }
 

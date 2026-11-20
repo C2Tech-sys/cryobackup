@@ -180,7 +180,9 @@
 //	C12  key not loaded (the zero value) or an active escrow wrapped under another key id: critical.
 //	     MasterKeyFacts.EnrollmentAllowed is false without a loaded key (the 503 of C12 / C18).
 //	C14  no digest on the local date of the newest digest_local_time + 30 min that has passed: critical.
-//	     A disabled digest raises nothing; an unset or unparseable time is C14b warning.
+//	     A disabled digest raises nothing; an unset or unparseable time is C14b warning. With no relay
+//	     configured it is the C14b "not set up" warning instead of C14; with a relay and no recipient
+//	     with the digest switch, the C20 warning.
 //	C15  worst target with a soft quota: 80 % warning, 90 % and 100 % critical, growth (least squares over the
 //	     samples, at least 2 spanning an hour) reaching 100 % within 14 d critical. A target without a quota
 //	     raises nothing; a quota whose usage was never measured, is negative, or was not measured for
@@ -200,7 +202,6 @@
 //
 //	QuotaFacts.NotInBuild       usage-sampler (provider-side listing)  M5
 //	SelfBackupFacts.NotInBuild  db-self-backup                         M5
-//	DigestFacts.NotInBuild      daily-digest                           M4
 //	ReleaseFacts.NotInBuild     release-check                          M11
 //
 // The quota usage source is the provider-side listing of usage-sampler, which is
@@ -227,8 +228,8 @@
 // 23 and 25 hours are one cell. Days before the (re)enrollment day and from the
 // pause day on are none; a day without runs is missed only when a run was
 // expected (not pending, not without a schedule, not today). DigestDue and
-// DigestKey give the digest one due time and one dedupe key per local date,
-// across DST; DigestOf lists the exceptions the digest sends, MISSING customers
+// DigestKey give the digest one due time and one dedupe key per local date and
+// recipient ("digest:<local date>:<rule id>"), across DST; DigestOf lists the exceptions the digest sends, MISSING customers
 // and UNKNOWN devices first.
 //
 // # Scope of this version

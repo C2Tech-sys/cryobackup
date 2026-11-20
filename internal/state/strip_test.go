@@ -207,10 +207,10 @@ func TestDigestOncePerLocalDay(t *testing.T) {
 			wantKey   string
 			wantDue   string
 		}{
-			{"spring_forward", "07:00", []string{"2026-03-08T13:00:00Z", "2026-03-09T04:59:00Z"}, "digest:2026-03-08", "2026-03-08T12:00:00Z"},
-			{"fall_back", "07:00", []string{"2026-11-01T14:00:00Z", "2026-11-02T05:59:00Z"}, "digest:2026-11-01", "2026-11-01T13:00:00Z"},
-			{"fall_back_repeated_hour", "01:30", []string{"2026-11-01T06:45:00Z", "2026-11-01T07:45:00Z"}, "digest:2026-11-01", "2026-11-01T06:30:00Z"},
-			{"spring_forward_skipped_hour", "02:30", []string{"2026-03-08T08:45:00Z", "2026-03-08T20:00:00Z"}, "digest:2026-03-08", "2026-03-08T08:30:00Z"},
+			{"spring_forward", "07:00", []string{"2026-03-08T13:00:00Z", "2026-03-09T04:59:00Z"}, "digest:2026-03-08:r1", "2026-03-08T12:00:00Z"},
+			{"fall_back", "07:00", []string{"2026-11-01T14:00:00Z", "2026-11-02T05:59:00Z"}, "digest:2026-11-01:r1", "2026-11-01T13:00:00Z"},
+			{"fall_back_repeated_hour", "01:30", []string{"2026-11-01T06:45:00Z", "2026-11-01T07:45:00Z"}, "digest:2026-11-01:r1", "2026-11-01T06:30:00Z"},
+			{"spring_forward_skipped_hour", "02:30", []string{"2026-03-08T08:45:00Z", "2026-03-08T20:00:00Z"}, "digest:2026-03-08:r1", "2026-03-08T08:30:00Z"},
 		} {
 			t.Run(c.name, func(t *testing.T) {
 				keys := map[string]bool{}
@@ -220,7 +220,7 @@ func TestDigestOncePerLocalDay(t *testing.T) {
 					if !ok || due.Format(time.RFC3339) != c.wantDue {
 						t.Fatalf("DigestDue at %s = %v ok=%v, want %s", s, due, ok, c.wantDue)
 					}
-					keys[DigestKey(due, chi)] = true
+					keys[DigestKey(due, chi, "r1")] = true
 				}
 				if len(keys) != 1 || !keys[c.wantKey] {
 					t.Errorf("two triggers on one local day name %v, want only %s (one send)", keys, c.wantKey)
@@ -230,10 +230,10 @@ func TestDigestOncePerLocalDay(t *testing.T) {
 	})
 	t.Run("E05_digest_key_is_the_local_date", func(t *testing.T) {
 		at := time.Date(2026, 3, 9, 4, 30, 0, 0, time.UTC) // 23:30 CDT on Mar 8
-		if got := DigestKey(at, chi); got != "digest:2026-03-08" {
+		if got := DigestKey(at, chi, "r1"); got != "digest:2026-03-08:r1" {
 			t.Errorf("key = %s", got)
 		}
-		if got := DigestKey(at, nil); got != "digest:2026-03-09" {
+		if got := DigestKey(at, nil, "r1"); got != "digest:2026-03-09:r1" {
 			t.Errorf("nil zone key = %s, want the UTC date", got)
 		}
 		if _, ok := DigestDue("", chi, at); ok {

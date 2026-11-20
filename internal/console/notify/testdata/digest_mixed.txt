@@ -1,0 +1,35 @@
+CryoBackup daily digest, Tue 17 Nov
+Not all clear: 2 critical, 2 warnings, 1 customer missing.
+Polled Tue 17 Nov 2026, 3:04 PM CST
+
+Console
+  No console condition: every self-check passes.
+
+Critical
+  Northwind Dental
+    [MISSING] no active device
+  Alpine Orthodontics (suspended: notifications muted)
+    [STALE] ALP-OFFICE since Sat 14 Nov 2026, 7:04 AM CST
+  Summit Eye Care
+    [FAILED] FRONTDESK-01 since Mon 16 Nov 2026, 8:04 PM CST [ACKNOWLEDGED]
+        also ESCROW_UNVERIFIED
+
+Warnings
+  Alpine Orthodontics (suspended: notifications muted)
+    [OUTDATED] ALP-XRAY since Sun 18 Oct 2026, 3:04 PM CST
+  Summit Eye Care
+    [PARTIAL] LAB-PC since Tue 17 Nov 2026, 9:04 AM CST
+
+Parked and long-deferred devices
+  Summit Eye Care
+    [PAUSED] SPARE-LAPTOP since Sun 8 Nov 2026, 3:04 PM CST
+        paused with no end date
+
+Totals: 6 devices: 1 backed up, 1 paused, 1 failed, 1 partial, 1 stale, 1 on an outdated agent. Exceptions: 2 critical, 2 warnings, 1 parked or deferred. 3 customers, 1 missing.
+
+Open the console: https://console.example.com/
+
+This digest is sent every day, also when everything is green: a day
+without it means the console or its mail has stopped.
+You receive this because this address receives the CryoBackup daily
+digest.

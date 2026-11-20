@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
@@ -55,7 +57,11 @@ func isLoopbackBind(addr string) bool {
 // runDoctor checks what a stranger would get wrong first: the configuration,
 // the database, the master key, the listener binds, the host's swap (ADR 0008)
 // and the maintenance worker.
-// It prints OK, WARN or FAIL per check and exits 1 on any FAIL.
+// It prints OK, WARN, FAIL or NOT CHECKED per check and exits 1 on any FAIL.
+// It changes no data it checks: the database is opened read-only without
+// migrations or checkpoints (checkDatabase, store.OpenNoMigrate), so doctor is
+// safe to run before an upgrade and beside a running console. SQLite may create
+// the -shm index and an empty -wal file to read a WAL database.
 func runDoctor(args []string, io IO) int {
 	fs := newFlags("doctor", io)
 	cfgPath := fs.String("config", "config.json", "path of config.json")
@@ -67,7 +73,7 @@ func runDoctor(args []string, io IO) int {
 		if level == "FAIL" {
 			failed = true
 		}
-		fmt.Fprintf(io.Stdout, "%-5s %-22s %s\n", level, name, detail)
+		fmt.Fprintf(io.Stdout, "%-11s %-22s %s\n", level, name, detail) // 11 fits "NOT CHECKED"
 	}
 	cfg, err := config.Read(*cfgPath, nil)
 	if err != nil {
@@ -80,28 +86,7 @@ func runDoctor(args []string, io IO) int {
 		report("OK", "config", "valid")
 	}
 
-	if st, err := store.Open(context.Background(), store.Options{Path: cfg.DBPath}); err != nil {
-		report("FAIL", "database", fmt.Sprint(sanitize(err)))
-	} else {
-		ctx := context.Background()
-		v, verr := st.SchemaVersion(ctx)
-		integrity, _ := st.IntegrityCheck(ctx)
-		switch {
-		case verr != nil:
-			report("FAIL", "database", "cannot read the schema version")
-		case integrity != "ok":
-			report("FAIL", "database", "integrity_check did not return ok")
-		default:
-			report("OK", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok", v))
-		}
-		if _, err := st.DefaultPolicy(ctx); err != nil {
-			report("FAIL", "default policy", "none: run cryo-console init")
-		}
-		if _, err := st.DefaultStorageTarget(ctx); err != nil {
-			report("WARN", "storage target", "no default storage target")
-		}
-		_ = st.Close()
-	}
+	checkDatabase(cfg.DBPath, report)
 
 	if mk, err := escrow.LoadMasterKey(cfg.MasterKeyPath); err != nil {
 		report("FAIL", "master key", err.Error()+" (banner C12: enrollment is disabled)")
@@ -153,4 +138,75 @@ func runDoctor(args []string, io IO) int {
 		return ExitFailed
 	}
 	return ExitOK
+}
+
+// openForReading opens the file at path for reading and closes it again: whether this account can
+// read the database's main file at all. A variable so that a test can inject the failure where
+// making a file unreadable (an ACL on Windows) cannot be done hermetically.
+var openForReading = func(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// checkDatabase opens the database without applying migrations or writing anything
+// (store.OpenNoMigrate). A database older than this binary is not a failure: doctor
+// says which version it records, which version the first start of this binary will
+// migrate it to and the migrations that will run, and the checks that read the
+// current schema (the default policy and storage target) are NOT CHECKED until
+// then, never passed. A database newer than the binary fails, as the console would. A database that
+// cannot be opened fails with its cause: a main file this account cannot read (checked first), or
+// else, for SQLite's "unable to open database file", the -shm index it cannot set up.
+func checkDatabase(path string, report func(level, name, detail string)) {
+	ctx := context.Background()
+	st, pending, err := store.OpenNoMigrate(ctx, store.Options{Path: path})
+	if errors.Is(err, store.ErrNotFound) {
+		report("FAIL", "database", "missing: run cryo-console init")
+		return
+	}
+	if err != nil {
+		if openForReading(path) != nil {
+			// The file exists (OpenNoMigrate looked) but this account cannot even open it for reading:
+			// that, not the directory or the -shm index, is why SQLite could not open it.
+			report("FAIL", "database", "database file is not readable by this user")
+			return
+		}
+		if strings.Contains(err.Error(), "unable to open database file") {
+			// The file exists (OpenNoMigrate looked), so what failed is the read-only open itself: to
+			// read a WAL database SQLite must create or open its -shm index next to it.
+			report("FAIL", "database", "cannot be read: to read the database SQLite must create or open its -shm index file next to it, and this account cannot (the directory is not writable for it, or the -shm file is unusable); run doctor as the service account cryo-console serve runs as")
+			return
+		}
+		report("FAIL", "database", fmt.Sprint(sanitize(err)))
+		return
+	}
+	defer func() { _ = st.Close() }()
+	v, verr := st.SchemaVersion(ctx)
+	integrity, _ := st.IntegrityCheck(ctx)
+	switch {
+	case verr != nil:
+		report("FAIL", "database", "cannot read the schema version")
+		return
+	case integrity != "ok":
+		report("FAIL", "database", "integrity_check did not return ok")
+		return
+	}
+	if len(pending) > 0 {
+		target := v + len(pending)
+		report("WARN", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok; the first start of this binary migrates it to schema version %d (pending: %s). Doctor changes no data and applies no migration (SQLite may create the -shm and an empty -wal file); take the backup before you start the new binary",
+			v, target, strings.Join(pending, ", ")))
+		why := fmt.Sprintf("the database is at schema version %d and this binary reads schema version %d: checked after the upgrade", v, target)
+		report("NOT CHECKED", "default policy", why)
+		report("NOT CHECKED", "storage target", why)
+		return
+	}
+	report("OK", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok; read only: no data changed (SQLite may create the -shm and an empty -wal file)", v))
+	if _, err := st.DefaultPolicy(ctx); err != nil {
+		report("FAIL", "default policy", "none: run cryo-console init")
+	}
+	if _, err := st.DefaultStorageTarget(ctx); err != nil {
+		report("WARN", "storage target", "no default storage target")
+	}
 }

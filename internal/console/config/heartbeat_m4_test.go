@@ -124,3 +124,45 @@ func TestM4HeartbeatPingExamplesCarryTheBlock(t *testing.T) {
 		})
 	}
 }
+
+// P20-W2B item 5: a URL with userinfo, with white space around it, or with a port outside 1 to
+// 65535 is refused, with a fixed text that names the key and never the URL. The ping job asks the
+// same question (HeartbeatURLAllowed), so it refuses them too.
+func TestM4HeartbeatPingURLShapeIsRefused(t *testing.T) {
+	for _, tc := range []struct{ name, url, says string }{
+		{"user and password", "https://user:s3cr3t-pass@monitor.example.test/ping/abc", "user name or password"},
+		{"user only", "https://s3cr3t-user@monitor.example.test/ping/abc", "user name or password"},
+		{"leading space", " https://monitor.example.test/ping/s3cr3t", "white space"},
+		{"trailing space", "https://monitor.example.test/ping/s3cr3t ", "white space"},
+		{"trailing newline", "https://monitor.example.test/ping/s3cr3t\n", "white space"},
+		{"port 0", "https://monitor.example.test:0/ping/s3cr3t", "port"},
+		{"port 65536", "https://monitor.example.test:65536/ping/s3cr3t", "port"},
+		{"port 99999", "https://monitor.example.test:99999/ping/s3cr3t", "port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := heartbeatBase()
+			c.HealthcheckPing.URL = tc.url
+			err := c.Validate()
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "healthcheck_ping.url") || !strings.Contains(msg, tc.says) {
+				t.Fatalf("the refusal does not say why: %v", err)
+			}
+			if strings.Contains(msg, "s3cr3t") || strings.Contains(msg, "monitor.example.test") {
+				t.Fatalf("the refusal echoes the URL: %v", err)
+			}
+			if HeartbeatURLAllowed(tc.url) {
+				t.Fatal("the ping job would still send to it")
+			}
+		})
+	}
+	for _, ok := range []string{"https://monitor.example.test:1/p", "https://monitor.example.test:65535/p", "https://monitor.example.test/p"} {
+		c := heartbeatBase()
+		c.HealthcheckPing.URL = ok
+		if err := c.Validate(); err != nil || !HeartbeatURLAllowed(ok) {
+			t.Fatalf("%s refused: %v", ok, err)
+		}
+	}
+}

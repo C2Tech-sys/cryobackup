@@ -134,7 +134,7 @@ func (w *world) view() state.FleetView {
 	for _, id := range w.devices {
 		s := w.states[id]
 		d := state.DeviceState{ID: id, CustomerID: w.devCust[id], Hostname: w.host[id], Primary: s, Flags: []state.State{s},
-			Since: w.clk.Now().Add(-26 * time.Hour)}
+			Since: w.clk.Now().Add(-26 * time.Hour), CurrentBackup: s == state.StateOK}
 		if s != state.StateOK && s != state.StateRetired && s != state.StatePaused {
 			d.AlarmFlags = []state.State{s}
 		}

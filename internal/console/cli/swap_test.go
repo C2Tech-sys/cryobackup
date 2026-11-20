@@ -73,10 +73,10 @@ func TestDoctorPrintsTheSwapLine(t *testing.T) {
 		t.Fatal(e)
 	}
 	_, out, _ := run(t, "", "doctor", "--config", filepath.Join(dir, "config.json"))
-	if !strings.Contains(out, "OK    swap") && !strings.Contains(out, "WARN  swap") {
+	if !strings.Contains(out, doctorLine("OK", "swap")) && !strings.Contains(out, doctorLine("WARN", "swap")) {
 		t.Fatalf("doctor lacks the swap line:\n%s", out)
 	}
-	if strings.Contains(out, "FAIL  swap") {
+	if strings.Contains(out, doctorLine("FAIL", "swap")) {
 		t.Fatalf("the swap line never fails:\n%s", out)
 	}
 }

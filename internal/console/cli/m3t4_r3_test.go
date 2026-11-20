@@ -34,6 +34,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/maintain"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // M3-T4 fix round 3: what only a real App can show. These drive cli.Build's App
@@ -179,6 +180,18 @@ func r3SMTP(t *testing.T) (host string, port int) {
 					case "QUIT":
 						_, _ = io.WriteString(c, "221 bye\r\n")
 						return
+					case "DATA": // the real dialogue: 354, the message up to a lone ".", then 250 (P20-W2BF B1)
+						_, _ = io.WriteString(c, "354 go ahead\r\n")
+						for {
+							body, err := rd.ReadString('\n')
+							if err != nil {
+								return
+							}
+							if body == ".\r\n" || body == ".\n" {
+								break
+							}
+						}
+						_, _ = io.WriteString(c, "250 queued\r\n")
 					default:
 						_, _ = io.WriteString(c, "250 ok\r\n")
 					}
@@ -248,6 +261,37 @@ func r3RealApp(t *testing.T, mod func(*config.Config)) *App {
 	}
 	t.Cleanup(app.Close)
 	return app
+}
+
+// r3DigestSent records today's daily digest to the recipient ruleID as delivered, under the key the
+// daily-digest job uses for today (state.DigestKey in the display zone): a healthy console is one
+// whose digest went out, and with the real key the job finds it sent whether or not the digest
+// time has passed (P20-W2BF B1; the old fixed key made the job send a catch-up digest after it).
+func r3DigestSent(t *testing.T, app *App, ruleID string) {
+	t.Helper()
+	ctx := context.Background()
+	key := state.DigestKey(app.clock(), app.Display.Loc(), ruleID)
+	row, _, err := app.Store.EnqueueDelivery(ctx, store.ScopeAll(), store.DeliveryInput{Kind: store.DeliveryDigest, RuleID: ruleID, DedupeKey: key, SubjectType: "console"})
+	if err == nil {
+		_, err = app.Store.MarkDeliverySent(ctx, store.ScopeAll(), row.ID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// r3DigestTimes are the two sides of the digest time of day the healthy-console tests run at,
+// whatever the wall clock says (P20-W2BF B1): "00:00" has always passed today, so the daily-digest
+// job finds today's digest due; "23:59" never has, so it finds yesterday's and sends nothing.
+var r3DigestTimes = []string{"00:00", "23:59"}
+
+// r3DigestTime stores digest_local_time (HH:MM in the display zone).
+func r3DigestTime(t *testing.T, app *App, hhmm string) {
+	t.Helper()
+	b, _ := json.Marshal(hhmm)
+	if err := app.Store.PutSetting(context.Background(), store.SettingDigestLocalTime, b, ""); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // r3Serve runs the App until the test ends and answers its admin address.
@@ -343,19 +387,28 @@ func r3WaitFor(t *testing.T, base, token string, ok func(adminapi.SystemHealthRe
 // this build can produce. Overall reaches ok, with the checks this build does not run
 // and the clock check a small fleet cannot run said on their rows.
 func TestR3AHealthyConsoleReadsOverallOK(t *testing.T) { // M3-T4 r3 M1
+	for _, at := range r3DigestTimes {
+		t.Run("digest_time_"+strings.ReplaceAll(at, ":", ""), func(t *testing.T) { r3HealthyConsoleReadsOverallOK(t, at) })
+	}
+}
+
+func r3HealthyConsoleReadsOverallOK(t *testing.T, digestAt string) {
 	app := r3RealApp(t, nil)
-	if _, err := app.Store.CreateRecipient(context.Background(), store.ScopeAll(), store.RecipientInput{Name: "Ops", Address: "ops@example.test", Alerts: true},
-		store.AuditActor{Username: "test", Method: "api"}); err != nil { // P20-W2A: a relay with no alert recipient raises C18
+	r3DigestTime(t, app, digestAt)
+	rec, err := app.Store.CreateRecipient(context.Background(), store.ScopeAll(), store.RecipientInput{Name: "Ops", Address: "ops@example.test", Alerts: true, Digest: true},
+		store.AuditActor{Username: "test", Method: "api"}) // P20-W2A: a relay with no alert recipient raises C18
+	if err != nil {
 		t.Fatal(err)
 	}
 	r3MaintainPass(t, app.Store)
+	r3DigestSent(t, app, rec.ID) // P20-W2B: the digest is live, and a healthy console has sent today's
 	token := r3Token(t, app)
 	base := r3Serve(t, app)
 	h, ok := r3WaitFor(t, base, token, func(h adminapi.SystemHealthResponse) bool { return h.Overall == "ok" })
 	if !ok {
 		t.Fatalf("a healthy console never read overall ok: %s%s", h.Overall, r3Rows(h))
 	}
-	want := map[string]string{"release_manifest": "not_in_build", "storage_quota": "not_in_build", "digest": "not_in_build", "self_backup": "not_in_build", "clock": "not_applicable", "fleet_data": "not_applicable"}
+	want := map[string]string{"release_manifest": "not_in_build", "storage_quota": "not_in_build", "self_backup": "not_in_build", "clock": "not_applicable", "fleet_data": "not_applicable"}
 	for _, c := range h.Components {
 		w, special := want[c.ID]
 		if !special {
@@ -380,7 +433,7 @@ func TestR3AHealthyConsoleReadsOverallOK(t *testing.T) { // M3-T4 r3 M1
 	if !regexp.MustCompile(`id="sys-h" class="sys-title">Overall</h2><span class="st ok"><i aria-hidden="true"></i>OK<`).MatchString(page) {
 		t.Errorf("S36 does not read overall OK: %.400s", page)
 	}
-	for _, s := range []string{"NOT IN THIS BUILD", "NOT APPLICABLE", "Needs at least 5 devices", "6 cannot be checked here", "No devices enrolled yet: nothing is being backed up"} {
+	for _, s := range []string{"NOT IN THIS BUILD", "NOT APPLICABLE", "Needs at least 5 devices", "5 cannot be checked here" /* P20-W2B: the digest is checked now */, "No devices enrolled yet: nothing is being backed up"} {
 		if !strings.Contains(page, s) {
 			t.Errorf("S36 lacks %q", s)
 		}
@@ -404,7 +457,7 @@ func TestR3NotCheckedForSomethingInThisBuildStillBlocksOverall(t *testing.T) { /
 	// Wait until everything else is ok: no probe is still on its way, and only the unconfigured relay is left.
 	h, ok := r3WaitFor(t, base, token, func(h adminapi.SystemHealthResponse) bool {
 		for _, c := range h.Components {
-			if c.ID != "smtp" && c.Status != "ok" && c.Status != "not_in_build" && c.Status != "not_applicable" {
+			if c.ID != "smtp" && c.ID != "digest" && c.Status != "ok" && c.Status != "not_in_build" && c.Status != "not_applicable" { // P20-W2B: no relay is also the digest's C14b
 				return false
 			}
 		}
