@@ -57,6 +57,27 @@ Two things to know about the ping:
   in a row. At the default interval of 300 seconds that is about fifteen minutes; at a long interval
   it is three intervals, up to three days at 86400.
 
+### `cryo-console doctor` checks the mail setup
+
+Doctor now ends with a mail section and a heartbeat line. Without an smtp block it prints one WARN,
+"not configured: alert e-mail and the daily digest are off", and nothing in the section can fail
+doctor. With one, it checks the block as `serve` and every send do (`mail config`), checks the
+password file (`mail password file`: it exists, this account can read it, it is not empty, it holds
+one line and, on Unix, it is not open to group or others, which the sender refuses; Windows has no
+mode to check, so protect the file with its ACL), then probes the relay live (`mail relay`): it
+connects, waits for the greeting, says EHLO, starts TLS as configured, signs in when a user name is
+set and quits without sending a message. A failure names the stage and the class word (`dns`,
+`refused`, `timeout`, `cert_invalid`, `tls_handshake`, `starttls_missing`, `auth_rejected`,
+`protocol` and the rest of the sender's list) with one fixed line of advice; the relay's host and
+port are printed, never the user name, the password or what the relay answered. Any FAIL here fails
+doctor when the smtp block is present. On a database at the new schema it counts the recipients with
+each switch (`mail recipients`) and warns when mail is configured and nobody has the alerts switch,
+and when the digest is on and nobody has the digest switch; on an older database these lines are
+NOT CHECKED until the upgrade. The `heartbeat ping` line says whether `healthcheck_ping.url` is set
+(scheme and host only, never the path or the token), with its method and interval; doctor never
+sends the ping, because a ping tells the outside monitor that the console is healthy. Doctor has no
+flag that skips network checks: the relay probe always runs.
+
 ### The daily digest is on by default, and banner C14 is live
 
 The `daily-digest` job now runs: every day at `digest_local_time` (07:00 by default) in the display

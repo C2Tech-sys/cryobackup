@@ -55,11 +55,14 @@ func isLoopbackBind(addr string) bool {
 }
 
 // runDoctor checks what a stranger would get wrong first: the configuration,
-// the database, the master key, the listener binds, the host's swap (ADR 0008)
-// and the maintenance worker.
+// the database, the master key, the listener binds, the host's swap (ADR 0008),
+// the maintenance worker, the mail setup and the heartbeat ping (ADR 0020,
+// doctor_mail_m4.go).
 // It prints OK, WARN, FAIL or NOT CHECKED per check and exits 1 on any FAIL.
+// Doctor has no flag that skips network checks: the bind tests, the adminpath
+// ping and the mail relay probe always run.
 // It changes no data it checks: the database is opened read-only without
-// migrations or checkpoints (checkDatabase, store.OpenNoMigrate), so doctor is
+// migrations or checkpoints (openCheckedDatabase, store.OpenNoMigrate), so doctor is
 // safe to run before an upgrade and beside a running console. SQLite may create
 // the -shm index and an empty -wal file to read a WAL database.
 func runDoctor(args []string, io IO) int {
@@ -86,7 +89,10 @@ func runDoctor(args []string, io IO) int {
 		report("OK", "config", "valid")
 	}
 
-	checkDatabase(cfg.DBPath, report)
+	st, dbWhy := openCheckedDatabase(cfg.DBPath, report)
+	if st != nil {
+		defer func() { _ = st.Close() }()
+	}
 
 	if mk, err := escrow.LoadMasterKey(cfg.MasterKeyPath); err != nil {
 		report("FAIL", "master key", err.Error()+" (banner C12: enrollment is disabled)")
@@ -134,6 +140,8 @@ func runDoctor(args []string, io IO) int {
 	}
 	cancel()
 	c.Close()
+	checkMail(cfg, st, dbWhy, report)
+	checkHeartbeat(cfg, report)
 	if failed {
 		return ExitFailed
 	}
@@ -151,47 +159,50 @@ var openForReading = func(path string) error {
 	return f.Close()
 }
 
-// checkDatabase opens the database without applying migrations or writing anything
+// openNoMigrate is store.OpenNoMigrate; a variable so that a test can inject an open failure
+// whose cause the real file system cannot produce hermetically.
+var openNoMigrate = store.OpenNoMigrate
+
+// dbNotOpened is the NOT CHECKED reason of a check that reads the database when it could not be
+// opened at all.
+const dbNotOpened = "the database could not be opened (see the database line)"
+
+// openCheckedDatabase opens the database without applying migrations or writing anything
 // (store.OpenNoMigrate). A database older than this binary is not a failure: doctor
 // says which version it records, which version the first start of this binary will
 // migrate it to and the migrations that will run, and the checks that read the
 // current schema (the default policy and storage target) are NOT CHECKED until
 // then, never passed. A database newer than the binary fails, as the console would. A database that
-// cannot be opened fails with its cause: a main file this account cannot read (checked first), or
-// else, for SQLite's "unable to open database file", the -shm index it cannot set up.
-func checkDatabase(path string, report func(level, name, detail string)) {
+// cannot be opened fails with its cause (dbOpenFailure).
+//
+// It returns the open store when the database is at this binary's schema, for the later checks
+// that read it (the caller closes it); otherwise nil and the NOT CHECKED reason of those checks.
+func openCheckedDatabase(path string, report func(level, name, detail string)) (*store.Store, string) {
 	ctx := context.Background()
-	st, pending, err := store.OpenNoMigrate(ctx, store.Options{Path: path})
+	st, pending, err := openNoMigrate(ctx, store.Options{Path: path})
 	if errors.Is(err, store.ErrNotFound) {
 		report("FAIL", "database", "missing: run cryo-console init")
-		return
+		return nil, dbNotOpened
 	}
 	if err != nil {
-		if openForReading(path) != nil {
-			// The file exists (OpenNoMigrate looked) but this account cannot even open it for reading:
-			// that, not the directory or the -shm index, is why SQLite could not open it.
-			report("FAIL", "database", "database file is not readable by this user")
-			return
-		}
-		if strings.Contains(err.Error(), "unable to open database file") {
-			// The file exists (OpenNoMigrate looked), so what failed is the read-only open itself: to
-			// read a WAL database SQLite must create or open its -shm index next to it.
-			report("FAIL", "database", "cannot be read: to read the database SQLite must create or open its -shm index file next to it, and this account cannot (the directory is not writable for it, or the -shm file is unusable); run doctor as the service account cryo-console serve runs as")
-			return
-		}
-		report("FAIL", "database", fmt.Sprint(sanitize(err)))
-		return
+		report("FAIL", "database", dbOpenFailure(path, err))
+		return nil, dbNotOpened
 	}
-	defer func() { _ = st.Close() }()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = st.Close()
+		}
+	}()
 	v, verr := st.SchemaVersion(ctx)
 	integrity, _ := st.IntegrityCheck(ctx)
 	switch {
 	case verr != nil:
 		report("FAIL", "database", "cannot read the schema version")
-		return
+		return nil, "the schema version of the database cannot be read (see the database line)"
 	case integrity != "ok":
 		report("FAIL", "database", "integrity_check did not return ok")
-		return
+		return nil, "the database did not pass integrity_check (see the database line)"
 	}
 	if len(pending) > 0 {
 		target := v + len(pending)
@@ -200,7 +211,7 @@ func checkDatabase(path string, report func(level, name, detail string)) {
 		why := fmt.Sprintf("the database is at schema version %d and this binary reads schema version %d: checked after the upgrade", v, target)
 		report("NOT CHECKED", "default policy", why)
 		report("NOT CHECKED", "storage target", why)
-		return
+		return nil, why
 	}
 	report("OK", "database", fmt.Sprintf("schema version %d, quick_check and integrity_check ok; read only: no data changed (SQLite may create the -shm and an empty -wal file)", v))
 	if _, err := st.DefaultPolicy(ctx); err != nil {
@@ -209,4 +220,36 @@ func checkDatabase(path string, report func(level, name, detail string)) {
 	if _, err := st.DefaultStorageTarget(ctx); err != nil {
 		report("WARN", "storage target", "no default storage target")
 	}
+	keep = true
+	return st, ""
+}
+
+// dbOpenFailure is the FAIL detail of a database file that exists (OpenNoMigrate looked) but could
+// not be opened read-only. It names a cause only where doctor can see one, in this order: a main
+// file this account cannot read; a -wal file beside it that this account cannot read; and, for
+// SQLite's "unable to open database file", the -shm index: a -shm that is not a regular file or
+// that this account cannot read, or no -shm at all, which SQLite had to create next to the database
+// and could not (the directory is not writable for this account). With none of those it says
+// neutrally that the read-only open failed and blames nothing.
+func dbOpenFailure(path string, err error) string {
+	if openForReading(path) != nil {
+		return "database file is not readable by this user"
+	}
+	if _, serr := os.Lstat(path + "-wal"); serr == nil && openForReading(path+"-wal") != nil {
+		return "database -wal file is not readable by this user"
+	}
+	if !strings.Contains(err.Error(), "unable to open database file") {
+		return fmt.Sprint(sanitize(err))
+	}
+	const asService = "; run doctor as the service account cryo-console serve runs as"
+	fi, serr := os.Lstat(path + "-shm")
+	switch {
+	case serr == nil && !fi.Mode().IsRegular():
+		return "cannot be read: to read the database SQLite must open its -shm index file next to it, and what stands at that name is not a regular file" + asService
+	case serr == nil && openForReading(path+"-shm") != nil:
+		return "database -shm file is not readable by this user" + asService
+	case errors.Is(serr, os.ErrNotExist):
+		return "cannot be read: to read the database SQLite must create its -shm index file next to it, and this account cannot (the directory is not writable for it)" + asService
+	}
+	return "database could not be opened read-only" + asService
 }
