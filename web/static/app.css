@@ -1195,3 +1195,15 @@ table.fleet.unseen td.act .btn { white-space: nowrap; }
 @media (max-width: 1000px) and (min-width: 640px) {
   .actionbar details.act-purge[open] > .purgepop { left: auto; right: 0; }
 }
+
+/* ===== P20-CI: the customer page's "Needs attention" holds at 390 px whatever the font metrics =====
+   A font wider than the design's (DejaVu Sans on Linux) made the widest state chip of the table ("NEVER BACKED UP · no
+   successful run", one line that does not wrap) wider than a phone, and the card's grid items, sized to their content, pushed
+   the page 25 px past the viewport. On a phone that chip wraps, as in the jobs table; and the card's grid items may shrink
+   below their content, so whatever still cannot wrap scrolls inside its table region instead of widening the page. Nothing
+   changes where everything already fits, so the desktop layout is untouched. */
+.mt.stack > *, #customer-overview > * { min-width: 0; }
+@media (max-width: 640px) {
+  #customer-overview table.fleet td.state-cell .st { height: auto; min-height: 24px; white-space: normal; }
+  #customer-overview table.fleet td.state-cell .st.sm { min-height: 20px; }
+}
