@@ -3,6 +3,7 @@ package mail
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -53,7 +54,8 @@ const (
 // "user@host" or "Name <user@host>", where user@host is a plain address (see
 // checkEnvelopeAddr: no quoted local part, no address literal). Text is required (a message with only HTML
 // is unreadable in a plain client and scores badly with filters); HTML is
-// optional, and without it the message is a single text/plain part.
+// optional, and without it the message is a single text/plain part. Inline is
+// optional and needs HTML: the images the HTML shows as <img src="cid:ID">.
 type Message struct {
 	From    string
 	To      []string
@@ -61,7 +63,27 @@ type Message struct {
 	Text    string
 	HTML    string
 	Kind    Kind
+	Inline  []Inline
 }
+
+// Inline is an image carried inside the message (RFC 2387 multipart/related)
+// and shown by the HTML part as <img src="cid:ContentID">. It is part of the
+// message, not remote content: showing it makes no request. ContentID is
+// letters, digits and ".", "-", "_", "@" (at most maxContentID bytes; the
+// brackets of the header are added by Build); MediaType is "image/png"; Data
+// is at most maxInlineBytes. The part's file name is the ContentID before its
+// "@" with ".png".
+type Inline struct {
+	ContentID string
+	MediaType string
+	Data      []byte
+}
+
+// Limits of an inline image.
+const (
+	maxContentID   = 100
+	maxInlineBytes = 64 << 10
+)
 
 // addrs is a message's parsed addresses.
 type addrs struct {
@@ -130,7 +152,57 @@ func (m Message) parse() (addrs, error) {
 	if strings.TrimSpace(m.Text) == "" {
 		return bad("text body is empty")
 	}
+	if len(m.Inline) > 0 && strings.TrimSpace(m.HTML) == "" {
+		return bad("inline images need an HTML part")
+	}
+	seen := make(map[string]bool, len(m.Inline))
+	for _, im := range m.Inline {
+		if !contentIDOK(im.ContentID) {
+			return bad("an inline image content id is not 1 to %d letters, digits or . - _ @", maxContentID)
+		}
+		if seen[im.ContentID] {
+			return bad("two inline images share a content id")
+		}
+		seen[im.ContentID] = true
+		if im.MediaType != "image/png" {
+			return bad("an inline image is not image/png")
+		}
+		if len(im.Data) == 0 {
+			return bad("an inline image is empty")
+		}
+		if len(im.Data) > maxInlineBytes {
+			return bad("an inline image is larger than %d bytes", maxInlineBytes)
+		}
+	}
 	return a, nil
+}
+
+// contentIDOK reports whether s is a content id Build writes between angle
+// brackets and an HTML part names after "cid:": a fixed alphabet that needs no
+// quoting or escaping in either place.
+func contentIDOK(s string) bool {
+	if s == "" || len(s) > maxContentID {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_' || c == '@') {
+			return false
+		}
+	}
+	return true
+}
+
+// inlineFileName is the file name of an inline image: its content id before
+// the "@", with ".png" (the one media type accepted).
+func inlineFileName(id string) string {
+	if at := strings.IndexByte(id, '@'); at > 0 {
+		id = id[:at]
+	}
+	if !strings.HasSuffix(strings.ToLower(id), ".png") {
+		id += ".png"
+	}
+	return id
 }
 
 func kindOK(s string) bool {
@@ -255,8 +327,11 @@ func isASCII(s string) bool {
 // when Kind is set, X-CryoBackup-Kind. There is no Bcc and no Cc: every
 // recipient is in To. The body is multipart/alternative with the text part
 // first and the HTML part second, both UTF-8 and quoted-printable; without HTML
-// it is one text/plain part. Nothing in the output loads remote content unless
-// the caller's own HTML does.
+// it is one text/plain part. With inline images the HTML part becomes a
+// multipart/related of the HTML followed by each image (base64 in lines of 76,
+// Content-ID, Content-Disposition inline with a file name); without them the
+// output is what it was before inline images existed. Nothing in the output
+// loads remote content unless the caller's own HTML does.
 //
 // Header lines are at most 78 octets wherever there is a fold point: a space in
 // an ASCII subject or display name, the gap between encoded words, between
@@ -297,6 +372,12 @@ func (m Message) Build(now time.Time) ([]byte, error) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	for _, part := range []struct{ typ, text string }{{"text/plain", m.Text}, {"text/html", m.HTML}} {
+		if part.typ == "text/html" && len(m.Inline) > 0 {
+			if err := m.writeRelated(mw); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		w, err := mw.CreatePart(textproto.MIMEHeader{
 			"Content-Type":              {part.typ + `; charset="utf-8"`},
 			"Content-Transfer-Encoding": {"quoted-printable"},
@@ -315,6 +396,62 @@ func (m Message) Build(now time.Time) ([]byte, error) {
 	b.WriteString("\r\n")
 	b.Write(body.Bytes())
 	return b.Bytes(), nil
+}
+
+// writeRelated writes the multipart/related part of a message with inline
+// images into mw: the HTML part, then each image. Its Content-Type is folded
+// before the boundary, as the message's own is.
+func (m Message) writeRelated(mw *multipart.Writer) error {
+	var rel bytes.Buffer
+	rw := multipart.NewWriter(&rel)
+	w, err := rw.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {`text/html; charset="utf-8"`},
+		"Content-Transfer-Encoding": {"quoted-printable"},
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeQP(w, m.HTML); err != nil {
+		return err
+	}
+	for _, im := range m.Inline {
+		w, err := rw.CreatePart(textproto.MIMEHeader{
+			"Content-Type":              {im.MediaType},
+			"Content-Transfer-Encoding": {"base64"},
+			"Content-ID":                {"<" + im.ContentID + ">"},
+			"Content-Disposition":       {`inline; filename="` + inlineFileName(im.ContentID) + `"`},
+		})
+		if err != nil {
+			return err
+		}
+		if err := writeBase64(w, im.Data); err != nil {
+			return err
+		}
+	}
+	if err := rw.Close(); err != nil {
+		return err
+	}
+	w, err = mw.CreatePart(textproto.MIMEHeader{
+		"Content-Type": {"multipart/related;\r\n boundary=" + rw.Boundary() + ";\r\n type=\"text/html\""},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(rel.Bytes())
+	return err
+}
+
+// writeBase64 writes b as base64 in lines of 76 characters with CRLF line ends.
+func writeBase64(w io.Writer, b []byte) error {
+	enc := base64.StdEncoding.EncodeToString(b)
+	var buf bytes.Buffer
+	for len(enc) > 76 {
+		buf.WriteString(enc[:76] + "\r\n")
+		enc = enc[76:]
+	}
+	buf.WriteString(enc + "\r\n")
+	_, err := w.Write(buf.Bytes())
+	return err
 }
 
 // writeQP writes s quoted-printable with CRLF line ends. The output always ends
