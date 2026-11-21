@@ -59,7 +59,7 @@ const (
 
 // m4UIPatterns lists the patterns registerM4 adds (m4_acks.go adds the acknowledgement routes).
 func m4UIPatterns() []string {
-	return append([]string{patEmail, patEmailRcptAdd, patEmailRcptSave, patEmailRcptDelete, patEmailTest, patEmailDigest, patEmailDigestSend}, ackUIPatterns()...)
+	return append([]string{patEmail, patEmailRcptAdd, patEmailRcptSave, patEmailRcptDelete, patEmailTest, patEmailDigest, patEmailDigestSend, patMailMark}, ackUIPatterns()...)
 }
 
 func (s *Service) registerM4(r httpx.Registrar) {
@@ -72,6 +72,7 @@ func (s *Service) registerM4(r httpx.Registrar) {
 	r.Handle(patEmailTest, ad(s.emailTest))
 	r.Handle(patEmailDigest, ow(s.emailDigestSave))
 	r.Handle(patEmailDigestSend, ow(s.emailDigestSend))
+	r.Handle(patMailMark, http.HandlerFunc(s.mailMark)) // P20-MD: public, like /static (m4_mailmark.go)
 	s.registerAcks(r)
 }
 
@@ -203,7 +204,8 @@ type DigestSendRow struct {
 	Chip Chip
 }
 
-// DigestPreviewView is the digest as it would go out now. HTML goes into a sandboxed frame.
+// DigestPreviewView is the digest as it would go out now. HTML goes into a sandboxed frame, as
+// mailPreviewHTML made it (the mark from the console's route).
 type DigestPreviewView struct {
 	Subject string
 	HTML    string
@@ -500,7 +502,7 @@ func (s *Service) emailData(r *http.Request, p *auth.Principal) EmailPage {
 		if err := s.apiGet(r, "/api/v1/digest/preview", &pv); err != nil {
 			d.Digest.PreviewErr = &Note{"crit", "The preview could not be rendered.", previewWhy(err)}
 		} else {
-			d.Digest.Preview = &DigestPreviewView{Subject: pv.Subject, HTML: pv.HTML, Text: pv.Text}
+			d.Digest.Preview = &DigestPreviewView{Subject: pv.Subject, HTML: mailPreviewHTML(pv.HTML), Text: pv.Text}
 		}
 	}
 

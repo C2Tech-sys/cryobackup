@@ -15,6 +15,11 @@
 {{range .Digests}}<div><p class="meta-mono">{{.Name}}</p><div class="card mailcard">{{template "m4_digest" .V}}</div></div>{{end}}
 {{with .Preview}}<div><p class="meta-mono">The preview frame: sandboxed, no script, no remote content (the fixture fleet, rendered as the real preview renders it)</p><div class="card mailcard">{{template "m4_preview" .}}</div></div>{{end}}</div>
 
+<div class="stack" id="d-mail-messages"><h3 class="h-label">The alert and the recovery notice (ADR 0022: the console's dark look, the mark inline)</h3>
+{{range .Samples}}<div><p class="meta-mono">{{.Name}}</p><div class="card mailcard"><div class="dpreview"><p class="subject"><span class="label-mono">Subject</span> <b>{{.Subject}}</b></p>
+<div class="frame"><span class="ribbon" aria-hidden="true">SAMPLE</span><iframe title="{{.Name}}: the HTML part" sandbox="" referrerpolicy="no-referrer" srcdoc="{{.HTML}}"></iframe></div></div></div></div>
+{{else}}<p class="meta-mono">The fixture fleet has no critical device, so there is no alert to show.</p>{{end}}</div>
+
 <div class="stack" id="d-mail-log"><h3 class="h-label">Delivery log: each outcome and each suppress label</h3>
 {{template "m4_log_table" .Log}}
 <div class="stack"><p class="meta-mono">At 640 px and below each row stacks into a card, and a row past its first attempt adds ATTEMPT: N, labelled like its siblings. The live row template, laid out as a phone shows it:</p>

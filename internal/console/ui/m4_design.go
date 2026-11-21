@@ -28,6 +28,13 @@ type DesignMail struct {
 	Stacked DeliveryLogView
 	Alarms  []designAlarms
 	Preview *DigestPreviewView
+	// Samples are the alert and the recovery notice of the fixture fleet, as a mail client shows their
+	// HTML part (P20-MD); the digest is Preview.
+	Samples []designMailSample
+}
+
+type designMailSample struct {
+	Name, Subject, HTML string
 }
 
 type designMailStatus struct {
@@ -139,8 +146,9 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 		{"Incomplete: one sent, one failed, and for one the outcome could not be recorded (only what is known)", partly},
 		{"The API answered 500: nothing is claimed either way", failedAll}, {"Read-only (admin)", ro}, {"A time refused; nobody receives it", notime}}
 	if ct, err := notify.RenderDigest(fleet, nil, notify.Options{Loc: s.loc(ctx)}); err == nil {
-		d.Preview = &DigestPreviewView{Subject: ct.Subject, HTML: ct.HTML, Text: ct.Text}
+		d.Preview = &DigestPreviewView{Subject: ct.Subject, HTML: mailPreviewHTML(ct.HTML), Text: ct.Text}
 	}
+	d.Samples = designMailSamples(fleet, notify.Options{Loc: s.loc(ctx), ConsoleURL: "https://console.example.com/"})
 
 	// the delivery log: each outcome and each suppress label, and a word nobody knows
 	next := now.Add(4 * time.Minute)
@@ -218,4 +226,31 @@ func (s *Service) designMail(ctx context.Context, now time.Time, fleet state.Fle
 			Rows: []AlarmRow{{Chip: failedChip, NotYet: uncheckedText}, {Chip: partChip, NotYet: uncheckedText}}}},
 	}
 	return d
+}
+
+// designMailSamples renders the alert and the recovery notice for up to three critical devices of
+// the fixture fleet, as the notifier would (P20-MD). A fleet without one renders none.
+func designMailSamples(fleet state.FleetView, o notify.Options) []designMailSample {
+	var open, closed []store.Episode
+	for _, dv := range fleet.Devices {
+		if len(open) == 3 || !notify.IsCritical(string(dv.Primary)) {
+			continue
+		}
+		e := store.Episode{ID: dv.ID, SubjectType: store.EpisodeDevice, SubjectID: dv.ID, CustomerID: dv.CustomerID, AlarmType: string(dv.Primary), StateSince: dv.Since}
+		open = append(open, e)
+		end := fleet.ComputedAt
+		e.ClosedAt = &end
+		closed = append(closed, e)
+	}
+	if len(open) == 0 {
+		return nil
+	}
+	var out []designMailSample
+	if c, err := notify.RenderAlert(fleet, open, o); err == nil {
+		out = append(out, designMailSample{"Alert: the critical devices of the fixture fleet", c.Subject, mailPreviewHTML(c.HTML)})
+	}
+	if c, err := notify.RenderRecovery(fleet, closed, o); err == nil {
+		out = append(out, designMailSample{"Recovery notice: the same alarms, ended", c.Subject, mailPreviewHTML(c.HTML)})
+	}
+	return out
 }
