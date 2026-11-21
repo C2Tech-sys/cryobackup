@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"html"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/notify"
+	"github.com/c2tech-sys/cryobackup/internal/console/server"
+	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
 
 // P20-MD (ADR 0022): the previews of the e-mail messages show the mark from the console's own route.
@@ -93,5 +97,49 @@ func TestP20MD_DesignMailSamplesShowTheNewLook(t *testing.T) {
 	}
 	if strings.Contains(page, "allow-scripts") || strings.Contains(page, "allow-same-origin") {
 		t.Error("a sample frame is not fully sandboxed")
+	}
+}
+
+// FIX BATCH 1 L1 and L5: through the real admin handler chain of the server (request id, access
+// log, recover, security headers), the mark keeps its Cross-Origin-Resource-Policy: cross-origin
+// while the listener's other headers stay, and the access log names the route (a pattern with a dot
+// in its last segment is logged as "invalid").
+func TestP20MD_MailMarkThroughTheRealServerChain(t *testing.T) {
+	e := newM4Env(t)
+	var logs bytes.Buffer
+	cfg := config.Default()
+	cfg.Resolve()
+	cfg.Fixtures = true
+	cfg.AdminListen = "127.0.0.1:0"
+	srv, err := server.New(cfg, server.Options{RegisterAdmin: e.svc.Register, AgentDisabled: true, Log: logx.New(&logs, logx.LevelInfo)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	srv.AdminHandler().ServeHTTP(w, httptest.NewRequest("GET", mailMarkPath, nil))
+	h := w.Header()
+	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), notify.MarkPNG()) {
+		t.Fatalf("GET %s through the server: %d", mailMarkPath, w.Code)
+	}
+	if h.Get("Cross-Origin-Resource-Policy") != "cross-origin" {
+		t.Fatalf("CORP %q after the security-headers middleware, want cross-origin", h.Get("Cross-Origin-Resource-Policy"))
+	}
+	if h.Get("Content-Security-Policy") != server.ContentSecurityPolicy || h.Get("X-Frame-Options") != "DENY" || h.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("the listener's other security headers changed: %v", h)
+	}
+	// Another response keeps the listener's same-origin.
+	w = httptest.NewRecorder()
+	srv.AdminHandler().ServeHTTP(w, httptest.NewRequest("GET", "/static/app.css", nil))
+	if w.Header().Get("Cross-Origin-Resource-Policy") != "same-origin" {
+		t.Fatalf("/static CORP %q: the relaxation leaked", w.Header().Get("Cross-Origin-Resource-Policy"))
+	}
+	var line string
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, `"status":200`) && strings.Contains(l, "mail") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, `"route":"GET__mail_mark"`) {
+		t.Fatalf("the access log does not name the mark route:\n%s", logs.String())
 	}
 }

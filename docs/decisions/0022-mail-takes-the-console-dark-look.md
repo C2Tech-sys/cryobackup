@@ -20,7 +20,7 @@ B, the console's dark top bar on a light body.
 2. **The mark travels inside the message**, as an inline image under a content id (`multipart/related`, shown with
    `cid:`). It is part of the message, not remote content: showing it makes no request, so ADR 0020's decision on
    remote images stands. The console's previews show the same embedded file from a same-origin route
-   (`GET /mail/mark.png`); the Content-Security-Policy is unchanged.
+   (`GET /mail/mark`); the Content-Security-Policy is unchanged.
 3. **The wordmark is text, and mail loads no font.** The templates use system font stacks; there is no image of
    lettering and no web font, because the console's display face is being reconsidered.
 4. **What each message says does not change.** The text parts and the subjects are byte for byte what they were; every

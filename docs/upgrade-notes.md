@@ -107,6 +107,6 @@ is not remote content: the mail client makes no request to show it). What each m
 unchanged, and so are the plain-text parts and the subjects, so mail rules that match a subject
 keep working. A message is a few kilobytes larger (the mark). A mail client's own dark or light
 mode may recolour parts of it; every state is also written as a word. The console's digest
-preview and the /design/mail samples load the mark from a new public route, `GET /mail/mark.png`,
+preview and the /design/mail samples load the mark from a new public route, `GET /mail/mark`,
 on the admin listener; a reverse proxy that allows only listed paths must allow it as it allows
 `/static/`.

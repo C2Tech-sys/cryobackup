@@ -512,11 +512,11 @@ func TestPreviewHTMLPointsTheMarkAtTheRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := PreviewHTML(c.HTML, "/mail/mark.png")
-	if strings.Contains(p, "cid:") || !strings.Contains(p, `src="/mail/mark.png"`) || strings.Contains(p, "<style") {
+	p := PreviewHTML(c.HTML, "/mail/mark")
+	if strings.Contains(p, "cid:") || !strings.Contains(p, `src="/mail/mark"`) || strings.Contains(p, "<style") {
 		t.Fatal("the preview still has the cid: link or the style block")
 	}
-	back := strings.Replace(p, `src="/mail/mark.png"`, markAttr, 1)
+	back := strings.Replace(p, `src="/mail/mark"`, markAttr, 1)
 	if back != styleBlock.ReplaceAllString(c.HTML, "") {
 		t.Fatal("the preview changed more than the mark's src and the style block")
 	}
@@ -615,4 +615,64 @@ func fixtureWorld(t *testing.T) mdWorld {
 		t.Fatal(err)
 	}
 	return mdWorld{View: f.View, Acks: acks}
+}
+
+// FIX BATCH 1 L3: a message's mark is its own copy; changing it changes neither the embedded file
+// nor the next message.
+func TestMarkInlineIsACopyPerMessage(t *testing.T) {
+	c1, err := RenderAlert(renderView(), alertBatch(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1.Inline[0].Data[0] ^= 0xff
+	c2, err := RenderAlert(renderView(), alertBatch(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := (&TestMailer{}).message(renderNow, "ops@example.com")
+	if !bytes.Equal(c2.Inline[0].Data, MarkPNG()) || !bytes.Equal(m.Inline[0].Data, MarkPNG()) || markPNG[0] != 0x89 {
+		t.Fatal("changing one message's mark changed the embedded file or the next message")
+	}
+}
+
+// FIX BATCH 1 L4: the PAUSED chip of the digest is accent, as in the console and the mock.
+func TestDigestPausedChipIsAccent(t *testing.T) {
+	v, acks := mixedView()
+	c, err := RenderDigest(v, acks, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`<td bgcolor="(#[0-9A-F]{6})"[^>]*color:(#[0-9A-F]{6});">PAUSED</td>`).FindStringSubmatch(c.HTML)
+	if m == nil || m[1] != tokens["accent-soft"] || m[2] != tokens["accent"] {
+		t.Fatalf("the PAUSED chip is not accent: %v", m)
+	}
+	if n := regexp.MustCompile(`color:(#[0-9A-F]{6});">PARTIAL</td>`).FindStringSubmatch(c.HTML); n == nil || n[1] != tokens["warning"] {
+		t.Fatalf("a warning chip changed colour: %v", n)
+	}
+}
+
+// FIX BATCH 1 L4: the Attention tile is danger with a critical device, warning with warnings only,
+// and the neutral text colour at zero.
+func TestDigestAttentionTileColour(t *testing.T) {
+	tile := func(c Content) (string, string) {
+		m := regexp.MustCompile(`color:(#[0-9A-F]{6});">(\d+)</div>\s*<div[^>]*>Attention</div>`).FindStringSubmatch(c.HTML)
+		if m == nil {
+			t.Fatalf("no Attention tile in %s", c.Subject)
+		}
+		return m[1], m[2]
+	}
+	mv, acks := mixedView()
+	crit, _ := RenderDigest(mv, acks, Options{})
+	warnOnly := greenView(3)
+	warnOnly.Devices[1] = dev(devLab, custSummit, "LAB-PC", state.StatePartial, state.SeverityAlarm, 6*time.Hour)
+	warn, _ := RenderDigest(warnOnly, nil, Options{})
+	zero, _ := RenderDigest(greenView(3), nil, Options{})
+	for _, tc := range []struct {
+		name, colour, n string
+		c               Content
+	}{{"critical", tokens["danger"], "4", crit}, {"warnings only", tokens["warning"], "1", warn}, {"zero", tokens["text"], "0", zero}} {
+		if col, n := tile(tc.c); col != tc.colour || n != tc.n {
+			t.Errorf("%s: Attention %s in %s, want %s in %s", tc.name, n, col, tc.n, tc.colour)
+		}
+	}
 }

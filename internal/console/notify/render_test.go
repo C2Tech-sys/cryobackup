@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -160,11 +161,42 @@ func TestRenderHTMLIsSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	// P20-MD: the mark is the one image (inline, by content id) and the phone media query the one
-	// style block; both are fixed markup, so they are taken out before the search.
-	h := styleBlock.ReplaceAllString(strings.Replace(c.HTML, `<img `+markAttr, "", 1), "")
-	for _, bad := range []string{"<script", "<img", "<style", " src=\"", "url(", "@import", "<link"} {
-		if strings.Contains(strings.ToLower(h), bad) {
-			t.Errorf("HTML contains %q", bad)
+	// style block. Both are fixed markup of the shell: the rendered HTML must hold each exactly once
+	// and byte-equal to the template's, and only those exact bytes are taken out before the search.
+	fixedStyle := regexp.MustCompile(`(?s)<style>\n@media.*?</style>`).FindString(shellSource) // the block, not the comment that names it
+	fixedMark := strings.Replace(regexp.MustCompile(`<img src="\{\{markSrc\}\}"[^>]*>`).FindString(shellSource), "{{markSrc}}", "cid:"+MarkContentID, 1)
+	if fixedStyle == "" || fixedMark == "" {
+		t.Fatal("the shell template has no style block or no mark tag")
+	}
+	problems := func(html string) []string {
+		var out []string
+		low := strings.ToLower(html)
+		if strings.Count(low, "<style") != 1 || strings.Count(html, fixedStyle) != 1 {
+			out = append(out, "not exactly one <style>, byte-equal to the shell's fixed block")
+		}
+		if strings.Count(low, "<img") != 1 || strings.Count(html, fixedMark) != 1 {
+			out = append(out, "not exactly one <img>, byte-equal to the shell's fixed mark tag")
+		}
+		h := strings.ToLower(strings.Replace(strings.Replace(html, fixedStyle, "", 1), fixedMark, "", 1))
+		for _, bad := range []string{"<script", "<img", "<style", " src=\"", "url(", "@import", "<link"} {
+			if strings.Contains(h, bad) {
+				out = append(out, "HTML contains "+bad)
+			}
+		}
+		return out
+	}
+	if p := problems(c.HTML); len(p) > 0 {
+		t.Errorf("the rendered alert: %v", p)
+	}
+	// The check is strict: an extra complete style block, a second copy of the fixed one, or a
+	// second image is caught.
+	for name, bad := range map[string]string{
+		"injected style block": strings.Replace(c.HTML, "</body>", "<style>p{color:red}</style></body>", 1),
+		"second fixed block":   strings.Replace(c.HTML, "</body>", fixedStyle+"</body>", 1),
+		"second mark":          strings.Replace(c.HTML, "</body>", fixedMark+"</body>", 1),
+	} {
+		if len(problems(bad)) == 0 {
+			t.Errorf("%s passed the check", name)
 		}
 	}
 	if !strings.Contains(c.HTML, "&lt;script&gt;") || !strings.Contains(c.Text, "<script>") {

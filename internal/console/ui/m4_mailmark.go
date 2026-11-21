@@ -25,8 +25,8 @@ import (
 // origin embed it discloses nothing. The CSP is unchanged.
 
 const (
-	patMailMark  = "GET /mail/mark.png"
-	mailMarkPath = "/mail/mark.png"
+	patMailMark  = "GET /mail/mark"
+	mailMarkPath = "/mail/mark"
 )
 
 // mailMarkPNG is read once: the bytes never change while the console runs.

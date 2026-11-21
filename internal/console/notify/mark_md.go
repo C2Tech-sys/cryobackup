@@ -33,9 +33,10 @@ func MarkPNG() []byte { return bytes.Clone(markPNG) }
 // reaches it.
 func markSrc() htmltemplate.URL { return htmltemplate.URL("cid:" + MarkContentID) }
 
-// markInline is the mark as the inline image of a message.
+// markInline is the mark as the inline image of a message: a copy of the embedded bytes, so a
+// caller that changes a message's image cannot change the next message's.
 func markInline() []mail.Inline {
-	return []mail.Inline{{ContentID: MarkContentID, MediaType: "image/png", Data: markPNG}}
+	return []mail.Inline{{ContentID: MarkContentID, MediaType: "image/png", Data: MarkPNG()}}
 }
 
 // markAttr is the mark's src attribute exactly as the templates write it.

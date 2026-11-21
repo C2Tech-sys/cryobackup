@@ -168,7 +168,7 @@ func TestInlineImagesAreValidated(t *testing.T) {
 		"no html":          func(m *Message) { m.HTML = "" },
 		"blank html":       func(m *Message) { m.HTML = "  \n" },
 		"angle id":         func(m *Message) { m.Inline[0].ContentID = "<mark@console>" },
-		"crlf id":          func(m *Message) { m.Inline[0].ContentID = "mark\r\nBcc: x@example.net" },
+		"crlf id":          func(m *Message) { m.Inline[0].ContentID = "mark\r\nBcc: x@example.test" },
 		"space id":         func(m *Message) { m.Inline[0].ContentID = "mark console" },
 		"quote id":         func(m *Message) { m.Inline[0].ContentID = `mark"@console` },
 		"empty id":         func(m *Message) { m.Inline[0].ContentID = "" },

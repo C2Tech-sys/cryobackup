@@ -41,9 +41,12 @@ var (
 type digestLine struct {
 	Host  string // empty for a MISSING customer
 	State string // the state word shown
-	Also  string // the other alarming flags, comma separated
-	Since string
-	Ack   string // ACKNOWLEDGED or SNOOZED; empty when neither
+	// Colour is the token of the line's chip: its section's colour, except a PAUSED device, whose
+	// chip is accent as in the console (the state word is beside it).
+	Colour string
+	Also   string // the other alarming flags, comma separated
+	Since  string
+	Ack    string // ACKNOWLEDGED or SNOOZED; empty when neither
 	// Indefinite flags a pause with no end date.
 	Indefinite bool
 }
@@ -60,7 +63,7 @@ type digestGroup struct {
 type digestSection struct {
 	Title  string
 	Word   string // the band's word in the plain-text part
-	Colour string // a token name: the colour of the band's chips, beside the state word
+	Colour string // a token name: the colour of the band's chips (but see digestLine.Colour), beside the state word
 	Groups []digestGroup
 	Count  int
 }
@@ -271,7 +274,10 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 			groups[s][key] = g
 			order[s] = append(order[s], g)
 		}
-		dl := digestLine{Host: l.Hostname, State: string(l.State), Since: when(l.Since, loc), Ack: ackOf(l, marks)}
+		dl := digestLine{Host: l.Hostname, State: string(l.State), Since: when(l.Since, loc), Ack: ackOf(l, marks), Colour: p.Sections[s].Colour}
+		if l.State == state.StatePaused && s == sectionOther {
+			dl.Colour = "accent"
+		}
 		if l.Kind == state.DigestMissing {
 			missing++
 			g.missing = true
@@ -420,11 +426,11 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	// its "paused" count (zero when it lists none).
 	p.Tiles = []digestTile{
 		{N: backedUp, Label: "Backed up", Colour: "success"},
-		{N: critDevices + warn, Label: "Attention", Colour: "danger"},
+		{N: critDevices + warn, Label: "Attention", Colour: attentionColour(critDevices, warn)},
 		{N: byState[state.StatePaused], Label: "Paused", Colour: "accent"},
 		{N: p.Checked, Label: "Devices", Colour: "text"},
 	}
-	for i := range p.Tiles[:3] {
+	for _, i := range []int{0, 2} {
 		if p.Tiles[i].N == 0 {
 			p.Tiles[i].Colour = "text" // a zero is not a state: no colour
 		}
@@ -438,4 +444,16 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	}
 	return Content{Kind: mail.KindDigest, Subject: "[CryoBackup] Backup digest " + p.Date + ": " + summary, Text: text.String(), HTML: html.String(),
 		Inline: markInline()}, nil
+}
+
+// attentionColour is the colour of the Attention tile's number: danger when a critical device is
+// counted, warning when only warnings are, the neutral text colour at zero.
+func attentionColour(critical, warnings int) string {
+	switch {
+	case critical > 0:
+		return "danger"
+	case warnings > 0:
+		return "warning"
+	}
+	return "text"
 }
