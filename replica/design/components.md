@@ -1004,6 +1004,8 @@ Constraints common to all four templates (the shell, 10.1, enforces them):
 
 ### 10.1 Email shell
 
+Superseded in part by ADR 0022 (docs/decisions/0022-mail-takes-the-console-dark-look.md): the messages use the console's dark look, not a light default, and the mark rides inline.
+
 ```
 Email shell
   variants  operator mail (digest, immediate failure, storage report), customer mail (per-customer report); light default with dark-scheme override

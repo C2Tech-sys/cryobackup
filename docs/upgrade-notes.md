@@ -98,3 +98,15 @@ The digest banners are now judged on every installation:
 
 Right after the upgrade, before the day's digest time has come, C14 can name the previous day's
 digest, which the old console never sent. It clears when the day's first digest goes out.
+
+### The messages take the console's dark look (ADR 0022)
+
+The HTML part of the alert, the recovery notice, the daily digest and the test message is now in
+the console's dark theme, with the brand mark carried inside each message as an inline image (it
+is not remote content: the mail client makes no request to show it). What each message says is
+unchanged, and so are the plain-text parts and the subjects, so mail rules that match a subject
+keep working. A message is a few kilobytes larger (the mark). A mail client's own dark or light
+mode may recolour parts of it; every state is also written as a word. The console's digest
+preview and the /design/mail samples load the mark from a new public route, `GET /mail/mark.png`,
+on the admin listener; a reverse proxy that allows only listed paths must allow it as it allows
+`/static/`.

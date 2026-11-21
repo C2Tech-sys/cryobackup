@@ -557,7 +557,11 @@ func TestWriteMailSamples(t *testing.T) {
 		{"1-alert.eml", func() (Content, error) { return RenderAlert(f.View, crit, o) }},
 		{"2-recovery.eml", func() (Content, error) { return RenderRecovery(f.View, closed[:2], o) }},
 		{"3-digest-problems.eml", func() (Content, error) { return RenderDigest(f.View, f.Acks, o) }},
-		{"4-digest-all-green.eml", func() (Content, error) { return RenderDigest(greenView(12), nil, o) }},
+		{"4-digest-all-green.eml", func() (Content, error) {
+			g := greenView(12)
+			g.ComputedAt = now
+			return RenderDigest(g, nil, o)
+		}},
 		{"5-test-message.eml", func() (Content, error) {
 			m := (&TestMailer{ConsoleURL: mdURL, Loc: func() *time.Location { return cst }}).message(now, "ops@example.com")
 			return Content{Kind: m.Kind, Subject: m.Subject, Text: m.Text, HTML: m.HTML, Inline: m.Inline}, nil
