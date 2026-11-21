@@ -1,0 +1,75 @@
+{{/* P20-MD (ADR 0022): the pieces every HTML part shares, in the console's dark look. Inline-styled
+nested tables that classic Outlook's Word engine lays out: every background is a bgcolor attribute
+and an inline style on a table or td; no flex, grid, position, float, CSS variables or background
+images. The one <style> block is the phone-width media query. Fonts are system stacks: nothing is
+loaded. Colours come from tok (the dark tokens of web/static/tokens.css), and every colour is paired
+with a word. */}}
+{{define "md-open"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
+<title>{{.}}</title>
+<style>
+@media only screen and (max-width:480px){
+.cb-outer{padding:12px 6px !important}
+.cb-pad{padding-left:14px !important;padding-right:14px !important}
+.cb-tile{display:inline-block !important;width:50% !important;box-sizing:border-box;padding:0 4px 8px 0 !important}
+}
+</style>
+</head>
+<body bgcolor="{{tok "bg"}}" style="margin:0;padding:0;background:{{tok "bg"}};color:{{tok "text"}};font-family:'IBM Plex Sans','Segoe UI',Arial,sans-serif;font-size:14px;line-height:20px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{{tok "bg"}}" style="background:{{tok "bg"}};">
+<tr><td align="center" class="cb-outer" bgcolor="{{tok "bg"}}" style="padding:20px 12px;background:{{tok "bg"}};">
+{{msoOpen}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{{tok "surface"}}" style="width:100%;max-width:640px;background:{{tok "surface"}};border:1px solid {{tok "border"}};border-collapse:separate;border-radius:10px;">
+{{end}}
+
+{{define "md-close"}}</table>{{msoClose}}
+</td></tr>
+</table>
+</body>
+</html>
+{{end}}
+
+{{/* The console's top bar: the mark, the wordmark (live text) and the polled line in mono. */}}
+{{define "md-top"}}<tr><td class="cb-pad" bgcolor="{{tok "bg"}}" style="padding:14px 20px;background:{{tok "bg"}};border-bottom:1px solid {{tok "border"}};border-radius:10px 10px 0 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td width="38" valign="middle" style="width:38px;padding:0 10px 0 0;"><img src="{{markSrc}}" width="28" height="28" alt="" style="display:block;width:28px;height:28px;border:0;outline:none;text-decoration:none;"></td>
+<td valign="middle" style="font-family:'IBM Plex Sans','Segoe UI',Arial,sans-serif;font-size:15px;line-height:20px;font-weight:800;letter-spacing:.14em;color:{{tok "text"}};white-space:nowrap;">CRYO<span style="color:{{tok "accent"}};">BACKUP</span></td>
+<td align="right" valign="middle" style="padding:0 0 0 12px;font-family:Consolas,'Courier New',monospace;font-size:11px;line-height:16px;color:{{tok "text-muted"}};text-align:right;">{{.}}</td>
+</tr></table>
+</td></tr>
+{{end}}
+
+{{/* The headline as a banner strip in the message's level colour. */}}
+{{define "md-strip"}}<tr><td class="cb-pad" bgcolor="{{tok (soft .Colour)}}" style="padding:12px 20px 12px 16px;background:{{tok (soft .Colour)}};border-left:4px solid {{tok .Colour}};border-bottom:1px solid {{tok "border"}};font-size:15px;line-height:22px;font-weight:600;color:{{tok "text"}};">{{.Text}}</td></tr>
+{{end}}
+
+{{/* A spaced-caps section label. */}}
+{{define "md-label"}}<div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:{{tok "text-muted"}};padding:16px 0 8px 0;">{{.}}</div>
+{{end}}
+
+{{/* A state chip: the word in its colour, on its soft colour (a table cell, so Outlook draws the background). */}}
+{{define "md-chip"}}<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;"><tr><td bgcolor="{{tok (soft .Colour)}}" style="background:{{tok (soft .Colour)}};border:1px solid {{tok .Colour}};border-radius:999px;padding:3px 8px;font-size:10.5px;line-height:14px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;color:{{tok .Colour}};">{{.Word}}</td></tr></table>{{end}}
+
+{{/* A customer heading, with the muted note of a suspended customer. */}}
+{{define "md-customer"}}<div style="font-weight:600;font-size:14px;line-height:20px;color:{{tok "text"}};padding:12px 0 6px 0;">{{.Customer}}{{if .Muted}} <span style="font-weight:400;font-size:12px;color:{{tok "text-muted"}};">(suspended: notifications muted)</span>{{end}}</div>
+{{end}}
+
+{{/* The open of a block of rows (closed with </table>). */}}
+{{define "md-rows"}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{{tok "surface"}}" style="background:{{tok "surface"}};border:1px solid {{tok "border"}};border-collapse:separate;border-radius:8px;">
+{{end}}
+
+{{/* The one button, with the URL beside it in mono; the no-link sentence when there is no URL. */}}
+{{define "md-cta"}}{{if .URL}}<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0;"><tr>
+<td bgcolor="{{tok "accent"}}" style="background:{{tok "accent"}};border-radius:6px;padding:9px 16px;"><a href="{{.URL}}" style="color:{{tok "on-accent"}};font-weight:700;font-size:13px;line-height:18px;text-decoration:none;display:inline-block;">Open the console</a></td>
+<td style="padding:0 0 0 10px;font-family:Consolas,'Courier New',monospace;font-size:11px;line-height:16px;color:{{tok "text-muted"}};word-break:break-all;">{{.URL}}</td>
+</tr></table>
+{{else if .Sentence}}<div style="font-size:13px;line-height:18px;color:{{tok "text-muted"}};">Open the console to see the details.</div>
+{{end}}{{end}}
+
+{{/* The footer: muted small text on the raised surface. */}}
+{{define "md-foot-open"}}<tr><td class="cb-pad" bgcolor="{{tok "surface-raised"}}" style="padding:12px 20px 14px 20px;background:{{tok "surface-raised"}};border-top:1px solid {{tok "border"}};border-radius:0 0 10px 10px;font-size:12px;line-height:18px;color:{{tok "text-muted"}};">
+{{end}}

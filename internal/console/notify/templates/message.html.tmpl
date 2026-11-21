@@ -1,46 +1,12 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
-<title>CryoBackup: {{.Title}}</title>
-</head>
-<body style="margin:0;padding:0;background:{{tok "bg"}};color:{{tok "text"}};font-family:'IBM Plex Sans','Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.45;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{tok "bg"}};">
-<tr><td align="center" style="padding:20px;">
-<table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;background:{{tok "surface"}};border:1px solid {{tok "border"}};border-radius:8px;">
-<tr><td style="padding:16px 20px;border-bottom:1px solid {{tok "border"}};">
-<div style="font-weight:800;font-size:13px;letter-spacing:.12em;color:{{tok "text"}};">CRYOBACKUP</div>
-<div style="font-family:Consolas,'Courier New',monospace;font-size:12px;color:{{tok "text-muted"}};">polled {{.Polled}}</div>
+{{template "md-open" (print "CryoBackup: " .Title)}}{{template "md-top" (print "polled " .Polled)}}{{if .Recovery}}{{template "md-strip" (bar "success" .Title)}}{{else}}{{template "md-strip" (bar "danger" .Title)}}{{end}}<tr><td class="cb-pad" bgcolor="{{tok "surface"}}" style="padding:4px 20px 8px 20px;background:{{tok "surface"}};">
+{{if .Recovery}}{{template "md-label" "Recovery"}}{{else}}{{template "md-label" "Alert"}}{{end}}{{range .Groups}}{{template "md-customer" .}}{{template "md-rows"}}{{range $i, $l := .Lines}}<tr><td width="1%" valign="top" style="width:1%;padding:9px 0 9px 12px;white-space:nowrap;{{if $i}}border-top:1px solid {{tok "border"}};{{end}}">{{if $.Recovery}}{{template "md-chip" (chip "success" "RESOLVED")}}{{else}}{{template "md-chip" (chip "danger" $l.State)}}{{end}}</td>
+<td valign="top" style="padding:9px 12px;{{if $i}}border-top:1px solid {{tok "border"}};{{end}}">{{if $.Recovery}}<div style="font-size:13px;line-height:18px;color:{{tok "text"}};">{{if $l.Host}}<span style="font-family:Consolas,'Courier New',monospace;font-weight:600;">{{$l.Host}}</span> {{end}}<span style="font-weight:600;">{{$l.State}}</span></div>
+<div style="font-size:12px;line-height:18px;color:{{tok "text-muted"}};">since {{$l.Since}}, ended {{$l.Ended}}{{if $l.Now}}; now {{$l.Now}}{{end}}</div>{{else}}<div style="font-size:13px;line-height:18px;color:{{tok "text"}};">{{if $l.Host}}<span style="font-family:Consolas,'Courier New',monospace;font-weight:600;">{{$l.Host}}</span>{{else}}no active device{{end}}</div>
+<div style="font-size:12px;line-height:18px;color:{{tok "text-muted"}};">since {{$l.Since}}{{if $l.Class}}; error class {{$l.Class}}{{end}}</div>{{end}}</td></tr>
+{{end}}</table>
+{{end}}<div style="padding:14px 0 12px 0;font-size:14px;line-height:20px;color:{{tok "text"}};">{{if .Recovery}}These alarms have ended. No further mail is sent about them.{{else}}Each alarm is mailed once while it lasts. Acknowledge or snooze it in the console to mute it; a recovery notice follows when it ends.{{end}}</div>
+<div style="padding:0 0 16px 0;">{{template "md-cta" (cta .ConsoleURL true)}}</div>
 </td></tr>
-<tr><td style="padding:16px 20px 4px 20px;">
-<h1 style="margin:0;font-size:18px;font-weight:600;color:{{tok "text"}};">{{.Title}}</h1>
+{{template "md-foot-open"}}{{if .Recovery}}You receive this because this address receives CryoBackup recovery notices.{{else}}You receive this because this address receives CryoBackup alerts.{{end}}
 </td></tr>
-{{range .Groups}}<tr><td style="padding:12px 20px 0 20px;">
-<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:{{tok "text-muted"}};padding-bottom:6px;">{{.Customer}}</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-{{range .Lines}}{{if $.Recovery}}<tr><td style="padding:8px 10px;border-left:3px solid {{tok "success"}};border-bottom:1px solid {{tok "border"}};">
-<span style="color:{{tok "success"}};font-weight:600;">&#9679; RESOLVED</span>
-{{if .Host}}<strong style="font-weight:600;">{{.Host}}</strong>{{end}} {{.State}}
-<div style="font-size:12px;color:{{tok "text-muted"}};">since {{.Since}}, ended {{.Ended}}{{if .Now}}; now {{.Now}}{{end}}</div>
-</td></tr>
-{{else}}<tr><td style="padding:8px 10px;border-left:3px solid {{tok "danger"}};border-bottom:1px solid {{tok "border"}};">
-<span style="color:{{tok "danger"}};font-weight:600;">&#9670; {{.State}}</span>
-{{if .Host}}<strong style="font-weight:600;">{{.Host}}</strong>{{else}}no active device{{end}}
-<div style="font-size:12px;color:{{tok "text-muted"}};">since {{.Since}}{{if .Class}}; error class {{.Class}}{{end}}</div>
-</td></tr>
-{{end}}{{end}}</table>
-</td></tr>
-{{end}}<tr><td style="padding:16px 20px;">
-<p style="margin:0;color:{{tok "text"}};">{{if .Recovery}}These alarms have ended. No further mail is sent about them.{{else}}Each alarm is mailed once while it lasts. Acknowledge or snooze it in the console to mute it; a recovery notice follows when it ends.{{end}}</p>
-</td></tr>
-<tr><td style="padding:12px 20px;border-top:1px solid {{tok "border"}};font-size:12px;color:{{tok "text-muted"}};">
-{{if .ConsoleURL}}<a href="{{.ConsoleURL}}" style="color:{{tok "accent"}};">Open the console</a>: {{.ConsoleURL}}<br>{{else}}Open the console to see the details.<br>{{end}}
-{{if .Recovery}}You receive this because this address receives CryoBackup recovery notices.{{else}}You receive this because this address receives CryoBackup alerts.{{end}}
-</td></tr>
-</table>
-</td></tr>
-</table>
-</body>
-</html>
+{{template "md-close"}}

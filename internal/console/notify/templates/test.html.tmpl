@@ -1,0 +1,8 @@
+{{template "md-open" "CryoBackup: test message"}}{{template "md-top" (print "sent " .When)}}{{template "md-strip" (bar "success" "Test message")}}<tr><td class="cb-pad" bgcolor="{{tok "surface"}}" style="padding:14px 20px 8px 20px;background:{{tok "surface"}};">
+<p style="margin:0 0 8px 0;font-size:14px;line-height:20px;color:{{tok "text"}};">This is a test message from the CryoBackup console, sent {{.When}}.</p>
+<p style="margin:0 0 14px 0;font-size:14px;line-height:20px;color:{{tok "text"}};">It shows that the console can deliver e-mail to this address through its relay. Nothing needs to be done.</p>
+{{if .ConsoleURL}}<div style="padding:0 0 16px 0;">{{template "md-cta" (cta .ConsoleURL false)}}</div>
+{{end}}</td></tr>
+{{template "md-foot-open"}}You receive this because an administrator of the console asked for a test message to this address.
+</td></tr>
+{{template "md-close"}}

@@ -159,8 +159,11 @@ func TestRenderHTMLIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// P20-MD: the mark is the one image (inline, by content id) and the phone media query the one
+	// style block; both are fixed markup, so they are taken out before the search.
+	h := styleBlock.ReplaceAllString(strings.Replace(c.HTML, `<img `+markAttr, "", 1), "")
 	for _, bad := range []string{"<script", "<img", "<style", " src=\"", "url(", "@import", "<link"} {
-		if strings.Contains(strings.ToLower(c.HTML), bad) {
+		if strings.Contains(strings.ToLower(h), bad) {
 			t.Errorf("HTML contains %q", bad)
 		}
 	}
