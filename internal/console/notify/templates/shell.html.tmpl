@@ -1,0 +1,113 @@
+{{/* P20-MD (ADR 0022): the pieces every HTML part shares, in the console's dark look. Inline-styled
+nested tables that classic Outlook's Word engine lays out: every background is a bgcolor attribute
+and an inline style on a table or td; no flex, grid, position, float, CSS variables or background
+images. The one <style> block is the phone-width media query. Fonts are system stacks: nothing is
+loaded. Colours come from tok (the dark tokens of web/static/tokens.css), and every colour is paired
+with a word. Vertical space is the padding of a td, never of a div or p (Word ignores those): every
+block that needs room above or below is its own row of the body table (md-body-open). */}}
+
+{{/* The two font stacks, each written once: Word (classic Outlook) does not inherit font-family
+from <body> into a table cell and draws a cell that names none in Times New Roman, so every cell
+that holds text, and every a or span that sets a font property, names its stack with one of these. */}}
+{{define "sans"}}font-family:'IBM Plex Sans','Segoe UI',Arial,sans-serif;{{end}}
+{{define "mono"}}font-family:Consolas,'Courier New',monospace;{{end}}
+
+{{define "md-open"}}<!DOCTYPE html>
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8">
+{{msoHead}}
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
+<title>{{.}}</title>
+<style>
+@media only screen and (max-width:480px){
+.cb-outer{padding:12px 6px !important}
+.cb-pad{padding-left:14px !important;padding-right:14px !important}
+.cb-tile{display:inline-block !important;width:50% !important;box-sizing:border-box;padding:0 4px 8px 0 !important}
+}
+</style>
+</head>
+<body bgcolor="{{tok "bg"}}" style="margin:0;padding:0;background:{{tok "bg"}};color:{{tok "text"}};{{template "sans"}}font-size:14px;line-height:20px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{{tok "bg"}}" style="background:{{tok "bg"}};">
+<tr><td align="center" class="cb-outer" bgcolor="{{tok "bg"}}" style="padding:20px 12px;background:{{tok "bg"}};">
+{{msoOpen}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{{tok "surface"}}" style="width:100%;max-width:640px;background:{{tok "surface"}};border:1px solid {{tok "border"}};border-collapse:separate;border-radius:10px;">
+{{end}}
+
+{{define "md-close"}}</table>{{msoClose}}
+</td></tr>
+</table>
+</body>
+</html>
+{{end}}
+
+{{/* The console's top bar: the mark, the wordmark (live text) and the polled line in mono. */}}
+{{define "md-top"}}<tr><td class="cb-pad" bgcolor="{{tok "bg"}}" style="padding:14px 20px;background:{{tok "bg"}};border-bottom:1px solid {{tok "border"}};border-radius:10px 10px 0 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td width="38" valign="middle" style="width:38px;padding:0 10px 0 0;"><img src="{{markSrc}}" width="28" height="28" alt="" style="display:block;width:28px;height:28px;border:0;outline:none;text-decoration:none;"></td>
+<td valign="middle" style="{{template "sans"}}font-size:15px;line-height:20px;font-weight:800;letter-spacing:.14em;color:{{tok "text"}};white-space:nowrap;">CRYO<span style="color:{{tok "accent"}};">BACKUP</span></td>
+<td align="right" valign="middle" style="padding:0 0 0 12px;{{template "mono"}}font-size:11px;line-height:16px;color:{{tok "text-muted"}};text-align:right;">{{.}}</td>
+</tr></table>
+</td></tr>
+{{end}}
+
+{{/* The headline as a banner strip in the message's level colour. */}}
+{{define "md-strip"}}<tr><td class="cb-pad" bgcolor="{{tok (soft .Colour)}}" style="padding:12px 20px 12px 16px;background:{{tok (soft .Colour)}};border-left:4px solid {{tok .Colour}};border-bottom:1px solid {{tok "border"}};{{template "sans"}}font-size:15px;line-height:22px;font-weight:600;color:{{tok "text"}};">{{.Text}}</td></tr>
+{{end}}
+
+{{/* The body: the rows between the strip and the footer, each block its own row (md-label,
+md-customer, md-rows ... md-rows-close, md-cta, a sentence row). */}}
+{{define "md-body-open"}}<tr><td class="cb-pad" bgcolor="{{tok "surface"}}" style="padding:0 20px;background:{{tok "surface"}};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+{{end}}
+
+{{define "md-body-close"}}</table>
+</td></tr>
+{{end}}
+
+{{/* A spaced-caps section label: 18px above, 8px below. */}}
+{{define "md-label"}}<tr><td style="padding:18px 0 8px 0;{{template "sans"}}font-size:11px;line-height:16px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:{{tok "text-muted"}};">{{.}}</td></tr>
+{{end}}
+
+{{/* A state chip: the word in its colour, on its soft colour (a table cell, so Outlook draws the
+background). Word's render showed the cause of the clipping: an exact line height of 14px cut the
+word's descent (the underscore of IDENTITY_CONFLICT vanished). The cell has an explicit height and
+an exact line height of 16px, with room for the descent at any scaling (Word and browsers read
+the height as the content height: 16 + padding 4 + border 2 = the 22px chip of the approved look). */}}
+{{define "md-chip"}}<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;"><tr><td bgcolor="{{tok (soft .Colour)}}" height="16" nowrap style="background:{{tok (soft .Colour)}};border:1px solid {{tok .Colour}};border-radius:999px;padding:2px 9px 2px 8px;height:16px;mso-line-height-rule:exactly;line-height:16px;{{template "sans"}}font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;color:{{tok .Colour}};">{{.Word}}</td></tr></table>{{end}}
+
+{{/* The open of the cell that holds a row's chip. Its top and bottom padding equal its text cell's:
+with any difference Word draws the row's top border of the two cells at different heights. */}}
+{{define "md-chip-cell"}}<td width="1%" valign="top" style="width:1%;padding:9px 0 9px 12px;white-space:nowrap;{{if .}}border-top:1px solid {{tok "border"}};{{end}}">{{end}}
+
+{{/* A customer heading, with the muted note of a suspended customer: 14px above, 6px below. */}}
+{{define "md-customer"}}<tr><td style="padding:14px 0 6px 0;{{template "sans"}}font-weight:600;font-size:14px;line-height:20px;color:{{tok "text"}};">{{.Customer}}{{if .Muted}} <span style="{{template "sans"}}font-weight:400;font-size:12px;color:{{tok "text-muted"}};">(suspended: notifications muted)</span>{{end}}</td></tr>
+{{end}}
+
+{{/* The open of a block of rows, as a row of the body (closed with md-rows-close). */}}
+{{define "md-rows"}}<tr><td style="padding:0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{{tok "surface"}}" style="background:{{tok "surface"}};border:1px solid {{tok "border"}};border-collapse:separate;border-radius:8px;">
+{{end}}
+
+{{define "md-rows-close"}}</table>
+</td></tr>
+{{end}}
+
+{{/* A sentence of the body (the closing sentence, the totals): 18px above, 16px to the button. */}}
+{{define "md-sentence-open"}}<tr><td style="padding:18px 0 16px 0;{{template "sans"}}font-size:14px;line-height:20px;color:{{tok "text"}};">{{end}}
+
+{{/* The one button (the console URL is not shown as text: the link is the button; the text part keeps
+the URL); the no-link sentence when there is no URL. Its row leaves 20px below. The button stays a
+table cell (VML text is recoloured by Outlook's dark mode). */}}
+{{define "md-cta"}}{{if .URL}}<tr><td style="padding:0 0 20px 0;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0;"><tr>
+<td bgcolor="{{tok "accent"}}" nowrap style="background:{{tok "accent"}};border-radius:6px;{{template "sans"}}padding:9px 16px;mso-padding-alt:9px 16px;white-space:nowrap;"><a href="{{.URL}}" style="color:{{tok "on-accent"}};{{template "sans"}}font-weight:700;font-size:13px;line-height:18px;text-decoration:none;display:inline-block;white-space:nowrap;">Open the console</a></td>
+</tr></table>
+</td></tr>
+{{else if .Sentence}}<tr><td style="padding:0 0 20px 0;{{template "sans"}}font-size:13px;line-height:18px;color:{{tok "text-muted"}};">Open the console to see the details.</td></tr>
+{{end}}{{end}}
+
+{{/* The footer: muted small text on the raised surface. */}}
+{{define "md-foot-open"}}<tr><td class="cb-pad" bgcolor="{{tok "surface-raised"}}" style="padding:16px 20px 18px 20px;background:{{tok "surface-raised"}};border-top:1px solid {{tok "border"}};border-radius:0 0 10px 10px;{{template "sans"}}font-size:12px;line-height:18px;color:{{tok "text-muted"}};">
+{{end}}

@@ -3,7 +3,6 @@ package notify
 import (
 	"bytes"
 	_ "embed"
-	htmltemplate "html/template"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,16 +34,19 @@ var digestHTMLSource string
 
 var (
 	digestTextTmpl = texttemplate.Must(texttemplate.New("digest-text").Parse(digestTextSource))
-	digestHTMLTmpl = htmltemplate.Must(htmltemplate.New("digest-html").Funcs(htmltemplate.FuncMap{"tok": tok}).Parse(digestHTMLSource))
+	digestHTMLTmpl = mdTemplate("digest-html", digestHTMLSource)
 )
 
 // digestLine is one listed device or MISSING customer.
 type digestLine struct {
 	Host  string // empty for a MISSING customer
 	State string // the state word shown
-	Also  string // the other alarming flags, comma separated
-	Since string
-	Ack   string // ACKNOWLEDGED or SNOOZED; empty when neither
+	// Colour is the token of the line's chip: its section's colour, except a PAUSED device, whose
+	// chip is accent as in the console (the state word is beside it).
+	Colour string
+	Also   string // the other alarming flags, comma separated
+	Since  string
+	Ack    string // ACKNOWLEDGED or SNOOZED; empty when neither
 	// Indefinite flags a pause with no end date.
 	Indefinite bool
 }
@@ -60,9 +62,8 @@ type digestGroup struct {
 // digestSection is one severity band of the exceptions.
 type digestSection struct {
 	Title  string
-	Glyph  htmltemplate.HTML // the band's glyph: a fixed character entity, never data
-	Word   string            // the band's word in the plain-text part
-	Colour string            // a token name
+	Word   string // the band's word in the plain-text part
+	Colour string // a token name: the colour of the band's chips (but see digestLine.Colour), beside the state word
 	Groups []digestGroup
 	Count  int
 }
@@ -70,7 +71,14 @@ type digestSection struct {
 // digestBanner is one console condition.
 type digestBanner struct {
 	Word, Colour, Text string
-	Glyph              htmltemplate.HTML // a fixed character entity, never data
+}
+
+// digestTile is one counter of the HTML part (P20-MD): a number of the totals line, its label, and a
+// colour token that is never its only meaning.
+type digestTile struct {
+	N      int
+	Label  string
+	Colour string
 }
 
 // digestPage is what both digest templates render.
@@ -84,6 +92,12 @@ type digestPage struct {
 	Sections   []digestSection
 	Totals     string
 	ConsoleURL string
+	// Level is the colour token of the headline strip of the HTML part: danger when a critical line,
+	// a missing customer or a critical console condition is listed; success only when the headline
+	// is an all-clear with every device backed up; warning otherwise.
+	Level string
+	// Tiles are the four counters of the HTML part: the same numbers the totals line is built from.
+	Tiles []digestTile
 }
 
 // digestDevices counts the devices a digest speaks for: every device of the view that is neither
@@ -233,16 +247,16 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	p := digestPage{Date: date.Format("Mon 2 Jan"), Polled: when(v.ComputedAt, loc), Checked: digestDevices(v),
 		ConsoleURL: consoleURL(o.ConsoleURL)}
 	for _, b := range d.Banners {
-		db := digestBanner{Word: "WARNING", Glyph: "&#9650;", Colour: "warning", Text: b.Text}
+		db := digestBanner{Word: "WARNING", Colour: "warning", Text: b.Text}
 		if b.Severity >= state.SeverityCritical {
-			db = digestBanner{Word: "CRITICAL", Glyph: "&#9670;", Colour: "danger", Text: b.Text}
+			db = digestBanner{Word: "CRITICAL", Colour: "danger", Text: b.Text}
 		}
 		p.Banners = append(p.Banners, db)
 	}
 	p.Sections = []digestSection{
-		{Title: "Critical", Glyph: "&#9670;", Word: "CRITICAL", Colour: "danger"},
-		{Title: "Warnings", Glyph: "&#9650;", Word: "WARNING", Colour: "warning"},
-		{Title: "Parked and long-deferred devices", Glyph: "&#9675;", Word: "NOTICE", Colour: "text-muted"},
+		{Title: "Critical", Word: "CRITICAL", Colour: "danger"},
+		{Title: "Warnings", Word: "WARNING", Colour: "warning"},
+		{Title: "Parked and long-deferred devices", Word: "NOTICE", Colour: "text-muted"},
 	}
 	groups := [3]map[string]*digestGroup{{}, {}, {}}
 	var order [3][]*digestGroup
@@ -260,7 +274,10 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 			groups[s][key] = g
 			order[s] = append(order[s], g)
 		}
-		dl := digestLine{Host: l.Hostname, State: string(l.State), Since: when(l.Since, loc), Ack: ackOf(l, marks)}
+		dl := digestLine{Host: l.Hostname, State: string(l.State), Since: when(l.Since, loc), Ack: ackOf(l, marks), Colour: p.Sections[s].Colour}
+		if l.State == state.StatePaused && s == sectionOther {
+			dl.Colour = "accent"
+		}
 		if l.Kind == state.DigestMissing {
 			missing++
 			g.missing = true
@@ -338,8 +355,17 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	allClear := len(d.Banners) == 0 && complete && critDevices+missing == 0 && warn == 0
 	var summary string
 	leftSaid := false
+	p.Level = "warning"
 	switch {
 	case !allClear:
+		if critDevices+missing > 0 {
+			p.Level = "danger"
+		}
+		for _, b := range p.Banners {
+			if b.Colour == "danger" {
+				p.Level = "danger"
+			}
+		}
 		parts := []string{strconv.Itoa(critDevices) + " critical", count(warn, "warning", "warnings")}
 		if missing > 0 {
 			parts = append(parts, count(missing, "customer missing", "customers missing"))
@@ -371,12 +397,14 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 		summary = strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up, " + strings.Join(rest, ", ")
 		p.Title = strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up. " + upperFirst(strings.Join(rest, ", ")) + "."
 	case len(left) == 0 && backedUp == p.Checked:
+		p.Level = "success"
 		summary = "all clear, " + count(p.Checked, "device", "devices") + " backed up"
 		p.Title = "All " + strconv.Itoa(p.Checked) + " devices backed up."
 		if p.Checked == 1 {
 			p.Title = "The 1 device is backed up."
 		}
 	default:
+		p.Level = "success"
 		summary = "all clear, " + strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up"
 		p.Title = "All clear: " + strconv.Itoa(backedUp) + " of " + strconv.Itoa(p.Checked) + " devices backed up."
 	}
@@ -392,6 +420,21 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	if len(left) > 0 {
 		p.Totals += " " + upperFirst(strings.Join(left, ", ")) + "."
 	}
+	// The tiles are the totals line again, from the same variables: backed up and devices are its
+	// first two numbers, attention is its critical and warning device counts together (the device
+	// lines of the Critical and Warnings sections; a missing customer is not a device), paused is
+	// its "paused" count (zero when it lists none).
+	p.Tiles = []digestTile{
+		{N: backedUp, Label: "Backed up", Colour: "success"},
+		{N: critDevices + warn, Label: "Attention", Colour: attentionColour(critDevices, warn)},
+		{N: byState[state.StatePaused], Label: "Paused", Colour: "accent"},
+		{N: p.Checked, Label: "Devices", Colour: "text"},
+	}
+	for _, i := range []int{0, 2} {
+		if p.Tiles[i].N == 0 {
+			p.Tiles[i].Colour = "text" // a zero is not a state: no colour
+		}
+	}
 	var text, html bytes.Buffer
 	if err := digestTextTmpl.Execute(&text, p); err != nil {
 		return Content{}, err
@@ -399,5 +442,18 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 	if err := digestHTMLTmpl.Execute(&html, p); err != nil {
 		return Content{}, err
 	}
-	return Content{Kind: mail.KindDigest, Subject: "[CryoBackup] Backup digest " + p.Date + ": " + summary, Text: text.String(), HTML: html.String()}, nil
+	return Content{Kind: mail.KindDigest, Subject: "[CryoBackup] Backup digest " + p.Date + ": " + summary, Text: text.String(), HTML: html.String(),
+		Inline: markInline()}, nil
+}
+
+// attentionColour is the colour of the Attention tile's number: danger when a critical device is
+// counted, warning when only warnings are, the neutral text colour at zero.
+func attentionColour(critical, warnings int) string {
+	switch {
+	case critical > 0:
+		return "danger"
+	case warnings > 0:
+		return "warning"
+	}
+	return "text"
 }

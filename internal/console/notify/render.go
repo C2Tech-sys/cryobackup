@@ -32,17 +32,19 @@ type Options struct {
 	DigestDate string
 }
 
-// Content is one rendered message: the same for every recipient of a batch.
+// Content is one rendered message: the same for every recipient of a batch. Inline is the images
+// the HTML part shows by content id (the mark, P20-MD); they travel inside the message.
 type Content struct {
 	Kind    mail.Kind
 	Subject string
 	Text    string
 	HTML    string
+	Inline  []mail.Inline
 }
 
 // Message is c addressed to one recipient. From is left empty: the dispatcher fills it in.
 func (c Content) Message(to string) mail.Message {
-	return mail.Message{To: []string{to}, Subject: c.Subject, Text: c.Text, HTML: c.HTML, Kind: c.Kind}
+	return mail.Message{To: []string{to}, Subject: c.Subject, Text: c.Text, HTML: c.HTML, Kind: c.Kind, Inline: c.Inline}
 }
 
 // errNothingToRender is what a renderer returns for an empty batch: a message about nothing is a bug.
@@ -78,11 +80,16 @@ func rankOf(alarmType string) int {
 // classWord is the shape of an error class a message may show; anything else is left out.
 var classWord = regexp.MustCompile(`^[a-z0-9_]{1,40}$`)
 
-// The light colour tokens of replica/design/tokens.css. Messages use the light set only: mail
-// clients disagree on dark mode, and every colour is paired with a word.
+// The dark colour tokens of web/static/tokens.css (ADR 0022: the messages take the console's dark
+// look). Each value equals the dark token of that name; a soft token, which tokens.css gives as an
+// rgba colour, is that colour composited over "surface", because a mail client takes only a 6-digit
+// hex value in a bgcolor attribute. TestDarkTokensMatchTokensCSS fails when they drift. Every colour
+// is paired with a word: a client that recolours the message loses no meaning.
 var tokens = map[string]string{
-	"bg": "#F3F7FC", "surface": "#FFFFFF", "border": "#D5DFEE", "text": "#0E1A2E", "text-muted": "#4D5F7E",
-	"accent": "#0A6FAE", "danger": "#B42323", "warning": "#9A5A00", "success": "#13743F",
+	"bg": "#0B1220", "surface": "#121C30", "surface-raised": "#182642", "border": "#243656",
+	"text": "#E8F0FA", "text-muted": "#93A6C6", "accent": "#5CC9F5", "on-accent": "#06111F",
+	"danger": "#FF7A7A", "warning": "#F5B547", "success": "#48D597",
+	"accent-soft": "#1C344C", "danger-soft": "#33293A", "warning-soft": "#363434", "success-soft": "#1A363E",
 }
 
 func tok(name string) htmltemplate.CSS {
@@ -100,7 +107,7 @@ var htmlSource string
 
 var (
 	textTmpl = texttemplate.Must(texttemplate.New("text").Parse(textSource))
-	htmlTmpl = htmltemplate.Must(htmltemplate.New("html").Funcs(htmltemplate.FuncMap{"tok": tok}).Parse(htmlSource))
+	htmlTmpl = mdTemplate("html", htmlSource)
 )
 
 // line is one alarm of a message.
@@ -120,6 +127,10 @@ type group struct {
 	Lines    []line
 	missing  bool
 }
+
+// Muted is false: a suspended customer is never alerted. The shell's customer heading (shared with
+// the digest, whose groups carry the flag) asks for it.
+func (group) Muted() bool { return false }
 
 // page is what both templates render.
 type page struct {
@@ -233,7 +244,7 @@ func render(v state.FleetView, eps []store.Episode, o Options, recovery bool) (C
 	}
 	// The subject is counts only: fixed words and two numbers fit the sender's limit at any fleet size,
 	// and no customer or host name rides in a header.
-	return Content{Kind: kind, Subject: "[CryoBackup] " + p.Title, Text: text.String(), HTML: html.String()}, nil
+	return Content{Kind: kind, Subject: "[CryoBackup] " + p.Title, Text: text.String(), HTML: html.String(), Inline: markInline()}, nil
 }
 
 // when is t in the display zone with the zone named; "unknown" for a zero time.

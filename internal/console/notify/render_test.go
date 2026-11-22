@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -159,16 +160,63 @@ func TestRenderHTMLIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{"<script", "<img", "<style", " src=\"", "url(", "@import", "<link"} {
-		if strings.Contains(strings.ToLower(c.HTML), bad) {
-			t.Errorf("HTML contains %q", bad)
+	// P20-MD: the mark is the one image (inline, by content id) and the phone media query the one
+	// style block. Both are fixed markup of the shell: the rendered HTML must hold each exactly once
+	// and byte-equal to the template's, and only those exact bytes are taken out before the search.
+	fixedStyle := regexp.MustCompile(`(?s)<style>\n@media.*?</style>`).FindString(shellSource) // the block, not the comment that names it
+	fixedMark := strings.Replace(regexp.MustCompile(`<img src="\{\{markSrc\}\}"[^>]*>`).FindString(shellSource), "{{markSrc}}", "cid:"+MarkContentID, 1)
+	// FIX BATCH 2 M4: Outlook's document settings block in the head is fixed markup too.
+	fixedHead := string(msoHead)
+	if fixedStyle == "" || fixedMark == "" {
+		t.Fatal("the shell template has no style block or no mark tag")
+	}
+	problems := func(html string) []string {
+		var out []string
+		low := strings.ToLower(html)
+		if strings.Count(low, "<style") != 1 || strings.Count(html, fixedStyle) != 1 {
+			out = append(out, "not exactly one <style>, byte-equal to the shell's fixed block")
+		}
+		if strings.Count(low, "<img") != 1 || strings.Count(html, fixedMark) != 1 {
+			out = append(out, "not exactly one <img>, byte-equal to the shell's fixed mark tag")
+		}
+		if strings.Count(low, "<xml") != 1 || strings.Count(html, fixedHead) != 1 {
+			out = append(out, "not exactly one <xml>, byte-equal to the shell's fixed head block")
+		}
+		h := strings.ToLower(strings.Replace(strings.Replace(strings.Replace(html, fixedStyle, "", 1), fixedMark, "", 1), fixedHead, "", 1))
+		for _, bad := range []string{"<script", "<img", "<style", "<xml", " src=\"", "url(", "@import", "<link"} {
+			if strings.Contains(h, bad) {
+				out = append(out, "HTML contains "+bad)
+			}
+		}
+		return out
+	}
+	if p := problems(c.HTML); len(p) > 0 {
+		t.Errorf("the rendered alert: %v", p)
+	}
+	// The check is strict: an extra complete style block, a second copy of the fixed one, or a
+	// second image is caught.
+	for name, bad := range map[string]string{
+		"injected style block": strings.Replace(c.HTML, "</body>", "<style>p{color:red}</style></body>", 1),
+		"second fixed block":   strings.Replace(c.HTML, "</body>", fixedStyle+"</body>", 1),
+		"second mark":          strings.Replace(c.HTML, "</body>", fixedMark+"</body>", 1),
+		"second head block":    strings.Replace(c.HTML, "</body>", fixedHead+"</body>", 1),
+	} {
+		if len(problems(bad)) == 0 {
+			t.Errorf("%s passed the check", name)
 		}
 	}
 	if !strings.Contains(c.HTML, "&lt;script&gt;") || !strings.Contains(c.Text, "<script>") {
 		t.Fatalf("names not escaped in HTML or not kept in text")
 	}
-	if strings.Count(c.HTML, "href=") != 1 {
-		t.Fatalf("want exactly one link (the console), HTML:\n%s", c.HTML)
+	// FIX BATCH 4 O2: the console URL is linked once (the button); every absolute link is the console URL.
+	hrefs := regexp.MustCompile(`href="([^"]*)"`).FindAllStringSubmatch(c.HTML, -1)
+	if len(hrefs) != 1 || len(hrefs) != strings.Count(c.HTML, "href=") {
+		t.Fatalf("want exactly one console link, every href quoted, got %d, HTML:\n%s", len(hrefs), c.HTML)
+	}
+	for _, m := range hrefs {
+		if m[1] != "https://console.example.com/" {
+			t.Fatalf("a link to %q: every absolute href must be the console URL", m[1])
+		}
 	}
 }
 

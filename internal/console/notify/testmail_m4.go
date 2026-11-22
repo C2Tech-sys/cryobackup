@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"errors"
-	htmltemplate "html/template"
 	"strconv"
 	"sync"
 	"time"
@@ -221,39 +221,13 @@ func testMailKey(now time.Time) (string, error) {
 	return "test:" + strconv.FormatInt(now.UnixMilli(), 10) + ":" + hex.EncodeToString(b[:]), nil
 }
 
-// testMailHTML is the HTML part of the test message: inline styles only, no remote content, no image.
-var testMailHTML = htmltemplate.Must(htmltemplate.New("test").Funcs(htmltemplate.FuncMap{"tok": tok}).Parse(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
-<title>CryoBackup: test message</title>
-</head>
-<body style="margin:0;padding:0;background:{{tok "bg"}};color:{{tok "text"}};font-family:'IBM Plex Sans','Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.45;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{tok "bg"}};">
-<tr><td align="center" style="padding:20px;">
-<table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;background:{{tok "surface"}};border:1px solid {{tok "border"}};border-radius:8px;">
-<tr><td style="padding:16px 20px;border-bottom:1px solid {{tok "border"}};">
-<div style="font-weight:800;font-size:13px;letter-spacing:.12em;color:{{tok "text"}};">CRYOBACKUP</div>
-</td></tr>
-<tr><td style="padding:16px 20px 4px 20px;">
-<h1 style="margin:0;font-size:18px;font-weight:600;color:{{tok "text"}};"><span style="color:{{tok "success"}};">&#9679;</span> Test message</h1>
-</td></tr>
-<tr><td style="padding:12px 20px 16px 20px;">
-<p style="margin:0 0 8px 0;">This is a test message from the CryoBackup console, sent {{.When}}.</p>
-<p style="margin:0;">It shows that the console can deliver e-mail to this address through its relay. Nothing needs to be done.</p>
-</td></tr>
-<tr><td style="padding:12px 20px;border-top:1px solid {{tok "border"}};font-size:12px;color:{{tok "text-muted"}};">
-{{if .ConsoleURL}}<a href="{{.ConsoleURL}}" style="color:{{tok "accent"}};">Open the console</a>: {{.ConsoleURL}}<br>{{end}}
-You receive this because an administrator of the console asked for a test message to this address.
-</td></tr>
-</table>
-</td></tr>
-</table>
-</body>
-</html>
-`))
+// testMailSource is the HTML part of the test message (P20-MD: the console's dark look, the mark
+// as an inline image, no remote content).
+//
+//go:embed templates/test.html.tmpl
+var testMailSource string
+
+var testMailHTML = mdTemplate("test", testMailSource)
 
 // message is the test message to addr at now. It names no customer, host or path.
 func (t *TestMailer) message(now time.Time, addr string) mail.Message {
@@ -271,8 +245,11 @@ func (t *TestMailer) message(now time.Time, addr string) mail.Message {
 	}
 	text += "You receive this because an administrator of the console asked for a test message to this address.\n"
 	var html bytes.Buffer
+	var inline []mail.Inline
 	if err := testMailHTML.Execute(&html, page); err != nil {
 		html.Reset() // the text part alone is a complete message
+	} else {
+		inline = markInline()
 	}
-	return mail.Message{To: []string{addr}, Subject: "[CryoBackup] Test message", Text: text, HTML: html.String(), Kind: mail.KindTest}
+	return mail.Message{To: []string{addr}, Subject: "[CryoBackup] Test message", Text: text, HTML: html.String(), Kind: mail.KindTest, Inline: inline}
 }
