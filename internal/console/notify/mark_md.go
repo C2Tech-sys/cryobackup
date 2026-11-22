@@ -49,8 +49,10 @@ var styleBlock = regexp.MustCompile(`(?s)<style>.*?</style>\n?`)
 // mark's cid: link, which does not resolve in a browser, points at markURL (the console's own route
 // to the same embedded bytes), and the <style> block is left out, because the frame inherits the
 // console's Content-Security-Policy (style-src 'self'), which refuses an inline <style> element;
-// the inline style attributes that carry the look are allowed. Nothing else changes.
+// the inline style attributes that carry the look are allowed. Outlook's document settings in the
+// head (msoHead, exact bytes) go too: a browser has no use for them. Nothing else changes.
 func PreviewHTML(html, markURL string) string {
 	html = strings.ReplaceAll(html, markAttr, `src="`+htmltemplate.HTMLEscapeString(markURL)+`"`)
+	html = strings.Replace(html, string(msoHead)+"\n", "", 1)
 	return styleBlock.ReplaceAllString(html, "")
 }

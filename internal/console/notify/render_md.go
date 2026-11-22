@@ -42,6 +42,11 @@ type ctaData struct {
 const (
 	msoOpen  = htmltemplate.HTML(`<!--[if mso]><table role="presentation" width="640" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->`)
 	msoClose = htmltemplate.HTML(`<!--[if mso]></td></tr></table><![endif]-->`)
+	// msoHead is classic Outlook's document settings, in the head: PNG allowed, and 96 pixels per
+	// inch, the usual guard against Outlook scaling px values on a high-DPI display (Word's own
+	// render could not show that scaling, so it is a guard, not a proven fix). Browsers read it as
+	// a comment.
+	msoHead = htmltemplate.HTML(`<!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->`)
 )
 
 var mdFuncs = htmltemplate.FuncMap{
@@ -50,6 +55,7 @@ var mdFuncs = htmltemplate.FuncMap{
 	"markSrc":  markSrc,
 	"msoOpen":  func() htmltemplate.HTML { return msoOpen },
 	"msoClose": func() htmltemplate.HTML { return msoClose },
+	"msoHead":  func() htmltemplate.HTML { return msoHead },
 	"bar":      func(colour, text string) stripData { return stripData{colour, text} },
 	"chip":     func(colour, word string) chipData { return chipData{colour, word} },
 	"cta":      func(url string, sentence bool) ctaData { return ctaData{url, sentence} },

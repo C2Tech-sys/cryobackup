@@ -222,7 +222,8 @@ func TestNoMessageReferencesARemoteResource(t *testing.T) {
 				t.Errorf("%s: a link to %q", name, m[1])
 			}
 		}
-		if wantLink := !strings.Contains(name, "without a link"); (len(hrefs) == 1) != wantLink {
+		// FIX BATCH 2 M2: the button and the URL beside it both link the console.
+		if wantLink := !strings.Contains(name, "without a link"); (len(hrefs) > 0) != wantLink {
 			t.Errorf("%s: %d links", name, len(hrefs))
 		}
 		if rest := strings.ReplaceAll(low, mdURL, ""); strings.Contains(rest, "http:") || strings.Contains(rest, "https:") || strings.Contains(rest, `="//`) {
@@ -513,12 +514,12 @@ func TestPreviewHTMLPointsTheMarkAtTheRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := PreviewHTML(c.HTML, "/mail/mark")
-	if strings.Contains(p, "cid:") || !strings.Contains(p, `src="/mail/mark"`) || strings.Contains(p, "<style") {
-		t.Fatal("the preview still has the cid: link or the style block")
+	if strings.Contains(p, "cid:") || !strings.Contains(p, `src="/mail/mark"`) || strings.Contains(p, "<style") || strings.Contains(p, "<xml") {
+		t.Fatal("the preview still has the cid: link, the style block or Outlook's head block")
 	}
 	back := strings.Replace(p, `src="/mail/mark"`, markAttr, 1)
-	if back != styleBlock.ReplaceAllString(c.HTML, "") {
-		t.Fatal("the preview changed more than the mark's src and the style block")
+	if want := strings.Replace(styleBlock.ReplaceAllString(c.HTML, ""), string(msoHead)+"\n", "", 1); back != want {
+		t.Fatal("the preview changed more than the mark's src, the style block and Outlook's head block")
 	}
 	if q := PreviewHTML(c.HTML, `/x"onload="y`); strings.Contains(q, `"onload="`) {
 		t.Fatal("the route is not escaped")
