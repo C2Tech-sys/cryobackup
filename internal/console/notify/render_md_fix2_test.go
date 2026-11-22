@@ -9,7 +9,7 @@ import (
 
 // P20-MD fix batch 2: what classic Outlook (the Word engine) did to the samples on the operator's
 // machine. Vertical space sat in div padding, which Word ignores; the URL beside the button was left
-// as text, which Outlook auto-links in its own blue; the state chips were clipped.
+// as text, which Outlook auto-links in its own blue (fix batch 4 removed it); the state chips were clipped.
 
 // M1: no div or p carries padding or margin (Word ignores both); every block that needs room is a
 // row of the body table whose td carries it, in the rhythm the operator asked for.
@@ -54,30 +54,34 @@ func TestVerticalSpaceIsOnTableCells(t *testing.T) {
 	}
 }
 
-// M2: the URL beside the button is a link in the accent colour with no underline, set on the a and
-// on a span inside it (Outlook colours the span); no other address or URL is shown as text.
-func TestTheURLBesideTheButtonIsAnAccentLink(t *testing.T) {
-	acc := tokens["accent"]
-	link := regexp.MustCompile(`<a href="` + regexp.QuoteMeta(mdURL) + `" style="color:` + acc + `;text-decoration:none;[^"]*"><span style="color:` + acc + `;text-decoration:none;">` + regexp.QuoteMeta(mdURL) + `</span></a>`)
+// M2 (changed by fix batch 4): the console URL is not shown as text in any HTML part (Outlook
+// auto-links text in its own blue; the button is the link and the text part keeps the URL). It occurs
+// only inside the one href of the button, and no other address or URL is shown as text.
+func TestTheConsoleURLIsNotShownAsText(t *testing.T) {
+	tag := regexp.MustCompile(`<[^>]*>`)
 	for name, c := range mdRendered(t) {
 		h := c.HTML
-		withLink := !strings.Contains(name, "without a link")
-		if withLink && len(link.FindAllString(h, -1)) != 1 {
-			t.Errorf("%s: the URL beside the button is not one accent link with an accent span", name)
+		visible := tag.ReplaceAllString(h, "|")
+		if strings.Contains(visible, mdURL) {
+			t.Errorf("%s: the console URL is shown as text", name)
 		}
-		// Shown as text, the URL appears only inside that span.
-		visible := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(h, "\x00")
-		want := 0
-		if withLink {
-			want = 1
+		want := 1
+		if strings.Contains(name, "without a link") {
+			want = 0
 		}
-		if n := strings.Count(visible, mdURL); n != want {
-			t.Errorf("%s: the console URL is shown as text %d times, want %d", name, n, want)
+		if n := strings.Count(h, mdURL); n != want {
+			t.Errorf("%s: the console URL occurs %d times in the HTML, want %d (the button's href only)", name, n, want)
+		}
+		if n := len(regexp.MustCompile(`<a\s[^>]*href="`+regexp.QuoteMeta(mdURL)+`"`).FindAllString(h, -1)); n != want {
+			t.Errorf("%s: %d anchors to the console, want exactly %d", name, n, want)
+		}
+		if n := strings.Count(strings.ToLower(h), "<a "); n != want {
+			t.Errorf("%s: %d anchors, want %d", name, n, want)
 		}
 		plain := plainOf(h)
-		for _, auto := range []string{"@", "www.", "http:", "ftp:", "mailto:"} {
-			if strings.Contains(strings.ReplaceAll(plain, mdURL, ""), auto) {
-				t.Errorf("%s: text a mail client may auto-link (%q) outside the console link", name, auto)
+		for _, auto := range []string{"@", "www.", "http:", "https:", "ftp:", "mailto:"} {
+			if strings.Contains(plain, auto) {
+				t.Errorf("%s: text a mail client may auto-link (%q)", name, auto)
 			}
 		}
 	}

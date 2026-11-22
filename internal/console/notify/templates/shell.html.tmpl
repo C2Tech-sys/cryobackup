@@ -97,14 +97,12 @@ with any difference Word draws the row's top border of the two cells at differen
 {{/* A sentence of the body (the closing sentence, the totals): 18px above, 16px to the button. */}}
 {{define "md-sentence-open"}}<tr><td style="padding:18px 0 16px 0;{{template "sans"}}font-size:14px;line-height:20px;color:{{tok "text"}};">{{end}}
 
-{{/* The one button, with the URL beside it as a link in the accent colour (a URL left as text is
-auto-linked by Outlook in its own blue, underlined; Outlook colours the inner span); the no-link
-sentence when there is no URL. Its row leaves 20px below. The button stays a table cell (VML text
-is recoloured by Outlook's dark mode). */}}
+{{/* The one button (the console URL is not shown as text: the link is the button; the text part keeps
+the URL); the no-link sentence when there is no URL. Its row leaves 20px below. The button stays a
+table cell (VML text is recoloured by Outlook's dark mode). */}}
 {{define "md-cta"}}{{if .URL}}<tr><td style="padding:0 0 20px 0;">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0;"><tr>
 <td bgcolor="{{tok "accent"}}" nowrap style="background:{{tok "accent"}};border-radius:6px;{{template "sans"}}padding:9px 16px;mso-padding-alt:9px 16px;white-space:nowrap;"><a href="{{.URL}}" style="color:{{tok "on-accent"}};{{template "sans"}}font-weight:700;font-size:13px;line-height:18px;text-decoration:none;display:inline-block;white-space:nowrap;">Open the console</a></td>
-<td style="padding:0 0 0 10px;{{template "mono"}}font-size:11px;line-height:16px;word-break:break-all;"><a href="{{.URL}}" style="color:{{tok "accent"}};text-decoration:none;{{template "mono"}}"><span style="color:{{tok "accent"}};text-decoration:none;">{{.URL}}</span></a></td>
 </tr></table>
 </td></tr>
 {{else if .Sentence}}<tr><td style="padding:0 0 20px 0;{{template "sans"}}font-size:13px;line-height:18px;color:{{tok "text-muted"}};">Open the console to see the details.</td></tr>

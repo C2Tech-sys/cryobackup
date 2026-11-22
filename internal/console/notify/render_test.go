@@ -208,11 +208,10 @@ func TestRenderHTMLIsSafe(t *testing.T) {
 	if !strings.Contains(c.HTML, "&lt;script&gt;") || !strings.Contains(c.Text, "<script>") {
 		t.Fatalf("names not escaped in HTML or not kept in text")
 	}
-	// FIX BATCH 2 M2: the console URL is linked twice (the button and the URL beside it); every
-	// absolute link is the console URL.
+	// FIX BATCH 4 O2: the console URL is linked once (the button); every absolute link is the console URL.
 	hrefs := regexp.MustCompile(`href="([^"]*)"`).FindAllStringSubmatch(c.HTML, -1)
-	if len(hrefs) == 0 || len(hrefs) != strings.Count(c.HTML, "href=") {
-		t.Fatalf("want the console linked, every href quoted, HTML:\n%s", c.HTML)
+	if len(hrefs) != 1 || len(hrefs) != strings.Count(c.HTML, "href=") {
+		t.Fatalf("want exactly one console link, every href quoted, got %d, HTML:\n%s", len(hrefs), c.HTML)
 	}
 	for _, m := range hrefs {
 		if m[1] != "https://console.example.com/" {

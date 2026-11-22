@@ -222,9 +222,13 @@ func TestNoMessageReferencesARemoteResource(t *testing.T) {
 				t.Errorf("%s: a link to %q", name, m[1])
 			}
 		}
-		// FIX BATCH 2 M2: the button and the URL beside it both link the console.
-		if wantLink := !strings.Contains(name, "without a link"); (len(hrefs) > 0) != wantLink {
-			t.Errorf("%s: %d links", name, len(hrefs))
+		// FIX BATCH 4 O2: the button is the one link (the URL is not shown beside it).
+		wantLinks := 1
+		if strings.Contains(name, "without a link") {
+			wantLinks = 0
+		}
+		if len(hrefs) != wantLinks {
+			t.Errorf("%s: %d links, want %d", name, len(hrefs), wantLinks)
 		}
 		if rest := strings.ReplaceAll(low, mdURL, ""); strings.Contains(rest, "http:") || strings.Contains(rest, "https:") || strings.Contains(rest, `="//`) {
 			t.Errorf("%s: an absolute URL other than the console's", name)
@@ -336,7 +340,8 @@ func TestEveryFactOfTheTextPartIsInTheHTML(t *testing.T) {
 			words[trim(w)] = true
 		}
 		for _, w := range strings.Fields(c.Text) {
-			if tw := trim(w); tw != "" && !words[tw] {
+			// FIX BATCH 4 O1: the console URL is the button's href only, not text of the HTML part.
+			if tw := trim(w); tw != "" && !words[tw] && w != mdURL {
 				t.Errorf("%s: the word %q of the text part is not in the HTML", name, w)
 			}
 		}
@@ -372,7 +377,7 @@ func TestEveryFactOfTheTextPartIsInTheHTML(t *testing.T) {
 			wants = append(wants, tm)
 		}
 		if strings.Contains(c.Text, "Open the console: ") {
-			wants = append(wants, "Open the console "+mdURL)
+			wants = append(wants, "Open the console")
 		}
 		if len(wants) < 3 {
 			t.Errorf("%s: only %d whole facts found in the text part: the test proves little", name, len(wants))
