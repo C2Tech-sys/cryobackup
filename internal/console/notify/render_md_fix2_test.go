@@ -27,7 +27,7 @@ func TestVerticalSpaceIsOnTableCells(t *testing.T) {
 		switch {
 		case strings.HasPrefix(name, "digest"):
 			wants = []string{`<td style="padding:18px 0 8px 0;[^"]*">Fleet</td>`, `<td style="padding:18px 0 8px 0;[^"]*">Console</td>`,
-				`<td style="padding:18px 0 16px 0;[^"]*"><span style="font-weight:600;">Totals:</span>`}
+				`<td style="padding:18px 0 16px 0;[^"]*"><span style="font-weight:600;[^"]*">Totals:</span>`}
 		case strings.HasPrefix(name, "alert"):
 			wants = []string{`<td style="padding:18px 0 8px 0;[^"]*">Alert</td>`, `<td style="padding:14px 0 6px 0;[^"]*">Summit Eye Care</td>`,
 				`<td style="padding:18px 0 16px 0;[^"]*">Each alarm is mailed once`}

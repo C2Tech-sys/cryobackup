@@ -1,5 +1,5 @@
-{{template "md-open" "CryoBackup: test message"}}{{template "md-top" (print "sent " .When)}}{{template "md-strip" (bar "success" "Test message")}}{{template "md-body-open"}}<tr><td style="padding:14px 0 8px 0;font-size:14px;line-height:20px;color:{{tok "text"}};">This is a test message from the CryoBackup console, sent {{.When}}.</td></tr>
-<tr><td style="padding:0 0 {{if .ConsoleURL}}16px{{else}}20px{{end}} 0;font-size:14px;line-height:20px;color:{{tok "text"}};">It shows that the console can deliver e-mail to this address through its relay. Nothing needs to be done.</td></tr>
+{{template "md-open" "CryoBackup: test message"}}{{template "md-top" (print "sent " .When)}}{{template "md-strip" (bar "success" "Test message")}}{{template "md-body-open"}}<tr><td style="padding:14px 0 8px 0;{{template "sans"}}font-size:14px;line-height:20px;color:{{tok "text"}};">This is a test message from the CryoBackup console, sent {{.When}}.</td></tr>
+<tr><td style="padding:0 0 {{if .ConsoleURL}}16px{{else}}20px{{end}} 0;{{template "sans"}}font-size:14px;line-height:20px;color:{{tok "text"}};">It shows that the console can deliver e-mail to this address through its relay. Nothing needs to be done.</td></tr>
 {{if .ConsoleURL}}{{template "md-cta" (cta .ConsoleURL false)}}{{end}}{{template "md-body-close"}}{{template "md-foot-open"}}You receive this because an administrator of the console asked for a test message to this address.
 </td></tr>
 {{template "md-close"}}

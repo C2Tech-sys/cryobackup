@@ -1,7 +1,7 @@
 {{template "md-open" (print "CryoBackup daily digest, " .Date)}}{{template "md-top" (print "daily digest, " .Date " · polled " .Polled)}}{{template "md-strip" (bar .Level .Title)}}{{template "md-body-open"}}{{template "md-label" "Fleet"}}<tr><td style="padding:0;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
 {{range $i, $t := .Tiles}}<td class="cb-tile" width="25%" valign="top" style="width:25%;padding:0 {{if lt $i 3}}4px{{else}}0{{end}} 0 {{if $i}}4px{{else}}0{{end}};">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{{tok "surface-raised"}}" style="background:{{tok "surface-raised"}};border:1px solid {{tok "border"}};border-collapse:separate;border-radius:8px;"><tr><td style="padding:10px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{{tok "surface-raised"}}" style="background:{{tok "surface-raised"}};border:1px solid {{tok "border"}};border-collapse:separate;border-radius:8px;"><tr><td style="padding:10px 12px;{{template "sans"}}">
 <div style="font-size:22px;line-height:26px;font-weight:700;color:{{tok $t.Colour}};">{{$t.N}}</div>
 <div style="font-size:10.5px;line-height:14px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:{{tok "text-muted"}};">{{$t.Label}}</div>
 </td></tr></table>
@@ -9,17 +9,17 @@
 {{end}}</tr></table>
 </td></tr>
 {{template "md-label" "Console"}}{{template "md-rows"}}{{if .Banners}}{{range $i, $b := .Banners}}<tr>{{template "md-chip-cell" $i}}{{template "md-chip" (chip $b.Colour $b.Word)}}</td>
-<td valign="top" style="padding:9px 12px;font-size:13px;line-height:18px;color:{{tok "text"}};{{if $i}}border-top:1px solid {{tok "border"}};{{end}}">{{$b.Text}}</td></tr>
+<td valign="top" style="padding:9px 12px;{{template "sans"}}font-size:13px;line-height:18px;color:{{tok "text"}};{{if $i}}border-top:1px solid {{tok "border"}};{{end}}">{{$b.Text}}</td></tr>
 {{end}}{{else}}<tr>{{template "md-chip-cell" 0}}{{template "md-chip" (chip "success" "OK")}}</td>
-<td valign="top" style="padding:9px 12px;font-size:13px;line-height:18px;color:{{tok "text"}};">No console condition: every self-check passes.</td></tr>
+<td valign="top" style="padding:9px 12px;{{template "sans"}}font-size:13px;line-height:18px;color:{{tok "text"}};">No console condition: every self-check passes.</td></tr>
 {{end}}{{template "md-rows-close"}}{{range .Sections}}{{template "md-label" .Title}}{{if .Groups}}{{range .Groups}}{{template "md-customer" .}}{{template "md-rows"}}{{range $i, $l := .Lines}}<tr>{{template "md-chip-cell" $i}}{{template "md-chip" (chip $l.Colour $l.State)}}</td>
-<td valign="top" style="padding:9px 12px;{{if $i}}border-top:1px solid {{tok "border"}};{{end}}"><div style="font-size:13px;line-height:18px;color:{{tok "text"}};">{{if $l.Host}}<span style="font-family:Consolas,'Courier New',monospace;font-weight:600;">{{$l.Host}}</span>{{else}}no active device{{end}}{{if $l.Ack}} <span style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:{{tok "text-muted"}};border:1px solid {{tok "border"}};border-radius:4px;padding:1px 5px;white-space:nowrap;">{{$l.Ack}}</span>{{end}}</div>
+<td valign="top" style="padding:9px 12px;{{template "sans"}}{{if $i}}border-top:1px solid {{tok "border"}};{{end}}"><div style="font-size:13px;line-height:18px;color:{{tok "text"}};">{{if $l.Host}}<span style="{{template "mono"}}font-weight:600;">{{$l.Host}}</span>{{else}}no active device{{end}}{{if $l.Ack}} <span style="{{template "sans"}}font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:{{tok "text-muted"}};border:1px solid {{tok "border"}};border-radius:4px;padding:1px 5px;white-space:nowrap;">{{$l.Ack}}</span>{{end}}</div>
 {{if or $l.Since $l.Also $l.Indefinite}}<div style="font-size:12px;line-height:18px;color:{{tok "text-muted"}};">{{if $l.Since}}since {{$l.Since}}{{end}}{{if $l.Indefinite}}; paused with no end date{{end}}{{if $l.Also}}; also {{$l.Also}}{{end}}</div>
 {{end}}</td></tr>
 {{end}}{{template "md-rows-close"}}{{end}}{{else}}<tr><td style="padding:0;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed {{tok "border"}};border-collapse:separate;border-radius:8px;"><tr><td style="padding:9px 12px;font-size:12px;line-height:18px;color:{{tok "text-muted"}};">None. {{$.CheckedAs}} checked.</td></tr></table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed {{tok "border"}};border-collapse:separate;border-radius:8px;"><tr><td style="padding:9px 12px;{{template "sans"}}font-size:12px;line-height:18px;color:{{tok "text-muted"}};">None. {{$.CheckedAs}} checked.</td></tr></table>
 </td></tr>
-{{end}}{{end}}{{template "md-sentence-open"}}<span style="font-weight:600;">Totals:</span> {{.Totals}}</td></tr>
+{{end}}{{end}}{{template "md-sentence-open"}}<span style="font-weight:600;{{template "sans"}}">Totals:</span> {{.Totals}}</td></tr>
 {{template "md-cta" (cta .ConsoleURL true)}}{{template "md-body-close"}}{{template "md-foot-open"}}This digest is sent every day, also when everything is green: a day without it means the console or its mail has stopped.<br>
 You receive this because this address receives the CryoBackup daily digest.
 </td></tr>
