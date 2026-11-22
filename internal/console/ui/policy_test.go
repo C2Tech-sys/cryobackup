@@ -96,6 +96,7 @@ func (e *env) newTemplate(name string, sec map[string]string) store.PolicyRecord
 // ---- tests ----
 
 func TestW2APagesRenderInFixturesMode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	def, summit := e.policyIDs()
@@ -150,6 +151,7 @@ func TestW2APagesRenderInFixturesMode(t *testing.T) {
 }
 
 func TestW2AEditorGrammarErrorsSurfaceOnTheForm(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	_, summit := e.policyIDs()
@@ -187,6 +189,7 @@ func TestW2AEditorGrammarErrorsSurfaceOnTheForm(t *testing.T) {
 }
 
 func TestW2APreviewShowsTheBlastRadiusThenSavesExactlyIt(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	_, summit := e.policyIDs()
@@ -261,6 +264,7 @@ func TestW2APreviewShowsTheBlastRadiusThenSavesExactlyIt(t *testing.T) {
 }
 
 func TestW2ADefaultEditPreviewReachesEveryCustomer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	def, _ := e.policyIDs()
@@ -280,6 +284,7 @@ func TestW2ADefaultEditPreviewReachesEveryCustomer(t *testing.T) {
 }
 
 func TestW2ANewPolicyAndDelete(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	north := e.customerID("Northwind Dental")
@@ -355,6 +360,7 @@ func (e *env) assignThroughUI(customerID, policyID string) {
 }
 
 func TestW2ACustomerPolicyTabAssignsWithTheBlastRadiusFirst(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	north := e.customerID("Northwind Dental")
@@ -396,6 +402,7 @@ func TestW2ACustomerPolicyTabAssignsWithTheBlastRadiusFirst(t *testing.T) {
 }
 
 func TestW2AOversizedPostsAreRefusedBeforeAnythingIsParsed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	before := e.auditTotal()
@@ -430,6 +437,7 @@ func TestW2AOversizedPostsAreRefusedBeforeAnythingIsParsed(t *testing.T) {
 }
 
 func TestW2AWindowValidatorIsRateLimitedPerSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	limited := 0
@@ -453,6 +461,7 @@ func TestW2AWindowValidatorIsRateLimitedPerSession(t *testing.T) {
 }
 
 func TestW2AUnchangedFormIsNothingToSaveAndKeepsPins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	tpl := e.newTemplate("Pinned", map[string]string{"sla": `{"stale_after_hours":72}`}) // equal to the default's own value
@@ -484,6 +493,7 @@ func TestW2AUnchangedFormIsNothingToSaveAndKeepsPins(t *testing.T) {
 }
 
 func TestW2ABrokenPolicyIsAnAlarmNotADeadEnd(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	_, summit := e.policyIDs()
@@ -515,6 +525,7 @@ func TestW2ABrokenPolicyIsAnAlarmNotADeadEnd(t *testing.T) {
 }
 
 func TestW2ACustomerSettingsFormCannotAssignAPolicy(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	harbor := e.customerID("Harbor Family Practice")
@@ -552,6 +563,7 @@ func TestW2ACustomerSettingsFormCannotAssignAPolicy(t *testing.T) {
 }
 
 func TestW2ADeviceOverrideThroughTheUI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	dev := e.dev["FRONTDESK-01"]
@@ -618,6 +630,7 @@ func TestW2ADeviceOverrideThroughTheUI(t *testing.T) {
 }
 
 func TestW2ARoleGating(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	def, summit := e.policyIDs()
 	custSummit := e.customerID("Summit Eye Care")
@@ -703,6 +716,7 @@ func TestW2ARoleGating(t *testing.T) {
 }
 
 func TestW2AScopedAccountsNeverSeeOrChangeAnotherCustomersPolicy(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	north, summit := e.customerID("Northwind Dental"), e.customerID("Summit Eye Care")
 	_, summitPol := e.policyIDs()
@@ -755,6 +769,7 @@ func TestW2AScopedAccountsNeverSeeOrChangeAnotherCustomersPolicy(t *testing.T) {
 }
 
 func TestW2AWindowValidatorReturnsTheParsersReading(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	res, body := e.post("/ui/policy/window/validate", url.Values{"f.schedule.window": {"Mon-Fri/8-18;Sat,Sun/0-24"}}, true)
@@ -775,6 +790,7 @@ func TestW2AWindowValidatorReturnsTheParsersReading(t *testing.T) {
 }
 
 func TestW2AEffectiveViewLabelsTheSourceOfEveryField(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	page := e.page("/devices/"+e.dev["DR-OFFICE-PC"]+"/policy", 200)
@@ -799,6 +815,7 @@ func TestW2AEffectiveViewLabelsTheSourceOfEveryField(t *testing.T) {
 }
 
 func TestW2ANavHasPolicies(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	mustContain(t, "board nav", e.page("/", 200), `href="/policies"`)

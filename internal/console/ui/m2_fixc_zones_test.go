@@ -30,6 +30,7 @@ func selectedOptions(sel string) []string {
 }
 
 func TestFixCZoneListIsValidAndCoversTheStoreList(t *testing.T) {
+	t.Parallel()
 	seen := map[string]bool{}
 	for _, n := range zoneNames() {
 		if seen[n] {
@@ -52,6 +53,7 @@ func TestFixCZoneListIsValidAndCoversTheStoreList(t *testing.T) {
 }
 
 func TestFixCZoneGroupsKeepTheCurrentValue(t *testing.T) {
+	t.Parallel()
 	count := func(gs []ZoneGroup, v string) (n, sel int) {
 		for _, g := range gs {
 			for _, o := range g.Options {
@@ -80,6 +82,7 @@ func TestFixCZoneGroupsKeepTheCurrentValue(t *testing.T) {
 }
 
 func TestFixCSettingsZoneIsASelect(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	body := e.page("/settings", 200)
@@ -106,6 +109,7 @@ func TestFixCSettingsZoneIsASelect(t *testing.T) {
 }
 
 func TestFixCCustomerFormZoneIsASelect(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	body := e.page("/ui/customers/new", 200)

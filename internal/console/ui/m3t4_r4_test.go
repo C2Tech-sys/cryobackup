@@ -22,6 +22,7 @@ func r4Row(t *testing.T, body, id string) string {
 // MEDIUM-1 on S36: a row of a job this process does not run reads as what it is. The maintenance
 // scheduler is unregistered here too, but it is alive in another process: its real result stays.
 func TestR4AnUnregisteredJobRowReadsNoLongerScheduled(t *testing.T) { // r4 M1
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	last := e.now.Add(-48 * 3600 * 1e9)
@@ -54,6 +55,7 @@ func TestR4AnUnregisteredJobRowReadsNoLongerScheduled(t *testing.T) { // r4 M1
 
 // LOW 5: on a console that has never enrolled a device, OK does not stand alone.
 func TestR4ANeverEnrolledConsoleSaysSoInTheOverallLine(t *testing.T) { // r4 low 5
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	e.canned(map[string]any{

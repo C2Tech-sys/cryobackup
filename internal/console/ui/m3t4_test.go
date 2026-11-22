@@ -48,6 +48,7 @@ func (e *env) m3Pages() map[string]string {
 // ---- rendering, banners, states ----
 
 func TestM3T4PagesRenderInFixturesMode(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -72,6 +73,7 @@ func TestM3T4PagesRenderInFixturesMode(t *testing.T) {
 // warnings, C11 critical) shows on every page that has the strip, each under its
 // own label rather than "CONDITION C01b".
 func TestM3T4EveryBannerShowsOnEveryPage(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.svc.Fleet.Extra = func(now time.Time) []state.Banner { return allBanners(now) }
 	e.login()
@@ -108,6 +110,7 @@ func TestM3T4EveryBannerShowsOnEveryPage(t *testing.T) {
 // The MISSING customer is on each page that can show a customer: the activity
 // grid says it is an alarm, its Runs tab says nobody is there to run.
 func TestM3T4TheMissingCustomerIsAnAlarmWhereItShows(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	blue := e.customerID("Blue Ridge Accounting")
@@ -126,6 +129,7 @@ func TestM3T4TheMissingCustomerIsAnAlarmWhereItShows(t *testing.T) {
 
 // Every outcome chip of components 3.2 on the run list, and the open run as RUNNING.
 func TestM3T4S21EveryOutcomeChip(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -141,6 +145,7 @@ func TestM3T4S21EveryOutcomeChip(t *testing.T) {
 // ---- scope and roles ----
 
 func TestM3T4ScopedAccountSeesOnlyItsCustomer(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -174,6 +179,7 @@ func TestM3T4ScopedAccountSeesOnlyItsCustomer(t *testing.T) {
 }
 
 func TestM3T4RoleGates(t *testing.T) {
+	t.Parallel()
 	e, jobs := newM3Env(t)
 	e.login()
 	pages := e.m3Pages()
@@ -220,6 +226,7 @@ func TestM3T4RoleGates(t *testing.T) {
 // ---- S21 / S22 / S16 ----
 
 func TestM3T4S21ClauseBuilderPagerAndAgreementWithTheAPI(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -311,6 +318,7 @@ func firstRun(body string) string {
 
 // S21 and S22 never print a file name or a path, whatever a run carries.
 func TestM3T4RunPagesAreFreeOfPaths(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -349,6 +357,7 @@ func TestM3T4RunPagesAreFreeOfPaths(t *testing.T) {
 }
 
 func TestM3T4S22RunDetailNumbersAndClasses(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -380,6 +389,7 @@ func sysRows(body string) (ids, words []string) {
 // S36 shows the API's verdict, row for row, and reads NOT CHECKED, never OK,
 // where the console has no evidence.
 func TestM3T4S36AgreesWithTheAPIAndNeverSaysOKWithoutEvidence(t *testing.T) {
+	t.Parallel()
 	for _, withBanners := range []bool{false, true} {
 		e, _ := newM3Env(t)
 		if withBanners {
@@ -431,6 +441,7 @@ func TestM3T4S36AgreesWithTheAPIAndNeverSaysOKWithoutEvidence(t *testing.T) {
 // When the console cannot read its own health, no component is shown, so none
 // can be shown as OK; the page says it is an alarm.
 func TestM3T4S36UnreadableHealthIsAnAlarm(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	// A private API that refuses the health read.
@@ -447,6 +458,7 @@ func TestM3T4S36UnreadableHealthIsAnAlarm(t *testing.T) {
 
 // An unreadable run list is an alarm panel with no rows, never an empty list.
 func TestM3T4S21UnreadableRunListIsAnAlarm(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	mux := http.NewServeMux()
@@ -467,6 +479,7 @@ func TestM3T4S21UnreadableRunListIsAnAlarm(t *testing.T) {
 // ---- Run now ----
 
 func TestM3T4RunNowAuditsOnceAndARefusedAuditStartsNothing(t *testing.T) {
+	// Serial (P21-T1): it watches a 300 ms window for a job that must not start, so it runs alone, as it always did.
 	e, jobs := newM3Env(t)
 	e.login()
 	body := e.page("/system", 200)
@@ -523,6 +536,7 @@ func TestM3T4RunNowAuditsOnceAndARefusedAuditStartsNothing(t *testing.T) {
 
 // Without a job runner "Run now" is not offered and says why; a forged POST is refused.
 func TestM3T4RunNowWithoutARunnerIsRefusedAndSaysSo(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t) // no Jobs on the UI service, and not fixtures mode (fixtures mode brings its own fictional jobs)
 	e.svc.Fixtures = false
 	e.login()
@@ -545,6 +559,7 @@ func TestM3T4RunNowWithoutARunnerIsRefusedAndSaysSo(t *testing.T) {
 var devRowRE = regexp.MustCompile(`<tr id="dev-([0-9A-Za-z]+)" class="dev">`)
 
 func TestM3T4OverdueAgreesWithTheAPI(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	var api adminapi.FleetOverdueResponse
@@ -587,6 +602,7 @@ func TestM3T4OverdueAgreesWithTheAPI(t *testing.T) {
 }
 
 func TestM3T4EmptyListsAreAlarmsWhenThereIsNothingToCheckOrOnlyPartData(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	e.signInAs("empty-scope", "read_only", []string{"no-such-customer"})
@@ -631,6 +647,7 @@ func TestM3T4EmptyListsAreAlarmsWhenThereIsNothingToCheckOrOnlyPartData(t *testi
 }
 
 func TestM3T4UnseenCollapsesACustomersSilenceToOneRow(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	// Before: one unseen device, listed on its own.
@@ -677,6 +694,7 @@ var (
 )
 
 func TestM3T4ActivityGridMatchesTheAPI(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -755,6 +773,7 @@ var (
 // name, the day grid has exactly ten day columns of ten blocks, and nothing sets
 // a pixel width inline.
 func TestM3T4RenderedLayout(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -827,6 +846,7 @@ func TestM3T4RenderedLayout(t *testing.T) {
 // ---- units ----
 
 func TestM3T4ParseRunQuery(t *testing.T) {
+	t.Parallel()
 	q, bad := parseRunQuery(url.Values{"status": {"failed", "failed", "partial"}, "kind": {"backup"}, "from": {"2026-10-01"}, "to": {""}, "size": {"25"}, "page": {"2"}, "add": {"customer:abc"}})
 	if len(bad) != 0 {
 		t.Fatalf("bad: %v", bad)
@@ -861,6 +881,7 @@ func TestM3T4ParseRunQuery(t *testing.T) {
 // What an agent supplies is allow-listed, not merely scrubbed: a bare file name is
 // "(withheld)" wherever a known set or a version shape applies.
 func TestM3T4AgentTextIsAllowListed(t *testing.T) {
+	t.Parallel()
 	names := []string{"secret-payroll.xlsx", "Patient_Chart.docx", "John Smith MRI.pdf", "payroll", `C:\x`, "/etc/x", `\\srv\x`, "", "file.docx\x00", "x/y"}
 	for _, bad := range names {
 		for fn, f := range map[string]func(string) string{"class": safeClass, "deferred": safeDeferred, "kind": safeKind, "trigger": safeTrigger, "origin": safeOrigin, "os": safeOS, "commit": safeCommit, "date": safeBuildDate} {
@@ -919,6 +940,7 @@ func TestM3T4AgentTextIsAllowListed(t *testing.T) {
 }
 
 func TestM3T4PageInfoAndSystemStatusChips(t *testing.T) {
+	t.Parallel()
 	if i := m3PageInfo(120, 3, 50); i.From != 101 || i.To != 120 || i.Pages != 3 || i.Clamped {
 		t.Errorf("%+v", i)
 	}

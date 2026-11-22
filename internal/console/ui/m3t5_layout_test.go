@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"html"
 	"net/url"
 	"os"
@@ -130,12 +130,17 @@ window.addEventListener('load', function () {
 	// Headless Chrome will not open a window narrower than about 500 px (and reports a few px less than asked
 	// at any width), so the page is laid out in an iframe of exactly W x H: the iframe's viewport IS W x H, so
 	// the media queries, position: fixed and innerWidth/innerHeight are those of a W x H screen. srcdoc keeps it
-	// same-origin with the wrapper, which hands the probe's answer out.
+	// same-origin with the wrapper, which hands the probe's answer out. The frame's load event, which runs the
+	// probe, comes before the wrapper's, so the answer is normally there at once; the wrapper looks for it every
+	// 50 ms for up to 800 ms (the fixed 800 ms wait it replaces) before it reports that the probe did not run.
 	wrapper := `<!doctype html><html><body style="margin:0;background:#888"><iframe id="f" style="border:0;display:block;width:` + strconv.Itoa(o.W) + `px;height:` + strconv.Itoa(o.H) +
 		`px" srcdoc="` + html.EscapeString(page) + `"></iframe><script>
-window.addEventListener('load', function () { setTimeout(function () {
-  var r = document.getElementById('f').contentDocument.getElementById('__r'), pre = document.createElement('pre'); pre.id = '__r';
-  pre.textContent = r ? r.textContent : '{"error":"the probe did not run"}'; document.body.appendChild(pre); }, 800); });
+window.addEventListener('load', function () { var tries = 0; (function look() {
+  var r = document.getElementById('f').contentDocument.getElementById('__r');
+  if (!r && ++tries <= 16) { setTimeout(look, 50); return; }
+  var pre = document.createElement('pre'); pre.id = '__r';
+  pre.textContent = r ? r.textContent : '{"error":"the probe did not run"}'; document.body.appendChild(pre);
+  if (parent !== window) parent.postMessage(pre.textContent, '*'); })(); });
 </script></body></html>`
 	file := filepath.Join(dir, "page.html")
 	if err := os.WriteFile(file, []byte(wrapper), 0o644); err != nil {
@@ -144,23 +149,25 @@ window.addEventListener('load', function () { setTimeout(function () {
 	if keep := os.Getenv("CRYO_LAYOUT_KEEP"); keep != "" { // to look at what the browser was given: the page and its static/ files
 		_ = os.CopyFS(filepath.Join(keep, strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())+"_"+strconv.Itoa(o.W)), os.DirFS(dir))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) // a hung browser must not burn the package's limit
-	defer cancel()
-	out, err := exec.CommandContext(ctx, chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars", "--window-size="+strconv.Itoa(o.W+300)+","+strconv.Itoa(o.H+300),
-		"--user-data-dir="+filepath.Join(dir, "profile"), "--virtual-time-budget=6000", "--dump-dom", "file:///"+filepath.ToSlash(file)).Output()
-	if err != nil {
+	// The package's one browser (layout_browser_test.go) lays the wrapper out in a frame of the size the
+	// separate window used to have, and hands back the text of the wrapper's <pre id="__r">.
+	b, err := sharedLayoutBrowser(chrome)
+	var out string
+	if err == nil {
+		out, err = b.run(dir, o.W+300, o.H+300, 2*time.Minute) // a hung browser must not burn the package's limit
+	}
+	if err != nil && !errors.Is(err, errNoAnswer) {
 		if os.Getenv("CI") != "" {
 			t.Fatalf("CI is set and the browser would not run (%v)", err)
 		}
 		t.Skipf("the browser would not run here (%v)", err)
 	}
-	m := regexp.MustCompile(`(?s)<pre id="__r">(.*?)</pre>`).FindSubmatch(out)
-	if m == nil {
-		t.Fatalf("the probe produced no result: %.300s", out)
+	if err != nil || out == "" {
+		t.Fatalf("the probe produced no result (%v)", err)
 	}
 	var res map[string]float64
-	if err := json.Unmarshal([]byte(html.UnescapeString(string(m[1]))), &res); err != nil {
-		t.Fatalf("probe result %q: %v", m[1], err)
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("probe result %q: %v", out, err)
 	}
 	if w := res["iw"]; w != 0 && int(w) != o.W {
 		t.Fatalf("the window is %v px wide, not the %d asked for: the measurement would not be at the real viewport", w, o.W)
@@ -189,6 +196,7 @@ func (e *env) allBannersOn(t *testing.T) {
 }
 
 func TestM3T5C_F8_TheBannerStripScrollsWithThePage(t *testing.T) {
+	// Serial (P21-T1): it turns on fixtures.SetAllBanners, a process-wide switch, so it never runs beside the parallel tests.
 	e := newEnv(t)
 	e.login()
 	e.allBannersOn(t)
@@ -221,6 +229,7 @@ var a = fields[0].querySelector('.input').getBoundingClientRect(), b = fields[1]
 return {first: a.top, second: b.top, heightA: fields[0].getBoundingClientRect().height, heightB: fields[1].getBoundingClientRect().height};`
 
 func TestM3T5C_F2_FormRowFieldsStartOnTheSameLine(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	css := e.appCSS(t)
@@ -254,6 +263,7 @@ var b = document.getElementById('board'); var n = b.cloneNode(true); b.replaceWi
 out.afterUpdate = visible(); return out;`
 
 func TestM3T5M2_VisibleRowsEqualTheCountInARealBrowser(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	css := e.appCSS(t)
@@ -289,6 +299,7 @@ out.btnReachable = (inView(b) && b.top >= p.top - 0.5 && b.bottom <= p.bottom + 
 return out;`
 
 func TestM3T5M3_ThePhoneViewsPopoverKeepsItsSaveButtonInTheViewport(t *testing.T) {
+	// Serial (P21-T1): it turns on fixtures.SetAllBanners, a process-wide switch, so it never runs beside the parallel tests.
 	e := newEnv(t)
 	e.login()
 	e.allBannersOn(t) // the worst case: three critical banners and the folded warnings above the control
@@ -335,6 +346,7 @@ return {iw: innerWidth, sw: document.documentElement.scrollWidth, headH: t.query
   sideBySide: (Math.abs(tops[0] - tops[1]) < 2 && lefts[1] > lefts[0]) ? 1 : 0, labelled: /Changed by/.test(lab) ? 1 : 0, cardW: rows[0].getBoundingClientRect().width};`
 
 func TestM3T5L4_Ruling3_TheRevisionsTableIsACardListOnAPhone(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	path := e.revisionsPage(t)
 	css := e.appCSS(t)
@@ -367,6 +379,7 @@ out.popLinks = out.moreVisible ? links : 0; out.popInside = (!out.moreVisible ||
 return out;`
 
 func TestM3T5L4_Ruling4_PhoneDeviceTabsHaveAMoreTab(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	css := e.appCSS(t)
@@ -395,6 +408,7 @@ for (var i = 0; i < dts.length; i++) { var a = dts[i].getBoundingClientRect(), b
 return {iw: innerWidth, n: dts.length, labelsAbove: ok};`
 
 func TestM3T5L4_Ruling5_ReviewLabelsSitAboveTheirValues(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	north := e.customerID("Northwind Dental")

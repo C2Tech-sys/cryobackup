@@ -70,6 +70,7 @@ func purgeFormOf(t *testing.T, page string) string {
 }
 
 func TestADR19_PurgeDialogIsForOwnersOfRetiredDevicesOnly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev[adr19Host]
@@ -105,6 +106,7 @@ func TestADR19_PurgeDialogIsForOwnersOfRetiredDevicesOnly(t *testing.T) {
 }
 
 func TestADR19_APurgeFromANonOwnerIsRefusedServerSide(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev[adr19Host]
@@ -139,6 +141,7 @@ func TestADR19_APurgeFromANonOwnerIsRefusedServerSide(t *testing.T) {
 }
 
 func TestADR19_ANameThatDoesNotMatchExactlyPurgesNothing(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev[adr19Host]
@@ -166,6 +169,7 @@ func TestADR19_ANameThatDoesNotMatchExactlyPurgesNothing(t *testing.T) {
 }
 
 func TestADR19_StaleMFAAsksForACodeAndKeepsWhatWasTyped(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev[adr19Host]
@@ -219,6 +223,7 @@ func TestADR19_StaleMFAAsksForACodeAndKeepsWhatWasTyped(t *testing.T) {
 }
 
 func TestADR19_APurgeShowsPurgingUntilTheRowIsGone(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev[adr19Host]
@@ -254,6 +259,7 @@ func TestADR19_APurgeShowsPurgingUntilTheRowIsGone(t *testing.T) {
 }
 
 func TestADR19_AFailingPurgeSaysWhyInWordsAndRetries(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["SPARE-PC-09"]
@@ -277,6 +283,7 @@ func TestADR19_AFailingPurgeSaysWhyInWordsAndRetries(t *testing.T) {
 }
 
 func TestADR19_PurgeNotFinishedBannerHasALabelAndLinksToTheDevice(t *testing.T) {
+	t.Parallel()
 	if got := BannerLabel(health.BannerPurgeNotFinished); got != "PURGE NOT FINISHED" {
 		t.Fatalf("label %q", got)
 	}
@@ -295,6 +302,7 @@ func TestADR19_PurgeNotFinishedBannerHasALabelAndLinksToTheDevice(t *testing.T) 
 }
 
 func TestADR19_ACustomerWithDevicesCannotBeDeleted(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -320,6 +328,7 @@ func TestADR19_ACustomerWithDevicesCannotBeDeleted(t *testing.T) {
 }
 
 func TestADR19_DeleteAnEmptyCustomer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.customerID("Cedar Valley Veterinary")
@@ -346,6 +355,7 @@ func TestADR19_DeleteAnEmptyCustomer(t *testing.T) {
 }
 
 func TestADR19_PurgeEveryRetiredDeviceOfACustomer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.adr19RetireAllOf("Northwind Dental") // 3 retired now, plus SPARE-PC-09 already purging
@@ -375,6 +385,7 @@ func TestADR19_PurgeEveryRetiredDeviceOfACustomer(t *testing.T) {
 // No host name, customer name, reason or code in any log line of these flows. The refused-audit
 // pass makes sure the capture is wired: it must log.
 func TestADR19_NoHostNameInAnyLogLine(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var logs bytes.Buffer
 	lg := logx.New(&logs, logx.LevelDebug)
@@ -404,6 +415,7 @@ func TestADR19_NoHostNameInAnyLogLine(t *testing.T) {
 }
 
 func TestADR19_DesignPageShowsEveryState(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	page := e.page("/design/purge", 200)
 	mustContain(t, "/design/purge", page, `id="purge"`,
@@ -426,6 +438,7 @@ func TestADR19_DesignPageShowsEveryState(t *testing.T) {
 // Rendered in a real browser at both widths and themes: the open dialogs, the purging page, the
 // customer section and /design/purge do not overflow, and every visible button is inside the viewport.
 func TestADR19_LayoutAtBothWidthsAndThemes(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newEnv(t)
 	e.login()
@@ -513,6 +526,7 @@ document.querySelectorAll('.mfa-ok').forEach(function (p) {
 // F2: when the audit row of the step-up cannot be written, nothing changed, and the page says so
 // ("not saved, nothing was changed"), not "Code incorrect or expired."
 func TestADR19_StepUpAuditFailureSaysNotSavedNotWrongCode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev[adr19Host]

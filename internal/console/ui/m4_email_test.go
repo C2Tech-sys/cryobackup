@@ -72,6 +72,7 @@ func (e *env) m4Recipient(name, addr string) string {
 }
 
 func TestP20W3B_EmailPageShowsTheFixtureWorld(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	body := e.page("/settings/email", 200)
@@ -118,6 +119,7 @@ func TestP20W3B_EmailPageShowsTheFixtureWorld(t *testing.T) {
 }
 
 func TestP20W3B_SettingsLinksToTheDigestBlock(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	body := e.page("/settings", 200)
@@ -128,6 +130,7 @@ func TestP20W3B_SettingsLinksToTheDigestBlock(t *testing.T) {
 }
 
 func TestP20W3B_NoRecipientIsAnAlarmNotAnEmptyTable(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t) // no recipients: LoadFixtures writes none
 	e.login()
 	body := e.page("/settings/email", 200)
@@ -137,6 +140,7 @@ func TestP20W3B_NoRecipientIsAnAlarmNotAnEmptyTable(t *testing.T) {
 }
 
 func TestP20W3B_RecipientsAreAddedEditedAndRemovedThroughTheAPI(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	before := e.auditTotal()
@@ -174,6 +178,7 @@ func TestP20W3B_RecipientsAreAddedEditedAndRemovedThroughTheAPI(t *testing.T) {
 }
 
 func TestP20W3B_RecipientRefusalsComeBackToTheForm(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	res, body := e.post("/ui/settings/email/recipients", url.Values{"name": {""}, "address": {"Night <night@example.test>"}}, false)
@@ -203,6 +208,7 @@ func TestP20W3B_RecipientRefusalsComeBackToTheForm(t *testing.T) {
 }
 
 func TestP20W3B_TestMailOutcomesInline(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	// prefilled from a recipient row: one click, the address is looked up by id (never in the URL)
@@ -243,6 +249,7 @@ func TestP20W3B_TestMailOutcomesInline(t *testing.T) {
 }
 
 func TestP20W3B_SMTPNotConfiguredDisablesTheTestWithItsReason(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.mailSvc.Configured, e.mailSvc.Fixtures, e.mailSvc.Test.Configured = false, false, false
 	e.login()
@@ -262,6 +269,7 @@ func TestP20W3B_SMTPNotConfiguredDisablesTheTestWithItsReason(t *testing.T) {
 }
 
 func TestP20W3B_ConsoleWithoutMailServiceSaysSo(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.svc.m3.api.Mail = nil // a console wired without it (before P20-W3B the pages' API was)
 	e.login()
@@ -274,6 +282,7 @@ func TestP20W3B_ConsoleWithoutMailServiceSaysSo(t *testing.T) {
 }
 
 func TestP20W3B_DigestSettingsPreviewAndSendNow(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	before := e.auditTotal()
@@ -318,6 +327,7 @@ func TestP20W3B_DigestSettingsPreviewAndSendNow(t *testing.T) {
 }
 
 func TestP20W3B_RolesMatchTheAPI(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.signInAs("admin2", "admin", nil)
 	body := e.page("/settings/email", 200)
@@ -342,6 +352,7 @@ func TestP20W3B_RolesMatchTheAPI(t *testing.T) {
 
 // F3: the suppress labels are fixed per recorded word.
 func TestP20W3B_F3_SuppressLabelsSayOnlyWhatWasRecorded(t *testing.T) {
+	t.Parallel()
 	for word, want := range map[string]string{"acknowledged": "Acknowledged", "snoozed": "Snoozed", "paused": "Device parked", "customer_suspended": "Customer suspended",
 		"below_threshold": "Alarm already resolved", "deduped": "Not sent: duplicate, switched off or removed", "": "no reason recorded", "a_future_word": "a_future_word"} {
 		if got := suppressLabel(word); got != want {
@@ -352,6 +363,7 @@ func TestP20W3B_F3_SuppressLabelsSayOnlyWhatWasRecorded(t *testing.T) {
 
 // F6: only an owner is told to add a recipient; an admin sees them; another role is sent to System health.
 func TestP20W3B_F6_BannerActionsSayWhatTheRoleCanDo(t *testing.T) {
+	t.Parallel()
 	f := health.Fleet{View: state.FleetView{Banners: []state.Banner{{ID: "C18", Severity: state.SeverityAlarm, Text: "Alert e-mail has no recipient."},
 		{ID: "C20", Severity: state.SeverityAlarm, Text: "The daily digest has no recipient."}}}}
 	for role, want := range map[auth.Role][2]string{auth.RoleOwner: {"Add a recipient", "Choose digest recipients"}, auth.RoleAdmin: {"See recipients", "See recipients"},
@@ -374,6 +386,7 @@ func TestP20W3B_F6_BannerActionsSayWhatTheRoleCanDo(t *testing.T) {
 // F6, G2: a test mail or a send-now the API answers 500 (here: its audit row cannot be written) says only
 // what is true whatever the cause: neither "nothing was changed" nor "Not sent".
 func TestP20W3B_F6_UnauditedSendSaysItWasNotRecorded(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	e.mutRefuseAudits(true)
@@ -404,6 +417,7 @@ func (d uiDigestDouble) SendDigestNow(context.Context, bool) (notify.DigestResul
 }
 
 func TestP20W3B_G2_AnIncompleteSendSaysWhatWentOut(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t) // two recipients have the digest switch
 	e.login()
 	boom := context.DeadlineExceeded
@@ -431,6 +445,7 @@ func TestP20W3B_G2_AnIncompleteSendSaysWhatWentOut(t *testing.T) {
 // updated after its message went out (or cannot be written at all). Both messages, or the one, leave
 // the console; the page claims one sent and one unknown, never "could not be sent" for the other.
 func TestP20W3B_H1_AnUnrecordedOutcomeIsNotCalledNotSent(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, trigger string
 		messages      int
@@ -466,6 +481,7 @@ func TestP20W3B_H1_AnUnrecordedOutcomeIsNotCalledNotSent(t *testing.T) {
 // J2: an incomplete send-now is always critical (red, role="alert"): the console does not know who
 // received the digest. Every variant of the note, and the page that shows one.
 func TestP20W3B_J2_AnIncompleteSendIsAlwaysAnAlert(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	for name, n := range map[string]Note{"sent 0": incompleteNote(0, 1, 1), "failed only": incompleteNote(1, 1, 0), "unlisted only": incompleteNote(1, 0, 1),
 		"count unreadable": incompleteNote(1, 0, -1)} {
@@ -502,6 +518,7 @@ func (d removingDigest) SendDigestNow(context.Context, bool) (notify.DigestResul
 }
 
 func TestP20W3B_J3_ARecipientRemovedMidSendIsStillUnknown(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t) // Night desk and Service manager have the digest switch
 	e.login()
 	manager := e.recipientID(fixtures.RecipientManager)
@@ -520,6 +537,7 @@ func TestP20W3B_J3_ARecipientRemovedMidSendIsStillUnknown(t *testing.T) {
 // J4: /design/mail renders its ATTEMPT: N sample through the live delivery-row template, and its "Not
 // recorded yet" sample from the evaluator's interval, as the live page does.
 func TestP20W3B_J4_DesignSamplesComeFromTheLiveCode(t *testing.T) {
+	// Serial (P21-T1): it changes the package variable evaluatorEvery, so it never runs beside the parallel tests.
 	e := newM4Env(t)
 	e.login()
 	old := evaluatorEvery

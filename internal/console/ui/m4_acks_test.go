@@ -42,6 +42,7 @@ func alarmsBlock(t *testing.T, body string) string {
 }
 
 func TestP20W3B_AnAcknowledgedAlarmStaysAnAlarm(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	body := e.page("/devices/"+e.dev[fixtures.AckedHost], 200)
@@ -62,6 +63,7 @@ func TestP20W3B_AnAcknowledgedAlarmStaysAnAlarm(t *testing.T) {
 }
 
 func TestP20W3B_AcknowledgeSnoozePresetsAndClear(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	id := e.dev[fixtures.SnoozedHost]
@@ -128,6 +130,7 @@ func TestP20W3B_AcknowledgeSnoozePresetsAndClear(t *testing.T) {
 }
 
 func TestP20W3B_AnAlarmThatIsNotOpenIsAPlainMessage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t) // no evaluator pass: RECEPTION-2's PARTIAL has no episode yet
 	e.login()
 	id := e.dev["RECEPTION-2"]
@@ -162,6 +165,7 @@ func TestP20W3B_AnAlarmThatIsNotOpenIsAPlainMessage(t *testing.T) {
 }
 
 func TestP20W3B_TheMissingCustomerIsAcknowledgedOnItsPage(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	cid := e.customerID(fixtures.MissingCustomer)
@@ -179,6 +183,7 @@ func TestP20W3B_TheMissingCustomerIsAcknowledgedOnItsPage(t *testing.T) {
 }
 
 func TestP20W3B_ReadOnlySeesAcknowledgementsAndNoButtons(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.signInAs("viewer", "read_only", nil)
 	block := alarmsBlock(t, e.page("/devices/"+e.dev[fixtures.AckedHost], 200))
@@ -197,6 +202,7 @@ func TestP20W3B_ReadOnlySeesAcknowledgementsAndNoButtons(t *testing.T) {
 // renderer would print them (a class word of the delivery log, which the schema leaves free text)
 // appear nowhere; the acknowledgement note an operator typed appears only in its own element.
 func TestP20W3B_NewPagesLeakNothing(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	planted := []string{`C:\Users\jdoe\Charts\MRN-004417.pdf`, "Jane Q. Patient DOB 1961-04-02"}
@@ -259,6 +265,7 @@ func TestP20W3B_NewPagesLeakNothing(t *testing.T) {
 // F1: every outcome of an acknowledgement is shown, also on a page with no open alarm (the alarm just
 // cleared, the acknowledgement was the last one): on the device panel and on the customer page.
 func TestP20W3B_F1_AckOutcomesShowWithNoOpenAlarm(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	pages := map[string]string{"device": "/devices/" + e.dev["LEGAL-PC-01"], "customer": "/customers/" + e.customerID("Pinecrest Legal")}
@@ -277,6 +284,7 @@ func TestP20W3B_F1_AckOutcomesShowWithNoOpenAlarm(t *testing.T) {
 
 // F5: "3 days" and "1 week" keep the local time of day across both changes of daylight saving time.
 func TestP20W3B_F5_SnoozePresetsKeepTheWallClock(t *testing.T) {
+	t.Parallel()
 	loc, err := time.LoadLocation("America/Chicago")
 	if err != nil {
 		t.Fatal(err)
@@ -309,6 +317,7 @@ func TestP20W3B_F5_SnoozePresetsKeepTheWallClock(t *testing.T) {
 
 // F6: "Change…" opens with the acknowledgement in force: its kind, end and note.
 func TestP20W3B_F6_ChangeOpensWithWhatIsInForce(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	acked := alarmsBlock(t, e.page("/devices/"+e.dev[fixtures.AckedHost], 200))
@@ -327,6 +336,7 @@ func TestP20W3B_F6_ChangeOpensWithWhatIsInForce(t *testing.T) {
 // never more than an hour from the local time asked for, and within an hour of N days on. Starts on an
 // ambiguous local time (the second 01:30 of a fall-back night) too.
 func TestP20W3B_G3_SnoozeEndsOnTransitionDays(t *testing.T) {
+	t.Parallel()
 	for _, z := range []struct {
 		zone                       string
 		springNow, springEnd       string // N days on lands in the skipped hour
@@ -385,6 +395,7 @@ func TestP20W3B_G3_SnoozeEndsOnTransitionDays(t *testing.T) {
 // G5: when both reads behind the alarms block fail, both are reported: the open-episodes failure does not
 // overwrite the acknowledgements failure. (Both read alarm_episodes; renaming it fails them together.)
 func TestP20W3B_G5_BothReadFailuresAreReported(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
@@ -404,6 +415,7 @@ func TestP20W3B_G5_BothReadFailuresAreReported(t *testing.T) {
 // H2: a snooze end in the hour the clocks repeat says which of the two it is: the zone abbreviation is
 // shown with the end, in the acknowledgement line and in the engine's SNOOZED badge.
 func TestP20W3B_H2_ASnoozeEndShowsItsZone(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	id := e.dev[fixtures.SnoozedHost]
@@ -425,6 +437,7 @@ func TestP20W3B_H2_ASnoozeEndShowsItsZone(t *testing.T) {
 // H3: when the open episodes cannot be read, no row says "Not recorded yet" (that was not read either):
 // each says it could not be checked, and no acknowledge form is offered.
 func TestP20W3B_H3_AnUncheckedAlarmIsNotCalledUnrecorded(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
@@ -446,6 +459,7 @@ func TestP20W3B_H3_AnUncheckedAlarmIsNotCalledUnrecorded(t *testing.T) {
 
 // J1: the state chip's explain tooltip shows a snooze end with its zone, like the line and the badge.
 func TestP20W3B_J1_TheExplainTooltipShowsTheSnoozeZone(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	id := e.dev[fixtures.SnoozedHost]
@@ -464,6 +478,7 @@ func TestP20W3B_J1_TheExplainTooltipShowsTheSnoozeZone(t *testing.T) {
 
 // K1: the acknowledge form's custom end names the zone it is read in, beside the field and in its label.
 func TestP20W3B_K1_TheCustomEndNamesItsZone(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	block := alarmsBlock(t, e.page("/devices/"+e.dev["RECEPTION-2"], 200))
@@ -474,6 +489,7 @@ func TestP20W3B_K1_TheCustomEndNamesItsZone(t *testing.T) {
 // the clocks repeat; a new end in that hour, or in the hour they skip, is refused with the form open on
 // what was typed, and nothing is stored or audited.
 func TestP20W3B_K2_AChangeFormKeepsItsEndAndNeverGuesses(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	id := e.dev[fixtures.SnoozedHost]
@@ -506,6 +522,7 @@ func TestP20W3B_K2_AChangeFormKeepsItsEndAndNeverGuesses(t *testing.T) {
 // K3: "Could not be checked: reload the page." is written once, as uncheckedText, which the page and the
 // design samples both use; and the page shows it.
 func TestP20W3B_K3_TheUncheckedLineIsOneConstant(t *testing.T) {
+	t.Parallel()
 	n := 0
 	for _, f := range []string{"m4_acks.go", "m4_design.go", "m4_email.go"} {
 		b, err := os.ReadFile(f)

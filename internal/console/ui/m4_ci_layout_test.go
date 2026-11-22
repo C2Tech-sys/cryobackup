@@ -31,6 +31,7 @@ out.boxes = h;
 return out;`, 1)
 
 func TestP20CI_HasDevicesHoldsAt390WithWideFontMetrics(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newEnv(t)
 	e.login()

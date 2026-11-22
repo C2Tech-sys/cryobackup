@@ -14,6 +14,7 @@ import (
 // Now fonts.css is served with every font URL versioned, the pages preload the
 // display face at the same URL, and Orbitron uses font-display: block.
 func TestFontsAreVersionedAndPreloaded(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	_, login := e.do("GET", "/login", nil)
 	cssURL := regexp.MustCompile(`/static/fonts\.css\?v=[0-9a-f]{8}`).FindString(login)

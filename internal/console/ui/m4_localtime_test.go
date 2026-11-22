@@ -9,6 +9,7 @@ import (
 // passes twice is repeated, one it skips is missing. Chicago (both nights of 2026), London, a zone without
 // daylight saving time and UTC.
 func TestP20W3B_K2_ResolveLocalNeverGuesses(t *testing.T) {
+	t.Parallel()
 	zone := func(name string) *time.Location {
 		l, err := time.LoadLocation(name)
 		if err != nil {

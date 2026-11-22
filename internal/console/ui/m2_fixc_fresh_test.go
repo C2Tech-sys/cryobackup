@@ -15,6 +15,7 @@ import (
 // and "as of" appear; start it: they clear by themselves; reload during normal
 // running: no banner flash).
 func TestFixCFreshStreamGrace(t *testing.T) {
+	t.Parallel()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node is not installed; run internal/console/ui/testdata/fresh_sim.js by hand")

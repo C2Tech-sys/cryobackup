@@ -16,6 +16,7 @@ html, body, body * { font-family: Verdana, "DejaVu Sans", sans-serif !important;
 // reachable at 1360 whatever the font metrics. The table scrolls inside its own box,
 // so the page did not overflow, but the action buttons sat past the right edge.
 func TestTokenTableActionsStayInViewWithWideFontMetrics(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newEnv(t)
 	e.login()

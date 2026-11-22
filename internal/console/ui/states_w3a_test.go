@@ -12,6 +12,7 @@ import (
 // wave 1-2 screens.
 
 func TestW3AAccountPageDoesNotSayNotSetUpWhenTheStatusCannotBeRead(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	mustContain(t, "healthy", e.page("/account", 200), ">ON<")
@@ -29,6 +30,7 @@ func TestW3AAccountPageDoesNotSayNotSetUpWhenTheStatusCannotBeRead(t *testing.T)
 }
 
 func TestW3ADeviceSummaryStatesAFailedReadAndABrokenPolicy(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	// Rendered with the view the handler builds when the run list or a fact could not be read.
@@ -59,6 +61,7 @@ func TestW3ADeviceSummaryStatesAFailedReadAndABrokenPolicy(t *testing.T) {
 }
 
 func TestW3AHtmxRegionsAreLoadableAndFailLoudly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	for _, p := range []string{"/devices", "/audit"} {

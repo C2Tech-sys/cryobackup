@@ -74,6 +74,7 @@ func (e *env) tokenIDOf(secret string) string {
 }
 
 func TestEnrollPagesRenderInFixturesMode(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	summit := e.customerID("Summit Eye Care")
 	tokID := ""
@@ -127,6 +128,7 @@ func TestEnrollPagesRenderInFixturesMode(t *testing.T) {
 }
 
 func TestDownloadsShowsTheInstallerAndItsHash(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	none := e.page("/downloads", 200)
 	mustContain(t, "no installer", none, "No agent installer found", "Where to get it", "make msi", "does not serve installers")
@@ -160,6 +162,7 @@ func TestDownloadsShowsTheInstallerAndItsHash(t *testing.T) {
 }
 
 func TestCreatedTokenIsShownOnceAndNothingElseHasIt(t *testing.T) {
+	t.Parallel()
 	e, logs := wizardEnv(t)
 	body := []byte("msi bytes for the hash")
 	if err := os.WriteFile(filepath.Join(e.svc.ArtifactsDir, "cryobackup-agent-2.0.0.msi"), body, 0o600); err != nil {
@@ -262,6 +265,7 @@ func TestCreatedTokenIsShownOnceAndNothingElseHasIt(t *testing.T) {
 }
 
 func TestWizardRejectsBadInputWithoutCreatingAnything(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	summit := e.customerID("Summit Eye Care")
 	tokens, audits := e.tokenCount(), e.auditTotal()
@@ -304,6 +308,7 @@ func TestWizardRejectsBadInputWithoutCreatingAnything(t *testing.T) {
 }
 
 func TestWizardCreatesANewCustomerAndKeepsItOnRetry(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	audits, tokens := e.auditTotal(), e.tokenCount()
 	res, page := e.createToken("", url.Values{"new_customer": {"Wizard Dental"}, "expires": {"14d"}})
@@ -348,6 +353,7 @@ func TestWizardCreatesANewCustomerAndKeepsItOnRetry(t *testing.T) {
 }
 
 func TestRevokeFromTheListAndTheDetailPage(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	summit := e.customerID("Summit Eye Care")
 	_, page := e.createToken(summit, nil)
@@ -384,6 +390,7 @@ func TestRevokeFromTheListAndTheDetailPage(t *testing.T) {
 }
 
 func TestTokenDetailListsTheDevicesThatEnrolled(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	summit := e.customerID("Summit Eye Care")
 	toks, _ := e.st.ListEnrollmentTokens(context.Background(), store.ScopeAll(), summit)
@@ -403,6 +410,7 @@ func TestTokenDetailListsTheDevicesThatEnrolled(t *testing.T) {
 }
 
 func TestPublicURLMissingFailsLoudly(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	e.svc.PublicURL = ""
 	mustContain(t, "enroll page", e.page("/enroll", 200), "Public URL not set.", "public_url")
@@ -421,6 +429,7 @@ func TestPublicURLMissingFailsLoudly(t *testing.T) {
 }
 
 func TestEnrollRoutesAreAdminOnlyAndCSRFChecked(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	summit := e.customerID("Summit Eye Care")
 	toks, _ := e.st.ListEnrollmentTokens(context.Background(), store.ScopeAll(), summit)
@@ -477,6 +486,7 @@ func TestEnrollRoutesAreAdminOnlyAndCSRFChecked(t *testing.T) {
 }
 
 func TestWizardRefusesWhenTheCreateIsNotAudited(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	summit := e.customerID("Summit Eye Care")
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
@@ -500,6 +510,7 @@ func TestWizardRefusesWhenTheCreateIsNotAudited(t *testing.T) {
 }
 
 func TestWizardSaysWhatWasCreatedWhenTheTokenAuditFailsAfterANewCustomer(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
 		_, err := tx.Exec(`CREATE TRIGGER refuse_token_audits BEFORE INSERT ON audit_events WHEN NEW.action = 'enrollment_token.create'

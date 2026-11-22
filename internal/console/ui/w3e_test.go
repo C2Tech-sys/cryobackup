@@ -19,6 +19,7 @@ import (
 // ---- 3a: the cancel result says why nothing was stopped ----
 
 func TestW3ECancelDetailSaysWhyNothingWasStopped(t *testing.T) {
+	t.Parallel()
 	cmd := func(result string) store.Command {
 		return store.Command{Type: store.CommandCancel, Result: json.RawMessage(result)}
 	}
@@ -43,6 +44,7 @@ func TestW3ECancelDetailSaysWhyNothingWasStopped(t *testing.T) {
 // A handler registered through Register sees one snapshot for its whole
 // request, however the settings change meanwhile; the next request sees the new one.
 func TestW3EARequestKeepsOneDisplaySnapshot(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var seen []string
 	reg := &probeReg{}
@@ -70,6 +72,7 @@ var shownZone = regexp.MustCompile(`data-zone="([^"]+)"|\((America/Chicago|Pacif
 // While the zone flips between two values as fast as it can, no page names both:
 // the shell, the stamp, the tooltip and the table agree within every response.
 func TestW3EPagesNameOneZoneWhileTheZoneChanges(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	e.setZone(t, "America/Chicago")
@@ -109,6 +112,7 @@ func TestW3EPagesNameOneZoneWhileTheZoneChanges(t *testing.T) {
 // ---- 3d / 3e: the audit viewer's secret and path guards ----
 
 func TestW3EAuditDetailsShowPlainFactsAndStillWithholdSecrets(t *testing.T) {
+	t.Parallel()
 	raw := json.RawMessage(`{"exit_code":2,"status_code":503,"key":"display_timezone","tokens_revoked":3,"sessions_ended":1,` +
 		`"recovery_codes_left":8,"file_count":12,"retry_count":0,` +
 		`"token":"abc","api_token":"abc","recovery_codes":["a","b"],"totp_secret":"x","password":"p","passphrase":"q","secret_key":"s","code":"123456","private_key":"k","credential":"c",` +
@@ -141,6 +145,7 @@ func TestW3EAuditDetailsShowPlainFactsAndStillWithholdSecrets(t *testing.T) {
 // The write guard sees JSON text, where a single backslash is doubled. The viewer
 // and the API form check that form as well as the decoded string.
 func TestW3EAuditDetailsWithholdASingleBackslashRelativePath(t *testing.T) {
+	t.Parallel()
 	raw := json.RawMessage(`{"note":"Clients\\Smith","list":["a\\b"],"fine":"ok","slash":"a/b"}`)
 	got := map[string]store.AuditDetail{}
 	for _, d := range store.AuditDetails(raw) {
@@ -166,6 +171,7 @@ func TestW3EAuditDetailsWithholdASingleBackslashRelativePath(t *testing.T) {
 // ---- 3f: a policy save fails closed when the default policy cannot be read ----
 
 func TestW3EPolicySaveIsRefusedWhenTheDefaultPolicyCannotBeRead(t *testing.T) {
+	// Serial (P21-T1): it replaces the package variable defaultSectionsImpl, so it never runs beside the parallel tests.
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	tpl := e.newTemplate("Default unreadable", map[string]string{"sla": `{"stale_after_hours":96,"unseen_after_hours":250}`})

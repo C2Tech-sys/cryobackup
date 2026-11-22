@@ -12,6 +12,7 @@ import (
 // neither the chip tooltip nor the device banner may tell the operator to
 // resolve it "to continue".
 func TestFixCIdentityConflictCopyAgreesWithADR0011(t *testing.T) {
+	t.Parallel()
 	c := fmtCtx{Now: time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC), Loc: time.UTC}
 	tip := reasonLine(SampleDeviceState(state.StateIdentityConflict, c.Now), c)
 	if strings.Contains(tip, "to continue") || !strings.Contains(tip, "Backups continue") {

@@ -17,6 +17,7 @@ func shellNames(t *testing.T, body, name, role string) {
 // /ui/account/profile (M3-PROFILE): the username and display name from the
 // /account page, and the shell showing the display name when one is set.
 func TestAccountProfileFormAndShell(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.addAccount("pat", "operator")
 	e.loginAs("pat", testPassword)
@@ -91,6 +92,7 @@ func TestAccountProfileFormAndShell(t *testing.T) {
 // A refused post re-renders /account with the reason and what was typed, and
 // changes nothing.
 func TestAccountProfileErrorsKeepWhatWasTyped(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.addAccount("pat", "operator")
 	e.loginAs("pat", testPassword)
@@ -138,6 +140,7 @@ func TestAccountProfileErrorsKeepWhatWasTyped(t *testing.T) {
 // it for its own account, a post needs the CSRF token and a same-origin
 // request, and nobody signed in is let through.
 func TestAccountProfileCSRFAndSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.addAccount("viewer", "read_only")
 	e.loginAs("viewer", testPassword)

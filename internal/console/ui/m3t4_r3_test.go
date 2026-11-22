@@ -14,6 +14,7 @@ import (
 // M3-T4 fix round 3.
 
 func TestR3NotInBuildAndNotApplicableChipsAreNeutralNotAmber(t *testing.T) { // M1
+	t.Parallel()
 	for status, label := range map[string]string{"not_in_build": "NOT IN THIS BUILD", "not_applicable": "NOT APPLICABLE"} {
 		c := sysStatusChip("x", status)
 		if c.Label != label || c.Class != ClassNeutral || !c.Dashed {
@@ -24,6 +25,7 @@ func TestR3NotInBuildAndNotApplicableChipsAreNeutralNotAmber(t *testing.T) { // 
 
 // M1 on S36: rows that cannot be checked here are shown honestly, under an overall OK that says so.
 func TestR3S36ShowsWhatCannotBeCheckedHereUnderAnOverallOK(t *testing.T) { // M1
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	e.canned(map[string]any{
@@ -50,6 +52,7 @@ func TestR3S36ShowsWhatCannotBeCheckedHereUnderAnOverallOK(t *testing.T) { // M1
 
 // A customer whose devices are all retired says that, not "no devices yet".
 func TestR3AnAllRetiredCustomerSaysItsDevicesAreRetired(t *testing.T) { // low
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	pine := e.customerID("Pinecrest Legal")
@@ -71,6 +74,7 @@ func TestR3AnAllRetiredCustomerSaysItsDevicesAreRetired(t *testing.T) { // low
 
 // /runs filtered to a MISSING customer shows the MISSING alarm, as /activity does.
 func TestR3RunsFilteredToAMissingCustomerIsTheMissingAlarm(t *testing.T) { // low
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	blue := e.customerID("Blue Ridge Accounting")
@@ -89,6 +93,7 @@ func TestR3RunsFilteredToAMissingCustomerIsTheMissingAlarm(t *testing.T) { // lo
 
 // M2: what a stored version shows.
 func TestR3RunDetailShowsUnknownAndWithholdsARawLabel(t *testing.T) { // M2
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	fin := e.now.Add(-time.Hour)

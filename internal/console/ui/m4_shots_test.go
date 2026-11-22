@@ -83,8 +83,9 @@ func (e *env) shot(t *testing.T, path, theme string, w, h int, extraJS string, m
 	raw := filepath.Join(dir, "shot.png")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := exec.CommandContext(ctx, chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars", "--disable-site-isolation-trials", "--window-size="+strconv.Itoa(ww)+","+strconv.Itoa(h),
-		"--user-data-dir="+filepath.Join(dir, "profile"), "--virtual-time-budget=6000", "--screenshot="+raw, "file:///"+filepath.ToSlash(file)).Run(); err != nil {
+	args := append([]string{"--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars", "--disable-site-isolation-trials", "--window-size=" + strconv.Itoa(ww) + "," + strconv.Itoa(h),
+		"--user-data-dir=" + filepath.Join(dir, "profile"), "--virtual-time-budget=6000", "--screenshot=" + raw}, quietBrowserFlags...)
+	if err := exec.CommandContext(ctx, chrome, append(args, "file:///"+filepath.ToSlash(file))...).Run(); err != nil {
 		t.Skipf("the browser would not take a screenshot here (%v)", err)
 	}
 	f, err := os.Open(raw)
@@ -105,6 +106,7 @@ func (e *env) shot(t *testing.T, path, theme string, w, h int, extraJS string, m
 // the frame's document emptied is the control: the two must differ over a large area. (The frame's
 // DOM cannot be read from the page: its origin is opaque by design, so pixels are the evidence.)
 func TestP20W3B_F7_ThePreviewFramePaintsTheDigest(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newM4Env(t)
 	e.login()
@@ -131,6 +133,7 @@ func TestP20W3B_F7_ThePreviewFramePaintsTheDigest(t *testing.T) {
 }
 
 func TestP20W3B_Screenshots(t *testing.T) {
+	t.Parallel()
 	dir := os.Getenv("CRYO_SHOTS")
 	if dir == "" {
 		t.Skip("CRYO_SHOTS names no directory: the screenshots are for review, not a gate")

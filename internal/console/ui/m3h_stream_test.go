@@ -89,6 +89,7 @@ func streamEnds(t *testing.T, e *env, st *uiStream, what string) {
 // M3-HARDEN A2: a signed-out session loses its stream within one ping interval, and
 // the page is told, so it can leave instead of going quietly stale.
 func TestUIEventStreamEndsOnePingAfterLogout(t *testing.T) {
+	// Serial (P21-T1): it watches 300 ms windows in which the stream must stay open, so it runs alone, as it always did.
 	e := newEnv(t)
 	e.login()
 	st := openUIStream(t, e)
@@ -106,6 +107,7 @@ func TestUIEventStreamEndsOnePingAfterLogout(t *testing.T) {
 
 // M3-HARDEN A2: the same for a disabled account (sessions deleted with it).
 func TestUIEventStreamEndsOnePingAfterTheAccountIsDisabled(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	e.signInAs("leaving", "admin", nil)
@@ -119,6 +121,7 @@ func TestUIEventStreamEndsOnePingAfterTheAccountIsDisabled(t *testing.T) {
 // M3-HARDEN A2: a narrowed account does not keep reading what it could before: the
 // stream ends quietly and the browser's reconnect subscribes with the current scope.
 func TestUIEventStreamEndsWhenTheScopeNarrows(t *testing.T) {
+	// Serial (P21-T1): it watches 300 ms windows in which the stream must stay open, so it runs alone, as it always did.
 	e := newEnv(t)
 	e.login()
 	cust := e.customerID("Summit Eye Care")
@@ -142,6 +145,7 @@ func TestUIEventStreamEndsWhenTheScopeNarrows(t *testing.T) {
 
 // M3-HARDEN A2: a database that cannot answer is no verdict on the credential.
 func TestUIEventStreamStaysWhenTheCheckCannotRun(t *testing.T) {
+	// Serial (P21-T1): it watches 300 ms windows in which the stream must stay open, so it runs alone, as it always did.
 	e := newEnv(t)
 	e.login()
 	st := openUIStream(t, e)
@@ -156,6 +160,7 @@ func TestUIEventStreamStaysWhenTheCheckCannotRun(t *testing.T) {
 // An open tab with nothing but its stream reaches the idle timeout: pings keep coming,
 // the session expires on time, the stream ends and the page is told.
 func TestUIEventStreamDoesNotKeepAnIdleSessionAlive(t *testing.T) {
+	// Serial (P21-T1): it watches 300 ms windows in which the stream must stay open, so it runs alone, as it always did.
 	e := newEnv(t)
 	e.login()
 	st := openUIStream(t, e)
@@ -179,6 +184,7 @@ func TestUIEventStreamDoesNotKeepAnIdleSessionAlive(t *testing.T) {
 // M3-HARDEN A2 (security review): reconnecting a stream does not slide the session
 // either: an EventSource retries on its own for as long as the page is open.
 func TestUIEventStreamReconnectDoesNotKeepAnIdleSessionAlive(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	step := e.svc.Auth.Idle / 4
@@ -197,6 +203,7 @@ func TestUIEventStreamReconnectDoesNotKeepAnIdleSessionAlive(t *testing.T) {
 // session, and what comes back after the idle timeout moves the page to the sign-in
 // page, which says why, instead of swapping that page into the board.
 func TestABackgroundRefreshDoesNotKeepAnIdleSessionAlive(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	idle := e.svc.Auth.Idle
@@ -226,6 +233,7 @@ func TestABackgroundRefreshDoesNotKeepAnIdleSessionAlive(t *testing.T) {
 // The control: what the operator does still counts. A request without the marker
 // slides the session.
 func TestAnOperatorRequestStillKeepsTheSessionAlive(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	idle := e.svc.Auth.Idle
@@ -241,6 +249,7 @@ func TestAnOperatorRequestStillKeepsTheSessionAlive(t *testing.T) {
 
 // The notice is there only when asked for and repeats nothing from the query.
 func TestSignInPageSaysWhyOnlyAfterASessionEnded(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	_, plain := e.do("GET", "/login", nil)
 	if strings.Contains(plain, "signin-ended") {

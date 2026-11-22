@@ -35,6 +35,7 @@ func (e *env) seedAudit(n int, action string, at time.Time, customerID string) {
 }
 
 func TestW3APagesRenderInFixturesMode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -71,6 +72,7 @@ func TestW3APagesRenderInFixturesMode(t *testing.T) {
 }
 
 func TestW3AAuditAndSettingsRoleGating(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	gets := []string{"/audit", "/ui/audit/table", "/settings"}
 	for _, p := range gets {
@@ -147,6 +149,7 @@ func TestW3AAuditAndSettingsRoleGating(t *testing.T) {
 // only), so a scoped account never reaches them: it is refused, and the
 // store-level scope matrix covers the rows themselves.
 func TestW3AScopedAccountsAreRefusedTheAuditLogAndSettings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	summit := e.customerID("Summit Eye Care")
 	e.appendAudit(store.AuditEvent{ActorType: "admin", ActorLabel: "pat", Action: "scope.visible", CustomerID: summit})
@@ -164,6 +167,7 @@ func TestW3AScopedAccountsAreRefusedTheAuditLogAndSettings(t *testing.T) {
 }
 
 func TestW3AAuditFiltersPagingAndDeepLinks(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -220,6 +224,7 @@ func TestW3AAuditFiltersPagingAndDeepLinks(t *testing.T) {
 }
 
 func TestW3AAuditDetailShowsStoredDetailsAndWithholdsTheRest(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -248,6 +253,7 @@ func TestW3AAuditDetailShowsStoredDetailsAndWithholdsTheRest(t *testing.T) {
 }
 
 func TestW3AEmptyAndErrorStates(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	// A trail with nothing in it is an alarm, not a blank table.
@@ -275,6 +281,7 @@ func TestW3AEmptyAndErrorStates(t *testing.T) {
 }
 
 func TestW3ASettingsChangeTheZoneOnTheNextPageAndIsAudited(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	// Before: Chicago. The fixtures clock is a fixed instant; its 12-hour time in Chicago is the stamp.
@@ -326,6 +333,7 @@ func TestW3ASettingsChangeTheZoneOnTheNextPageAndIsAudited(t *testing.T) {
 }
 
 func TestW3ASettingsRefuseBadValuesAtTheirFields(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	n := len(e.auditRows("settings.update", ""))
@@ -365,6 +373,7 @@ func TestW3ASettingsRefuseBadValuesAtTheirFields(t *testing.T) {
 }
 
 func TestW3ASettingsAreRefusedWhenTheyCannotBeAudited(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
@@ -381,6 +390,7 @@ func TestW3ASettingsAreRefusedWhenTheyCannotBeAudited(t *testing.T) {
 }
 
 func TestW3ASettingsNoteAWrongStoredZone(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	// Boot the prefs from a corrupt stored value: the console must say it fell back.
@@ -398,6 +408,7 @@ func TestW3ASettingsNoteAWrongStoredZone(t *testing.T) {
 
 // Copy buttons: markup on every secret and snippet, hidden-until-script, with the select-on-click fallback.
 func TestW3ACopyButtonsOnSecretsAndSnippets(t *testing.T) {
+	t.Parallel()
 	e, _ := wizardEnv(t)
 	check := func(name, body string, ids ...string) {
 		t.Helper()

@@ -57,6 +57,7 @@ func getNonce(t *testing.T, e *env) (*http.Cookie, string) {
 }
 
 func TestLoginPageIssuesTheNonce(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	c, field := getNonce(t, e)
 	if c.Value == field || len(c.Value) != 43 || len(field) != 43 {
@@ -73,6 +74,7 @@ func TestLoginPageIssuesTheNonce(t *testing.T) {
 }
 
 func TestLoginWithMatchingNonceNeedsNoOriginHeaders(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	c, field := getNonce(t, e)
 	// A hardened browser: Origin: null, no Referer, no Sec-Fetch-Site.
@@ -105,6 +107,7 @@ func TestLoginWithMatchingNonceNeedsNoOriginHeaders(t *testing.T) {
 }
 
 func TestLoginNonceMissingCookieOrMismatchIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	c, field := getNonce(t, e)
 	good := url.Values{"username": {"admin"}, "password": {testPassword}, auth.LoginNonceField: {field}}
@@ -127,6 +130,7 @@ func TestLoginNonceMissingCookieOrMismatchIsRefused(t *testing.T) {
 // The nonce makes up for missing header evidence only (FIX23b): headers that
 // point at another site refuse the post even with a server-issued pair.
 func TestLoginNonceDoesNotOverrideContraryHeaders(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	c, field := getNonce(t, e)
 	form := url.Values{"username": {"admin"}, "password": {testPassword}, auth.LoginNonceField: {field}}
@@ -158,6 +162,7 @@ func TestLoginNonceDoesNotOverrideContraryHeaders(t *testing.T) {
 
 // An injected cookie with an invented field (no server key) is refused.
 func TestLoginForgedNonceIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	forged := &http.Cookie{Name: auth.LoginNonceCookie, Value: "client-chosen"}
 	for _, field := range []string{"client-chosen", "anything"} {
@@ -170,6 +175,7 @@ func TestLoginForgedNonceIsRefused(t *testing.T) {
 }
 
 func TestLoginWithoutNonceFallsBackToTheOriginRule(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	form := url.Values{"username": {"admin"}, "password": {testPassword}}
 	if res, _ := e.loginPostWith(form, nil, "Origin", "null"); res.StatusCode != 403 {

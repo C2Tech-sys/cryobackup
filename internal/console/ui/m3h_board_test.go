@@ -13,6 +13,7 @@ import (
 // M3-HARDEN A6: a saved view whose customer clause names a MISSING customer is a
 // question about that customer: the board answers with its alarm, not "No devices match".
 func TestBoardViewNamingAMissingCustomerShowsItsAlarm(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.customerID("Blue Ridge Accounting")
@@ -50,6 +51,7 @@ func TestBoardViewNamingAMissingCustomerShowsItsAlarm(t *testing.T) {
 // M3-HARDEN A6: a state filter cannot match a customer with no devices. The customer
 // is left out, and the page names it and says why.
 func TestBoardStateFilterSaysWhyAMissingCustomerIsLeftOut(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	got := e.t5Board(boardQuery{States: []string{"FAILED"}})

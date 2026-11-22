@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -71,8 +70,7 @@ func newM3Env(t *testing.T) (*env, *fakeJobs) {
 	mux := http.NewServeMux()
 	e.svc.Register(muxReg{mux})
 	pub.Register(muxReg{mux})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	srv := serveForTest(t, mux)
 	e.srv = srv
 	return e, jobs
 }

@@ -13,6 +13,7 @@ import (
 // WORLD", version 1-M): 16 data codewords give these 10 error-correction
 // codewords.
 func TestQRReedSolomonKnownVector(t *testing.T) {
+	t.Parallel()
 	data := []byte{32, 91, 11, 120, 209, 114, 220, 77, 67, 64, 236, 17, 236, 17, 236, 17}
 	want := []byte{196, 35, 39, 119, 235, 215, 231, 226, 93, 23}
 	if got := rsRemainder(data, rsDivisor(10)); !bytes.Equal(got, want) {
@@ -23,6 +24,7 @@ func TestQRReedSolomonKnownVector(t *testing.T) {
 // Format information of level M with mask 0 is the specification's
 // 101010000010010 (bit 14 first).
 func TestQRFormatBitsAndStructure(t *testing.T) {
+	t.Parallel()
 	q, err := qrEncode([]byte("otpauth://totp/CryoBackup:admin?secret=ABCDEFGHIJKLMNOPQRSTUVWXYZ234567&issuer=CryoBackup&algorithm=SHA1&digits=6&period=30"))
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +79,7 @@ func TestQRFormatBitsAndStructure(t *testing.T) {
 }
 
 func TestQRTooLongAndSVG(t *testing.T) {
+	t.Parallel()
 	if _, err := qrEncode(bytes.Repeat([]byte("a"), 2332)); err == nil {
 		t.Fatal("2332 bytes must not fit a version-40 symbol at level M")
 	}
@@ -103,6 +106,7 @@ func TestQRTooLongAndSVG(t *testing.T) {
 // (CRYO_QR_PGM_DIR set; skipped otherwise). The M2-W1A check decoded them with
 // OpenCV's QRCodeDetector.
 func TestQRWritePGM(t *testing.T) {
+	t.Parallel()
 	dir := os.Getenv("CRYO_QR_PGM_DIR")
 	if dir == "" {
 		t.Skip("CRYO_QR_PGM_DIR not set")

@@ -31,6 +31,7 @@ return out;`, 1)
 }
 
 func TestP20W3B_LayoutAtBothWidthsAndThemes(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newM4Env(t)
 	e.login()
@@ -92,6 +93,7 @@ func TestP20W3B_LayoutAtBothWidthsAndThemes(t *testing.T) {
 // desktop width: in the flow (it scrolls with the page), never over the content, never wider than the
 // window, with the M4 warnings folded into the one summary line.
 func TestP20W3B_TheStripHoldsWithTheM4BannersAt390AndDesktop(t *testing.T) {
+	// Serial (P21-T1): it turns on fixtures.SetAllBanners, a process-wide switch, so it never runs beside the parallel tests.
 	chromeOrSkip(t)
 	e := newEnv(t)
 	e.login()
@@ -119,6 +121,7 @@ func TestP20W3B_TheStripHoldsWithTheM4BannersAt390AndDesktop(t *testing.T) {
 // the table's visible box, and nothing of the table needs a sideways scroll. The mutant without the
 // F4 rules is seen by the same probe.
 func TestP20W3B_F4_SettingsEditLinksFitAPhone(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newEnv(t)
 	e.login()
@@ -147,6 +150,7 @@ return out;`
 // F4, G5: on a phone the delivery log hides the Attempt column, so a row past its first attempt says
 // "ATTEMPT: N" in its stacked card, labelled like its siblings ("KIND:", "TO:"); a first attempt says nothing.
 func TestP20W3B_F4_PhoneDeliveryRowsShowTheirAttempt(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newM4Env(t)
 	e.login()
@@ -171,6 +175,7 @@ const g1Rule = "@media (max-width: 640px) { table.fleet.settable td.wrap { min-w
 // overflows sideways, neither the page nor the table's own box. The F4 rule that broke values ("40/0/da/ys")
 // is the mutant.
 func TestP20W3B_G1_SettingsValuesNeverBreakInsideAWord(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newEnv(t)
 	e.login()
@@ -210,6 +215,7 @@ return out;`
 // the system fallback fonts, the real house fonts and wide-font metrics: every descendant is inside the
 // popover's padding on all four sides.
 func TestP20W3B_G4_TheAcknowledgePopoverHoldsItsOptions(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newM4Env(t)
 	e.login()

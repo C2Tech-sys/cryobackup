@@ -15,6 +15,7 @@ import (
 // the form shows onboarding_until to the minute, so a stored time with seconds
 // must survive a save that did not touch it.
 func TestM2NotesOnlySaveDoesNotRewriteTheOnboardingWindow(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	harbor := e.customerID("Harbor Family Practice")
@@ -56,6 +57,7 @@ func TestM2NotesOnlySaveDoesNotRewriteTheOnboardingWindow(t *testing.T) {
 // filter that matches nothing: neutral, with the in-scope denominator, no alarm
 // and nothing that tells the two apart.
 func TestM2UnknownOrForeignCustomerFilterIsNotAnAlarmOrAnOracle(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	north, summit := e.customerID("Northwind Dental"), e.customerID("Summit Eye Care")
 	e.signInAs("scoped", "operator", []string{north})
@@ -76,6 +78,7 @@ func TestM2UnknownOrForeignCustomerFilterIsNotAnAlarmOrAnOracle(t *testing.T) {
 }
 
 func TestM2UnchangedDeviceSettingsDoNotDirtyTheFleet(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	id := e.dev["FRONTDESK-01"]
@@ -99,6 +102,7 @@ func TestM2UnchangedDeviceSettingsDoNotDirtyTheFleet(t *testing.T) {
 }
 
 func TestM2AuditTabPagerShowsTheTotal(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	id := e.dev["FRONTDESK-01"]
@@ -118,6 +122,7 @@ func TestM2AuditTabPagerShowsTheTotal(t *testing.T) {
 
 // The loading state keeps the header and turns the body cells into skeleton bars (components 5.1).
 func TestM2LoadingStateIsSkeletonRows(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	res, css := e.do("GET", "/static/app.css", nil)
 	if res.StatusCode != 200 {
