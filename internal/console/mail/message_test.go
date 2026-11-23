@@ -222,7 +222,7 @@ func TestBuildFoldsALongASCIISubject(t *testing.T) {
 }
 
 func TestBuildRejectsHeaderInjection(t *testing.T) {
-	inj := []string{"\r\nBcc: evil@example.net", "\nBcc: evil@example.net", "\rBcc: evil@example.net", "\x00", "a\x1bb", "\x7f"}
+	inj := []string{"\r\nBcc: evil@example.test", "\nBcc: evil@example.test", "\rBcc: evil@example.test", "\x00", "a\x1bb", "\x7f"}
 	for _, bad := range inj {
 		base := func() Message {
 			return Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: "s", Text: "t", Kind: KindAlert}

@@ -404,13 +404,28 @@ type loginData struct {
 	Next     string
 	Nonce    string // hidden login_nonce field value (auth.IssueLoginNonce)
 	Ended    bool   // the page came here because its session ended (auth.SessionEndedPath)
+	Idle     string // the configured idle limit as the page says it ("12 hours"): session.idle_h, through auth.Manager.Idle
 }
 
 // renderLogin issues a fresh login nonce (cookie plus hidden field) and renders
 // the sign-in page; every login page the browser sees carries its own nonce.
 func (s *Service) renderLogin(w http.ResponseWriter, r *http.Request, status int, d loginData) {
 	d.Nonce = s.Auth.IssueLoginNonce(w, r)
+	d.Idle = idleLimitText(s.Auth.Idle)
 	s.render(w, r, status, "login", "bare", d)
+}
+
+// idleLimitText says the session idle limit in whole hours, "1 hour" or "12 hours" (session.idle_h
+// is a whole number of hours), or in minutes for a limit that is not a whole number of hours.
+func idleLimitText(d time.Duration) string {
+	n, unit := int64(d/time.Hour), "hour"
+	if d%time.Hour != 0 || n == 0 {
+		n, unit = int64((d+time.Minute-1)/time.Minute), "minute"
+	}
+	if n != 1 {
+		unit += "s"
+	}
+	return strconv.FormatInt(n, 10) + " " + unit
 }
 
 func (s *Service) loginPage(w http.ResponseWriter, r *http.Request) {

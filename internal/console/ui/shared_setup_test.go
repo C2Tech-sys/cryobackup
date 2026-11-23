@@ -33,9 +33,11 @@ import (
 // in their first line; Go runs every serial test before it releases the parallel ones.
 
 func TestMain(m *testing.M) {
-	removeStaleTempDirs(os.TempDir(), time.Hour)
+	removeStaleTempDirs(os.TempDir(), staleTempAge)
+	stopTouching := keepLiveTempDirsFresh(liveTouchEvery)
 	parseTemplatesFn = clonedTemplates
 	code := m.Run()
+	stopTouching()
 	stopLayoutBrowser()
 	if err := checkPageOrigins(); err != nil { // the layout pages' isolation held for the whole run
 		fmt.Fprintln(os.Stderr, "FAIL:", err)
@@ -43,20 +45,103 @@ func TestMain(m *testing.M) {
 	}
 	closePageServers()
 	removeFixtureTemplate()
-	if n := layoutSkips.Load(); n > 0 {
-		fmt.Fprintf(os.Stderr, "%d layout tests skipped because the browser did not start (set CRYO_CHROME; with CI set they fail instead)\n", n)
+	if line := layoutSkipLine(layoutSkips.Load()); line != "" {
+		fmt.Fprintln(os.Stderr, line)
 	}
 	os.Exit(code)
+}
+
+// layoutSkipLine is the line TestMain prints when layout tests skipped, or "" when none did. The
+// only skip left is a machine with no browser at all (chromeOrSkip); a browser that is found but
+// will not start fails its test, with CI set or not (P21-T2 F1, browserWouldNotRun). The line
+// shows with -v or a package run; go test ./... drops a passing package's output.
+func layoutSkipLine(n int64) string {
+	if n <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d layout tests skipped because no Chrome or Chromium was found (set CRYO_CHROME; with CI set they fail instead)", n)
 }
 
 // tempPrefix starts the name of every temporary directory this package makes outside t.TempDir:
 // the fixture template, each env's store copy and the browser profile.
 const tempPrefix = "cryo-ui-"
 
+// staleTempAge is how old a leftover directory must be before a run's start-up sweep removes it. A
+// directory's modification time does not move while a run merely uses it, so age alone cannot tell
+// a live run from a dead one: the margin is a day (no run of this package lasts that long, even
+// under -race with -count or in a debugger), and a live run also touches its own directories from
+// its start and every liveTouchEvery after (keepLiveTempDirsFresh), so they never look older than
+// that (P21-T2 F2).
+const staleTempAge = 24 * time.Hour
+
+// liveTouchEvery is how often a running package touches its own temporary directories.
+const liveTouchEvery = 10 * time.Minute
+
+// liveTempDirs is the temporary directories this run made outside t.TempDir and has not removed yet.
+var liveTempDirs struct {
+	mu   sync.Mutex
+	dirs map[string]bool
+}
+
+// mkLiveTempDir makes a temporary directory named tempPrefix+pattern and registers it as this
+// run's, so it is kept fresh until forgetLiveTempDir.
+func mkLiveTempDir(pattern string) (string, error) {
+	dir, err := os.MkdirTemp("", tempPrefix+pattern)
+	if err != nil {
+		return "", err
+	}
+	liveTempDirs.mu.Lock()
+	defer liveTempDirs.mu.Unlock()
+	if liveTempDirs.dirs == nil {
+		liveTempDirs.dirs = map[string]bool{}
+	}
+	liveTempDirs.dirs[dir] = true
+	return dir, nil
+}
+
+// forgetLiveTempDir stops keeping dir fresh (it is being removed).
+func forgetLiveTempDir(dir string) {
+	liveTempDirs.mu.Lock()
+	defer liveTempDirs.mu.Unlock()
+	delete(liveTempDirs.dirs, dir)
+}
+
+// touchLiveTempDirs sets the modification time of every directory this run has made and still
+// uses to now, so another run's start-up sweep never takes it for a leftover.
+func touchLiveTempDirs() {
+	liveTempDirs.mu.Lock()
+	defer liveTempDirs.mu.Unlock()
+	now := time.Now()
+	for d := range liveTempDirs.dirs {
+		_ = os.Chtimes(d, now, now)
+	}
+}
+
+// keepLiveTempDirsFresh touches this run's directories at once and then every interval, from the
+// start of the run until the returned stop is called (TestMain).
+func keepLiveTempDirsFresh(every time.Duration) (stop func()) {
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		tick := time.NewTicker(every)
+		defer tick.Stop()
+		for {
+			touchLiveTempDirs()
+			select {
+			case <-tick.C:
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() { close(done); <-finished }
+}
+
 // removeStaleTempDirs removes from root (the temp folder) this package's own temporary directories
 // left behind by an earlier run that was killed before its cleanups ran (a timeout, a hard kill),
 // so they do not pile up there. It touches only directories named tempPrefix* and only those last
-// modified more than maxAge ago: a younger one may belong to a run of this package still going.
+// modified more than maxAge ago (staleTempAge at start-up): a younger one may belong to a run of
+// this package still going.
 func removeStaleTempDirs(root string, maxAge time.Duration) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -124,13 +209,14 @@ func fixtureTemplate() (string, error) {
 
 func buildFixtureTemplate() (string, error) {
 	ctx := context.Background()
-	dir, err := os.MkdirTemp("", tempPrefix+"template-")
+	dir, err := mkLiveTempDir("template-")
 	if err != nil {
 		return "", err
 	}
 	now := fixtures.Now()
 	st, err := store.Open(ctx, store.Options{Path: filepath.Join(dir, "console.db"), Clock: func() time.Time { return now }})
 	if err != nil {
+		forgetLiveTempDir(dir)
 		_ = os.RemoveAll(dir)
 		return "", err
 	}
@@ -139,6 +225,7 @@ func buildFixtureTemplate() (string, error) {
 		err = cerr
 	}
 	if err != nil {
+		forgetLiveTempDir(dir)
 		_ = os.RemoveAll(dir)
 		return "", err
 	}
@@ -170,6 +257,7 @@ func seedFixtureTemplate(ctx context.Context, st *store.Store, now time.Time) er
 
 func removeFixtureTemplate() {
 	if templateDir != "" {
+		forgetLiveTempDir(templateDir)
 		_ = os.RemoveAll(templateDir)
 	}
 }
@@ -182,22 +270,23 @@ func openFixtureStore(t *testing.T, clock func() time.Time) *store.Store {
 	if err != nil {
 		t.Fatalf("building the fixture database: %v", err)
 	}
-	dir, err := os.MkdirTemp("", tempPrefix+"store-")
+	dir, err := mkLiveTempDir("store-")
 	if err != nil {
 		t.Fatal(err)
 	}
+	remove := func() { forgetLiveTempDir(dir); _ = os.RemoveAll(dir) }
 	for _, name := range []string{"console.db", "console.db-wal"} {
 		if err := copyFile(filepath.Join(src, name), filepath.Join(dir, name)); err != nil && !(errors.Is(err, os.ErrNotExist) && name != "console.db") {
-			_ = os.RemoveAll(dir)
+			remove()
 			t.Fatal(err)
 		}
 	}
 	st, err := store.Open(context.Background(), store.Options{Path: filepath.Join(dir, "console.db"), Clock: clock})
 	if err != nil {
-		_ = os.RemoveAll(dir)
+		remove()
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = st.Close(); _ = os.RemoveAll(dir); st = nil }) // st = nil: see serveForTest
+	t.Cleanup(func() { _ = st.Close(); remove(); st = nil }) // st = nil: see serveForTest
 	return st
 }
 

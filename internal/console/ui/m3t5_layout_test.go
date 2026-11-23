@@ -25,7 +25,8 @@ import (
 // that measurement to fail, so the test is known to see the fault it guards against.
 //
 // They need a Chrome or Chromium: CRYO_CHROME names it, otherwise the usual install paths and PATH
-// names are tried. Without one the tests skip and say so, or fail when CI is set.
+// names are tried. Without one the tests skip and say so, or fail when CI is set. A browser that is
+// found but will not run fails the test either way (P21-T2 F1).
 
 func chromeBinary() string {
 	if p := os.Getenv("CRYO_CHROME"); p != "" {
@@ -70,8 +71,18 @@ func chromeOrSkip(t *testing.T) string {
 	if os.Getenv("CI") != "" {
 		t.Fatal("CI is set and no Chrome or Chromium was found (set CRYO_CHROME): the rendered-layout tests must run in CI, not skip")
 	}
+	layoutSkips.Add(1) // TestMain names the count at the end of the run (layoutSkipLine)
 	t.Skip("no Chrome or Chromium found (set CRYO_CHROME): the rendered-layout tests need a browser")
 	return ""
+}
+
+// browserWouldNotRun ends a test whose browser was found but would not start or run: a FAILURE, with
+// CI set or not (P21-T2 F1). It used to be a skip with CI unset, named only in a count line that
+// go test ./... never shows (it drops a passing package's output), so the run ended on a quiet "ok".
+// Only a machine with no browser at all skips (chromeOrSkip).
+func browserWouldNotRun(t testing.TB, err error) {
+	t.Helper()
+	t.Fatalf("a browser was found but would not run (%v): fix it or point CRYO_CHROME at one that runs; a found browser that fails is a failure, not a skip", err)
 }
 
 // layoutPage lays out the real markup of path with css as app.css, runs probe (JavaScript that returns
@@ -157,11 +168,7 @@ window.addEventListener('load', function () { var tries = 0; (function look() {
 		out, err = b.run(dir, o.W+300, o.H+300, 2*time.Minute) // a hung browser must not burn the package's limit
 	}
 	if err != nil && !errors.Is(err, errNoAnswer) && !errors.Is(err, errPageServer) {
-		if os.Getenv("CI") != "" {
-			t.Fatalf("CI is set and the browser would not run (%v)", err)
-		}
-		layoutSkips.Add(1) // TestMain names the count at the end of the run
-		t.Skipf("the browser would not run here (%v)", err)
+		browserWouldNotRun(t, err)
 	}
 	if err != nil || out == "" {
 		t.Fatalf("the probe produced no result (%v)", err)
