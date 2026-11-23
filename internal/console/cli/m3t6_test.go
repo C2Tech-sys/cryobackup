@@ -186,8 +186,9 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 	app, _ := buildFromInit(t, "America/Chicago", "America/Chicago")
 	// The API's retire answers io once the sync run after it has failed. That run checks a bcrypt
 	// hash, which under -race on a loaded machine takes seconds per compare, and it can queue behind
-	// a run already in flight, so the product's 5 s wait can run out first (the answer was then
-	// still_in_file, sync_busy or check_timed_out). The wait is set long here, before anything is
+	// a run already in flight, so the product's 5 s wait can run out first (the answer is then the
+	// newest read that finished, still_in_file or sync_busy, or check_timed_out when none had; P21-T5).
+	// The wait is set long here, before anything is
 	// served; the answer still comes as soon as the failed run is recorded. The UI's retire below
 	// goes through the UI's own in-process API, which keeps the 5 s wait.
 	const syncWait = time.Minute

@@ -488,24 +488,35 @@ func TestRetireAnswersWhatAReadOfTheFileFound(t *testing.T) {
 			t.Fatalf("%+v", got)
 		}
 	})
+	// P21-T5: these two end the wait while the read after a real one is in flight (readsThenEnd), not on a
+	// 60 ms timer. On a loaded machine that timer could end mid-read, and the answer was check_timed_out; the
+	// ruling now answers with the newest finished read, and ending the wait at a chosen read pins it exactly.
 	t.Run("the login is in the file and no sync comes", func(t *testing.T) {
 		e := newEnv(t)
-		realJob(t, e)
-		e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, 60*time.Millisecond
-		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewayStillInFile {
+		job := realJob(t, e)
+		ctx, end := context.WithCancel(context.Background())
+		defer end()
+		var n atomic.Int32
+		e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, time.Minute
+		e.svc.CheckGatewayLogins = readsThenEnd(t, end, &n, job.Check)
+		if got := retireEndable(t, e, ctx, e.deviceNamed(host).ID); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewayStillInFile {
 			t.Fatalf("%+v", got)
 		}
 	})
 	t.Run("a job that reads ok proves nothing: only the file does", func(t *testing.T) {
 		e := newEnv(t)
-		realJob(t, e)
-		e.svc.GatewaySyncWait = 60 * time.Millisecond
+		job := realJob(t, e)
+		ctx, end := context.WithCancel(context.Background())
+		defer end()
+		var n atomic.Int32
+		e.svc.GatewaySyncWait = time.Minute
+		e.svc.CheckGatewayLogins = readsThenEnd(t, end, &n, job.Check)
 		e.svc.SyncGateway = func() {
 			if err := e.st.RecordJobRun(context.Background(), store.JobHtpasswdSync, store.JobRun{Status: "ok", StartedAt: e.clk.Now(), FinishedAt: e.clk.Now()}); err != nil {
 				t.Error(err)
 			}
 		}
-		if got := retireOf(t, e); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewayStillInFile {
+		if got := retireEndable(t, e, ctx, e.deviceNamed(host).ID); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != gatewayStillInFile {
 			t.Fatalf("%+v", got)
 		}
 	})
@@ -540,6 +551,10 @@ func TestRetireAnswersWhatAReadOfTheFileFound(t *testing.T) {
 	t.Run("a run that takes the login out answers removed", func(t *testing.T) {
 		e := newEnv(t)
 		job := realJob(t, e)
+		// P21-T5: the run below happens inside the signal, before the first read, and under -race on a loaded
+		// machine its bcrypt work can spend the whole default 5 s; no read then finishes and the answer is
+		// check_timed_out, which is right. The wait is long here; a removed read still answers at once.
+		e.svc.GatewaySyncWait = time.Minute
 		e.svc.SyncGateway = func() {
 			if err := job.Run(context.Background()); err != nil {
 				t.Error(err)
