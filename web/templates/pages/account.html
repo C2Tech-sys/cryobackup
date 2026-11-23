@@ -110,7 +110,7 @@
         <td class="act">{{if .Current}}<span class="meta-mono">use Sign out</span>{{else}}<form method="post" action="/ui/account/sessions/{{.ID}}/revoke"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button class="btn sm danger" type="submit" aria-label="Sign out the session last active {{.Seen.Text}}">Sign out</button></form>{{end}}</td>
       </tr>{{end}}</tbody>
     </table></div>
-    <p class="meta-mono">{{len .Sessions}} signed-in session{{if ne (len .Sessions) 1}}s{{end}}. Sessions end after 12 hours idle or 7 days.</p>
+    <p class="meta-mono">{{len .Sessions}} signed-in session{{if ne (len .Sessions) 1}}s{{end}}. Sessions end after {{.Idle}} idle or {{.Absolute}}.</p>
     {{end}}
   </section>
 

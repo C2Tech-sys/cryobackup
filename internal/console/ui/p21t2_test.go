@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -112,6 +113,31 @@ func TestP21T2_B_RetireDialogAt390KeepsEveryControlInView(t *testing.T) {
 			})
 		}
 	}
+	// Fix batch 1 R3: the .page-head rule has its own case. A host name is one unbreakable word (a DNS
+	// label may be 63 characters), so on its own it is wider than the phone; without the rule the
+	// head's grid track takes that width and the action bar and the open dialog run off the screen with
+	// it. (The word itself still runs past the edge: that is the host name, not a control.) The tab
+	// rule cannot hide this case: it is the title row that is wide here, not the tabs.
+	longHost := func(t *testing.T, css string) map[string]float64 {
+		return e.layout(t, layoutOpts{Path: path, CSS: css, W: 390, H: 844,
+			Probe: `var h = document.getElementById('dev-h'); if (h) h.textContent = 'WORKSTATION-' + 'X'.repeat(48);` + reachProbe})
+	}
+	t.Run("long_host_name", func(t *testing.T) {
+		got := longHost(t, css)
+		if got["dialog"] < 4 {
+			t.Fatalf("the open retire dialog was not measured (%v controls in it)", got["dialog"])
+		}
+		if got["popInside"] != 1 || got["outside"] > 0 {
+			t.Errorf("a 60-character host name pushes %.0f of %.0f controls (dialog inside the viewport: %v) off the 390 px screen", got["outside"], got["controls"], got["popInside"] == 1)
+		}
+	})
+	noRule := strings.Replace(css, ".page-head { grid-template-columns: minmax(0, 1fr); }", "", 1)
+	if noRule == css {
+		t.Fatal("the mutation did not apply: the .page-head rule is not in app.css")
+	}
+	if bad := longHost(t, noRule); bad["outside"] == 0 && bad["popInside"] == 1 {
+		t.Error("the long host name case cannot tell a page head whose grid track is bounded from one that is not")
+	}
 	mutant := css
 	for _, rule := range []string{".page-head { grid-template-columns: minmax(0, 1fr); }", ".tabs:has(.tab-more) { flex-wrap: wrap; }"} {
 		if !strings.Contains(mutant, rule) {
@@ -185,35 +211,56 @@ func TestP21T2_C_TokenTableTimesNeverBreakInside(t *testing.T) {
 	}
 }
 
-// A: the sign-in page says the configured idle limit (session.idle_h, which cli hands the auth
-// Manager as Idle), singular or plural, and the template holds no hard-coded number for it.
+// A (and fix batch 1 R2): the sign-in page and the account page say the configured session limits
+// (session.idle_h and session.absolute_h, which cli hands the auth Manager as Idle and Absolute),
+// worded by sessionSpanText, and neither template holds a number of hours or days for them. The
+// rule: under 48 hours as hours, from 48 hours whole days as days and any other count as hours,
+// singular for 1 only.
 func TestP21T2_A_LoginPageSaysTheConfiguredIdleLimit(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
+	e, acct := newEnv(t), newEnv(t) // acct is signed in: a signed-in browser is sent away from /login
+	acct.login()
 	for _, c := range []struct {
-		idle time.Duration
-		want string
-	}{{time.Hour, "Sessions end after 1 hour idle and"}, {36 * time.Hour, "Sessions end after 36 hours idle and"}, {12 * time.Hour, "Sessions end after 12 hours idle and"}} {
-		e.svc.Auth.Idle = c.idle
+		idle, absolute time.Duration
+		login, account string
+	}{
+		{time.Hour, 48 * time.Hour, "Sessions end after 1 hour idle and 2 days in total.", "Sessions end after 1 hour idle or 2 days."},
+		{36 * time.Hour, 168 * time.Hour, "Sessions end after 36 hours idle and 7 days in total.", "Sessions end after 36 hours idle or 7 days."},
+		{12 * time.Hour, 50 * time.Hour, "Sessions end after 12 hours idle and 50 hours in total.", "Sessions end after 12 hours idle or 50 hours."},
+		{24 * time.Hour, 24 * time.Hour, "Sessions end after 24 hours idle and 24 hours in total.", "Sessions end after 24 hours idle or 24 hours."},
+		{6 * time.Hour, 24 * 90 * time.Hour, "Sessions end after 6 hours idle and 90 days in total.", "Sessions end after 6 hours idle or 90 days."},
+	} {
+		e.svc.Auth.Idle, e.svc.Auth.Absolute = c.idle, c.absolute
+		acct.svc.Auth.Idle, acct.svc.Auth.Absolute = c.idle, c.absolute
+		name := c.idle.String() + "/" + c.absolute.String()
 		res, body := e.do("GET", "/login", nil)
 		if res.StatusCode != 200 {
-			t.Fatalf("idle %v: /login answered %d", c.idle, res.StatusCode)
+			t.Fatalf("%s: /login answered %d", name, res.StatusCode)
 		}
-		mustContain(t, c.idle.String(), body, c.want)
+		mustContain(t, "login "+name, body, c.login)
+		res, body = acct.do("GET", "/account", nil)
+		if res.StatusCode != 200 {
+			t.Fatalf("%s: /account answered %d", name, res.StatusCode)
+		}
+		mustContain(t, "account "+name, body, c.account)
 	}
-	src, err := fs.ReadFile(web.Templates, "templates/pages/login.html")
-	if err != nil {
-		t.Fatal(err)
+	literal := regexp.MustCompile(`\d+\s+(hours?|days?|minutes?)`)
+	for _, f := range []string{"templates/pages/login.html", "templates/pages/account.html"} {
+		src, err := fs.ReadFile(web.Templates, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := literal.Find(src); m != nil {
+			t.Errorf("%s still holds a literal %q for a configured session limit", f, m)
+		}
+		if !strings.Contains(string(src), "{{.Idle}} idle") || !strings.Contains(string(src), "{{.Absolute}}") {
+			t.Errorf("%s does not say both configured session limits", f)
+		}
 	}
-	if strings.Contains(string(src), "12") {
-		t.Error("login.html still holds a literal 12")
-	}
-	if !strings.Contains(string(src), "{{.Idle}} idle") {
-		t.Error("login.html does not say the configured idle limit")
-	}
-	for d, want := range map[time.Duration]string{time.Hour: "1 hour", 2 * time.Hour: "2 hours", 168 * time.Hour: "168 hours", 90 * time.Minute: "90 minutes", time.Minute: "1 minute", 30 * time.Second: "1 minute"} {
-		if got := idleLimitText(d); got != want {
-			t.Errorf("idleLimitText(%v) = %q, want %q", d, got, want)
+	for d, want := range map[time.Duration]string{time.Hour: "1 hour", 2 * time.Hour: "2 hours", 36 * time.Hour: "36 hours", 47 * time.Hour: "47 hours", 48 * time.Hour: "2 days",
+		50 * time.Hour: "50 hours", 72 * time.Hour: "3 days", 168 * time.Hour: "7 days", 24 * time.Hour: "24 hours", 90 * time.Minute: "90 minutes", time.Minute: "1 minute", 30 * time.Second: "1 minute"} {
+		if got := sessionSpanText(d); got != want {
+			t.Errorf("sessionSpanText(%v) = %q, want %q", d, got, want)
 		}
 	}
 }

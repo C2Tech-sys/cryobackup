@@ -166,8 +166,8 @@ func TestStaleTempDirsOnlyOldOwnOnesAreRemoved(t *testing.T) {
 	liveTempDirs.dirs[live] = true
 	liveTempDirs.mu.Unlock()
 	t.Cleanup(func() { forgetLiveTempDir(live) })
-	stop := keepLiveTempDirsFresh(time.Hour) // touches at once, at the start of the run
-	stop()
+	k := keepLiveTempDirsFresh(time.Hour) // touches at once, at the start of the run
+	k.stop()
 	if fi, err := os.Stat(live); err != nil || time.Since(fi.ModTime()) > time.Minute {
 		t.Fatalf("the live directory was not touched at the start of the run (%v)", err)
 	}
@@ -181,11 +181,13 @@ func TestStaleTempDirsOnlyOldOwnOnesAreRemoved(t *testing.T) {
 		t.Errorf("%s, older than a day, is still there (%v)", dayOld, err)
 	}
 	// The touch is what kept it: with no touch, the same directory at the same age is swept.
+	// The directory is forgotten BEFORE it is aged: the process's own keeper (TestMain's) may tick at
+	// any moment, and a tick between the two would touch a directory this test means to leave alone.
+	forgetLiveTempDir(live)
 	old48 := time.Now().Add(-48 * time.Hour)
 	if err := os.Chtimes(live, old48, old48); err != nil {
 		t.Fatal(err)
 	}
-	forgetLiveTempDir(live)
 	touchLiveTempDirs()
 	removeStaleTempDirs(root, staleTempAge)
 	if _, err := os.Stat(live); !os.IsNotExist(err) {
@@ -281,5 +283,70 @@ func TestP21T2_F1_TheSkipCountLineNamesNoBrowserFound(t *testing.T) {
 	}
 	if strings.Contains(l, "did not start") || strings.Contains(l, "would not run") {
 		t.Errorf("the count line still counts a browser that would not start as a skip: %q", l)
+	}
+}
+
+// P21-T2 fix batch 1 R4 (b), (c): the run keeps its directories fresh. TestMain started the keeper
+// (runKeeper) and it touches what the run registered: a directory aged two days is fresh after the
+// keeper's touch, for a directory registered by hand and for the copy of the fixture store every env
+// opens (openFixtureStore). Without the keeper started, or with the store copies not registered, a
+// long run's directories would look like leftovers to another run's sweep.
+func TestP21T2_F2_TheRunKeepsItsDirectoriesFresh(t *testing.T) {
+	t.Parallel()
+	if runKeeper == nil {
+		t.Fatal("TestMain did not start the keep-fresh goroutine (runKeeper is nil)")
+	}
+	by, err := mkLiveTempDir("keep-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, storeDir := openFixtureStoreDir(t, time.Now)
+	t.Cleanup(func() { forgetLiveTempDir(by); _ = os.RemoveAll(by) })
+	dirs := map[string]string{"a directory registered with mkLiveTempDir": by, "the copy of the fixture store": storeDir}
+	aged := time.Now().Add(-48 * time.Hour)
+	for what, d := range dirs {
+		if err := os.Chtimes(d, aged, aged); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	if !runKeeper.touchNow() {
+		t.Fatal("the keep-fresh goroutine started by TestMain does not answer")
+	}
+	for what, d := range dirs {
+		if fi, err := os.Stat(d); err != nil || time.Since(fi.ModTime()) > time.Minute {
+			t.Errorf("%s was not touched by the run's keeper (%v)", what, err)
+		}
+	}
+}
+
+// P21-T2 fix batch 1 R4 (a): the F1 rule holds where layout ends the test, not only in the helper
+// browserWouldNotRun. layout is given a browser that is FOUND (CRYO_CHROME names a file) and will not
+// start, with CI unset and set; it must fail the test, and must not skip it or count a skip. Putting
+// the old t.Skipf back at layout's call site turns this red, as the helper's own test cannot.
+func TestP21T2_F1_LayoutFailsWhenTheFoundBrowserWillNotStart(t *testing.T) {
+	// Serial (P21-T2): it sets CI and CRYO_CHROME, process-wide variables.
+	bogus := filepath.Join(t.TempDir(), "chrome.exe")
+	if err := os.WriteFile(bogus, []byte("not a browser"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CRYO_CHROME", bogus)
+	e := newEnv(t)
+	before := layoutSkips.Load()
+	for _, ci := range []string{"", "true"} {
+		t.Setenv("CI", ci)
+		r := &tbRecorder{TB: t}
+		r.run(func(tb testing.TB) {
+			e.layout(tb, layoutOpts{HTML: "<!doctype html><html><body><p>x</p></body></html>", Probe: "return {iw: innerWidth};",
+				Start: startLayoutBrowser}) // not the shared browser: a running one would answer
+		})
+		if !r.failed || r.skipped {
+			t.Errorf("CI=%q: layout with a found browser that would not start: failed %v, skipped %v (%s)", ci, r.failed, r.skipped, r.msg)
+		}
+		if !strings.Contains(r.msg, "would not run") {
+			t.Errorf("CI=%q: the failure does not say the browser would not run: %q", ci, r.msg)
+		}
+	}
+	if layoutSkips.Load() != before {
+		t.Error("a found browser that would not start was counted as a skip")
 	}
 }

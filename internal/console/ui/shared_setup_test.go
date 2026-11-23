@@ -34,10 +34,10 @@ import (
 
 func TestMain(m *testing.M) {
 	removeStaleTempDirs(os.TempDir(), staleTempAge)
-	stopTouching := keepLiveTempDirsFresh(liveTouchEvery)
+	runKeeper = keepLiveTempDirsFresh(liveTouchEvery)
 	parseTemplatesFn = clonedTemplates
 	code := m.Run()
-	stopTouching()
+	runKeeper.stop()
 	stopLayoutBrowser()
 	if err := checkPageOrigins(); err != nil { // the layout pages' isolation held for the whole run
 		fmt.Fprintln(os.Stderr, "FAIL:", err)
@@ -117,24 +117,59 @@ func touchLiveTempDirs() {
 	}
 }
 
+// tempKeeper is the goroutine that keeps this run's temporary directories fresh.
+type tempKeeper struct {
+	done, finished chan struct{}
+	nudge          chan chan struct{} // touchNow asks for a touch over this channel
+}
+
+// runKeeper is the keeper TestMain started for this test process (nil outside TestMain's run).
+// TestP21T2_F2_TheRunKeepsItsDirectoriesFresh asks it for a touch, so a TestMain that does not start
+// it, or a keeper that does not touch, fails a test.
+var runKeeper *tempKeeper
+
 // keepLiveTempDirsFresh touches this run's directories at once and then every interval, from the
-// start of the run until the returned stop is called (TestMain).
-func keepLiveTempDirsFresh(every time.Duration) (stop func()) {
-	done, finished := make(chan struct{}), make(chan struct{})
+// start of the run until stop is called (TestMain). The first touch is done before it returns.
+func keepLiveTempDirsFresh(every time.Duration) *tempKeeper {
+	k := &tempKeeper{done: make(chan struct{}), finished: make(chan struct{}), nudge: make(chan chan struct{})}
+	touchLiveTempDirs()
 	go func() {
-		defer close(finished)
+		defer close(k.finished)
 		tick := time.NewTicker(every)
 		defer tick.Stop()
 		for {
-			touchLiveTempDirs()
 			select {
 			case <-tick.C:
-			case <-done:
+				touchLiveTempDirs()
+			case ack := <-k.nudge:
+				touchLiveTempDirs()
+				close(ack)
+			case <-k.done:
 				return
 			}
 		}
 	}()
-	return func() { close(done); <-finished }
+	return k
+}
+
+// stop ends the keeper and waits for it.
+func (k *tempKeeper) stop() { close(k.done); <-k.finished }
+
+// touchNow asks the running keeper for a touch, as its tick would, and waits until it has been
+// done. False when the keeper does not answer within 30 seconds (it is not running).
+func (k *tempKeeper) touchNow() bool {
+	ack := make(chan struct{})
+	select {
+	case k.nudge <- ack:
+	case <-time.After(30 * time.Second):
+		return false
+	}
+	select {
+	case <-ack:
+		return true
+	case <-time.After(30 * time.Second):
+		return false
+	}
 }
 
 // removeStaleTempDirs removes from root (the temp folder) this package's own temporary directories
@@ -265,6 +300,13 @@ func removeFixtureTemplate() {
 // openFixtureStore opens a private copy of the fixture template with clock as the store's clock.
 // Like store.OpenMemory, it lives in a fresh temporary directory removed after Close.
 func openFixtureStore(t *testing.T, clock func() time.Time) *store.Store {
+	st, _ := openFixtureStoreDir(t, clock)
+	return st
+}
+
+// openFixtureStoreDir is openFixtureStore and the directory of the copy (registered as the run's, so
+// kept fresh), for the test that checks the registration.
+func openFixtureStoreDir(t *testing.T, clock func() time.Time) (*store.Store, string) {
 	t.Helper()
 	src, err := fixtureTemplate()
 	if err != nil {
@@ -287,7 +329,7 @@ func openFixtureStore(t *testing.T, clock func() time.Time) *store.Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close(); remove(); st = nil }) // st = nil: see serveForTest
-	return st
+	return st, dir
 }
 
 // serveForTest starts h on a loopback test server that is closed when t ends.

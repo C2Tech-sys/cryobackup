@@ -59,11 +59,14 @@ type layoutOpts struct {
 	Probe   string
 	W, H    int      // the window; 1360 x 900 by default
 	Scripts []string // names under static/js to run (fresh.js, theme.js)
+	// Start gets the browser; nil is the package's shared one. A test seam (P21-T2 R4): the test of
+	// how layout ends when the browser will not start hands in a start that fails.
+	Start func(chrome string) (*layoutBrowser, error)
 }
 
 // chromeOrSkip returns the browser, or ends the test: a skip on a developer machine without one, a
 // FAILURE when the CI variable is set (a skipped layout test would let a regression through unseen).
-func chromeOrSkip(t *testing.T) string {
+func chromeOrSkip(t testing.TB) string {
 	t.Helper()
 	if c := chromeBinary(); c != "" {
 		return c
@@ -92,7 +95,7 @@ func (e *env) layoutPage(t *testing.T, path, css, probe string) map[string]float
 	return e.layout(t, layoutOpts{Path: path, CSS: css, Probe: probe})
 }
 
-func (e *env) layout(t *testing.T, o layoutOpts) map[string]float64 {
+func (e *env) layout(t testing.TB, o layoutOpts) map[string]float64 {
 	t.Helper()
 	chrome := chromeOrSkip(t)
 	if !containsStr(o.Scripts, "theme.js") { // it marks the page script-enabled (html.js): the phone drawer CSS depends on it
@@ -162,7 +165,11 @@ window.addEventListener('load', function () { var tries = 0; (function look() {
 	}
 	// The package's one browser (layout_browser_test.go) lays the wrapper out in a frame of the size the
 	// separate window used to have, and hands back the text of the wrapper's <pre id="__r">.
-	b, err := sharedLayoutBrowser(chrome)
+	start := o.Start
+	if start == nil {
+		start = sharedLayoutBrowser
+	}
+	b, err := start(chrome)
 	var out string
 	if err == nil {
 		out, err = b.run(dir, o.W+300, o.H+300, 2*time.Minute) // a hung browser must not burn the package's limit

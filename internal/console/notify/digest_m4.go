@@ -41,10 +41,10 @@ var (
 type digestLine struct {
 	Host  string // empty for a MISSING customer
 	State string // the state word shown
-	// Colour is the token of the line's chip: its section's colour, except for a PAUSED device. A
-	// PAUSED chip is always accent, as in the console, in whichever section the line sits: a pause is
-	// the operator's own decision, not a warning, and the state word is beside the colour. (Accent is
-	// the current choice; the operator has not ruled on this colour.)
+	// Colour is the token of the line's chip: its section's colour (danger under Critical, warning
+	// under Warnings), except a PAUSED device listed in the Parked section, whose chip is accent as in
+	// the console. A PAUSED device listed under Warnings or Critical (it carries an alarm-level flag)
+	// keeps that section's colour. The state word is beside the colour either way.
 	Colour string
 	Also   string // the other alarming flags, comma separated
 	Since  string
@@ -277,7 +277,7 @@ func RenderDigest(v state.FleetView, acks []store.Ack, o Options) (Content, erro
 			order[s] = append(order[s], g)
 		}
 		dl := digestLine{Host: l.Hostname, State: string(l.State), Since: when(l.Since, loc), Ack: ackOf(l, marks), Colour: p.Sections[s].Colour}
-		if l.State == state.StatePaused { // accent in every section: see digestLine.Colour
+		if l.State == state.StatePaused && s == sectionOther { // accent only in the Parked section: see digestLine.Colour
 			dl.Colour = "accent"
 		}
 		if l.Kind == state.DigestMissing {
