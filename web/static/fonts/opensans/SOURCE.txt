@@ -1,0 +1,17 @@
+Open Sans, The Open Sans Project Authors (https://github.com/googlefonts/opensans), SIL Open Font License 1.1.
+The files are Fontsource builds of the Google Fonts release (Google Fonts version v44, 2025-09-16):
+the variable font with its wght axis only (300-800; the wdth axis is not in these files), upright,
+split into Fontsource's latin and latin-ext subsets.
+Package: npm @fontsource-variable/open-sans 5.3.0 (https://fontsource.org/fonts/open-sans)
+         https://registry.npmjs.org/@fontsource-variable/open-sans/-/open-sans-5.3.0.tgz
+         sha1   60519bc6a61244acb55015ee113e98d5d4e48617 (the registry's published shasum; matches)
+         sha256 8f4c371d85381ef59af7ce93db9e0687fc7418409d366f6cace8f5d53c81711f
+Files:   from package/files/ in that tarball, stored unmodified under plain names
+         OpenSans-latin-var.woff2      <- open-sans-latin-wght-normal.woff2
+                                          sha256 d8e4fe0452aa2076429a9bb5d8757d00a994dd95986cf950e9a1a371b9a072a0
+         OpenSans-latin-ext-var.woff2  <- open-sans-latin-ext-wght-normal.woff2
+                                          sha256 d5bab8e28732fe3d10dcef4f77b9c248605bbb2a87d289a2539251ceafab536a
+         fonts.css declares each with the unicode-range of the package's wght.css (also unicode.json).
+Licence: OFL.txt is package/LICENSE from the same tarball, stored unmodified
+         sha256 9e7f12fafee50a9b4f7b3004c0fa58990805620d9debb0daf7f75de0d3ad5548
+The sha256 values are computed locally from the downloaded files.

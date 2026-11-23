@@ -1,4 +1,4 @@
-/* CryoBackup tokens - generated from tokens.json; dark-first. Display face: Orbitron, rationed (tokens.json display-usage). */
+/* CryoBackup tokens - generated from tokens.json; dark-first. Display face: Josefin Sans, rationed (tokens.json display-usage). */
 :root {
   --bg: #0B1220;
   --surface: #121C30;
@@ -18,9 +18,9 @@
   --warning-soft: rgba(245,181,71,.16);
   --success-soft: rgba(72,213,151,.14);
   color-scheme: dark;
-  --font-display: 'Orbitron', 'Michroma', 'IBM Plex Sans', system-ui, sans-serif;
-  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'Martian Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --font-display: 'Josefin Sans', 'JetBrains Mono', system-ui, sans-serif;
+  --font-sans: 'Open Sans', 'JetBrains Mono', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
   --text-xs: 12px; --leading-xs: 16px; --weight-xs: 500;
   --text-sm: 13px; --leading-sm: 18px; --weight-sm: 400;
   --text-base: 14px; --leading-base: 20px; --weight-base: 400;
@@ -104,10 +104,14 @@
   --success-soft: rgba(19,116,63,.10);
   color-scheme: light;
 }
-/* display roles (the only places Orbitron appears) */
-.t-hero-wordmark { font: 900 40px/1 var(--font-display); letter-spacing: .06em; }
-.t-wordmark { font: 800 15px/1 var(--font-display); letter-spacing: .12em; }
-.t-page-title { font: 600 12.5px/1.2 var(--font-display); letter-spacing: .22em; text-transform: uppercase; }
-.t-big-number { font: 700 23px/1.1 var(--font-display); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+/* display roles (the only places the display face appears). Josefin Sans's capitals sit above the middle of
+   their line box, so each role trades part of its line height for the same amount of top padding: the box
+   keeps its old height (1em, or 1.2em for the page title) and the capitals sit centred in it (ADR 0023). */
+.t-hero-wordmark { font: 900 40px/.75 var(--font-display); letter-spacing: .06em; padding-top: .25em; }
+.t-wordmark { font: 800 15px/.75 var(--font-display); letter-spacing: .12em; padding-top: .25em; }
+.t-page-title { font: 600 12.5px/1 var(--font-display); letter-spacing: .22em; text-transform: uppercase; padding-top: .2em; }
+.t-eyebrow-chip { font: 600 9.5px/.75 var(--font-display); letter-spacing: .14em; text-transform: uppercase; padding-top: .25em; }
+/* big numbers: the body face with tabular figures, not the display face. They change in place (KPI
+   tiles, ring centres) and Josefin Sans has no tabular figures, so its digits would jitter (ADR 0023). */
+.t-big-number { font: 700 23px/1.1 var(--font-sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .t-big-number.sm { font-size: 18px; }
-.t-eyebrow-chip { font: 600 9.5px/1 var(--font-display); letter-spacing: .14em; text-transform: uppercase; }

@@ -186,7 +186,7 @@ func (s *Service) designData(ctx context.Context, only string) DesignData {
 	d.Nav, d.Refresh, d.Fixtures, d.Zone = "design", 3600, true, s.zone(ctx)
 	d.Sys = s.sysItems(health.Fleet{})
 	d.Stamp = Stamp{State: "fresh", At: c.clock(now), ISO: now.Format(time.RFC3339), N: 26, M: 26, Zone: s.zone(ctx), Tooltip: "Fixtures clock, frozen"}
-	d.Checks = []Check{TokenCoverage(), OrbitronAudit()}
+	d.Checks = []Check{TokenCoverage(), DisplayFaceAudit()}
 	rows, cc := ContrastReport()
 	d.Contrast = rows
 	d.Checks = append(d.Checks, cc)

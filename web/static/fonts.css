@@ -1,32 +1,73 @@
 /* Vendored fonts (SIL OFL 1.1, licences beside each file). No remote font is ever requested.
-   Orbitron is the display face and is rationed to the five .t-* roles in tokens.css.
-   IBM Plex Sans is a variable font (wght 100-700). Martian Mono (the data face, --font-mono) is one
-   variable file (wght 100-800, wdth 75-112.5); font-stretch: 100% pins the width axis to Standard.
-   Orbitron and IBM Plex Sans are subset to Latin, Latin-1, Latin Extended-A and general punctuation
-   (web/README.md); Martian Mono is the unmodified release file (fonts/martianmono/SOURCE.txt).
+   Josefin Sans is the display face and is rationed to the .t-* display roles in tokens.css.
+   Open Sans is the body face; JetBrains Mono is the data face (--font-mono) and also stands behind
+   the display and body stacks as the symbol fallback for the few glyphs those two lack (ADR 0023).
+   Josefin Sans and Open Sans are variable (wght axis only) and come as two subsets each, latin and
+   latin-ext, declared with Fontsource's unicode-range values so a page fetches latin-ext only when
+   it shows such a character. JetBrains Mono is four static faces (400, 500, 600, 700), so every
+   weight the console asks for is a real face, never a synthetic bold.
+   Where each file came from: fonts/<family>/SOURCE.txt.
    The console serves this file with each url() versioned (?v=<content hash>, ui.New), so the
    font files share the one-year immutable cache of the other assets. */
 @font-face {
-  font-family: 'Orbitron';
-  src: url('/static/fonts/orbitron/Orbitron-var.woff2') format('woff2');
-  font-weight: 400 900;
+  font-family: 'Josefin Sans';
+  src: url('/static/fonts/josefinsans/JosefinSans-latin-ext-var.woff2') format('woff2');
+  font-weight: 100 700;
   font-style: normal;
-  /* block, not swap: Orbitron draws the wordmark, and a wordmark in the fallback face is a
-     different logo for a moment. The pages preload this file, so the block is rarely seen. */
   font-display: block;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 @font-face {
-  font-family: 'IBM Plex Sans';
-  src: url('/static/fonts/ibmplexsans/IBMPlexSans-var.woff2') format('woff2');
+  font-family: 'Josefin Sans';
+  src: url('/static/fonts/josefinsans/JosefinSans-latin-var.woff2') format('woff2');
   font-weight: 100 700;
+  font-style: normal;
+  /* block, not swap: Josefin Sans draws the wordmark, and a wordmark in the fallback face is a
+     different logo for a moment. The pages preload this file, so the block is rarely seen. */
+  font-display: block;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Open Sans';
+  src: url('/static/fonts/opensans/OpenSans-latin-ext-var.woff2') format('woff2');
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Open Sans';
+  src: url('/static/fonts/opensans/OpenSans-latin-var.woff2') format('woff2');
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/static/fonts/jetbrainsmono/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: 'Martian Mono';
-  src: url('/static/fonts/martianmono/MartianMono-var.woff2') format('woff2');
-  font-weight: 100 800;
-  font-stretch: 100%;
+  font-family: 'JetBrains Mono';
+  src: url('/static/fonts/jetbrainsmono/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/static/fonts/jetbrainsmono/JetBrainsMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/static/fonts/jetbrainsmono/JetBrainsMono-Bold.woff2') format('woff2');
+  font-weight: 700;
   font-style: normal;
   font-display: swap;
 }

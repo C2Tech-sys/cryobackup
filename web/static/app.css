@@ -1,7 +1,7 @@
 /* CryoBackup console - component styles (replica/design/components.md).
    Rules of this file, enforced by tests over web/static/*.css:
    - no literal colour: every colour is a token (var(--...)) or color-mix() over tokens;
-   - Orbitron (--font-display) is never referenced here: the five .t-* roles live in tokens.css. */
+   - the display face (--font-display) is never referenced here: its .t-* roles live in tokens.css. */
 
 /* ---- 1. Foundations -------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
@@ -11,6 +11,10 @@ body {
   font: var(--weight-base) var(--text-base)/var(--leading-base) var(--font-sans);
   font-variant-numeric: tabular-nums; font-variant-ligatures: no-contextual; -webkit-font-smoothing: antialiased;
 }
+/* Contextual alternates stay off on every element, not only where the body rule is inherited: a font
+   shorthand resets them, and the data face (JetBrains Mono) draws its ligatures (->, !=, ==) with them.
+   Text is shown as typed (ADR 0023). */
+*, *::before, *::after { font-variant-ligatures: no-contextual !important; }
 h1, h2, h3, h4, p { margin: 0; }
 h2, h3 { text-wrap: balance; }
 a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }

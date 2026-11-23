@@ -277,7 +277,7 @@ func TestTemplatesAreOutlookSafe(t *testing.T) {
 				t.Errorf("%s: missing %q", name, want)
 			}
 		}
-		for _, font := range []string{"Orbitron", "Martian", "fonts.googleapis"} {
+		for _, font := range []string{"Orbitron", "Martian", "IBM Plex", "Josefin", "JetBrains", "fonts.googleapis"} {
 			if strings.Contains(h, font) {
 				t.Errorf("%s: names the font %q", name, font)
 			}
