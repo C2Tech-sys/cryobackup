@@ -65,7 +65,7 @@ func TestFakeSenderRecordsAndFails(t *testing.T) {
 
 func TestFakeSenderValidatesLikeTheRealSender(t *testing.T) {
 	f := NewFakeSender()
-	err := f.Send(context.Background(), Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: "x\r\nBcc: e@example.net", Text: "t"})
+	err := f.Send(context.Background(), Message{From: "a@example.com", To: []string{"b@example.com"}, Subject: "x\r\nBcc: e@example.test", Text: "t"})
 	wantErr(t, err, StageConfig, ClassMessageInvalid, false)
 	if len(f.Sent()) != 0 {
 		t.Fatal("an invalid message was recorded")

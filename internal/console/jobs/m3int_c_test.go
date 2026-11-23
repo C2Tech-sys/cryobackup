@@ -25,8 +25,17 @@ func TestC08ProbeLeaseRenewsInsideItsTTL(t *testing.T) { // M3-INT C1
 			t.Errorf("interval %v: renew every %v with a TTL of %v; want at least two renewals inside the TTL", iv, every, ttl)
 		}
 	}
-	// And the renewer uses it: set a short interval and watch the lease outlive its TTL under a
-	// probe that runs longer.
+	// And the renewer uses it: set a short interval (a TTL of 90 ms on the store's clock, a renewal
+	// every 30 ms on the renewer's real ticker) and watch the lease outlive its TTL under a probe
+	// that does not end.
+	//
+	// P21-T2 G: no fixed sleep. This slept 200 ms of real time and then moved the store's clock a
+	// whole second at once; on a loaded runner under -race the renewal that followed could miss its
+	// bound (a third of the TTL, 30 ms of real time), find the lease already past its end on the
+	// prober's clock and drop it, so the test failed without any fault in the renewer. Now the
+	// store's clock moves in steps shorter than the TTL, each one only after a renewal has been
+	// seen, until it is a whole TTL past the first expiry. A slow renewal is then retried at the next
+	// tick, as in production, and every wait is on an observed renewal with a generous deadline.
 	r := newProberRig(t, false)
 	be := &countingBackend{Backend: r.be, release: make(chan struct{})}
 	defer close(be.release)
@@ -34,10 +43,27 @@ func TestC08ProbeLeaseRenewsInsideItsTTL(t *testing.T) { // M3-INT C1
 	if err := r.hp.Run(r.ctx); err != nil {
 		t.Fatal(err)
 	}
+	for deadline := time.Now().Add(30 * time.Second); be.active.Load() == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the storage probe did not start")
+		}
+	}
 	first := r.row(t, ProbeLease)
-	time.Sleep(200 * time.Millisecond) // several TTLs of real time: the renewer runs on a real ticker
-	r.clk.Advance(time.Second)         // the store's clock: well past the first expiry
-	waitLeaseRenewedAfter(t, r, "console-a", *first.LeaseUntil)
+	ttl := r.hp.leaseTTL()
+	until := *first.LeaseUntil
+	steps := 0
+	for !r.clk.Now().After(first.LeaseUntil.Add(ttl)) { // the store's clock: well past the first expiry
+		r.clk.Advance(ttl * 2 / 3) // inside the lease the last renewal gave: it cannot lapse in between
+		waitLeaseRenewedAfter(t, r, "console-a", until)
+		until = *r.row(t, ProbeLease).LeaseUntil
+		steps++
+	}
+	if steps < 3 {
+		t.Fatalf("only %d renewals were waited for: the clock did not pass the first expiry by a whole TTL", steps)
+	}
+	if be.active.Load() == 0 {
+		t.Fatal("the probe ended while its lease was being renewed: the lease was lost and the probe cancelled")
+	}
 }
 
 // M3-T2 r3 LOW-3: the worker's settings store failing during the probe (after a

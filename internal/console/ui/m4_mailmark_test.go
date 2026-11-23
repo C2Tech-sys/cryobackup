@@ -32,6 +32,8 @@ func TestP20MD_MailMarkRouteServesTheEmbeddedMark(t *testing.T) {
 	if !bytes.Equal([]byte(body), notify.MarkPNG()) {
 		t.Fatal("the route does not serve the embedded mark")
 	}
+	// On the package's own test mux (a bare http.ServeMux) another method is 405. The console's real
+	// admin listener answers it 404: TestP20MD_MailMarkThroughTheRealServerChain pins that one.
 	if res, _ := e.do("POST", mailMarkPath, nil); res.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("POST %s: %d", mailMarkPath, res.StatusCode)
 	}
@@ -130,6 +132,15 @@ func TestP20MD_MailMarkThroughTheRealServerChain(t *testing.T) {
 	}
 	if h.Get("Content-Security-Policy") != server.ContentSecurityPolicy || h.Get("X-Frame-Options") != "DENY" || h.Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("the listener's other security headers changed: %v", h)
+	}
+	// P21-T2 E: what the real listener answers to another method on the route is 404 (its catch-all
+	// route takes every method no route takes; the bare test mux says 405), and never the mark.
+	for _, m := range []string{"POST", "PUT", "DELETE"} {
+		w = httptest.NewRecorder()
+		srv.AdminHandler().ServeHTTP(w, httptest.NewRequest(m, mailMarkPath, nil))
+		if w.Code != http.StatusNotFound || bytes.Equal(w.Body.Bytes(), notify.MarkPNG()) {
+			t.Fatalf("%s %s through the server: %d, want 404 and no mark", m, mailMarkPath, w.Code)
+		}
 	}
 	// Another response keeps the listener's same-origin.
 	w = httptest.NewRecorder()

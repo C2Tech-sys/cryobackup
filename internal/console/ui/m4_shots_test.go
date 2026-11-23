@@ -86,7 +86,7 @@ func (e *env) shot(t *testing.T, path, theme string, w, h int, extraJS string, m
 	args := append([]string{"--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars", "--disable-site-isolation-trials", "--window-size=" + strconv.Itoa(ww) + "," + strconv.Itoa(h),
 		"--user-data-dir=" + filepath.Join(dir, "profile"), "--virtual-time-budget=6000", "--screenshot=" + raw}, quietBrowserFlags...)
 	if err := exec.CommandContext(ctx, chrome, append(args, "file:///"+filepath.ToSlash(file))...).Run(); err != nil {
-		t.Skipf("the browser would not take a screenshot here (%v)", err)
+		browserWouldNotRun(t, err) // P21-T2 F1: a found browser that fails is a failure, not a skip
 	}
 	f, err := os.Open(raw)
 	if err != nil {
