@@ -24,6 +24,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/api"
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
+	"github.com/c2tech-sys/cryobackup/internal/logx"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
@@ -1682,6 +1683,8 @@ func TestM3EventStreamDoesNotRememberADatabaseErrorAsNotVisible(t *testing.T) { 
 	e := newEnv(t)
 	src := &fakeSource{}
 	e.svc.Events, e.svc.sseRefresh, e.svc.sseGap, e.svc.sseShare = src, time.Hour, 10*time.Millisecond, time.Nanosecond
+	logs := &lockedBuf{}
+	e.svc.Log = logx.New(logs, logx.LevelDebug)
 	owner := e.login("admin", pw)
 	st, _ := e.openStream("/api/v1/events?topics=runs", owner)
 	// The device lookup fails with a database error (not "not found"): the event is dropped.
@@ -1693,12 +1696,20 @@ func TestM3EventStreamDoesNotRememberADatabaseErrorAsNotVisible(t *testing.T) { 
 	}
 	exec(`ALTER TABLE devices RENAME TO devices_held`)
 	src.send(Signal{Kind: SignalProgress, DeviceID: e.dev.ID, RunID: "01J9Y4K3A0B1C2D3E4F5G6H7M1"})
+	// The stream reads the signal only after its first fleet evaluation, which takes seconds on a
+	// loaded machine: wait for the failed lookup itself, so the table is not put back before it.
+	const lookupFailed = "event stream: device scope not checked"
+	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(logs.String(), lookupFailed); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the stream never looked the device up while the table was away; log:\n%s", logs.String())
+		}
+	}
 	st.none("run.progress", 300*time.Millisecond)
 	exec(`ALTER TABLE devices_held RENAME TO devices`)
 	// The error was not cached as "not visible": the same device's next event is delivered.
 	src.send(Signal{Kind: SignalProgress, DeviceID: e.dev.ID, RunID: "01J9Y4K3A0B1C2D3E4F5G6H7M2"})
 	var rp RunProgressJSON
-	if err := json.Unmarshal([]byte(st.next("run.progress", 5*time.Second).Data), &rp); err != nil || rp.RunID != "01J9Y4K3A0B1C2D3E4F5G6H7M2" {
+	if err := json.Unmarshal([]byte(st.next("run.progress", 30*time.Second).Data), &rp); err != nil || rp.RunID != "01J9Y4K3A0B1C2D3E4F5G6H7M2" {
 		t.Fatalf("after the database came back: %+v %v", rp, err)
 	}
 }

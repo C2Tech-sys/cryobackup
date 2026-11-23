@@ -102,7 +102,7 @@ func start(t *testing.T, o Options) *running {
 				t.Errorf("Run returned %v", err)
 			}
 		case <-time.After(30 * time.Second):
-			t.Error("the agent did not stop within 30 s")
+			t.Errorf("the agent did not stop within 30 s; goroutines:\n%s", allStacks())
 		}
 		a.Close()
 	}
@@ -119,7 +119,22 @@ func waitFor(t *testing.T, what string, d time.Duration, cond func() bool) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out after %v waiting for %s", d, what)
+	t.Fatalf("timed out after %v waiting for %s; goroutines:\n%s", d, what, allStacks())
+}
+
+// allStacks is every goroutine's stack. A wait that runs out here is a hang more often than a
+// slow step (P21-T4: a CI run logged nothing for 30 s after "agent started", where a normal boot
+// run starts within milliseconds, and then did not stop within 30 s either), and where each
+// goroutine waits says why. Stacks carry no file contents and no paths of the backed-up tree.
+func allStacks() string {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return string(buf[:n])
+		}
+		buf = make([]byte, 2*len(buf))
+	}
 }
 
 func readFile(t *testing.T, path string) string {

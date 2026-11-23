@@ -184,6 +184,14 @@ func (w *retireWorld) auditDetails(id string) []string {
 
 func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T) { // M3-T6 delta M1
 	app, _ := buildFromInit(t, "America/Chicago", "America/Chicago")
+	// The API's retire answers io once the sync run after it has failed. That run checks a bcrypt
+	// hash, which under -race on a loaded machine takes seconds per compare, and it can queue behind
+	// a run already in flight, so the product's 5 s wait can run out first (the answer was then
+	// still_in_file, sync_busy or check_timed_out). The wait is set long here, before anything is
+	// served; the answer still comes as soon as the failed run is recorded. The UI's retire below
+	// goes through the UI's own in-process API, which keeps the 5 s wait.
+	const syncWait = time.Minute
+	app.Admin.GatewaySyncWait = syncWait
 	ctx, cancel := context.WithCancel(context.Background())
 	app.Runner.Start(ctx)
 	t.Cleanup(func() { cancel(); app.Runner.Stop() })
@@ -222,7 +230,7 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 	// The answer is pending, within the bound, with the reason class.
 	began := time.Now()
 	got := w.retire(dead)
-	if took := time.Since(began); took > adminapi.DefaultGatewaySyncWait+3*time.Second {
+	if took := time.Since(began); took > syncWait+3*time.Second {
 		t.Errorf("the retire took %v: the wait must stay bounded", took)
 	}
 	if !got.Retired || got.LoginsRevoked != 1 || got.GatewayLogin != adminapi.GatewayLoginPending || got.GatewayLoginReason != "io" {

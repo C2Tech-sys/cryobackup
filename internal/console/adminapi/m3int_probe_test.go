@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -226,6 +227,9 @@ func TestM3INTStorageProbeWaitsForTheProbeInFlight(t *testing.T) { // F19, M3-IN
 	}
 	e.clk.Advance(time.Second) // the request starts after the tick's probe did
 	answer := e.postProbe(owner, target)
+	// Release the tick's probe only once the request has joined it: released earlier, the
+	// request finds nothing in flight and rightly starts a probe of its own.
+	waitProbeNowWaiting(t, answer)
 	select {
 	case a := <-answer:
 		t.Fatalf("answered (%d %s) while the storage probe in flight had not ended", a.status, a.body)
@@ -242,6 +246,38 @@ func TestM3INTStorageProbeWaitsForTheProbeInFlight(t *testing.T) { // F19, M3-IN
 	}
 	if n := be.calls.Load(); n != 1 {
 		t.Errorf("%d storage probes: the one in flight was doubled", n)
+	}
+}
+
+// waitProbeNowWaiting waits until a HealthProber.ProbeNow call is parked in its wait for
+// the probes it started or joined: it claims both probes before that wait, so from then on
+// a probe in flight is joined, never doubled. Nothing the prober exposes changes at that
+// point, so the goroutine's own state is read: a goroutine blocked in select whose top
+// frame is ProbeNow. An answer while waiting fails at once.
+func waitProbeNowWaiting(t *testing.T, answer <-chan probeAnswer) {
+	t.Helper()
+	const frame = "/internal/console/jobs.(*HealthProber).ProbeNow("
+	buf := make([]byte, 1<<20)
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		n := runtime.Stack(buf, true)
+		for n == len(buf) {
+			buf = make([]byte, 2*len(buf))
+			n = runtime.Stack(buf, true)
+		}
+		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+			lines := strings.SplitN(g, "\n", 3)
+			if len(lines) >= 2 && strings.Contains(lines[0], " [select") && strings.Contains(lines[1], frame) {
+				return
+			}
+		}
+		select {
+		case a := <-answer:
+			t.Fatalf("answered (%d %s) before it waited for the probes", a.status, a.body)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the probe request never came to wait for its probes")
+		}
 	}
 }
 
