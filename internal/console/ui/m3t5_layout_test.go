@@ -156,10 +156,11 @@ window.addEventListener('load', function () { var tries = 0; (function look() {
 	if err == nil {
 		out, err = b.run(dir, o.W+300, o.H+300, 2*time.Minute) // a hung browser must not burn the package's limit
 	}
-	if err != nil && !errors.Is(err, errNoAnswer) {
+	if err != nil && !errors.Is(err, errNoAnswer) && !errors.Is(err, errPageServer) {
 		if os.Getenv("CI") != "" {
 			t.Fatalf("CI is set and the browser would not run (%v)", err)
 		}
+		layoutSkips.Add(1) // TestMain names the count at the end of the run
 		t.Skipf("the browser would not run here (%v)", err)
 	}
 	if err != nil || out == "" {

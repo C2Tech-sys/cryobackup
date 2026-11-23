@@ -3,12 +3,14 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"html/template"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,11 +33,43 @@ import (
 // in their first line; Go runs every serial test before it releases the parallel ones.
 
 func TestMain(m *testing.M) {
+	removeStaleTempDirs(os.TempDir(), time.Hour)
 	parseTemplatesFn = clonedTemplates
 	code := m.Run()
 	stopLayoutBrowser()
+	if err := checkPageOrigins(); err != nil { // the layout pages' isolation held for the whole run
+		fmt.Fprintln(os.Stderr, "FAIL:", err)
+		code = 1
+	}
+	closePageServers()
 	removeFixtureTemplate()
+	if n := layoutSkips.Load(); n > 0 {
+		fmt.Fprintf(os.Stderr, "%d layout tests skipped because the browser did not start (set CRYO_CHROME; with CI set they fail instead)\n", n)
+	}
 	os.Exit(code)
+}
+
+// tempPrefix starts the name of every temporary directory this package makes outside t.TempDir:
+// the fixture template, each env's store copy and the browser profile.
+const tempPrefix = "cryo-ui-"
+
+// removeStaleTempDirs removes from root (the temp folder) this package's own temporary directories
+// left behind by an earlier run that was killed before its cleanups ran (a timeout, a hard kill),
+// so they do not pile up there. It touches only directories named tempPrefix* and only those last
+// modified more than maxAge ago: a younger one may belong to a run of this package still going.
+func removeStaleTempDirs(root string, maxAge time.Duration) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, de := range entries {
+		if !de.IsDir() || !strings.HasPrefix(de.Name(), tempPrefix) {
+			continue
+		}
+		if fi, err := de.Info(); err == nil && time.Since(fi.ModTime()) > maxAge {
+			_ = os.RemoveAll(filepath.Join(root, de.Name()))
+		}
+	}
 }
 
 // parsedTemplates is the page templates parsed once, never executed: only clones of it are.
@@ -90,7 +124,7 @@ func fixtureTemplate() (string, error) {
 
 func buildFixtureTemplate() (string, error) {
 	ctx := context.Background()
-	dir, err := os.MkdirTemp("", "cryo-ui-template-")
+	dir, err := os.MkdirTemp("", tempPrefix+"template-")
 	if err != nil {
 		return "", err
 	}
@@ -148,7 +182,7 @@ func openFixtureStore(t *testing.T, clock func() time.Time) *store.Store {
 	if err != nil {
 		t.Fatalf("building the fixture database: %v", err)
 	}
-	dir, err := os.MkdirTemp("", "cryo-ui-store-")
+	dir, err := os.MkdirTemp("", tempPrefix+"store-")
 	if err != nil {
 		t.Fatal(err)
 	}

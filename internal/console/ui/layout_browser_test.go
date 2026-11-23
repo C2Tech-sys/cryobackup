@@ -6,11 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,12 +57,16 @@ type layoutBrowser struct {
 var (
 	browserMu   sync.Mutex
 	browser     *layoutBrowser
-	browserErr  error
 	browserDone bool // stopLayoutBrowser ran: no new browser is started
+
+	// layoutSkips counts the layout tests that skipped because the browser would not run (CI unset).
+	// TestMain names the count at the end, so a run that skipped them does not end on a quiet "ok".
+	layoutSkips atomic.Int64
 )
 
-// sharedLayoutBrowser returns the package's browser, starting it on first use. A browser that
-// would not start is remembered, so every later measurement reports the same error at once.
+// sharedLayoutBrowser returns the package's browser, starting it on first use. A failed start is
+// not remembered: the next measurement tries again, so one bad start costs one test, as a failed
+// launch did when every measurement started its own browser.
 func sharedLayoutBrowser(chrome string) (*layoutBrowser, error) {
 	browserMu.Lock()
 	defer browserMu.Unlock()
@@ -70,14 +79,15 @@ func sharedLayoutBrowser(chrome string) (*layoutBrowser, error) {
 			return browser, nil
 		}
 	}
-	if browserErr != nil {
-		return nil, browserErr
-	}
 	if browserDone {
 		return nil, errors.New("the shared browser was already stopped")
 	}
-	browser, browserErr = startLayoutBrowser(chrome)
-	return browser, browserErr
+	b, err := startLayoutBrowser(chrome)
+	if err != nil {
+		return nil, err
+	}
+	browser = b
+	return b, nil
 }
 
 // stopLayoutBrowser closes the browser (TestMain, after the tests).
@@ -126,7 +136,7 @@ next();
 </script></body></html>`
 
 func startLayoutBrowser(chrome string) (*layoutBrowser, error) {
-	profile, err := os.MkdirTemp("", "cryo-ui-browser-")
+	profile, err := os.MkdirTemp("", tempPrefix+"browser-")
 	if err != nil {
 		return nil, err
 	}
@@ -190,9 +200,12 @@ func startLayoutBrowser(chrome string) (*layoutBrowser, error) {
 // run lays out the wrapper page in dir (page.html and its static/ files) in a frame of w x h and
 // returns what the wrapper reported. It gives up after timeout, or when the browser ends.
 func (b *layoutBrowser) run(dir string, w, h int, timeout time.Duration) (string, error) {
-	pages := httptest.NewServer(http.FileServer(http.Dir(dir)))
-	defer pages.Close()
-	j := &layoutJob{ID: strconv.FormatInt(b.seq.Add(1), 10), URL: pages.URL + "/page.html", W: w, H: h, result: make(chan string, 1)}
+	pages, err := newPageServer(dir)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errPageServer, err)
+	}
+	defer pages.retire()
+	j := &layoutJob{ID: strconv.FormatInt(b.seq.Add(1), 10), URL: pages.origin + "/page.html", W: w, H: h, result: make(chan string, 1)}
 	b.mu.Lock()
 	b.pending[j.ID] = j
 	b.mu.Unlock()
@@ -219,6 +232,121 @@ func (b *layoutBrowser) run(dir string, w, h int, timeout time.Duration) (string
 // errNoAnswer is a running browser that took the page and never reported on it: the page or its
 // probe is at fault, not the machine, so the test fails rather than skips.
 var errNoAnswer = errors.New("no answer from the page")
+
+// errPageServer is a page server that could not be set up: the harness is at fault, so the test fails.
+var errPageServer = errors.New("the page server could not start")
+
+// ---- the per-page servers ----
+//
+// Each measured page is served from its own origin, so nothing one page leaves in the browser
+// (cache entries, sessionStorage, which fresh.js uses) can reach another. Two rules make that hold:
+//
+//   - nothing is cached or revalidated: every response says Cache-Control: no-store and carries no
+//     Last-Modified or ETag, and conditional request headers are ignored;
+//   - an origin is never handed out twice in a run: a page's listener stays bound, answering 410
+//     to everything, until TestMain ends, so the operating system cannot give its port to a later
+//     page. (Linux picks ephemeral ports at random; a reused port would be a reused origin.)
+//
+// checkPageOrigins, run by TestMain at the end, verifies both halves of the second rule for the
+// whole run, and TestLayoutPageServer* test them directly.
+
+type pageServer struct {
+	origin string
+	ln     net.Listener
+	srv    *http.Server
+	dir    atomic.Pointer[string] // nil once retired: the server answers 410 Gone
+}
+
+var pageServers struct {
+	mu      sync.Mutex
+	all     []*pageServer
+	origins map[string]bool
+	dupes   []string // origins handed out twice (checkPageOrigins fails the run on any)
+}
+
+// newPageServer serves dir from a new loopback origin, never one handed out before in this run.
+func newPageServer(dir string) (*pageServer, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	p := &pageServer{origin: "http://" + ln.Addr().String(), ln: ln}
+	p.dir.Store(&dir)
+	p.srv = &http.Server{Handler: pageHandler(p.dir.Load), ReadHeaderTimeout: time.Minute}
+	pageServers.mu.Lock()
+	if pageServers.origins == nil {
+		pageServers.origins = map[string]bool{}
+	}
+	if pageServers.origins[p.origin] {
+		pageServers.dupes = append(pageServers.dupes, p.origin)
+	}
+	pageServers.origins[p.origin] = true
+	pageServers.all = append(pageServers.all, p)
+	pageServers.mu.Unlock()
+	go func() { _ = p.srv.Serve(ln) }()
+	return p, nil
+}
+
+// retire stops serving the page and keeps the port: from now on every request is answered 410.
+func (p *pageServer) retire() {
+	p.dir.Store(nil)
+	p.srv.SetKeepAlivesEnabled(false)
+}
+
+// pageHandler serves the files of the directory dir returns, with no caching and no validators,
+// or 410 Gone for everything once dir returns nil.
+func pageHandler(dir func() *string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		d := dir()
+		if d == nil {
+			http.Error(w, "this page's measurement is over", http.StatusGone)
+			return
+		}
+		rel := path.Clean("/" + r.URL.Path)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead || rel == "/" || strings.ContainsAny(rel, `\:`) {
+			http.NotFound(w, r)
+			return
+		}
+		b, err := os.ReadFile(filepath.Join(*d, filepath.FromSlash(rel[1:])))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if ct := mime.TypeByExtension(path.Ext(rel)); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		_, _ = w.Write(b)
+	})
+}
+
+// checkPageOrigins reports an origin handed out twice in this run, or a page listener that is no
+// longer bound (so its port could have gone to a later page). TestMain runs it before closing them.
+func checkPageOrigins() error {
+	pageServers.mu.Lock()
+	defer pageServers.mu.Unlock()
+	if len(pageServers.dupes) > 0 {
+		return fmt.Errorf("layout page origins handed out twice: %v", pageServers.dupes)
+	}
+	for _, p := range pageServers.all {
+		c, err := net.DialTimeout("tcp", p.ln.Addr().String(), 5*time.Second)
+		if err != nil {
+			return fmt.Errorf("layout page listener %s is no longer bound: %v", p.origin, err)
+		}
+		_ = c.Close()
+	}
+	return nil
+}
+
+// closePageServers closes every page listener (TestMain, after checkPageOrigins).
+func closePageServers() {
+	pageServers.mu.Lock()
+	defer pageServers.mu.Unlock()
+	for _, p := range pageServers.all {
+		_ = p.srv.Close()
+	}
+	pageServers.all = nil
+}
 
 // close asks the runner to close the browser, kills it if it has not gone within a few seconds,
 // and removes its profile.
