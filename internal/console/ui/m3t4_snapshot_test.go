@@ -16,6 +16,7 @@ import (
 // referenced from the source tree), for a headless browser to photograph. It
 // does nothing unless M3T4_SNAPSHOT_DIR is set.
 func TestM3T4WriteSnapshots(t *testing.T) {
+	t.Parallel()
 	dir := os.Getenv("M3T4_SNAPSHOT_DIR")
 	if dir == "" {
 		t.Skip("M3T4_SNAPSHOT_DIR is not set")

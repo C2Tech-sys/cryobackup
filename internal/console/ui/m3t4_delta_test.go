@@ -49,6 +49,7 @@ func (e *env) countEvals() *atomic.Int32 {
 // ---- item 6: one evaluation per request ----
 
 func TestM3T4EveryPageEvaluatesTheFleetOncePerRequest(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.m3Silence() // silence rows, expanded rows and the summary all want the fleet too
@@ -88,6 +89,7 @@ func TestM3T4EveryPageEvaluatesTheFleetOncePerRequest(t *testing.T) {
 // ---- item 6: paging by device inside a customer ----
 
 func TestM3T4UnitWindowPagesByDeviceInsideABigCustomer(t *testing.T) {
+	t.Parallel()
 	// A 3000-device customer between two small ones: 5, 3000, 1 (an empty customer is one row).
 	units := []int{5, 3000, 1}
 	for _, tc := range []struct {
@@ -138,6 +140,7 @@ func TestM3T4UnitWindowPagesByDeviceInsideABigCustomer(t *testing.T) {
 // ---- item 3: no-data states that are alarms ----
 
 func TestM3T4ActivityAlarmsWhenEveryDeviceIsRetiredAndSaysWhenTheFilterFindsNothing(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	// A healthy customer under the failed-or-missed filter: an explicit answer with its evidence, not a blank page.
@@ -167,6 +170,7 @@ func TestM3T4ActivityAlarmsWhenEveryDeviceIsRetiredAndSaysWhenTheFilterFindsNoth
 // ---- item 5: the silence row's link lists exactly the devices it counts ----
 
 func TestM3T4SilenceRowLinkListsExactlyTheDevicesItCounts(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	e.m3Silence()
@@ -223,6 +227,7 @@ func TestM3T4SilenceRowLinkListsExactlyTheDevicesItCounts(t *testing.T) {
 // ---- item 1 on the page, and items 7 (survivors) ----
 
 func TestM3T4SystemBuildFactShowsTheRealStamp(t *testing.T) {
+	t.Parallel()
 	facts := versionFacts(adminapi.VersionsJSON{Console: "1.4.2", Commit: "abc1234", BuildDate: "2026-11-05T10:20:30Z", Schema: 5}, fmtCtx{})
 	var build string
 	for _, f := range facts {
@@ -241,6 +246,7 @@ func TestM3T4SystemBuildFactShowsTheRealStamp(t *testing.T) {
 }
 
 func TestM3T4RunsFragmentIsPinnedAndScopedAndAFailedFleetIsNotBlank(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.m3Seed()
 	e.login()
@@ -274,6 +280,7 @@ func TestM3T4RunsFragmentIsPinnedAndScopedAndAFailedFleetIsNotBlank(t *testing.T
 }
 
 func TestM3T4NoRunsForEnrolledDevicesIsAnAlarm(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error { _, err := tx.Exec(`DELETE FROM runs`); return err }); err != nil {
@@ -290,6 +297,7 @@ func TestM3T4NoRunsForEnrolledDevicesIsAnAlarm(t *testing.T) {
 }
 
 func TestM3T4PartialAnswersAreWarningsNotCleanLists(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	dev := adminapi.DeviceJSON{ID: "dev1", CustomerID: "c1", Customer: "Summit Eye Care", Hostname: "PARTIAL-TEST-01", State: "stale", Flags: []string{}, Attributes: []string{}}
@@ -315,6 +323,7 @@ func TestM3T4PartialAnswersAreWarningsNotCleanLists(t *testing.T) {
 }
 
 func TestM3T4TheMissingChipIsCriticalAndAnUnknownJobStatusIsNotOK(t *testing.T) {
+	t.Parallel()
 	if c := customerStatusChip("x", "missing"); c.Class != ClassCrit || c.Label != "MISSING" {
 		t.Errorf("MISSING chip: %+v", c)
 	}
@@ -358,6 +367,7 @@ func TestM3T4TheMissingChipIsCriticalAndAnUnknownJobStatusIsNotOK(t *testing.T) 
 // ---- Run now: the form carries its token, shutdown refuses, the flash cannot be faked ----
 
 func TestM3T4RunNowFormCarriesItsTokenAndWorksFromTheRenderedForm(t *testing.T) {
+	t.Parallel()
 	e, jobs := newM3Env(t)
 	e.login()
 	body := e.page("/system", 200)
@@ -380,6 +390,7 @@ func TestM3T4RunNowFormCarriesItsTokenAndWorksFromTheRenderedForm(t *testing.T) 
 }
 
 func TestM3T4BeginShutdownRefusesRunNowFromTheFirstMoment(t *testing.T) {
+	// Serial (P21-T1): it watches a 300 ms window for a job that must not start, so it runs alone, as it always did.
 	e, jobs := newM3Env(t)
 	e.login()
 	e.svc.BeginShutdown() // before any page has been rendered
@@ -402,6 +413,7 @@ func TestM3T4BeginShutdownRefusesRunNowFromTheFirstMoment(t *testing.T) {
 }
 
 func TestM3T4TheAcceptedFlashCannotBeFakedByAURL(t *testing.T) {
+	t.Parallel()
 	e, jobs := newM3Env(t)
 	e.login()
 	for name, u := range map[string]string{
@@ -433,6 +445,7 @@ func TestM3T4TheAcceptedFlashCannotBeFakedByAURL(t *testing.T) {
 
 // N22: the flash token's expiry, in the same session, so the session binding cannot be what refuses it.
 func TestR3TheFlashTokenExpiresInTheSameSession(t *testing.T) { // M3 N22
+	t.Parallel()
 	e, jobs := newM3Env(t)
 	e.login()
 	res, _ := e.post("/ui/system/jobs/alarm-evaluator/run", url.Values{}, false)
@@ -452,6 +465,7 @@ func TestR3TheFlashTokenExpiresInTheSameSession(t *testing.T) { // M3 N22
 // ---- fixtures mode ----
 
 func TestM3T4FixturesModeBringsItsOwnJobsAndABannerSwitch(t *testing.T) {
+	// Serial (P21-T1): GET /fixtures flips fixtures.SetAllBanners, a process-wide switch, so it never runs beside the parallel tests.
 	t.Cleanup(func() { fixtures.SetAllBanners(false) })
 	e := newEnv(t) // Fixtures true, no job runner set: the pages use the fictional jobs
 	e.login()
@@ -497,6 +511,7 @@ func TestM3T4FixturesModeBringsItsOwnJobsAndABannerSwitch(t *testing.T) {
 // ---- low items: live regions, labels, icons ----
 
 func TestM3T4PagesRefreshLikeTheBoardAndLabelTheirPhoneValues(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -539,6 +554,7 @@ func TestM3T4PagesRefreshLikeTheBoardAndLabelTheirPhoneValues(t *testing.T) {
 }
 
 func TestM3T4EveryNewNavigationItemHasItsOwnIcon(t *testing.T) {
+	t.Parallel()
 	e, _ := newM3Env(t)
 	e.login()
 	body := e.page("/", 200)

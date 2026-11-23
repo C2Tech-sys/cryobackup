@@ -18,6 +18,7 @@ import (
 // passed; an unknown notice, a missing or stale at, or another page's URL
 // shows nothing.
 func TestBusyNoticeIsPlainWords(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	res, _ := e.post("/ui/devices/"+e.dev["DR-OFFICE-PC"]+"/restore", url.Values{"snapshot": {fixtures.FixtureSnapshotID}, "action": {"submit"}, "path": {"/C/Users/Public/Desktop/Welcome.txt"}}, false)

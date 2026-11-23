@@ -22,6 +22,7 @@ func raw(m map[string]string) map[string]json.RawMessage {
 }
 
 func TestPlanRepairKeepsEverythingThatStillComposes(t *testing.T) {
+	t.Parallel()
 	def, err := policy.Encode(policy.Default(policy.ClassUnknown))
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +68,7 @@ func TestPlanRepairKeepsEverythingThatStillComposes(t *testing.T) {
 }
 
 func TestPlanRepairGoesBelowTheSectionAndBelowTheField(t *testing.T) {
+	t.Parallel()
 	def, _ := policy.Encode(policy.Default(policy.ClassUnknown))
 	stored := raw(map[string]string{
 		"retention": `{"keep_within":"30d","rules":{"keep_daily":7,"keep_weekly":-5,"keep_monthly":3}}`,
@@ -87,6 +89,7 @@ func TestPlanRepairGoesBelowTheSectionAndBelowTheField(t *testing.T) {
 }
 
 func TestPlanRepairOnAPolicyThatComposesKeepsItAll(t *testing.T) {
+	t.Parallel()
 	def, _ := policy.Encode(policy.Default(policy.ClassUnknown))
 	stored := raw(map[string]string{"sla": `{"stale_after_hours":96}`})
 	plan, ok := planRepair(def, stored)
@@ -100,6 +103,7 @@ var jitterValue = regexp.MustCompile(`name="f\.schedule\.jitter_minutes"[^>]*val
 var staleValue = regexp.MustCompile(`name="f\.sla\.stale_after_hours"[^>]*value="96"`)
 
 func TestW3ABrokenPolicyRepairKeepsItsOtherSettings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	tpl := e.newTemplate("Repair me", map[string]string{"sla": `{"stale_after_hours":96,"unseen_after_hours":250}`, "schedule": `{"interval_minutes":700,"jitter_minutes":7}`})
@@ -161,6 +165,7 @@ func TestW3ABrokenPolicyRepairKeepsItsOtherSettings(t *testing.T) {
 
 // A repair that changes nothing about the broken part still drops it, and says so.
 func TestW3ARepairReviewListsADropEvenWhenTheFormIsUntouched(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	tpl := e.newTemplate("Untouched", map[string]string{"sla": `{"stale_after_hours":96,"unseen_after_hours":250}`})

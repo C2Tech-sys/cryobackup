@@ -13,6 +13,7 @@ import (
 
 // An action that starts with a dot has no family; the page must still render.
 func TestW3AAuditFormSurvivesOddActionNames(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	for _, act := range []string{".leading", "trailing.", "ünï.code", "single"} {
@@ -29,6 +30,7 @@ func TestW3AAuditFormSurvivesOddActionNames(t *testing.T) {
 
 // The settings page names a config.json value that the saved one overrides.
 func TestW3ASettingsSaysWhenTheSavedValueOverridesConfig(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	if strings.Contains(e.page("/settings", 200), "The saved value wins.") {
@@ -44,6 +46,7 @@ func TestW3ASettingsSaysWhenTheSavedValueOverridesConfig(t *testing.T) {
 
 // If what a repair drops cannot be worked out, the review is refused and nothing is saved.
 func TestW3ARepairIsRefusedWhenItsDropsCannotBeListed(t *testing.T) {
+	// Serial (P21-T1): it replaces the package variable repairReviewImpl, so it never runs beside the parallel tests.
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	tpl := e.newTemplate("Cannot list", map[string]string{"sla": `{"stale_after_hours":96,"unseen_after_hours":250}`})

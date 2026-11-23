@@ -54,6 +54,7 @@ func (e *env) wakes() (*[]string, *sync.Mutex) {
 }
 
 func TestCommandPagesRenderInFixturesMode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	for _, host := range []string{"FRONTDESK-01", "DR-OFFICE-PC", "LAB-RETINA-02", "FRONTDESK-02", "XRAY-OLD-01", "OLD-RECEPTION-PC", "EXAM-ROOM-3", "NEW-EXAM-6"} {
@@ -74,6 +75,7 @@ func TestCommandPagesRenderInFixturesMode(t *testing.T) {
 }
 
 func TestActionMenuReflectsTheDevice(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	// An idle, online device: Back up now is a live button, with the online hint.
@@ -106,6 +108,7 @@ func TestActionMenuReflectsTheDevice(t *testing.T) {
 }
 
 func TestBackUpNowQueuesOnceAndShowsOnTheCommandsTab(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	woke, mu := e.wakes()
@@ -150,6 +153,7 @@ func TestBackUpNowQueuesOnceAndShowsOnTheCommandsTab(t *testing.T) {
 }
 
 func TestUndoCancelsAQueuedCommandOnceAndOnlyBeforeDelivery(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	dev := e.dev["FRONTDESK-01"]
@@ -195,6 +199,7 @@ func TestUndoCancelsAQueuedCommandOnceAndOnlyBeforeDelivery(t *testing.T) {
 }
 
 func TestCancelRunQueuesACancelForTheOpenRun(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	dev := e.dev["DR-OFFICE-PC"]
@@ -229,6 +234,7 @@ func TestCancelRunQueuesACancelForTheOpenRun(t *testing.T) {
 }
 
 func TestExpiredCommandsShowAsExpiredBeforeTheJobRuns(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	// The fixtures hold one expired back-up-now that the job already recorded.
@@ -263,6 +269,7 @@ func TestExpiredCommandsShowAsExpiredBeforeTheJobRuns(t *testing.T) {
 }
 
 func TestCommandResultsAreShownAsFixedPhrases(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	dev := e.dev["FRONTDESK-01"]
@@ -294,6 +301,7 @@ func TestCommandResultsAreShownAsFixedPhrases(t *testing.T) {
 }
 
 func TestCommandRoutesAreRoleGatedAndCSRFChecked(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	e.addAccount("viewer", "read_only")
@@ -345,6 +353,7 @@ func TestCommandRoutesAreRoleGatedAndCSRFChecked(t *testing.T) {
 }
 
 func TestCommandRoutesAreScopedNotFoundNotForbidden(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	harbor := e.customerID("Harbor Family Practice")
@@ -390,6 +399,7 @@ func TestCommandRoutesAreScopedNotFoundNotForbidden(t *testing.T) {
 }
 
 func TestIdentityConflictShowsAndResolves(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	dev := e.dev["FRONTDESK-02"]
@@ -457,6 +467,7 @@ func TestIdentityConflictShowsAndResolves(t *testing.T) {
 }
 
 func TestIdentityConflictRetire(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	dev := e.dev["FRONTDESK-02"]

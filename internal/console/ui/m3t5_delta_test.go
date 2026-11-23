@@ -30,6 +30,7 @@ func groupNames(b BoardData) []string {
 // M1: a ring segment filter shows every customer the legend counts, customers with no devices included.
 // It hid the MISSING group of /?cust=crit and answered "No devices match" for /?cust=other.
 func TestM3T5M1_TheCustomerRingFilterShowsEveryCustomerItCounts(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	all := e.t5Board(boardQuery{})
@@ -80,6 +81,7 @@ func TestM3T5M1_TheCustomerRingFilterShowsEveryCustomerItCounts(t *testing.T) {
 
 // M4: the API's banner text is the engine's own, untouched; the page words the time in the display zone itself.
 func TestM3T5M4_TheAPIBannerTextIsUntouchedAndThePageShowsTheDisplayZone(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t) // display zone America/Chicago; the clock is 18:42:10 UTC = 1:42:10 PM there
 	e.login()
 	now := fixtures.Now()
@@ -129,6 +131,7 @@ func TestM3T5M4_TheAPIBannerTextIsUntouchedAndThePageShowsTheDisplayZone(t *test
 
 // A time re-worded for the display zone moves with the zone, and a banner without an instant is left alone.
 func TestM3T5M4_RetimeFollowsTheZone(t *testing.T) {
+	t.Parallel()
 	now := fixtures.Now()
 	chicago := fixtures.Zone()
 	at := now.Add(-9 * time.Minute)
@@ -153,6 +156,7 @@ func TestM3T5M4_RetimeFollowsTheZone(t *testing.T) {
 // Surviving mutant: the fixtures cookie rule on a real console. A real (non-fixtures) App issues exactly
 // auth's expiry: the pending session's ten minutes, then the absolute lifetime of the full session.
 func TestM3T5_ARealConsoleKeepsAuthsCookieExpiry(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.Fixtures = false // a real console: the fixtures cookie rule must not apply
 	res, body := e.do("POST", "/login", url.Values{"username": {"admin"}, "password": {testPassword}})
@@ -181,6 +185,7 @@ func TestM3T5_ARealConsoleKeepsAuthsCookieExpiry(t *testing.T) {
 
 // Surviving mutant: events() dropped the board's filter. The stream's first paint must be the filtered board.
 func TestM3T5_TheEventStreamOpensWithTheBoardFilter(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -219,6 +224,7 @@ func TestM3T5_TheEventStreamOpensWithTheBoardFilter(t *testing.T) {
 
 // Surviving mutant: safeVersion bypassed at the OUTDATED qualifier and in the explain text.
 func TestM3T5F_NoRawVersionAtTheOutdatedQualifierReasonOrExplain(t *testing.T) {
+	t.Parallel()
 	hostile := hostileTexts[4]
 	now := fixtures.Now()
 	c := fmtCtx{Now: now, Loc: fixtures.Zone(), Zone: "America/Chicago"}
@@ -249,6 +255,7 @@ func TestM3T5F_NoRawVersionAtTheOutdatedQualifierReasonOrExplain(t *testing.T) {
 
 // Outside scope: a foreign device (one that exists, in a customer this account cannot see) is a 404.
 func TestM3T5_TheExplainFragmentRefusesAForeignDevice(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	north := e.customerID("Northwind Dental")
 	e.signInAs("scoped-explain", "read_only", []string{north})
@@ -266,6 +273,7 @@ func TestM3T5_TheExplainFragmentRefusesAForeignDevice(t *testing.T) {
 
 // L6: the restic version and the OS go through the same safe-display functions as the M3-T4 pages.
 func TestM3T5L6_AHostileResticVersionAndOSNeverReachAPage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -291,6 +299,7 @@ func TestM3T5L6_AHostileResticVersionAndOSNeverReachAPage(t *testing.T) {
 
 // L7: a runs view applied on the board says it belongs to the runs page and links there.
 func TestM3T5L7_ARunsViewOnTheBoardPointsToTheRunsPage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	v, err := e.st.CreateSavedViewAudited(context.Background(), store.ScopeAll(), store.SavedViewInput{Name: "Bad runs", Entity: "runs",
@@ -315,6 +324,7 @@ func TestM3T5L7_ARunsViewOnTheBoardPointsToTheRunsPage(t *testing.T) {
 
 // L7: the customer ring filter survives a failed Manage action, and is on every Manage form.
 func TestM3T5L7_CustSurvivesAFailedManageAction(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.t5View("Mine", false)
@@ -330,6 +340,7 @@ func TestM3T5L7_CustSurvivesAFailedManageAction(t *testing.T) {
 
 // L7: the explain error does not cite a reason it has just replaced.
 func TestM3T5L7_TheExplainErrorTextStandsOnItsOwn(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -347,6 +358,7 @@ func TestM3T5L7_TheExplainErrorTextStandsOnItsOwn(t *testing.T) {
 
 // L7: hovering a chip waits about 200 ms before it asks for the explanation.
 func TestM3T5L7_TheExplainFetchWaitsForAHoverDelay(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	board := e.page("/", 200)

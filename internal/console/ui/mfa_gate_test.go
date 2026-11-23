@@ -10,6 +10,7 @@ import (
 // also runs against the code before M2-W1A, where it fails: there the
 // password alone opened the board.
 func TestUIPasswordAloneIsNotALogin(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	res, body := e.do("POST", "/login", url.Values{"username": {"admin"}, "password": {testPassword}})
 	if res.StatusCode != http.StatusSeeOther {

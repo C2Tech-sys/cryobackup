@@ -13,6 +13,7 @@ import (
 // M3-HARDEN B: a pause "until" in the hour the clocks skip has no instant. It was stored an hour
 // early with no word; it is refused, and nothing changes.
 func TestPauseUntilInTheSkippedHourIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -38,6 +39,7 @@ func TestPauseUntilInTheSkippedHourIsRefused(t *testing.T) {
 
 // M3-HARDEN B: the account page offers the narrow scopes and names them in the table.
 func TestAccountPageOffersAndNamesTheNarrowScopes(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	page := e.page("/account", 200)
@@ -50,6 +52,7 @@ func TestAccountPageOffersAndNamesTheNarrowScopes(t *testing.T) {
 
 // M3-HARDEN B: S36 at both widths: nothing runs off the page, and Run now stays in the viewport.
 func TestSystemHealthLayoutAtBothWidths(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newEnv(t)
 	e.login()

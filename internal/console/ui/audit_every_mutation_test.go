@@ -987,6 +987,7 @@ func (e *env) flagIdentityConflict(deviceID string) {
 func baseRoute(key string) string { p, _, _ := strings.Cut(key, "#"); return p }
 
 func TestEveryUIPostIsAudited(t *testing.T) {
+	t.Parallel()
 	cases := uiMutationCases()
 
 	want := uiPostRoutes()
@@ -1014,6 +1015,7 @@ func TestEveryUIPostIsAudited(t *testing.T) {
 	for _, pattern := range names {
 		m := cases[pattern]
 		t.Run(pattern, func(t *testing.T) {
+			t.Parallel() // each case builds its own env
 			e := newEnv(t)
 			mk := m.build(e)
 			wantAudits := m.audits

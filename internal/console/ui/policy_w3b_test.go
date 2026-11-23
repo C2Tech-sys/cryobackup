@@ -11,6 +11,7 @@ import (
 // M2-W3B: an override with no admin (the enrollment token's policy, or a row
 // whose author is unknown) never renders an empty name.
 func TestW3BOverrideWithoutAnAdminNamesItsSource(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	dev := e.dev["FRONTDESK-01"]

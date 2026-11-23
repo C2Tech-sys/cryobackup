@@ -149,7 +149,7 @@ func New(s *Service) (*Service, error) {
 		s.assets["fonts.css"] = hex.EncodeToString(sum[:])[:8]
 	}
 	var err error
-	s.templates, err = parseTemplates(s.funcs())
+	s.templates, err = parseTemplatesFn(s.funcs())
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +161,11 @@ func New(s *Service) (*Service, error) {
 	s.initM3() // M3-T4: the pages' private admin API, built now (m3t4.go)
 	return s, nil
 }
+
+// parseTemplatesFn is parseTemplates, the only value it ever has in the product. It is a variable so
+// the package's tests can parse the templates once and give each of their hundreds of Services a
+// clone instead (shared_setup_test.go).
+var parseTemplatesFn = parseTemplates
 
 func parseTemplates(fm template.FuncMap) (map[string]*template.Template, error) {
 	pages, err := fs.Glob(web.Templates, "templates/pages/*.html")

@@ -20,7 +20,7 @@ import (
 // owner, so a change to the sign-in flow is a one-line fix here.
 func (e *env) signInAs(username, role string, scope []string) {
 	e.t.Helper()
-	hash, _ := auth.HashPassword(testPassword)
+	hash := testPasswordHash()
 	if _, err := e.st.GetAdminByUsername(context.Background(), username); err != nil {
 		if _, err := e.st.CreateAdmin(context.Background(), store.Admin{Username: username, Email: username + "@example.invalid", Role: role, PasswordHash: hash, CustomerScope: scope}); err != nil {
 			e.t.Fatal(err)
@@ -108,6 +108,7 @@ func (e *env) everyM2Page() map[string]string {
 }
 
 func TestM2PagesRenderInFixturesMode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	for name, path := range e.everyM2Page() {
@@ -133,6 +134,7 @@ func TestM2PagesRenderInFixturesMode(t *testing.T) {
 }
 
 func TestM2NavHasCustomersAndDevices(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	b := e.page("/", 200)
@@ -142,6 +144,7 @@ func TestM2NavHasCustomersAndDevices(t *testing.T) {
 }
 
 func TestM2RoleGating(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	summit := e.customerID("Summit Eye Care")
 	dev := e.dev["FRONTDESK-01"]
@@ -210,6 +213,7 @@ func TestM2RoleGating(t *testing.T) {
 }
 
 func TestM2ScopedOperatorNeverSeesAnotherCustomer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	north, summit, harbor := e.customerID("Northwind Dental"), e.customerID("Summit Eye Care"), e.customerID("Harbor Family Practice")
 	foreign := []string{"FRONTDESK-01", "LAB-RETINA-02", "LEGAL-PC-01", "NEW-EXAM-6"}
@@ -259,6 +263,7 @@ func TestM2ScopedOperatorNeverSeesAnotherCustomer(t *testing.T) {
 }
 
 func TestM2CreateCustomerThroughTheUI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	form := e.page("/ui/customers/new", 200)
@@ -313,6 +318,7 @@ func TestM2CreateCustomerThroughTheUI(t *testing.T) {
 }
 
 func TestM2EditCustomerThroughTheUI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	harbor := e.customerID("Harbor Family Practice")
@@ -365,6 +371,7 @@ func TestM2EditCustomerThroughTheUI(t *testing.T) {
 }
 
 func TestM2CustomerPageStatesAndEvidence(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	// An expected customer with no devices is a critical alarm, never a neutral empty state.
@@ -385,6 +392,7 @@ func TestM2CustomerPageStatesAndEvidence(t *testing.T) {
 }
 
 func TestM2DevicesTableFiltersSortsAndPages(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	hostsOf := func(body string) []string {
@@ -463,6 +471,7 @@ func TestM2DevicesTableFiltersSortsAndPages(t *testing.T) {
 }
 
 func TestM2DevicesFragmentPushesTheCanonicalURL(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	res, body := e.do("GET", "/ui/devices/table?state=FAILED&sort=host", nil, "HX-Request", "true")
@@ -483,6 +492,7 @@ func TestM2DevicesFragmentPushesTheCanonicalURL(t *testing.T) {
 }
 
 func TestM2NoEnrolledDevicesIsAnAlarm(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	// A scoped account whose only customer has no devices: "no data" where data must exist.
 	blue := e.customerID("Blue Ridge Accounting")
@@ -495,6 +505,7 @@ func TestM2NoEnrolledDevicesIsAnAlarm(t *testing.T) {
 }
 
 func TestM2DevicePanelTabs(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	id := e.dev["FRONTDESK-01"]
@@ -561,6 +572,7 @@ func TestM2DevicePanelTabs(t *testing.T) {
 }
 
 func TestM2DeviceSettingsReadOnlyBelowOperator(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ro", "read_only", nil)
 	b := e.page("/devices/"+e.dev["FRONTDESK-01"]+"/settings", 200)
@@ -581,6 +593,7 @@ func TestM2DeviceSettingsReadOnlyBelowOperator(t *testing.T) {
 }
 
 func TestM2ChangesAreRefusedLoudlyWhenTheyCannotBeAudited(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
@@ -621,6 +634,7 @@ func TestM2ChangesAreRefusedLoudlyWhenTheyCannotBeAudited(t *testing.T) {
 }
 
 func TestM2SettingsPostChangesTheBoardsFreshness(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.signInAs("ad", "admin", nil)
 	// A change marks the fleet dirty so open boards refresh at the next coalesced tick.

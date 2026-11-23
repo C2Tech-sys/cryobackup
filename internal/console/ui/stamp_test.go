@@ -11,6 +11,7 @@ import (
 // The freshness stamp is a status pill: a dot, a word, the time and "n of m agents".
 // The word is the state's carrier (colour is never alone), so each state must say its own.
 func TestStampStatesRenderTheirWords(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	cases := []struct {
 		name  string
@@ -69,6 +70,7 @@ func TestStampStatesRenderTheirWords(t *testing.T) {
 
 // An unknown state must not read healthy, and the out-of-band wrapper keeps the same markup.
 func TestStampUnknownStateIsNoDataAndOOBKeepsMarkup(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	out, err := e.svc.renderString("board", "stamp", Stamp{State: "bogus", At: "--:--:--", Zone: "UTC", OOB: true})
 	if err != nil {
@@ -86,6 +88,7 @@ func TestStampUnknownStateIsNoDataAndOOBKeepsMarkup(t *testing.T) {
 
 // The fallback page (fleet unavailable) renders the lost state server-side, so it is correct before any script runs.
 func TestFallbackPageStampSaysNoData(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	out, err := e.svc.renderString("error", "stamp", e.svc.fallbackPage(context.Background(), &auth.Principal{}).Stamp)
 	if err != nil {

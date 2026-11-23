@@ -16,6 +16,7 @@ import (
 // with and without the per-request evaluation memo. It runs only with M3T4_SCALE=1
 // and prints; it asserts nothing about time (a loaded PC is not a gate).
 func TestM3T4ScaleMeasurement(t *testing.T) {
+	// Serial (P21-T1): it switches the package variable m3Memo, so it never runs beside the parallel tests.
 	if os.Getenv("M3T4_SCALE") == "" {
 		t.Skip("M3T4_SCALE is not set")
 	}

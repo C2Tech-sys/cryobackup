@@ -69,15 +69,9 @@ func newEnv(t *testing.T) *env {
 	}
 	e := &env{t: t, now: fixtures.Now(), loc: loc, dev: map[string]string{}}
 	clock := func() time.Time { e.nowMu.Lock(); defer e.nowMu.Unlock(); return e.now }
-	st, err := store.OpenMemory(ctx, clock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	hash, _ := auth.HashPassword(testPassword)
-	if err := store.LoadFixtures(ctx, st, e.now, store.WithAdminPasswordHash(hash)); err != nil {
-		t.Fatal(err)
-	}
+	// A private copy of the fixture world, seeded once per test binary (shared_setup_test.go): the
+	// fixtures with the admin's password hash and the two snapshots below.
+	st := openFixtureStore(t, clock)
 	e.st = st
 	mk, _ := escrow.NewMasterKey(bytes.Repeat([]byte{4}, 32))
 	e.be = &fixtures.Backend{}
@@ -115,17 +109,11 @@ func newEnv(t *testing.T) *env {
 	e.svc = svc
 	mux := http.NewServeMux()
 	svc.Register(muxReg{mux})
-	e.srv = httptest.NewServer(mux)
-	t.Cleanup(e.srv.Close)
+	e.srv = serveForTest(t, mux)
 	e.cli = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	l, _ := st.ListDevices(ctx, store.ScopeAll(), store.ListDevicesOptions{IncludeRetired: true, Page: store.Page{Limit: 100}})
 	for _, d := range l.Items {
 		e.dev[d.Hostname] = d.ID
-	}
-	for _, d := range []string{"DR-OFFICE-PC", "LEGAL-PC-01"} {
-		if _, _, err := st.AgentReplaceSnapshots(ctx, e.dev[d], []store.Snapshot{{DeviceID: e.dev[d], SnapshotID: fixtures.FixtureSnapshotID, TakenAt: e.now.Add(-time.Hour), Hostname: d, Paths: []string{`C:\Users`}}}); err != nil {
-			t.Fatal(err)
-		}
 	}
 	return e
 }
@@ -194,6 +182,7 @@ func mustContain(t *testing.T, name, body string, wants ...string) {
 var pathLike = regexp.MustCompile(`[A-Za-z]:\\|\\\\[A-Za-z]|/(?:Users|home|var|etc|opt)/[A-Za-z]|%[A-Z]+%`)
 
 func TestLoginPageAndFlow(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	res, body := e.do("GET", "/login", nil)
 	if res.StatusCode != 200 {
@@ -229,6 +218,7 @@ func TestLoginPageAndFlow(t *testing.T) {
 }
 
 func TestFixturesPagesRenderWithTheirMarkers(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	res, board := e.do("GET", "/", nil)
@@ -311,6 +301,7 @@ func TestFixturesPagesRenderWithTheirMarkers(t *testing.T) {
 }
 
 func TestDesignIsAbsentWithoutFixturesMode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.Fixtures = false
 	mux := http.NewServeMux()
@@ -330,6 +321,7 @@ func TestDesignIsAbsentWithoutFixturesMode(t *testing.T) {
 }
 
 func TestBoardFilterAndPartials(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	res, body := e.do("GET", "/?state=FAILED", nil)
@@ -384,6 +376,7 @@ func renderPanel(t *testing.T, e *env, v EmptyView) string {
 }
 
 func TestRestoreWizardEndToEndThroughTheUI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["DR-OFFICE-PC"]
@@ -481,6 +474,7 @@ func TestRestoreWizardEndToEndThroughTheUI(t *testing.T) {
 // at once (nothing is prepared); a failed download says so with its class and
 // stays downloadable; an expired or failed restore offers no download.
 func TestRestoreFailureAndPendingAreStatedPlainly(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	e.be.Errors = map[string]error{adminpath.MethodDump: adminpath.NewError(adminpath.CodeStorageUnreachable, "network")}
@@ -523,6 +517,7 @@ func TestRestoreFailureAndPendingAreStatedPlainly(t *testing.T) {
 }
 
 func TestStaticAssets(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	for path, ct := range map[string]string{"/static/app.css": "text/css", "/static/tokens.css": "text/css", "/static/fonts.css": "text/css", "/static/js/fresh.js": "text/javascript",
 		"/static/js/htmx.min.js": "text/javascript", "/static/fonts/orbitron/Orbitron-var.woff2": "font/woff2", "/static/fonts/ibmplexsans/OFL.txt": "text/plain",
@@ -586,6 +581,7 @@ func TestStaticAssets(t *testing.T) {
 // ---- golden: the state chip catalogue ----
 
 func TestStateChipCatalogueGolden(t *testing.T) {
+	t.Parallel()
 	rows := Catalogue()
 	prec := state.Precedence()
 	if len(rows) != len(prec) || len(prec) != 17 {
@@ -623,6 +619,7 @@ func TestStateChipCatalogueGolden(t *testing.T) {
 }
 
 func TestCatalogueAgainstTheDesignSpec(t *testing.T) {
+	t.Parallel()
 	// components.md 3.1: label and class of every state.
 	spec := map[state.State][2]string{
 		state.StateRetired: {"RETIRED", "neutral"}, state.StatePaused: {"PARKED", "neutral"}, state.StateUnknown: {"UNKNOWN", "crit"},
@@ -655,6 +652,7 @@ func TestCatalogueAgainstTheDesignSpec(t *testing.T) {
 }
 
 func TestChipQualifiers(t *testing.T) {
+	t.Parallel()
 	now := fixtures.Now()
 	want := map[state.State]string{
 		state.StateFailed: "FAILED \u00d73", state.StateUnseen: "UNSEEN 9d", state.StateStale: "STALE 4d", state.StatePartial: "PARTIAL \u00b7 23 files",
@@ -685,6 +683,7 @@ func TestChipQualifiers(t *testing.T) {
 }
 
 func TestBannerFixturesC01ToC16Render(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	now := fixtures.Now()
 	all := fixtures.Banners(now)
@@ -742,6 +741,7 @@ func TestBannerFixturesC01ToC16Render(t *testing.T) {
 }
 
 func TestEmptyFleetAndPartialDataAreAlarms(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	p := &auth.Principal{Scope: store.ScopeOf("no-such-customer"), Role: auth.RoleReadOnly}
 	f, err := e.svc.Fleet.Fleet(context.Background(), p.Scope)
@@ -769,6 +769,7 @@ func TestEmptyFleetAndPartialDataAreAlarms(t *testing.T) {
 }
 
 func TestKPIsAndRings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	f, _ := e.svc.Fleet.Fleet(context.Background(), store.ScopeAll())
 	c := fmtCtx{Now: f.Computed, Loc: e.loc}
@@ -872,6 +873,7 @@ func recv(t *testing.T, ch <-chan Event, name string) Event {
 }
 
 func TestHubPingChangeAndRefreshCadence(t *testing.T) {
+	// Serial (P21-T1): it watches a 50 ms window for an event that must not come, so it runs alone, as it always did.
 	h, ft, renders, stop := newFakeHub(t)
 	defer stop()
 	if h.Ping != 15*time.Second || h.Coalesce != 2*time.Second {
@@ -928,6 +930,7 @@ func TestHubPingChangeAndRefreshCadence(t *testing.T) {
 }
 
 func TestHubDropsASlowSubscriber(t *testing.T) {
+	t.Parallel()
 	h, ft, _, stop := newFakeHub(t)
 	defer stop()
 	slow, cancel := h.Subscribe(&Sub{Scope: store.ScopeAll()})
@@ -955,6 +958,7 @@ func TestHubDropsASlowSubscriber(t *testing.T) {
 }
 
 func TestSSEEndpointStreamsTheContract(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -993,6 +997,7 @@ func TestSSEEndpointStreamsTheContract(t *testing.T) {
 }
 
 func TestSSEOfAnUnknownDeviceIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	if res, _ := e.do("GET", "/ui/events?device=01J9ZZ0000000000000000ZZZZ", nil); res.StatusCode != 404 {
@@ -1003,6 +1008,7 @@ func TestSSEOfAnUnknownDeviceIsRefused(t *testing.T) {
 // ---- design-system checks ----
 
 func TestOrbitronAuditAndTokenCoverage(t *testing.T) {
+	t.Parallel()
 	for _, c := range []Check{TokenCoverage(), OrbitronAudit()} {
 		if !c.Pass {
 			t.Errorf("%s failed:\n%s", c.Name, strings.Join(c.Details, "\n"))
@@ -1011,6 +1017,7 @@ func TestOrbitronAuditAndTokenCoverage(t *testing.T) {
 }
 
 func TestChecksCatchViolations(t *testing.T) {
+	t.Parallel()
 	// The audit must be able to fail: feed the greps a bad stylesheet.
 	if !hexColorRE.MatchString("a { color: #ff00aa; }") || !funcColorRE.MatchString("a { color: rgba(1,2,3,.5); }") {
 		t.Fatal("colour grep is blind")
@@ -1031,6 +1038,7 @@ func TestChecksCatchViolations(t *testing.T) {
 }
 
 func TestContrastHasZeroAAFailures(t *testing.T) {
+	t.Parallel()
 	rows, c := ContrastReport()
 	if !c.Pass || len(rows) < 40 {
 		t.Fatalf("%s (%d pairs): %v", c.Summary, len(rows), c.Details)
@@ -1043,9 +1051,10 @@ func TestContrastHasZeroAAFailures(t *testing.T) {
 // The login page must not tell an unknown user, a wrong password and a locked
 // account apart: same status, same rendered error message.
 func TestLoginPageFailuresAreIndistinguishable(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	errMsg := regexp.MustCompile(`(?s)id="signin-err".*?<div class="b-text">(.*?)</div>`)
-	h, _ := auth.HashPassword(testPassword)
+	h := testPasswordHash()
 	if _, err := e.st.CreateAdmin(context.Background(), store.Admin{Username: "lockme", Email: "lockme@example.invalid", Role: "read_only", PasswordHash: h}); err != nil {
 		t.Fatal(err)
 	}

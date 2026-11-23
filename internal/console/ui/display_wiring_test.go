@@ -13,6 +13,7 @@ import (
 // cli.Build hands the UI and the admin API one DisplayPrefs (M2-W3A), following
 // the configured zone until an operator saves one, so a settings change reaches both.
 func TestBuildSharesOneDisplayPrefsBetweenTheUIAndTheAPI(t *testing.T) {
+	t.Parallel()
 	cfg := config.Default()
 	cfg.Resolve()
 	cfg.Fixtures = true

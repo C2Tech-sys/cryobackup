@@ -22,6 +22,7 @@ import (
 // D: critical banners are never behind warnings (components 9.2, ADR 0015). The strip printed three
 // critical banners, then every warning, then "and 9 more critical conditions".
 func TestM3T5D_CriticalBannersAreNeverBehindWarnings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	f := health.Fleet{View: state.FleetView{Banners: fixtures.AllBanners(fixtures.Now())}}
 	out, err := e.svc.renderString("board", "banners", buildBanners(f, false))
@@ -45,6 +46,7 @@ func TestM3T5D_CriticalBannersAreNeverBehindWarnings(t *testing.T) {
 // D: on a phone the strip must not fill the screen: at most three critical banners in full and the
 // warnings folded into one line (past two), however many conditions are up.
 func TestM3T5D_TheStripIsBoundedWithEveryBannerUp(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	f := health.Fleet{View: state.FleetView{Banners: fixtures.AllBanners(fixtures.Now())}}
 	out, _ := e.svc.renderString("board", "banners", buildBanners(f, false))
@@ -69,6 +71,7 @@ func TestM3T5D_TheStripIsBoundedWithEveryBannerUp(t *testing.T) {
 // C: the fixtures session cookies were issued already expired by the browser's clock (the console's
 // clock is frozen in the past), so a person could never sign in through the real form.
 func TestM3T5C_FixturesSessionCookiesAreNotExpired(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.Fixtures = true
 	res, body := e.do("POST", "/login", url.Values{"username": {"admin"}, "password": {testPassword}})
@@ -98,6 +101,7 @@ func TestM3T5C_FixturesSessionCookiesAreNotExpired(t *testing.T) {
 // F: an agent version label is printed only through safeVersion: a file name sent as a label shows as
 // "(withheld)" on every page that prints it, with the hostile fixture of M3-T4.
 func TestM3T5F_AHostileAgentVersionNeverReachesAPage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -127,6 +131,7 @@ func TestM3T5F_AHostileAgentVersionNeverReachesAPage(t *testing.T) {
 // G: the sidebar's Gateway line is read from the same evaluation as the page. It said "not probed"
 // on every page, beside a Gateway "ok" row on System.
 func TestM3T5G_TheSidebarGatewayLineIsNotAConstant(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	clock := func() time.Time { return e.now }

@@ -13,6 +13,7 @@ import (
 // "could not be read" and the gateway "may still accept" the login, though the newest clean read,
 // taken after the retire, had found it gone. The page reads that read.
 func TestRetiredPageWithASyncInFlightSaysPending(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]

@@ -15,6 +15,7 @@ import (
 // The Commands tab shows when a command was queued to the second and how long delivery took, so the
 // 30 s acceptance bound can be read off the row.
 func TestW3ECommandRowShowsSecondsAndDeliveryDelay(t *testing.T) {
+	t.Parallel()
 	chi, err := time.LoadLocation("America/Chicago")
 	if err != nil {
 		t.Skip("no tzdata")
@@ -37,6 +38,7 @@ func TestW3ECommandRowShowsSecondsAndDeliveryDelay(t *testing.T) {
 }
 
 func TestW3ECommandsTabQueuedTimeHasSeconds(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	dev := e.dev["FRONTDESK-01"]
@@ -50,6 +52,7 @@ func TestW3ECommandsTabQueuedTimeHasSeconds(t *testing.T) {
 
 // 12-hour clock everywhere a time is shown in the display zone.
 func TestW3ETimesAreTwelveHourEverywhere(t *testing.T) {
+	t.Parallel()
 	chi, err := time.LoadLocation("America/Chicago")
 	if err != nil {
 		t.Skip("no tzdata")
@@ -76,6 +79,7 @@ func TestW3ETimesAreTwelveHourEverywhere(t *testing.T) {
 
 // A counter-named detail key is shown only while its value is a JSON number.
 func TestW3EAuditCounterKeysNeedNumbers(t *testing.T) {
+	t.Parallel()
 	raw := json.RawMessage(`{"recovery_codes_left":8,"token_count":"abc123","file_count":"n/a","tokens_revoked":2}`)
 	got := map[string]store.AuditDetail{}
 	for _, d := range store.AuditDetails(raw) {
@@ -99,6 +103,7 @@ func TestW3EAuditCounterKeysNeedNumbers(t *testing.T) {
 
 // The sessions table: last active and signed-in share a cell, so no column squeezes a date onto four lines.
 func TestW3EAccountSessionsTableLayout(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	body := e.page("/account", 200)

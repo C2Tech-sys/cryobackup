@@ -11,6 +11,7 @@ import (
 // through the UI: its otpauth:// URI needs a QR symbol beyond version 10
 // (foreman verification notes, M2-W1A).
 func TestLongestUsernameEnrollsThroughTheUI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	user := strings.Repeat("a", 96) + "@b.c"
 	if len(user) != 100 {
@@ -27,6 +28,7 @@ func TestLongestUsernameEnrollsThroughTheUI(t *testing.T) {
 // is added through the e-mail page and shown in full: nothing is cut. m4_layout_test.go lays the
 // same page out in a browser at 390 px and desktop width.
 func TestLongestRecipientIsAddedAndShownInFull(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	name, addr := longRecipient()

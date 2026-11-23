@@ -11,6 +11,7 @@ import (
 // both share lives in internal/console/hubsig. (Other ui files use the agent
 // download and snippet helpers of adminapi; the hub must stay free of it.)
 func TestTheHubFilesDoNotImportTheAdminAPI(t *testing.T) {
+	t.Parallel()
 	for _, f := range []string{"hub.go", "hub_watch.go"} {
 		file, err := parser.ParseFile(gotoken.NewFileSet(), f, nil, parser.ImportsOnly)
 		if err != nil {

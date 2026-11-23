@@ -44,6 +44,7 @@ func (e *env) methodOf(action, id string) string {
 }
 
 func TestM3PolishA_RetireAndTokenDeleteFromThePageAuditAsWeb(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -69,6 +70,7 @@ func TestM3PolishA_RetireAndTokenDeleteFromThePageAuditAsWeb(t *testing.T) {
 }
 
 func TestM3PolishA_TheSameCallsToTheAdminAPIWithoutThePageMarkerAuditAsAPI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")

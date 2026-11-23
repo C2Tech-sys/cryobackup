@@ -3,7 +3,6 @@ package ui
 import (
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -14,13 +13,13 @@ import (
 // The UI and the JSON API share one DisplayPrefs per process (cli.Build wires
 // it): a zone saved through either is used by the other on its next request.
 func TestW3ADisplayZoneIsSharedBetweenTheUIAndTheAPI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	api := &adminapi.Service{Auth: e.svc.Auth, Store: e.st, Fleet: e.svc.Fleet, Clock: e.svc.Clock, Display: e.svc.Display}
 	mux := http.NewServeMux()
 	api.Register(muxReg{mux})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	srv := serveForTest(t, mux)
 	call := func(method, path, body string) (int, string) {
 		t.Helper()
 		r, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))

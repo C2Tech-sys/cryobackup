@@ -72,6 +72,7 @@ func showing(body string) (shown, total string) {
 
 // B03: a ring segment filters the board and the board shows exactly the devices the segment counts.
 func TestM3T5A_B03_ARingSegmentFiltersTheBoardToExactlyItsCount(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	all := e.t5Board(boardQuery{})
@@ -116,6 +117,7 @@ func TestM3T5A_B03_ARingSegmentFiltersTheBoardToExactlyItsCount(t *testing.T) {
 }
 
 func TestM3T5A_B03_ALegendRowIsALinkAndASecondClickClearsIt(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	body := e.page("/", 200)
@@ -133,6 +135,7 @@ func TestM3T5A_B03_ALegendRowIsALinkAndASecondClickClearsIt(t *testing.T) {
 
 // A live update keeps the board's filter: the stream is opened with it and renders with it.
 func TestM3T5A_ALiveUpdateKeepsTheFilter(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	mustContain(t, "board", e.page("/?state=FAILED&age=over", 200), `data-events="/ui/events?age=over&amp;state=FAILED"`)
@@ -161,6 +164,7 @@ func (e *env) postForm(path string, form url.Values) *http.Response {
 }
 
 func TestM3T5A_B01_SavedViewLifecycleOnTheBoard(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	res := e.postForm("/ui/views", url.Values{"entity": {"devices"}, "name": {"Failed ones"}, "state": {"FAILED"}})
@@ -207,6 +211,7 @@ func TestM3T5A_B01_SavedViewLifecycleOnTheBoard(t *testing.T) {
 }
 
 func TestM3T5A_B01_ASharedViewNamesItsAudienceAndALockedOneOffersOnlyPrivateAndDelete(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit, northwind := e.customerID("Summit Eye Care"), e.customerID("Northwind Dental")
@@ -230,6 +235,7 @@ func TestM3T5A_B01_ASharedViewNamesItsAudienceAndALockedOneOffersOnlyPrivateAndD
 }
 
 func TestM3T5A_B01_AViewThatCannotBeSavedSaysWhyAndKeepsTheFilters(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	cases := []struct {
@@ -261,6 +267,7 @@ func TestM3T5A_B01_AViewThatCannotBeSavedSaysWhyAndKeepsTheFilters(t *testing.T)
 }
 
 func TestM3T5A_S21_SavedViewsOnTheRunSearch(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	res := e.postForm("/ui/views", url.Values{"entity": {"runs"}, "name": {"Bad runs"}, "status": {"failed", "partial"}})
@@ -312,6 +319,7 @@ func (e *env) retiredDevice() string {
 }
 
 func TestM3T5A_B15_ThePauseDialog(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -378,6 +386,7 @@ func TestM3T5A_B15_ThePauseDialog(t *testing.T) {
 }
 
 func TestM3T5A_B15_AFixedPauseIsRefusedOnARetiredDeviceAndForAReadOnlyAccount(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	ret := e.retiredDevice()
@@ -405,6 +414,7 @@ func TestM3T5A_B15_AFixedPauseIsRefusedOnARetiredDeviceAndForAReadOnlyAccount(t 
 // ---- A: the state-explain tooltip ----
 
 func TestM3T5A_B01_TheStateExplainTooltip(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -432,6 +442,7 @@ func TestM3T5A_B01_TheStateExplainTooltip(t *testing.T) {
 // ---- A: banner labels, copy and actions (components 9.2) ----
 
 func TestM3T5A_BannerActionsAndLabels(t *testing.T) {
+	t.Parallel()
 	now := fixtures.Now()
 	for _, b := range fixtures.AllBanners(now) {
 		v := bannerView(b)
@@ -494,6 +505,7 @@ func TestM3T5A_BannerActionsAndLabels(t *testing.T) {
 // ---- G: the sidebar gateway line, case by case ----
 
 func TestM3T5G_GatewayLineFollowsTheEvidence(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	now := fixtures.Now()
 	at := func(d time.Duration) state.Millis { return state.Millis(now.Add(-d).UnixMilli()) }
@@ -543,6 +555,7 @@ func TestM3T5G_GatewayLineFollowsTheEvidence(t *testing.T) {
 // ---- B: the operator's rulings ----
 
 func TestM3T5B_Ruling1_ActionHintsAreTooltipsOnTheirButtons(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	page := e.page("/devices/"+e.dev["FRONTDESK-01"], 200)
@@ -558,6 +571,7 @@ func TestM3T5B_Ruling1_ActionHintsAreTooltipsOnTheirButtons(t *testing.T) {
 }
 
 func TestM3T5B_Ruling2and3and5_PolicyHeaderRevisionsAndReview(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	north := e.customerID("Northwind Dental")
@@ -588,6 +602,7 @@ func TestM3T5B_Ruling2and3and5_PolicyHeaderRevisionsAndReview(t *testing.T) {
 }
 
 func TestM3T5B_Ruling4_PhoneDeviceTabsHaveAMoreTab(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	page := e.page("/devices/"+e.dev["FRONTDESK-01"], 200)
@@ -608,6 +623,7 @@ func TestM3T5B_Ruling4_PhoneDeviceTabsHaveAMoreTab(t *testing.T) {
 }
 
 func TestM3T5B_Ruling6_ThePublicURLBannerIsAWarning(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	e.svc.PublicURL = ""
@@ -628,6 +644,7 @@ func TestM3T5B_Ruling6_ThePublicURLBannerIsAWarning(t *testing.T) {
 // ---- C: the favicon and the CSP ----
 
 func TestM3T5C_TheFaviconIsOurOwnFileSoTheCSPAllowsIt(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	linkRE := regexp.MustCompile(`<link rel="icon"[^>]*href="([^"]*)"`)
 	pages := map[string]string{"login": e.page("/login", 200)}
@@ -655,6 +672,7 @@ func TestM3T5C_TheFaviconIsOurOwnFileSoTheCSPAllowsIt(t *testing.T) {
 // ---- E: device history rows link to the run ----
 
 func TestM3T5E_DeviceHistoryRowsLinkToTheRun(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]

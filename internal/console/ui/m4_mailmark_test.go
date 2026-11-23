@@ -19,6 +19,7 @@ import (
 // P20-MD (ADR 0022): the previews of the e-mail messages show the mark from the console's own route.
 
 func TestP20MD_MailMarkRouteServesTheEmbeddedMark(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	res, body := e.do("GET", mailMarkPath, nil) // no session: a sandboxed frame sends none
 	if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "image/png" || res.Header.Get("X-Content-Type-Options") != "nosniff" {
@@ -67,6 +68,7 @@ func checkPreviewFrame(t *testing.T, where, doc string) {
 }
 
 func TestP20MD_DigestPreviewShowsTheMarkFromTheRoute(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	e.login()
 	pv := e.page("/settings/email?preview=1", 200)
@@ -81,6 +83,7 @@ func TestP20MD_DigestPreviewShowsTheMarkFromTheRoute(t *testing.T) {
 }
 
 func TestP20MD_DesignMailSamplesShowTheNewLook(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	page := e.page("/design/mail", 200)
 	fs := frames(t, page)
@@ -105,6 +108,7 @@ func TestP20MD_DesignMailSamplesShowTheNewLook(t *testing.T) {
 // while the listener's other headers stay, and the access log names the route (a pattern with a dot
 // in its last segment is logged as "invalid").
 func TestP20MD_MailMarkThroughTheRealServerChain(t *testing.T) {
+	t.Parallel()
 	e := newM4Env(t)
 	var logs bytes.Buffer
 	cfg := config.Default()

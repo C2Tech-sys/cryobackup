@@ -13,6 +13,7 @@ import (
 // A refresh interval saved in the settings reaches the running stream: on the
 // next ping the hub restarts its refresh ticker at the new period.
 func TestHubFollowsAChangedRefreshInterval(t *testing.T) {
+	t.Parallel()
 	ft := &fakeTicks{ch: map[time.Duration]chan time.Time{}, ready: make(chan struct{})}
 	h := NewHub(30*time.Second, nil)
 	h.Tick = ft.tick

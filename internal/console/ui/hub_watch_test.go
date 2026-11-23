@@ -23,6 +23,7 @@ func recvSignal(t *testing.T, ch <-chan hubsig.Signal) hubsig.Signal {
 }
 
 func TestWatchReceivesDeviceChangesAndRunProgress(t *testing.T) {
+	// Serial (P21-T1): it watches a 50 ms window for an event that must not come, so it runs alone, as it always did.
 	h := NewHub(time.Hour, nil)
 	ch, stop := h.Watch()
 	h.DeviceChanged("dev-1")
@@ -46,6 +47,7 @@ func TestWatchReceivesDeviceChangesAndRunProgress(t *testing.T) {
 }
 
 func TestWatchWithASlowReaderNeverBlocksTheHubAndOthersStillHear(t *testing.T) {
+	t.Parallel()
 	h := NewHub(time.Hour, nil)
 	_, stopSlow := h.Watch() // never read
 	defer stopSlow()
@@ -76,6 +78,7 @@ func TestWatchWithASlowReaderNeverBlocksTheHubAndOthersStillHear(t *testing.T) {
 }
 
 func TestWatchHearsTheRefreshTick(t *testing.T) {
+	t.Parallel()
 	h := NewHub(123*time.Second, nil)
 	var mu sync.Mutex
 	tick := map[time.Duration]chan time.Time{}
@@ -114,6 +117,7 @@ func TestWatchHearsTheRefreshTick(t *testing.T) {
 // M3-T3 r3 M1: Generation has counted a signal by the time a watcher receives
 // it, and counts signals a full (slow) watcher loses.
 func TestWatchGenerationCountsEverySignalBeforeDelivery(t *testing.T) {
+	t.Parallel()
 	h := NewHub(time.Hour, nil)
 	ch, stop := h.Watch()
 	defer stop()

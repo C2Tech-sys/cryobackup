@@ -50,6 +50,7 @@ func (e *env) t6Token(cust, label string, revoked bool) string {
 // ---- A: the enrollment page ----
 
 func TestM3T6A_EnrollIsTheTokenTableAndTheWizardIsItsOwnPage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	page := e.page("/enroll", 200)
@@ -80,6 +81,7 @@ func TestM3T6A_EnrollIsTheTokenTableAndTheWizardIsItsOwnPage(t *testing.T) {
 }
 
 func TestM3T6A_ActiveTokensComeFirstAndStatusesAreFilterable(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -104,6 +106,7 @@ func TestM3T6A_ActiveTokensComeFirstAndStatusesAreFilterable(t *testing.T) {
 }
 
 func TestM3T6A_DeleteHidesARevokedTokenAndRefusesAnActiveOne(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -137,6 +140,7 @@ func TestM3T6A_DeleteHidesARevokedTokenAndRefusesAnActiveOne(t *testing.T) {
 }
 
 func TestM3T6_EnrollRoutesNeedTheAdminRole(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	summit := e.customerID("Summit Eye Care")
@@ -167,6 +171,7 @@ func TestM3T6_EnrollRoutesNeedTheAdminRole(t *testing.T) {
 // ---- B: the retire dialog ----
 
 func TestM3T6B_TheRetireDialog(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -238,6 +243,7 @@ func TestM3T6B_TheRetireDialog(t *testing.T) {
 }
 
 func TestM3T6B_RetireOffersNoDialogBelowTheAdminRole(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -251,6 +257,7 @@ func TestM3T6B_RetireOffersNoDialogBelowTheAdminRole(t *testing.T) {
 
 // The Not seen page (B05) links each device to the same dialog and comes back.
 func TestM3T6B_NotSeenLinksToTheRetireDialogAndComesBack(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	page := e.page("/fleet/unseen", 200)
@@ -289,6 +296,7 @@ func TestM3T6B_NotSeenLinksToTheRetireDialogAndComesBack(t *testing.T) {
 // ---- Retired (n) on every list ----
 
 func TestM3T6B_RetiredDevicesCollapseUnderRetiredNOnEveryList(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.retiredDevice()
@@ -347,6 +355,7 @@ func TestM3T6B_RetiredDevicesCollapseUnderRetiredNOnEveryList(t *testing.T) {
 // On the page: a login a read finds in the file reads pending, in the notice and on the
 // device page, and is never called removed. A clean read clears it, by itself.
 func TestM3T6B_ALoginInTheFileReadsPending(t *testing.T) {
+	// Serial (P21-T1): it races a 60 ms gateway-sync bound against the store's reads, so it runs alone, as it always did.
 	e := newEnv(t)
 	e.login()
 	e.svc.m3.api.GatewaySyncWait = 60 * time.Millisecond
@@ -382,6 +391,7 @@ func TestM3T6B_ALoginInTheFileReadsPending(t *testing.T) {
 
 // m12: an answer the page cannot read is pending, never removed.
 func TestM3T6B_AnUnreadableAnswerReadsPending(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	for name, body := range map[string]string{"garbage": "not json", "empty": "", "no field": `{"retired":true}`} {
 		rec := httptest.NewRecorder()
@@ -395,6 +405,7 @@ func TestM3T6B_AnUnreadableAnswerReadsPending(t *testing.T) {
 
 // L-a, m11: every mutation made through the pages' private API signals the real hub.
 func TestM3T6_EveryPageMutationThroughThePrivateAPISignalsTheRealHub(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -433,6 +444,7 @@ func TestM3T6_EveryPageMutationThroughThePrivateAPISignalsTheRealHub(t *testing.
 
 // L-b: the hub hears of a retire at the commit, not after the wait.
 func TestM3T6_ARetireSignalsTheHubAtTheCommit(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -452,6 +464,7 @@ func TestM3T6_ARetireSignalsTheHubAtTheCommit(t *testing.T) {
 
 // m10: a retire and a pause through the pages wake the device's open command poll.
 func TestM3T6_APageMutationWakesTheAgent(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -483,6 +496,7 @@ func TestM3T6_APageMutationWakesTheAgent(t *testing.T) {
 
 // L-f: a retired_at of zero is corrupt: the page says retired, not nothing.
 func TestM3T6_ACorruptRetireTimeStillReadsAsRetired(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -498,6 +512,7 @@ func TestM3T6_ACorruptRetireTimeStillReadsAsRetired(t *testing.T) {
 
 // L4: no runs on a retired device is not an alarm, and the page does not call it one.
 func TestM3T6B_ARetiredDeviceWithNoRunsIsNotCalledAnAlarm(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	ctx := context.Background()
@@ -528,6 +543,7 @@ func TestM3T6B_ARetiredDeviceWithNoRunsIsNotCalledAnAlarm(t *testing.T) {
 
 // L6: only not-found is 404. A store that cannot answer fails loudly and changes nothing.
 func TestM3T6B_AStoreErrorIsNotCalledNotFound(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	id := e.dev["FRONTDESK-01"]
@@ -563,6 +579,7 @@ return out;`
 // nothing overflows the page, and every action button sits inside the viewport,
 // including the open retire dialog's. The mutant proves the probe sees the fault.
 func TestM3T6_LayoutAtBothWidthsAndThemes(t *testing.T) {
+	t.Parallel()
 	chromeOrSkip(t)
 	e := newEnv(t)
 	e.login()

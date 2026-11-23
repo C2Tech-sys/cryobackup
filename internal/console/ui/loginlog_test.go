@@ -13,6 +13,7 @@ import (
 // header copied through (a Referer can carry a path, a User-Agent names a
 // workstation, Host and Origin are whatever the client sent).
 func TestLoginRefusalLogsDerivedFieldsNotHeaders(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var buf bytes.Buffer
 	e.svc.Log = logx.New(&buf, logx.LevelInfo)
@@ -50,6 +51,7 @@ func TestLoginRefusalLogsDerivedFieldsNotHeaders(t *testing.T) {
 }
 
 func TestLoginRefusalFieldsAreBounded(t *testing.T) {
+	t.Parallel()
 	for ua, want := range map[string]string{
 		"": "absent", "curl/8.4.0": "curl", "Mozilla/5.0 Chrome/120 Safari/537 Edg/120": "edge",
 		"Mozilla/5.0 Chrome/120 Safari/537": "chrome", "Mozilla/5.0 Version/17 Safari/605": "safari", "SomethingElse/1.0": "other",

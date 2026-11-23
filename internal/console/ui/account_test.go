@@ -121,7 +121,7 @@ func (e *env) loginAs(user, pw string) {
 
 func (e *env) addAccount(user, role string) {
 	e.t.Helper()
-	h, _ := auth.HashPassword(testPassword)
+	h := testPasswordHash()
 	if _, err := e.st.CreateAdmin(context.Background(), store.Admin{Username: user, Email: user + "@example.invalid", Role: role, PasswordHash: h}); err != nil {
 		e.t.Fatal(err)
 	}
@@ -139,6 +139,7 @@ func (e *env) audits(action string) int {
 // The MFA step page: enrollment with a server-rendered QR (inline SVG, no
 // script, no remote asset) on the first login, the code form afterwards.
 func TestMFAPagesRender(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	res, _ := e.do("POST", "/login", url.Values{"username": {"admin"}, "password": {testPassword}})
 	e.adopt(res)
@@ -191,6 +192,7 @@ func (e *env) loginAsPasswordOnly(user string) {
 
 // Fixtures mode renders /account and /settings/accounts with every card.
 func TestAccountPagesRenderInFixturesMode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	res, body := e.do("GET", "/account", nil)
@@ -216,6 +218,7 @@ func TestAccountPagesRenderInFixturesMode(t *testing.T) {
 // Every UI route of the ticket refuses each role below its minimum with 403,
 // serves the roles at or above it, and refuses a Bearer token outright.
 func TestAccountUIRoutesRoleMatrix(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.addAccount("ro", "read_only")
 	e.addAccount("op", "operator")
@@ -298,6 +301,7 @@ func cookieValue(cs []*http.Cookie, name string) string {
 // role, disables and deletes it; the user changes their password and makes and
 // revokes a token. Every change writes one audit row and no secret reaches a log.
 func TestAccountFlowsThroughTheUI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var logs bytes.Buffer
 	e.svc.Log = logx.New(&logs, logx.LevelDebug)
@@ -407,6 +411,7 @@ func TestAccountFlowsThroughTheUI(t *testing.T) {
 // Regenerating recovery codes and replacing the authenticator from /account
 // need a fresh code, and show the new codes once.
 func TestAccountMFAManagement(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	res, body := e.post("/ui/account/recovery-codes", url.Values{"code": {"000000"}}, false)

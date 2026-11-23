@@ -14,6 +14,7 @@ import (
 
 // The actions fragment is operator-only (architecture §5 S07), like the actions it offers.
 func TestActionsFragmentNeedsTheOperatorRole(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	e.addAccount("viewer2", "read_only")
@@ -30,6 +31,7 @@ func TestActionsFragmentNeedsTheOperatorRole(t *testing.T) {
 // While a command is in flight the Commands tab refreshes itself through the console's
 // fast-poll hook (fresh.js: visible tab only, 5 s) and asks for the fragment, not the page.
 func TestCommandsTabRefreshesAsAFragmentOnlyWhileInFlight(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	dev := e.dev["FRONTDESK-01"]
@@ -78,6 +80,7 @@ func TestCommandsTabRefreshesAsAFragmentOnlyWhileInFlight(t *testing.T) {
 
 // The polling hook itself: visible tab only.
 func TestFreshJSFastPollSkipsHiddenTabs(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	_, js := e.do("GET", "/static/js/fresh.js", nil)
 	if !strings.Contains(js, "data-fast-poll") || !strings.Contains(js, "document.hidden") {
@@ -87,6 +90,7 @@ func TestFreshJSFastPollSkipsHiddenTabs(t *testing.T) {
 
 // A result that arrives after the deadline is shown as such, not as "never received".
 func TestLateResultShowsOnTheCommandsTab(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	dev := e.dev["NEW-EXAM-6"]
@@ -109,6 +113,7 @@ func TestLateResultShowsOnTheCommandsTab(t *testing.T) {
 
 // finding 4: resolving an identity conflict by retiring tells the gateway-login sync at once.
 func TestRetireByIdentityResolveSyncsTheGatewayLogins(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	var syncs atomic.Int32
