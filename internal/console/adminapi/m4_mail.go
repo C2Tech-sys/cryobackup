@@ -103,6 +103,9 @@ type MailService struct {
 	Configured bool
 	// Fixtures is true in fixtures mode: the sender is a mail.FakeSender and nothing leaves the process.
 	Fixtures bool
+	// AdminLink is the console address e-mails carry (config admin_url as scheme://host[:port]/), empty
+	// when admin_url is unset. System health reports an empty one beside the e-mail row.
+	AdminLink string
 }
 
 // Fixed texts of the M4 problem answers. They name no host, address or name.

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/fixtures"
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
@@ -113,6 +114,7 @@ func TestEverySenderIsGivenAdminURLAndNotPublicURL(t *testing.T) {
 		"notification-retry":       app.Retrier.ConsoleURL,
 		"daily digest":             app.Digest.ConsoleURL,
 		"test mail":                app.TestMail.ConsoleURL,
+		"system health row":        app.Admin.Mail.AdminLink, // P21-T6 U2: the row beside Alert e-mail reads this
 	} {
 		if got != t6AdminLink {
 			t.Errorf("%s ConsoleURL = %q, want %q", name, got, t6AdminLink)
@@ -181,6 +183,7 @@ func TestUnsetAdminURLMeansNoLinkAndNoButtonAndNeverPublicURL(t *testing.T) {
 		"notification-retry":       app.Retrier.ConsoleURL,
 		"daily digest":             app.Digest.ConsoleURL,
 		"test mail":                app.TestMail.ConsoleURL,
+		"system health row":        app.Admin.Mail.AdminLink,
 	} {
 		if got != "" {
 			t.Errorf("%s ConsoleURL = %q with admin_url unset, want none", name, got)
@@ -359,5 +362,44 @@ func TestDoctorCommandShowsTheLinkLineAndRefusesABadAdminURL(t *testing.T) {
 	code, out, _ := run(t, "", "doctor", "--config", cfgPath)
 	if code == 0 || !strings.Contains(out, "FAIL        config") || !strings.Contains(out, "admin_url must be http(s)://host[:port]") || strings.Contains(out, "SECRETPATH") {
 		t.Fatalf("a bad admin_url (exit %d):\n%s", code, out)
+	}
+}
+
+// P21-T6 U2: the System health row beside Alert e-mail, through a real console and its API. Mail is set
+// up in both runs; admin_url decides the row. A warning never turns the overall state red.
+func TestSystemHealthAdminURLRowFollowsTheConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, adminURL, status, detail, never string
+	}{
+		{"unset", "", "warn", "e-mails carry no console link", t6AdminHost},
+		{"set", t6AdminURL, "ok", "e-mails link to " + t6AdminLink, t6AgentHost},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			url := tc.adminURL
+			app := r3RealApp(t, func(c *config.Config) { c.AdminURL, c.PublicURL = url, t6PublicURL })
+			token := r3Token(t, app)
+			base := r3Serve(t, app)
+			row := func(h adminapi.SystemHealthResponse) adminapi.SystemComponentJSON {
+				for _, c := range h.Components {
+					if c.ID == "admin_url" {
+						return c
+					}
+				}
+				return adminapi.SystemComponentJSON{}
+			}
+			// The row is configuration, but C00 (self-checks not wired yet) holds an ok row at not_checked
+			// until the first probe results are in: wait for the verdict this test is about.
+			h, ok := r3WaitFor(t, base, token, func(h adminapi.SystemHealthResponse) bool { return row(h).Status == tc.status })
+			c := row(h)
+			if !ok {
+				t.Fatalf("admin_url row = %+v, want %s:%s", c, tc.status, r3Rows(h))
+			}
+			if !strings.Contains(c.Detail, tc.detail) || strings.Contains(c.Detail, tc.never) {
+				t.Errorf("detail = %q, want %q and never %q", c.Detail, tc.detail, tc.never)
+			}
+			if h.Overall == "failed" {
+				t.Errorf("overall failed because of the link row:%s", r3Rows(h))
+			}
+		})
 	}
 }

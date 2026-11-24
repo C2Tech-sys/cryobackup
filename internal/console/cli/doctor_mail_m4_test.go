@@ -310,11 +310,57 @@ func TestDoctorMailNotConfigured(t *testing.T) {
 	}
 }
 
+// rigBaseline are the doctor lines that carry no mail and may read WARN or FAIL on doctorRig's console
+// whatever the mail setup is: the rig has no TLS pair (config), no offline master-key copy to confirm,
+// no swap check on some platforms and no maintenance worker listening. A healthy mail setup adds no
+// WARN or FAIL line outside this set (P21-T6 U1: the old check read only the lines whose name begins
+// with "mail", and the admin_url line's name escapes that filter).
+var rigBaseline = map[string]bool{"config": true, "master key copy": true, "swap": true, "maintenance worker": true}
+
+// levelLines are the lines of doctor's output that carry one of the given levels (WARN, FAIL, ...) and
+// whose name is not in rigBaseline. The level is the first column, 11 wide; the name the next 22.
+func levelLines(out string, levels ...string) []string {
+	var got []string
+	for _, l := range strings.Split(out, "\n") {
+		if len(l) <= 12 || l[11] != ' ' || rigBaseline[strings.TrimSpace(l[12:min(len(l), 34)])] {
+			continue
+		}
+		for _, lv := range levels {
+			if strings.TrimSpace(l[:11]) == lv {
+				got = append(got, l)
+			}
+		}
+	}
+	return got
+}
+
+// TestRigBaselineIsNotMail pins the baseline above to what the rig really prints without any mail
+// setting: nothing in it may be a mail line, and every WARN or FAIL the rig prints outside "mail*" and
+// "heartbeat" lines is in it. It keeps rigBaseline from growing to hide a mail line.
+func TestRigBaselineIsNotMail(t *testing.T) {
+	for name := range rigBaseline {
+		if strings.HasPrefix(name, "mail") || strings.HasPrefix(name, "admin_url") || strings.HasPrefix(name, "heartbeat") {
+			t.Errorf("rigBaseline holds a mail line: %q", name)
+		}
+	}
+	cfgPath, _ := doctorRig(t)
+	_, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	for _, l := range strings.Split(out, "\n") {
+		if len(l) <= 12 || l[11] != ' ' {
+			continue
+		}
+		name := strings.TrimSpace(l[12:min(len(l), 34)])
+		if lv := strings.TrimSpace(l[:11]); (lv == "WARN" || lv == "FAIL") && !rigBaseline[name] && !strings.HasPrefix(name, "mail") && !strings.HasPrefix(name, "heartbeat") && name != "admin_url" {
+			t.Errorf("the bare rig prints %s %q, which is neither mail nor in rigBaseline:\n%s", lv, name, out)
+		}
+	}
+}
+
 func TestDoctorMailHealthy(t *testing.T) {
 	cfgPath, db := doctorRig(t)
 	r := startDoctorRelay(t, relayCfg{starttls: true, user: mailUserMarker, pass: mailPassMarker})
 	aimProbe(t, r, nil)
-	setConfig(t, cfgPath, map[string]any{"smtp": smtpBlock(t, mailPassMarker+"\n")})
+	setConfig(t, cfgPath, map[string]any{"smtp": smtpBlock(t, mailPassMarker+"\n"), "admin_url": "https://console.example.net/"})
 	addRecipients(t, db,
 		store.RecipientInput{Name: "Ops", Address: "ops@example.test", Alerts: true, Recoveries: true, Digest: true},
 		store.RecipientInput{Name: "Desk", Address: "desk@example.test", Digest: true})
@@ -328,6 +374,7 @@ func TestDoctorMailHealthy(t *testing.T) {
 		dline("OK", "mail relay", "mail.example.test:587: connected, greeted, STARTTLS, signed in, quit; no message sent"),
 		dline("OK", "mail recipients", "2 in all: 1 with alerts, 1 with recoveries, 2 with the digest"),
 		dline("OK", "mail digest", "on"),
+		dline("OK", "admin_url", "e-mails link to https://console.example.net/ (admin_url)"),
 	} {
 		if !strings.Contains(out, w) {
 			t.Fatalf("doctor lacks %q:\n%s", w, out)
@@ -336,9 +383,39 @@ func TestDoctorMailHealthy(t *testing.T) {
 	if strings.Contains(mailLines(out), "FAIL") || strings.Contains(mailLines(out), "WARN") {
 		t.Fatalf("a healthy mail setup warns or fails:\n%s", mailLines(out))
 	}
+	// Every line of the output, not only the mail* ones: the admin_url line's name escapes that filter.
+	if bad := levelLines(out, "WARN", "FAIL"); len(bad) != 0 {
+		t.Fatalf("a healthy mail setup has WARN or FAIL lines:\n%s\nfull output:\n%s", strings.Join(bad, "\n"), out)
+	}
 	saw := strings.Join(r.saw(), " ")
 	if !strings.Contains(saw, "STARTTLS") || !strings.Contains(saw, "AUTH") || !strings.Contains(saw, "QUIT") {
 		t.Fatalf("relay saw %s", saw)
+	}
+}
+
+// The counterpart of TestDoctorMailHealthy: the same setup with no admin_url has exactly one WARN, the
+// admin_url line (beyond the rig's non-mail baseline), and nothing fails. Mail works; the messages carry no console link.
+func TestDoctorMailHealthyWithoutAdminURLWarnsOnce(t *testing.T) {
+	cfgPath, db := doctorRig(t)
+	r := startDoctorRelay(t, relayCfg{starttls: true, user: mailUserMarker, pass: mailPassMarker})
+	aimProbe(t, r, nil)
+	setConfig(t, cfgPath, map[string]any{"smtp": smtpBlock(t, mailPassMarker+"\n")})
+	addRecipients(t, db,
+		store.RecipientInput{Name: "Ops", Address: "ops@example.test", Alerts: true, Recoveries: true, Digest: true},
+		store.RecipientInput{Name: "Desk", Address: "desk@example.test", Digest: true})
+	_, out, _ := run(t, "", "doctor", "--config", cfgPath)
+	writeMailOutput(t, "healthy-no-admin-url", out)
+	noLeak(t, out)
+	noMessage(t, r)
+	want := dline("WARN", "admin_url", "admin_url is not set: e-mails carry no console link. Set admin_url to the address you type to open the console (not public_url, which is the agent API)")
+	if got := levelLines(out, "WARN"); len(got) != 1 || !strings.Contains(got[0], want) {
+		t.Fatalf("want exactly one WARN, the admin_url line; got %d:\n%s\nfull output:\n%s", len(got), strings.Join(got, "\n"), out)
+	}
+	if bad := levelLines(out, "FAIL"); len(bad) != 0 {
+		t.Fatalf("a missing admin_url fails doctor:\n%s", out)
+	}
+	if !strings.Contains(out, dline("OK", "mail relay", "mail.example.test:587: connected, greeted, STARTTLS, signed in, quit; no message sent")) {
+		t.Fatalf("the relay is no longer probed:\n%s", out)
 	}
 }
 

@@ -190,7 +190,8 @@ page, so a link to it can never open the console. The console never falls back t
 * Unset (the default): e-mails go out with no link and no button, and the text says to open the
   console without giving an address. That is a warning, not a failure: `cryo-console doctor` prints
   `WARN admin_url: admin_url is not set: e-mails carry no console link` when the smtp block is present, and
-  `serve` logs one warning at start. Set `admin_url` to fix it.
+  `serve` logs one warning at start, and System health shows a warning on the "Console link in e-mails"
+  row beside "Alert e-mail" (overall becomes warn, never failed). Set `admin_url` to fix it.
 * The admin listener is private by design (loopback or a mesh address, see
   [Admin UI over TLS on a mesh address](#admin-ui-over-tls-on-a-mesh-address)); the link works for a recipient who can reach that address, and for nobody else.
 

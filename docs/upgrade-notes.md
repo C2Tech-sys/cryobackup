@@ -29,7 +29,10 @@ the value; `cryo-console doctor` shows the problem before the upgrade is applied
 
 With mail configured and `admin_url` unset, `cryo-console doctor` prints a warning (not a failure),
 `WARN admin_url: admin_url is not set: e-mails carry no console link`, and `serve` logs one
-warning at start. With it set, doctor prints `OK admin_url` with the address the links use.
+warning at start. With it set, doctor prints `OK admin_url` with the address the links use. System
+health shows the same on its own row, "Console link in e-mails", beside "Alert e-mail": a warning
+while mail is configured and `admin_url` is not (it raises the overall state to warn, never to
+failed), OK with the address when it is set, not applicable when mail is not configured.
 
 ## M4: alert e-mail, the daily digest and the heartbeat ping (ADR 0020)
 

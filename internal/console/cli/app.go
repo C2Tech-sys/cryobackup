@@ -224,7 +224,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	// One MailService for the admin API and the pages' in-process API (P20-W3B): the same TestMailer,
 	// so its one-test-every-10-s limit is the console's whichever of the two asks. Its Digest is set
 	// below, once the digester exists; no request is served before Build returns.
-	mailSvc := &adminapi.MailService{Test: a.TestMail, SMTP: smtpSet, Configured: mailOn, Fixtures: fix}
+	mailSvc := &adminapi.MailService{Test: a.TestMail, SMTP: smtpSet, Configured: mailOn, Fixtures: fix, AdminLink: link}
 
 	a.Endpoint = newEndpointProbe(cfg, a.clock, a.log)
 	if !fix {

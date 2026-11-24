@@ -213,7 +213,7 @@ const noDevicesYet = "No devices enrolled yet: nothing is being backed up"
 
 // healthRowOrder is the order of the rows on the page.
 var healthRowOrder = []struct{ id, label string }{
-	{"gateway", "Gateway"}, {"storage", "Storage"}, {"storage_quota", "Storage quota"}, {"smtp", "Alert e-mail"}, {"digest", "Daily digest"},
+	{"gateway", "Gateway"}, {"storage", "Storage"}, {"storage_quota", "Storage quota"}, {"smtp", "Alert e-mail"}, {"admin_url", "Console link in e-mails"}, {"digest", "Daily digest"},
 	{"certificates", "Certificates"}, {"agent_api", "Agent API"}, {"maintenance_worker", "Maintenance worker"},
 	{"database", "Console database"}, {"self_backup", "Database self-backup"}, {"evaluator", "Alarm evaluator"}, {"master_key", "Master key"},
 	{"jobs", "Background jobs"}, {"fleet_data", "Fleet data"}, {"clock", "Server clock"}, {"release_manifest", "Release manifest"},
@@ -273,6 +273,21 @@ type healthFacts struct {
 	Probes            state.ProbeFacts
 	Endpoint          probe.Status
 	MaintainReachable bool
+	// MailLink is what the console knows of the link in its e-mails (MailService). Nil: this console
+	// was wired without an e-mail service, and the admin_url row is not shown.
+	MailLink *mailLinkFacts
+}
+
+// mailLinkFacts are the configuration facts of the "Console link in e-mails" row. Nothing here is
+// probed: it is what the console was started with.
+type mailLinkFacts struct {
+	// Configured: a relay is configured (or fixtures mode). Without one no e-mail goes out.
+	Configured bool
+	// Fixtures: fixtures mode. Mail goes to a fake relay and there is no configuration to be missing a
+	// key, so the row is not shown (nor is it when there is no e-mail service: see MailLink).
+	Fixtures bool
+	// Link is the console address e-mails carry (config admin_url as scheme://host[:port]/); empty is unset.
+	Link string
 }
 
 // ---- the one rule ----
@@ -425,6 +440,7 @@ var rowAttempts = map[string]func(healthFacts) []attempt{
 	"storage":            healthFacts.storageAttempts,
 	"storage_quota":      healthFacts.quotaAttempts,
 	"smtp":               healthFacts.smtpAttempts,
+	"admin_url":          healthFacts.adminURLAttempts,
 	"digest":             healthFacts.digestAttempts,
 	"certificates":       healthFacts.certificateAttempts,
 	"agent_api":          healthFacts.agentAPIAttempts,
@@ -555,6 +571,27 @@ func (f healthFacts) smtpAttempts() []attempt {
 		bad("alert e-mail is waiting to go out and none has been delivered recently")
 	}
 	return out
+}
+
+// adminURLAttempts is the "Console link in e-mails" row: with mail configured and admin_url unset every
+// e-mail goes out with no link to click, which the operator would otherwise find out from a recipient. A
+// warning, never a failure: the mail itself works. Mail not configured is the same pattern as a digest
+// that is turned off: not applicable, because there is no e-mail to carry a link.
+func (f healthFacts) adminURLAttempts() []attempt {
+	m := f.MailLink
+	if m == nil { // not shown (buildComponents); nothing to say
+		return []attempt{{Why: "this console has no e-mail service"}}
+	}
+	a := attempt{What: "the console link in e-mails", At: f.Now}
+	switch {
+	case !m.Configured:
+		a.Outside, a.Why = statusNotApplicable, "alert e-mail is not set up, so there is no e-mail to carry a console link"
+	case m.Link == "":
+		a.Result, a.Why = failed, "e-mails carry no console link: admin_url is not set. Set admin_url in the console configuration to the address you type to open the console (not public_url, which is the agent API)"
+	default:
+		a.Result, a.Note = passed, "e-mails link to "+m.Link+" (admin_url)"
+	}
+	return []attempt{a}
 }
 
 // certRefusalClasses are the failure classes of a probe whose handshake got a certificate and
@@ -998,6 +1035,9 @@ func buildComponents(f healthFacts) []SystemComponentJSON {
 	_, c00 := worstOf(f.Banners, []string{bannerNotWired})
 	out := make([]SystemComponentJSON, 0, len(healthRowOrder))
 	for _, row := range healthRowOrder {
+		if row.id == "admin_url" && (f.MailLink == nil || f.MailLink.Fixtures) {
+			continue // no e-mail service, or fixtures mode (no configuration to be missing a key): a row here would say nothing true
+		}
 		c := SystemComponentJSON{ID: row.id, Label: row.label, Banners: []string{}}
 		raised, worst := worstOf(f.Banners, healthRowBanners[row.id])
 		if raised != nil {
@@ -1015,6 +1055,9 @@ func (s *Service) healthFactsOf(p *auth.Principal, f health.Fleet, probes state.
 		MasterKeyWired: s.Fleet.MasterLoaded != nil, Probes: probes, ReportingDevices: f.Reporting, Scoped: !p.Scope.All, FirstRun: f.View.FirstRun,
 		ProbeRows: map[string]store.JobState{}}
 	facts.MasterKeyLoaded = facts.MasterKeyWired && s.Fleet.MasterLoaded()
+	if m := s.Mail; m != nil {
+		facts.MailLink = &mailLinkFacts{Configured: m.Configured, Fixtures: m.Fixtures, Link: m.AdminLink}
+	}
 	if s.Fleet.Endpoint != nil {
 		facts.Endpoint = s.Fleet.Endpoint()
 	}
@@ -1085,7 +1128,8 @@ func labFacts(now time.Time) healthFacts {
 	ran := now.Add(-time.Minute)
 	return healthFacts{Now: now, Complete: true, EndpointWired: true, WorkerPinged: true, WorkerReachable: true, WorkerKeyLoaded: true, MaintainKnown: true, MaintainReachable: true,
 		EvaluatorLast: store.JobState{LastStatus: "ok"}, SchedulerLast: store.JobState{LastStatus: "ok"}, MasterKeyWired: true, MasterKeyLoaded: true, ReportingDevices: 3,
-		Jobs: []store.JobState{{Name: "lab", LastStatus: "ok", LastFinishedAt: &ran}},
+		Jobs:     []store.JobState{{Name: "lab", LastStatus: "ok", LastFinishedAt: &ran}},
+		MailLink: &mailLinkFacts{Configured: true, Link: "https://console.example.net/"},
 		Probes: state.ProbeFacts{Wired: true, Gateway: &gw, Storage: &st, SMTP: &state.SMTPFacts{Probe: ok()}, Evaluator: good,
 			Maintain: &state.MaintainFacts{RPC: ok(), Scheduler: good}, MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "lab"},
 			Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second), SelfBackup: &state.SelfBackupFacts{NotInBuild: true}},
