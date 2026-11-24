@@ -1,6 +1,6 @@
-# ADR DRAFT - The admin listener believes forwarded headers only from the proxies it is told to trust
+# ADR 0025 - The admin listener believes forwarded headers only from the proxies it is told to trust
 
-**Date:** 2026-11-24 - **Status:** Proposed (ticket P21-T7; the foreman numbers it at merge) - **Decider:** the operator
+**Date:** 2026-11-24 - **Status:** Accepted (foreman, 2026-11-24; the operator was told and did not object) - **Decider:** the foreman, for the operator (ticket P21-T7)
 
 ## Context
 
