@@ -152,7 +152,7 @@ Then fill in the `<placeholders>` and `chmod 0400` both files (owner uid 10001).
 
 ```sh
 cp .env.example .env            # set BUCKET, PREFIX, ports; the checksums are filled for restic 0.19.1 / rclone 1.75.1
-cp config.example.json config.json       # edit public_url and gateway_url
+cp config.example.json config.json       # edit public_url, gateway_url and admin_url
 mkdir -p secrets tls && chown 10001:10001 secrets
 docker compose build            # downloads restic and rclone, verifies SHA-256, fails on mismatch
 # one-off: create the database, the master key and the first owner account. The secrets
@@ -170,6 +170,29 @@ and writes `master.key` to the `master_key_path` of that config.
 The gateway waits for the console to be healthy because the console writes the
 htpasswd file the gateway reads (`gateway-auth` volume); if the file is missing the
 gateway restarts until it appears.
+
+## The console link in e-mails: `admin_url`
+
+Alert, recovery, digest and test e-mails carry an "Open the console" link. It is the config key
+`admin_url`: the address you type in a browser to open the console, that is, the **admin** listener
+(`admin_listen`, here published on `ADMIN_PORT` of `ADMIN_BIND`, or a reverse proxy or mesh name in
+front of it). It is not `public_url`: that is the agent API (port 8443), which serves no console
+page, so a link to it can never open the console. The console never falls back to `public_url`.
+
+```json
+"public_url": "https://backup.example.net:8443",
+"admin_url": "https://console.example.net:8080",
+```
+
+* Same shape as `public_url`: `http://` or `https://`, a host name or IP, an optional port, an
+  optional trailing slash and nothing else (no path, user name, query or escapes); a start with
+  any other value is refused. The environment override is `CRYO_ADMIN_URL`.
+* Unset (the default): e-mails go out with no link and no button, and the text says to open the
+  console without giving an address. That is a warning, not a failure: `cryo-console doctor` prints
+  `WARN admin_url: admin_url is not set: e-mails carry no console link` when the smtp block is present, and
+  `serve` logs one warning at start. Set `admin_url` to fix it.
+* The admin listener is private by design (loopback or a mesh address, see
+  [Admin UI over TLS on a mesh address](#admin-ui-over-tls-on-a-mesh-address)); the link works for a recipient who can reach that address, and for nobody else.
 
 ## Display time zone and refresh interval: the console's saved value wins (ADR 0012)
 
@@ -316,6 +339,7 @@ module versions are frozen at the last community release. Bump `RESTIC_VERSION` 
 `RESTIC_SHA256` and `RCLONE_VERSION` / `RCLONE_SHA256` together (the checksums come
 from the vendors' `SHA256SUMS`, linked in `.env.example`), and re-run L-APPEND-1.
 Pin base images by digest in production.
+Read [`../../docs/upgrade-notes.md`](../../docs/upgrade-notes.md) first: for the e-mail link, set `admin_url`.
 
 ## Validating the file
 

@@ -83,6 +83,11 @@ type App struct {
 	// TestMail sends the test message of ADR 0020 decision 11 and carries its per-console rate
 	// limit: the admin API and the e-mail page share it.
 	TestMail *notify.TestMailer
+	// Notifier and Retrier are the alarm-evaluator's mail step and the notification-retry job's
+	// re-sender (serve only; nil in fixtures mode). Held here so that a test can read the console
+	// link every sender was given.
+	Notifier *notify.Notifier
+	Retrier  *notify.Retrier
 	// FixturesPassword is the password of the fixtures admin ("admin").
 	FixturesPassword string
 
@@ -209,7 +214,13 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	a.Mail, a.Dispatch = newMailer(cfg, fix, a)
 	smtpSet := mail.SettingsFromConfig(cfg.SMTP)
 	mailOn := fix || smtpSet.Configured() // fixtures: the FakeSender is the relay and nothing leaves the process
-	a.TestMail = &notify.TestMailer{Dispatch: a.Dispatch, Configured: mailOn, Loc: disp.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}
+	// The link in every e-mail is admin_url (the address an operator types to open the console), never
+	// public_url: that is the agent API and serves no console page. Unset: no link and no button.
+	link := cfg.AdminLink()
+	if mailOn && !fix && link == "" {
+		a.log.Warn("admin url is not set; mail carries no console link", logx.Class("admin_url"))
+	}
+	a.TestMail = &notify.TestMailer{Dispatch: a.Dispatch, Configured: mailOn, Loc: disp.Loc, ConsoleURL: link, Log: a.log}
 	// One MailService for the admin API and the pages' in-process API (P20-W3B): the same TestMailer,
 	// so its one-test-every-10-s limit is the console's whichever of the two asks. Its Digest is set
 	// below, once the digester exists; no request is served before Build returns.
@@ -296,7 +307,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	// send-now get a digester of their own over the fixture world, sending through the FakeSender.
 	digest := a.Digest
 	if fix {
-		digest = &notify.Digester{Store: a.Store, Dispatch: a.Dispatch, Configured: true, Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log,
+		digest = &notify.Digester{Store: a.Store, Dispatch: a.Dispatch, Configured: true, Loc: a.Display.Loc, ConsoleURL: link, Log: a.log,
 			View: func(ctx context.Context) (state.FleetView, error) { f, err := fleet.Alarms(ctx); return f.View, err }}
 	}
 	if fix {

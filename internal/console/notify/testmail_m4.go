@@ -74,7 +74,7 @@ type TestMailer struct {
 	Configured bool
 	// Loc returns the operator's display zone for the time in the message; nil means UTC.
 	Loc func() *time.Location
-	// ConsoleURL is the console's public URL for the link in the message; empty means no link.
+	// ConsoleURL is the console address (config admin_url, never public_url) for the link in the message; empty means no link.
 	ConsoleURL string
 	// Interval is the least time between two tests; zero means TestMailInterval.
 	Interval time.Duration

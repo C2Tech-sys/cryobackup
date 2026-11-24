@@ -12,6 +12,25 @@ create the -shm file next to it, and doctor says so when it cannot. On a databas
 schema version, the version the first start will migrate it to and the pending migrations, and
 reports the checks that need the new schema as NOT CHECKED.
 
+## The "Open the console" link in e-mails is `admin_url`
+
+**Set `admin_url` to get the console link in e-mails.** New optional config key (environment
+override `CRYO_ADMIN_URL`): the address you type to open the console, for example
+`"admin_url": "https://console.example.net:8080"`. Until now every message linked to `public_url`,
+which is the agent API address and serves no console page, so the link never opened the console.
+Messages now link to `admin_url` and to nothing else: with `admin_url` unset there is no link and no
+button (the plain-text part still says to open the console, without an address), and `public_url`
+is never used as a fallback. `public_url` itself is unchanged.
+
+`admin_url` has the shape of `public_url`: `http://` or `https://`, a host name or IP address, an
+optional port, an optional trailing slash, no path, user name, query or escapes. A value of any
+other shape stops the console from starting, with a message that names the key and does not repeat
+the value; `cryo-console doctor` shows the problem before the upgrade is applied.
+
+With mail configured and `admin_url` unset, `cryo-console doctor` prints a warning (not a failure),
+`WARN admin_url: admin_url is not set: e-mails carry no console link`, and `serve` logs one
+warning at start. With it set, doctor prints `OK admin_url` with the address the links use.
+
 ## M4: alert e-mail, the daily digest and the heartbeat ping (ADR 0020)
 
 ### Schema v8

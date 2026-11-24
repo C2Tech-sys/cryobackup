@@ -51,8 +51,25 @@ func checkMail(cfg config.Config, st *store.Store, dbWhy string, report func(lev
 		rep("WARN", "mail", "not configured: alert e-mail and the daily digest are off")
 	} else {
 		checkMailRelay(cfg, rep)
+		checkMailLink(cfg, rep)
 	}
 	checkMailRecipients(present, st, dbWhy, rep)
+}
+
+// checkMailLink says what the link in an e-mail will be. With mail configured and admin_url unset
+// every message goes out without a console link, which is a warning, not a failure: mail works, but a
+// recipient has nowhere to click. The link is admin_url and never public_url (the agent API serves no
+// console page). An admin_url that is not valid is a FAIL of "config" already (config.Validate).
+func checkMailLink(cfg config.Config, rep func(level, name, detail string)) {
+	const name = "admin_url"
+	switch {
+	case strings.TrimSpace(cfg.AdminURL) == "":
+		rep("WARN", name, "admin_url is not set: e-mails carry no console link. Set admin_url to the address you type to open the console (not public_url, which is the agent API)")
+	case cfg.AdminLink() == "":
+		rep("NOT CHECKED", name, "admin_url is not valid (see config): e-mails would carry no console link")
+	default:
+		rep("OK", name, "e-mails link to "+cfg.AdminLink()+" (admin_url)")
+	}
 }
 
 // mailSettings are the sender's settings exactly as serve builds them (newMailer).

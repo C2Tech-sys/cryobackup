@@ -23,7 +23,7 @@ type Options struct {
 	// Loc is the operator's display zone; nil means UTC. Every time in a message is shown in it,
 	// with the zone named.
 	Loc *time.Location
-	// ConsoleURL is the console's public URL (config public_url). A message links to it when it is
+	// ConsoleURL is the address an operator types to open the console (config admin_url, never public_url: that is the agent API). A message links to it when it is
 	// an http or https URL; otherwise, or when empty, the message carries no link.
 	ConsoleURL string
 	// DigestDate is the local date ("2006-01-02") a digest is for, shown in its subject and header;
