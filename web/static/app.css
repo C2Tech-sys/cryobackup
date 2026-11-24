@@ -1,7 +1,7 @@
 /* CryoBackup console - component styles (replica/design/components.md).
    Rules of this file, enforced by tests over web/static/*.css:
    - no literal colour: every colour is a token (var(--...)) or color-mix() over tokens;
-   - Orbitron (--font-display) is never referenced here: the five .t-* roles live in tokens.css. */
+   - the display face (--font-display) is never referenced here: its .t-* roles live in tokens.css. */
 
 /* ---- 1. Foundations -------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
@@ -11,6 +11,10 @@ body {
   font: var(--weight-base) var(--text-base)/var(--leading-base) var(--font-sans);
   font-variant-numeric: tabular-nums; font-variant-ligatures: no-contextual; -webkit-font-smoothing: antialiased;
 }
+/* Contextual alternates stay off on every element, not only where the body rule is inherited: a font
+   shorthand resets them, and the data face (JetBrains Mono) draws its ligatures (->, !=, ==) with them.
+   Text is shown as typed (ADR 0023). */
+*, *::before, *::after { font-variant-ligatures: no-contextual !important; }
 h1, h2, h3, h4, p { margin: 0; }
 h2, h3 { text-wrap: balance; }
 a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
@@ -1354,3 +1358,15 @@ q.acknote { flex-basis: 100%; padding: 4px 0 0 10px; border-left: 2px solid var(
 .d-stack table.fleet.dlog td.att:not(.multi) { display: none; }
 .d-stack table.fleet.dlog td.att.multi { grid-column: 1 / -1; text-align: left; font: inherit; }
 .d-stack table.fleet td[data-label]::before { content: attr(data-label) ": "; color: var(--text-muted); font: 500 10.5px/1.3 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+
+/* ===== P21-T2: polish fixes (layout by structure, never by the glyph widths of today's fonts) =====
+   B: the page head is one column that never grows past its box. Its grid track was sized by the widest child's min-content, and on a
+   phone the device tabs (three tabs and "More", which do not scroll there so that the More menu is not clipped) are a row that cannot
+   shrink: with a wide font the track, and with it the action bar and the open retire dialog, ran past the right edge. On a phone the
+   tab row wraps instead. */
+.page-head { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 639px) {
+  .tabs:has(.tab-more) { flex-wrap: wrap; }
+}
+/* C: a date-time in the token table moves to its own line as a whole, never "1:42 / PM". */
+table.fleet.tokens .dt { white-space: nowrap; overflow-wrap: normal; }

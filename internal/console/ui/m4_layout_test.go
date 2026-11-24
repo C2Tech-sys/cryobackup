@@ -185,7 +185,7 @@ func TestP20W3B_G1_SettingsValuesNeverBreakInsideAWord(t *testing.T) {
 	}
 	probe := `var tw = document.querySelector('table.settable').closest('.table-wrap');
 var out = {iw: innerWidth, rows: 0, broken: 0, scroll: tw.scrollWidth - tw.clientWidth, overflow: document.documentElement.scrollWidth - innerWidth,
-  plex: document.fonts.check('12px "IBM Plex Sans"') && Array.from(document.fonts).some(function (f) { return f.family.indexOf('IBM Plex Sans') >= 0 && f.status === 'loaded'; }) ? 1 : 0};
+  sans: document.fonts.check('12px "Open Sans"') && Array.from(document.fonts).some(function (f) { return f.family.indexOf('Open Sans') >= 0 && f.status === 'loaded'; }) ? 1 : 0};
 document.querySelectorAll('table.settable td.val').forEach(function (td) {
   out.rows++;
   var words = td.textContent.trim().split(/\s+/).length, r = document.createRange(); r.selectNodeContents(td);
@@ -198,7 +198,7 @@ return out;`
 		if got["rows"] < 4 {
 			t.Fatalf("%s: %v value cells: the probe measures nothing", m.name, got["rows"])
 		}
-		if m.name == "house" && got["plex"] != 1 {
+		if m.name == "house" && got["sans"] != 1 {
 			t.Fatalf("the house fonts did not load: the house case would measure the fallback fonts")
 		}
 		if got["broken"] > 0 || got["scroll"] > 0.5 || got["overflow"] > 0.5 {
@@ -224,7 +224,7 @@ var p = d.querySelector('.rowmenu-pop'), r = p.getBoundingClientRect(), cs = get
 var right = r.right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth), left = r.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth);
 var top = r.top + parseFloat(cs.paddingTop) + parseFloat(cs.borderTopWidth), bottom = r.bottom - parseFloat(cs.paddingBottom) - parseFloat(cs.borderBottomWidth);
 var out = {iw: innerWidth, kids: 0, past: 0,
-  plex: Array.from(document.fonts).some(function (f) { return f.family.indexOf('IBM Plex Sans') >= 0 && f.status === 'loaded'; }) ? 1 : 0};
+  sans: Array.from(document.fonts).some(function (f) { return f.family.indexOf('Open Sans') >= 0 && f.status === 'loaded'; }) ? 1 : 0};
 p.querySelectorAll('*').forEach(function (el) { var q = el.getBoundingClientRect(); if (q.width === 0) return; out.kids++;
   out.past = Math.max(out.past, q.right - right, left - q.left, top - q.top, q.bottom - bottom); });
 return out;`
@@ -238,8 +238,8 @@ return out;`
 					t.Fatalf("%s: %v", name, msg)
 				}
 				// J5: the house case measures the house fonts, and the system case is known not to (so the check can tell)
-				if (m.name == "house") != (got["plex"] == 1) {
-					t.Fatalf("%s %d px %s fonts: IBM Plex Sans loaded = %v", name, w, m.name, got["plex"])
+				if (m.name == "house") != (got["sans"] == 1) {
+					t.Fatalf("%s %d px %s fonts: Open Sans (the body face) loaded = %v", name, w, m.name, got["sans"])
 				}
 				if got["kids"] < 20 || got["past"] > 0.5 {
 					t.Errorf("%s %d px %s fonts: something reaches %.1f px outside the popover's content box, on some side (%v elements)", name, w, m.name, got["past"], got["kids"])
@@ -275,8 +275,8 @@ func (e *env) houseFontsCSS(t *testing.T) string {
 		n++
 		return "url('data:font/woff2;base64," + base64.StdEncoding.EncodeToString([]byte(body)) + "')"
 	})
-	if n < 3 {
-		t.Fatalf("fonts.css names %d font files, want the three house faces", n)
+	if n < 8 {
+		t.Fatalf("fonts.css names %d font files, want the eight house files (ADR 0023)", n)
 	}
 	return out
 }

@@ -45,6 +45,8 @@ type AccountPage struct {
 	MasterOK  bool
 	SessErr   bool
 	TokErr    bool
+	// Idle and Absolute are the configured session limits as the page says them (sessionSpanText).
+	Idle, Absolute string
 }
 
 // AccountMe is the profile card. DisplayName is "" when none is set.
@@ -170,7 +172,7 @@ func (s *Service) accountData(r *http.Request, p *auth.Principal) (AccountPage, 
 		pg = s.page(r.Context(), p, f, "My account", "account", "/ui/events")
 	}
 	d := AccountPage{Page: pg, Errs: map[string]*Note{}, Lifetimes: auth.TokenLifetimes, TokenForm: TokenForm{Scope: auth.ScopeRead, Days: 90},
-		MasterOK: s.Auth.Master.Loaded()}
+		MasterOK: s.Auth.Master.Loaded(), Idle: sessionSpanText(s.Auth.Idle), Absolute: sessionSpanText(s.Auth.Absolute)}
 	a, err := s.Store.GetAdmin(r.Context(), p.Admin.ID)
 	if err != nil {
 		return d, false

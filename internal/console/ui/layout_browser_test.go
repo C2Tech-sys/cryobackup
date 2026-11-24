@@ -59,8 +59,9 @@ var (
 	browser     *layoutBrowser
 	browserDone bool // stopLayoutBrowser ran: no new browser is started
 
-	// layoutSkips counts the layout tests that skipped because the browser would not run (CI unset).
-	// TestMain names the count at the end, so a run that skipped them does not end on a quiet "ok".
+	// layoutSkips counts the layout tests that skipped because no browser was found (CI unset).
+	// TestMain names the count at the end (layoutSkipLine). A browser that is found but will not
+	// run is no skip: its test fails (browserWouldNotRun).
 	layoutSkips atomic.Int64
 )
 
@@ -136,7 +137,7 @@ next();
 </script></body></html>`
 
 func startLayoutBrowser(chrome string) (*layoutBrowser, error) {
-	profile, err := os.MkdirTemp("", tempPrefix+"browser-")
+	profile, err := mkLiveTempDir("browser-")
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +182,7 @@ func startLayoutBrowser(chrome string) (*layoutBrowser, error) {
 	b.cmd = exec.Command(chrome, append(args, b.ctl.URL+"/runner")...)
 	if err := b.cmd.Start(); err != nil {
 		b.ctl.Close()
+		forgetLiveTempDir(profile)
 		_ = os.RemoveAll(profile)
 		return nil, err
 	}
@@ -316,6 +318,12 @@ func pageHandler(dir func() *string) http.Handler {
 		if ct := mime.TypeByExtension(path.Ext(rel)); ct != "" {
 			w.Header().Set("Content-Type", ct)
 		}
+		// A .br file is a raw Brotli stream, sent as Content-Encoding: br so the browser decodes it
+		// (P21-T3: the glyph coverage test reads WOFF2 font data this way; Go has no Brotli decoder).
+		if path.Ext(rel) == ".br" {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Encoding", "br")
+		}
 		_, _ = w.Write(b)
 	})
 }
@@ -367,6 +375,7 @@ func (b *layoutBrowser) close() {
 	}
 	b.ctl.CloseClientConnections()
 	b.ctl.Close()
+	forgetLiveTempDir(b.profile)
 	for i := 0; i < 20; i++ { // the browser's helper processes can hold profile files a moment longer
 		if err := os.RemoveAll(b.profile); err == nil {
 			return

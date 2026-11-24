@@ -376,11 +376,11 @@ func TestDefaultSenderAndExplicitFrom(t *testing.T) {
 	set := srv.settings("plain")
 	set.AllowPlaintext = true
 	m := testMsg()
-	m.From = "Cryo Console <alerts@example.net>"
+	m.From = "Cryo Console <alerts@example.test>"
 	if err := sendWith(t, set, m); err != nil {
 		t.Fatal(err)
 	}
-	if got := srv.captured()[0].from; got != "alerts@example.net" {
+	if got := srv.captured()[0].from; got != "alerts@example.test" {
 		t.Fatalf("envelope sender = %q, want the message's own From", got)
 	}
 }
@@ -541,8 +541,8 @@ func TestSendRefusesAnInvalidMessageBeforeDialling(t *testing.T) {
 	set := srv.settings("plain")
 	set.AllowPlaintext = true
 	for name, m := range map[string]Message{
-		"subject injection":   {To: []string{"a@example.com"}, Subject: "x\r\nBcc: evil@example.net", Text: "t"},
-		"recipient injection": {To: []string{"a@example.com\r\nRCPT TO:<evil@example.net>"}, Subject: "s", Text: "t"},
+		"subject injection":   {To: []string{"a@example.com"}, Subject: "x\r\nBcc: evil@example.test", Text: "t"},
+		"recipient injection": {To: []string{"a@example.com\r\nRCPT TO:<evil@example.test>"}, Subject: "s", Text: "t"},
 		"no recipient":        {Subject: "s", Text: "t"},
 		"no text":             {To: []string{"a@example.com"}, Subject: "s"},
 	} {

@@ -14,7 +14,7 @@
 //
 // State chips (chips.go) are a closed catalogue of 17 states, the RUNNING
 // overlay and the outcome chips; testdata/state_chips.golden pins it. checks.go
-// holds the built-in design checks (TokenCoverage, OrbitronAudit,
+// holds the built-in design checks (TokenCoverage, DisplayFaceAudit,
 // ContrastReport) shown on /design in fixtures mode.
 //
 // Restore wizard: the browse listing is the single place a file path reaches a

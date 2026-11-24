@@ -1,0 +1,17 @@
+Josefin Sans, The Josefin Sans Project Authors (https://github.com/ThomasJockin/JosefinSansFont-master),
+SIL Open Font License 1.1, Reserved Font Name "Josefin Sans".
+The files are Fontsource builds of the Google Fonts release (Google Fonts version v34, 2025-09-05):
+the variable font (wght axis 100-700), upright, split into Fontsource's latin and latin-ext subsets.
+Package: npm @fontsource-variable/josefin-sans 5.3.0 (https://fontsource.org/fonts/josefin-sans)
+         https://registry.npmjs.org/@fontsource-variable/josefin-sans/-/josefin-sans-5.3.0.tgz
+         sha1   cce7c2cf02ad915b502a015bea31f13f7d236017 (the registry's published shasum; matches)
+         sha256 ba714fc4eac42aa40f2b231c9967bf7a7c3893926a742045d1190a0778c39750
+Files:   from package/files/ in that tarball, stored unmodified under plain names
+         JosefinSans-latin-var.woff2      <- josefin-sans-latin-wght-normal.woff2
+                                             sha256 21efe1559a026f9ad7f880772917faa3a621186688e8e79e0568e4308c0bafa9
+         JosefinSans-latin-ext-var.woff2  <- josefin-sans-latin-ext-wght-normal.woff2
+                                             sha256 e9dfe6f6288f73d10e1b3c9ef920f74411f8cf442515b71fc5c2ed5517c14ff7
+         fonts.css declares each with the unicode-range of the package's wght.css (also unicode.json).
+Licence: OFL.txt is package/LICENSE from the same tarball, stored unmodified
+         sha256 56a81de42b758828ed453bf712867221f6d4c05078ed28fba93dc4e06c6fa728
+The sha256 values are computed locally from the downloaded files.

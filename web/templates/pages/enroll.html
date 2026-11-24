@@ -1,5 +1,6 @@
 {{/* B16 - the enrollment token table (M3-T6; the wizard's form is pages/enroll_new.html). Admin only. The wizard's POST answers
-     here with the one-time result: the token and the deployment snippets. The token is in that response only. */}}
+     here with the one-time result: the token and the deployment snippets. The token is in that response only.
+     P21-T2: every date-time in the table sits in a .dt element, which never breaks inside itself. */}}
 {{define "content"}}{{if .Created}}{{template "enroll_created" .}}{{else}}{{template "enroll_main" .}}{{end}}{{end}}
 
 {{define "enroll_main"}}
@@ -35,9 +36,9 @@
 <td class="dev-cell"><a class="hostname" href="/enroll/tokens/{{.ID}}" aria-label="{{.Aria}}">{{.Label}}</a><small><a href="/customers/{{.CustomerID}}">{{.Customer}}</a></small></td>
 <td class="tk-status">{{template "chip" .Status}}</td>
 <td data-label="Uses">{{.Uses}}<small>{{.UsesNote}}</small></td>
-<td data-label="Expires"><time datetime="{{.ExpiresISO}}">{{.Expires}}</time><small>{{.ExpiresRel}}</small></td>
-<td data-label="Created by">{{.CreatedBy}}<small>{{.Created}}</small></td>
-<td data-label="Last used">{{.LastUsed}}{{if .LastRel}}<small>{{.LastRel}}</small>{{end}}</td>
+<td data-label="Expires"><time class="dt" datetime="{{.ExpiresISO}}">{{.Expires}}</time><small>{{.ExpiresRel}}</small></td>
+<td data-label="Created by">{{.CreatedBy}}<small><span class="dt">{{.Created}}</span></small></td>
+<td data-label="Last used"><span class="dt">{{.LastUsed}}</span>{{if .LastRel}}<small>{{.LastRel}}</small>{{end}}</td>
 <td class="act"><a class="btn sm ghost" href="/enroll/tokens/{{.ID}}">Details</a>{{if .CanRevoke}}
   <form class="inline-form" method="post" action="/ui/enroll/tokens/{{.ID}}/revoke"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="return" value="list"><button class="btn sm danger" type="submit" aria-label="Revoke token {{.Label}} for {{.Customer}}">Revoke</button></form>{{end}}{{if .CanDelete}}
   <form class="inline-form" method="post" action="/ui/enroll/tokens/{{.ID}}/delete"><input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button class="btn sm danger" type="submit" aria-label="Delete token {{.Label}} for {{.Customer}}">Delete</button></form>{{end}}</td>
