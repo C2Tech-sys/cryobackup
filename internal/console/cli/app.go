@@ -45,6 +45,9 @@ type BuildOptions struct {
 	// delivery log of every outcome and an acknowledged alarm (P20-W3B). serve sets it; tests that
 	// count the base fixture world leave it off.
 	FixtureMailWorld bool
+	// GatewaySyncWait bounds a retire's wait for the login to leave the gateway's file, in the admin API
+	// and in the pages' in-process one. Zero is adminapi.DefaultGatewaySyncWait (5 s), which serve uses.
+	GatewaySyncWait time.Duration
 }
 
 // App is a fully wired console: the store, the two route sets behind their
@@ -253,8 +256,12 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	a.Admin = &adminapi.Service{Auth: a.Auth, Store: a.Store, Fleet: fleet, Restores: a.Restores, Backend: a.Backend, Clock: a.clock, Log: a.log, Loc: disp.Loc(), Display: disp,
 		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify, CheckGatewayLogins: checkLogins,
 		Events: a.Hub, MaxEventStreams: cfg.RateLimits.EventStreamsMax, MaxEventStreamsPerPrincipal: cfg.RateLimits.EventStreamsPerAccount}
+	a.Admin.GatewaySyncWait = o.GatewaySyncWait // zero is the 5 s default; the pages' API below gets the same value
 	u, err := ui.New(&ui.Service{Auth: a.Auth, Store: a.Store, Fleet: fleet, Restores: a.Restores, Backend: a.Backend, Hub: a.Hub, Clock: a.clock, Loc: disp.Loc(), Display: disp,
 		Zone: disp.Zone(), Refresh: disp.RefreshS(), Fixtures: fix, Log: a.log, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status,
+
+		GatewaySyncWait: o.GatewaySyncWait,
+
 		PublicURL: cfg.PublicURL, ArtifactsDir: cfg.ArtifactsDir, WakeAgent: wake, SyncGateway: a.Htpasswd.Sig.Notify, CheckGatewayLogins: checkLogins, Mail: mailSvc})
 	if err != nil {
 		return nil, err

@@ -98,7 +98,7 @@ func renameDir(t *testing.T, from, to string) {
 // waitFor polls a condition for up to 15 s of real time.
 func (w *retireWorld) waitFor(what string, ok func() bool) {
 	w.t.Helper()
-	end := time.Now().Add(15 * time.Second)
+	end := time.Now().Add(60 * time.Second) // a sync run's bcrypt compares take seconds each under -race on a loaded machine
 	for !ok() {
 		if time.Now().After(end) {
 			w.t.Fatalf("timed out waiting for %s", what)
@@ -167,6 +167,33 @@ func (w *retireWorld) retire(id string) adminapi.DeviceRetireResponse {
 	return out
 }
 
+// watchRetire is the diagnostic for a retire that is still waiting after slowAfter: it logs every goroutine's
+// stack and the sync job's row once, so a run that outlasts the wait shows what it was doing (P21-T5). The
+// returned func stops it and must be called when the retire has answered. Stacks and class names only.
+func (w *retireWorld) watchRetire(slowAfter time.Duration) (stop func()) {
+	w.t.Helper()
+	done, quit := make(chan struct{}), make(chan struct{})
+	timer := time.AfterFunc(slowAfter, func() {
+		select {
+		case <-done:
+			return
+		default:
+		}
+		buf := make([]byte, 4<<20)
+		buf = buf[:runtime.Stack(buf, true)]
+		js, err := w.app.Store.GetJobState(context.Background(), store.JobHtpasswdSync)
+		w.t.Logf("the retire is still waiting after %v. job row: err=%v status=%q class=%q runs=%d started=%v finished=%v lease=%q until=%v\n%s",
+			slowAfter, err, js.LastStatus, js.LastErrorClass, js.RunCount, js.LastStartedAt, js.LastFinishedAt, js.LeaseHolder, js.LeaseUntil, buf)
+		close(quit)
+	})
+	return func() {
+		close(done)
+		if !timer.Stop() {
+			<-quit // the dump is under way: let it finish before the test can end
+		}
+	}
+}
+
 func (w *retireWorld) auditDetails(id string) []string {
 	w.t.Helper()
 	l, err := w.app.Store.ListAudit(context.Background(), store.ScopeAll(), store.AuditFilter{Action: "device.retire_sync"}, store.Page{Limit: 50})
@@ -183,16 +210,18 @@ func (w *retireWorld) auditDetails(id string) []string {
 }
 
 func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T) { // M3-T6 delta M1
-	app, _ := buildFromInit(t, "America/Chicago", "America/Chicago")
-	// The API's retire answers io once the sync run after it has failed. That run checks a bcrypt
-	// hash, which under -race on a loaded machine takes seconds per compare, and it can queue behind
-	// a run already in flight, so the product's 5 s wait can run out first (the answer is then the
-	// newest read that finished, still_in_file or sync_busy, or check_timed_out when none had; P21-T5).
-	// The wait is set long here, before anything is
-	// served; the answer still comes as soon as the failed run is recorded. The UI's retire below
-	// goes through the UI's own in-process API, which keeps the 5 s wait.
+	// The retire answers io once the sync run after it has failed. That run checks a bcrypt hash, which
+	// under -race on a loaded machine takes seconds per compare, and it can queue behind a run already
+	// in flight, so the product's 5 s wait can run out first (the answer is then the newest read that
+	// finished, still_in_file or sync_busy, or check_timed_out when none had; P21-T5). The wait is set
+	// long, through BuildOptions before anything is served, for both the API's retire and the UI's
+	// (which goes through the UI's own in-process API: ui.Service.GatewaySyncWait); the answer still
+	// comes as soon as the failed run is recorded.
 	const syncWait = time.Minute
-	app.Admin.GatewaySyncWait = syncWait
+	app, _ := buildFromInitWith(t, "America/Chicago", "America/Chicago", BuildOptions{GatewaySyncWait: syncWait})
+	if app.Admin.GatewaySyncWait != syncWait {
+		t.Fatalf("the admin API's wait is %v", app.Admin.GatewaySyncWait)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	app.Runner.Start(ctx)
 	t.Cleanup(func() { cancel(); app.Runner.Stop() })
@@ -230,7 +259,9 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 
 	// The answer is pending, within the bound, with the reason class.
 	began := time.Now()
+	stopWatch := w.watchRetire(syncWait - 15*time.Second)
 	got := w.retire(dead)
+	stopWatch()
 	if took := time.Since(began); took > syncWait+3*time.Second {
 		t.Errorf("the retire took %v: the wait must stay bounded", took)
 	}
@@ -256,7 +287,11 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 	}
 
 	// The UI path gets the same truth, in its notice.
+	began = time.Now()
 	res, _ := w.c.do("POST", "/ui/devices/"+viaUI+"/retire", url.Values{"csrf_token": {w.c.csrf}, "reason": {"compromised endpoint"}, "confirm": {"DEAD-PC-02"}})
+	if took := time.Since(began); took > syncWait+3*time.Second {
+		t.Errorf("the UI's retire took %v: the wait must stay bounded", took)
+	}
 	loc := res.Header.Get("Location")
 	if !strings.Contains(loc, "cmd=retired_pending") || !strings.Contains(loc, "why=io") {
 		t.Fatalf("UI retire went to %q", loc)
@@ -303,7 +338,10 @@ func TestRetireTellsTheTruthWhenTheSyncCannotWriteInRealServeWiring(t *testing.T
 	if loc := res.Header.Get("Location"); !strings.Contains(loc, "cmd=retired_ok") {
 		t.Fatalf("a retire with a working sync went to %q", loc)
 	}
-	if took := time.Since(began); took >= adminapi.DefaultGatewaySyncWait {
+	// The UI's wait is syncWait here (ui.Service.GatewaySyncWait), so "the whole wait" is that. retired_ok above already
+	// says a read found the login gone; this says it did not take the bound. A working sync under -race on a loaded
+	// machine can take longer than the product's 5 s, which is why the wait is lengthened.
+	if took := time.Since(began); took >= syncWait {
 		t.Errorf("a working sync took the whole wait (%v): the UI's API is not signalling it", took)
 	}
 	if w.inFile(w.dir, later) {

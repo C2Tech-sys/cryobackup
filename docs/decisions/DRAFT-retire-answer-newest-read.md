@@ -42,6 +42,7 @@ the outcome's audit row, which records the same status and reason as the answer.
   a hung or very slow mount.
 - The tests end the wait at a chosen read (through the request's context, the parent of the wait's) instead of on a
   timer, so the pinned answers do not depend on machine load.
-- The UI's retire goes through the UI's own in-process admin API, built inside the `ui` package with the default wait.
-  A test cannot lengthen that wait from outside; that is a test seam, not a product change, and it is not part of this
-  decision.
+- The UI's retire goes through the UI's own in-process admin API, built inside the `ui` package. Its wait is
+  `ui.Service.GatewaySyncWait` (zero keeps the 5 s default, and serve leaves it zero); `cli.BuildOptions.GatewaySyncWait`
+  sets it, with the admin API's, so a test can lengthen both. That is a test seam, not a product setting: there is no
+  config key, and a test pins both the pass-through and the 5 s constant.
