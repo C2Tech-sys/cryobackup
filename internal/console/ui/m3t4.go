@@ -109,6 +109,7 @@ func (s *Service) initM3() {
 	// The pages' mutations go through this API, so it wakes, syncs, measures and signals exactly as the real one does.
 	a := &adminapi.Service{Auth: s.Auth, Store: s.Store, Fleet: s.Fleet, Restores: s.Restores, Backend: s.Backend, Clock: s.Clock, Log: s.Log,
 		Loc: s.Loc, Display: s.Display, Jobs: jobProxy{s}, SyncGateway: s.SyncGateway, WakeAgent: s.WakeAgent, CheckGatewayLogins: s.CheckGatewayLogins}
+	a.GatewaySyncWait = s.GatewaySyncWait // zero keeps adminapi.DefaultGatewaySyncWait
 	if s.Mail != nil {
 		a.Mail = s.Mail // P20-W3B: the e-mail page's test mail, preview and send-now (one TestMailer per console)
 	}

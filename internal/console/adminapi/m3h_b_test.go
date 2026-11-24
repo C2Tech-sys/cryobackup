@@ -71,24 +71,21 @@ func TestExplainPrintsTheSafeVersionLabel(t *testing.T) {
 
 // M3-HARDEN B: a retire whose reads met a busy slot and then ran out of time answers with what
 // the reads said, sync_busy, as the page does: not check_timed_out.
+// P21-T5: the wait now ends while the next read is in flight (readsThenEnd), not on a 200 ms timer
+// that a loaded machine could spend before the busy read came back.
 func TestRetireAnswerNamesTheBusySlotAsThePageDoes(t *testing.T) {
 	e := newEnv(t)
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
+	ctx, end := context.WithCancel(context.Background())
+	defer end()
 	var calls atomic.Int32
-	e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, 200*time.Millisecond
-	e.svc.CheckGatewayLogins = func(context.Context) jobs.LoginFileCheck {
-		if calls.Add(1) == 1 {
-			return jobs.LoginFileCheck{ReadClass: jobs.LoginFileBusy}
-		}
-		<-release // the next read outlasts the bound
-		return jobs.LoginFileCheck{}
-	}
-	res, b := e.req("POST", "/api/v1/devices/"+e.dev.ID+"/retire", e.login("admin", pw), DeviceRetireRequest{Reason: "r"})
-	if res.StatusCode != 200 {
-		t.Fatalf("retire: %d %s", res.StatusCode, b)
-	}
-	if got := decode[DeviceRetireResponse](t, b); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != jobs.LoginFileBusy {
+	e.svc.SyncGateway, e.svc.GatewaySyncWait = func() {}, time.Minute // only end() ends the wait
+	e.svc.CheckGatewayLogins = readsThenEnd(t, end, &calls, func(context.Context) jobs.LoginFileCheck {
+		return jobs.LoginFileCheck{ReadClass: jobs.LoginFileBusy}
+	}) // the next read is in flight when the wait ends
+	if got := retireEndable(t, e, ctx, e.dev.ID); got.GatewayLogin != GatewayLoginPending || got.GatewayLoginReason != jobs.LoginFileBusy {
 		t.Fatalf("%+v, want pending with reason %s", got, jobs.LoginFileBusy)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("%d reads began, want 2", n)
 	}
 }

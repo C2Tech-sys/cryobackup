@@ -17,6 +17,12 @@ import (
 
 func buildFromInit(t *testing.T, tz, configZone string) (*App, string) {
 	t.Helper()
+	return buildFromInitWith(t, tz, configZone, BuildOptions{})
+}
+
+// buildFromInitWith is buildFromInit with the caller's BuildOptions (Backend and Log are set here).
+func buildFromInitWith(t *testing.T, tz, configZone string, o BuildOptions) (*App, string) {
+	t.Helper()
 	dir := t.TempDir()
 	if code, out, errb := run(t, "", initArgs(dir, "--master-key-copy-confirmed", "--timezone", tz)...); code != 0 {
 		t.Fatalf("init: %d\n%s\n%s", code, out, errb)
@@ -32,7 +38,8 @@ func buildFromInit(t *testing.T, tz, configZone string) (*App, string) {
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	app, err := Build(context.Background(), cfg, BuildOptions{Backend: &fixtures.Backend{}, Log: logx.New(&logs, logx.LevelDebug)})
+	o.Backend, o.Log = &fixtures.Backend{}, logx.New(&logs, logx.LevelDebug)
+	app, err := Build(context.Background(), cfg, o)
 	if err != nil {
 		t.Fatal(err)
 	}

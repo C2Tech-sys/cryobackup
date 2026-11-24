@@ -178,6 +178,13 @@ func (s *Service) syncFailedSince(ctx context.Context, t time.Time) (string, boo
 // awaitLoginRemoved signals the sync and reads the file until the login is gone, the file cannot
 // be read, a run after the retire has failed, or the bound ends. A signal can be lost to a run
 // holding the job's lease, so it is repeated while waiting.
+//
+// When the bound ends with a read in flight, the answer is the newest read that finished during
+// this wait, whatever it found (the login in the file, with its reason, or sync_busy), and
+// check_timed_out only when no read finished at all. A finished read is one that returned anything
+// other than the bound running out. A read that finds the login gone, or the file unreadable with no
+// login seen in it, still answers at once, as before. Only reads this call made count: each began
+// after the wait began, so the answer never rests on a read from before it.
 func (s *Service) awaitLoginRemoved(ctx context.Context, deviceID string, retiredAt time.Time) GatewayLoginState {
 	if s.SyncGateway == nil || s.CheckGatewayLogins == nil {
 		return s.GatewayLoginNow(ctx, deviceID, retiredAt)
@@ -192,19 +199,20 @@ func (s *Service) awaitLoginRemoved(ctx context.Context, deviceID string, retire
 	poll, again := time.NewTicker(25*time.Millisecond), time.NewTicker(time.Second)
 	defer poll.Stop()
 	defer again.Stop()
-	var busy *GatewayLoginState // a read that met a run; it says more than the bound running out afterwards
+	var last *GatewayLoginState // the newest read that finished during this wait
 	for {
 		v := s.GatewayLoginNow(ctx, deviceID, retiredAt)
-		if v.Reason == jobs.LoginFileBusy {
-			b := v
-			busy = &b
-		} else if v.Reason == gatewayCheckTimedOut && busy != nil {
-			v = *busy // the page reads sync_busy here too: the answer and the page name one cause
+		if v.Reason == gatewayCheckTimedOut { // the bound ended with this read in flight
+			if last != nil {
+				return *last // it says more than the bound running out, and the page reads the file the same way
+			}
+			return v
 		}
+		last = &v
 		switch {
 		case v.Status == GatewayLoginRemoved:
 			return v
-		case !v.InFile && v.Reason != jobs.LoginFileBusy && v.Reason != gatewayCheckTimedOut: // the file cannot be read
+		case !v.InFile && v.Reason != jobs.LoginFileBusy: // the file cannot be read
 			return v
 		}
 		if v.InFile {

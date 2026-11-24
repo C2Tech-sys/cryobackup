@@ -77,6 +77,10 @@ type Service struct {
 	// CheckGatewayLogins reads the file the gateway reads (jobs.HtpasswdSync.Check). A retire says
 	// removed only when a read finds the login gone.
 	CheckGatewayLogins func(context.Context) jobs.LoginFileCheck
+	// GatewaySyncWait bounds how long a retire from the pages waits for the login to leave that file
+	// (initM3 copies it into the pages' in-process admin API). Zero keeps adminapi.DefaultGatewaySyncWait,
+	// and serve leaves it zero; cli sets it from BuildOptions, so a test can lengthen it.
+	GatewaySyncWait time.Duration
 
 	// Jobs is the console's job runner, for the System page's "Run now" and its
 	// job table (M3-T4, m3t4.go). cli sets it once the runner exists, before the

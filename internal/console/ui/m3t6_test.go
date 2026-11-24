@@ -355,17 +355,29 @@ func TestM3T6B_RetiredDevicesCollapseUnderRetiredNOnEveryList(t *testing.T) {
 // On the page: a login a read finds in the file reads pending, in the notice and on the
 // device page, and is never called removed. A clean read clears it, by itself.
 func TestM3T6B_ALoginInTheFileReadsPending(t *testing.T) {
-	// Serial (P21-T1): it races a 60 ms gateway-sync bound against the store's reads, so it runs alone, as it always did.
+	// P21-T5 fix batch 1: the wait ends at a read the test chooses, not on a 60 ms timer. The first read
+	// finishes with the login in the file; the next is in flight when the test ends the wait, so the
+	// answer is the first read's (the ruling: the newest finished read), whatever the machine's load.
+	// It was serial because the timer raced the store's reads; with no timer it needs no such care.
 	e := newEnv(t)
 	e.login()
-	e.svc.m3.api.GatewaySyncWait = 60 * time.Millisecond
+	e.svc.m3.api.GatewaySyncWait = time.Minute // only end() ends the wait
 	id := e.dev["FRONTDESK-01"]
 	e.loginFile = func() jobs.LoginFileCheck { return jobs.LoginFileCheck{At: e.now, InFile: []string{id}} }
-	r := e.postForm("/ui/devices/"+id+"/retire", url.Values{"reason": {"compromised"}, "confirm": {"FRONTDESK-01"}})
-	if !strings.Contains(e.location(r), "cmd=retired_pending") || !strings.Contains(e.location(r), "why=still_in_file") {
-		t.Fatalf("went to %q", e.location(r))
+	ctx, end := context.WithCancel(context.Background())
+	defer end()
+	var reads atomic.Int32
+	restore := e.readsThenEnd(end, &reads)
+	r := e.postFormEndable(ctx, "/ui/devices/"+id+"/retire", url.Values{"reason": {"compromised"}, "confirm": {"FRONTDESK-01"}})
+	restore()
+	loc := r.Header().Get("Location")
+	if r.Code != http.StatusSeeOther || !strings.Contains(loc, "cmd=retired_pending") || !strings.Contains(loc, "why=still_in_file") {
+		t.Fatalf("%d, went to %q", r.Code, loc)
 	}
-	page := e.page(e.location(r), 200)
+	if reads.Load() < 2 {
+		t.Errorf("%d reads began: the wait did not end on a read in flight", reads.Load())
+	}
+	page := e.page(loc, 200)
 	mustContain(t, "pending", page, "Device retired, but its gateway login is not removed.", "the gateway may still accept this device&#39;s login until the sync succeeds", "Reason: still_in_file.",
 		"A banner stays up while a read of the gateway&#39;s file finds the login or cannot read the file.")
 	if strings.Contains(page, "a read of the gateway&#39;s file finds no login") || strings.Contains(page, "critical banner stays up") {
