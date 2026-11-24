@@ -189,7 +189,8 @@ type Config struct {
 	TLS              TLS             `json:"tls"`
 	Admin            Admin           `json:"admin"`
 	PublicURL        string          `json:"public_url"`
-	AdminURL         string          `json:"admin_url"` // the address an operator types to open the console; the link in e-mails. Empty: no link. Never public_url (the agent API serves no console page)
+	AdminURL         string          `json:"admin_url"`                 // the address an operator types to open the console; the link in e-mails. Empty: no link. Never public_url (the agent API serves no console page)
+	TrustedProxies   []string        `json:"trusted_proxies,omitempty"` // proxies in front of the admin listener whose X-Forwarded-For/-Proto are believed (ParseTrustedProxies); empty: none, and not written by init. CRYO_TRUSTED_PROXIES: comma-separated
 	GatewayURL       string          `json:"gateway_url"`
 	GatewayAuthDir   string          `json:"gateway_auth_dir"`
 	ArtifactsDir     string          `json:"artifacts_dir"` // where the operator places the agent MSI (shown on /downloads, hashed for the deployment snippets) and agent releases (M11); never restore data (ADR 0008)
@@ -386,6 +387,21 @@ func applyEnv(v reflect.Value, prefix []string, getenv func(string) string) erro
 				return fmt.Errorf("config: %s must be true or false", key)
 			}
 			fv.SetBool(b)
+		case reflect.Slice:
+			if f.Type.Elem().Kind() != reflect.String {
+				return fmt.Errorf("config: %s has an unsupported type", key)
+			}
+			// A list is comma-separated, white space around an entry ignored. An empty
+			// entry (",", "a,,b", a trailing comma) is malformed and refused, not dropped:
+			// a typo must not shrink the list without a word.
+			var list []string
+			for _, s := range strings.Split(raw, ",") {
+				if s = strings.TrimSpace(s); s == "" {
+					return fmt.Errorf("config: %s has an empty entry: separate the entries with single commas", key)
+				}
+				list = append(list, s)
+			}
+			fv.Set(reflect.ValueOf(list))
 		default:
 			return fmt.Errorf("config: %s has an unsupported type", key)
 		}
@@ -450,6 +466,9 @@ func (c Config) Validate() error {
 		if _, err := ParseAdminURL(c.AdminURL); err != nil {
 			add("%s", err.Error())
 		}
+	}
+	if _, err := ParseTrustedProxies(c.TrustedProxies); err != nil {
+		add("%s", err.Error())
 	}
 	if c.GatewayURL != "" {
 		if u, err := url.Parse(c.GatewayURL); err != nil || u.Scheme != "https" || u.Host == "" {

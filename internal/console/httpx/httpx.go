@@ -86,8 +86,14 @@ func SetActor(ctx context.Context, kind, id string) {
 
 // ClientIP returns the host part of the connection's remote address. The
 // X-Forwarded-For header is deliberately not trusted: the agent listener is
-// public and a client could forge it to dodge the per-IP limits.
+// public and a client could forge it to dodge the per-IP limits. The one
+// exception is the admin listener with trusted_proxies set: there ForwardedFor
+// (forwarded.go) may have taken the client from the chain a trusted proxy sent,
+// and that address is returned instead.
 func ClientIP(r *http.Request) string {
+	if f, ok := r.Context().Value(forwardedKey{}).(forwarded); ok && f.client != "" {
+		return f.client
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

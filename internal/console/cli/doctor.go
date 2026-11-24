@@ -119,6 +119,7 @@ func runDoctor(args []string, io IO) int {
 		report("FAIL", "admin exposure", "admin_listen is public and admin_allow_public is off")
 	}
 	checkAdminTLS(cfg, report)
+	checkTrustedProxies(cfg, report)
 	if fi, err := os.Stat(cfg.GatewayAuthDir); err != nil || !fi.IsDir() {
 		report("WARN", "gateway auth dir", "missing: htpasswd-sync cannot write the gateway's login file")
 	} else {

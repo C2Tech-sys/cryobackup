@@ -44,3 +44,54 @@ shares. Tickets P1-T6 (this directory's server side) and M1 (installer, RMM scri
   bucket is yours to choose and cover with an agreement.
 * **Run L-APPEND-1 on every release** against the deployed gateway:
   [`rclone/append-only-test.sh`](rclone/append-only-test.sh).
+
+## Admin UI behind a reverse proxy on the same host
+
+A reverse proxy (any that can set the headers below) may sit in front of the admin listener on the
+same host, to terminate TLS for the admin UI. The examples use documentation names and addresses:
+`console.example.net` for the name operators type, `10.0.0.5` for the host's own private address,
+`192.0.2.10` for an operator's workstation.
+
+What the proxy must do:
+
+* **Keep the `Host` header** the browser sent (do not rewrite it to the backend address).
+* **Append the client to `X-Forwarded-For`** as a bare IP address (no port, no brackets), and set
+  **`X-Forwarded-Proto: https`**, overwriting whatever the client sent (the console reads the first
+  `X-Forwarded-Proto` line only). RFC 7239 `Forwarded` is not read.
+* Connect to the admin listener from one fixed source address, the one you list below.
+
+What to put in `config.json` (the proxy connects from the host's private address here):
+
+```json
+"admin_listen": "10.0.0.5:8080",
+"admin_url": "https://console.example.net",
+"trusted_proxies": ["10.0.0.5"]
+```
+
+* `admin_url` is the address operators type; it is the link in e-mails, and its host is accepted in
+  the `Origin` and `Referer` of a form post even when the proxy does not pass `Host` through.
+* `trusted_proxies` lists the proxy's source address (IP addresses or CIDR prefixes; environment
+  `CRYO_TRUSTED_PROXIES`, comma-separated). Name only the proxy: anything that can connect to the
+  admin listener from a listed address can name any client address. If the proxy connects over
+  loopback instead (`admin_listen` `127.0.0.1:8080`, `trusted_proxies` `["127.0.0.1"]`), the admin
+  listener is not reachable from the network, but every process on the host can then speak for a
+  client. `0.0.0.0/0` and `::/0` are refused.
+* `cryo-console doctor` prints a `trusted proxies` line naming the list. Its `admin tls` warning for a
+  non-loopback `admin_listen` still shows; with the proxy on the same host that hop never leaves it.
+* Doctor cannot see the address the proxy actually connects from. If the list names the wrong one,
+  the console logs a warning the first time each such address sends forwarded headers:
+  `forwarded headers ignored: the peer is loopback or private but not a listed trusted proxy`, with
+  `"peer"` the address the proxy really uses and `"key":"trusted_proxies"`. Put that `peer` address
+  in `trusted_proxies` (after checking it is your proxy) and restart. Until then the audit trail
+  shows the proxy's address and only TLS on the admin listener itself makes the session cookie
+  `Secure`. The warning appears once per address per process run, for at most 32 addresses, and
+  never for a public address.
+
+What the audit trail then shows: a sign-in through the proxy is recorded with the workstation's
+address (`192.0.2.10`) in the audit row, the session list and the account's last sign-in address,
+and the per-address login limit counts each workstation on its own. A request that reaches the
+admin listener from any address not in the list, with or without forwarded headers, is recorded
+with its own address; its headers are ignored, and only a listed proxy may say the connection was
+https. Without `trusted_proxies`, every row shows the proxy's address (`10.0.0.5`) and everyone
+behind the proxy shares one login limit. The agent listener never reads forwarded headers. The rule
+is recorded in [`../docs/decisions/`](../docs/decisions/) ("trusted proxies").

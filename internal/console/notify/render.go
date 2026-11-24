@@ -15,6 +15,7 @@ import (
 
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
+	"github.com/c2tech-sys/cryobackup/internal/logx"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
@@ -24,7 +25,9 @@ type Options struct {
 	// with the zone named.
 	Loc *time.Location
 	// ConsoleURL is the address an operator types to open the console (config admin_url, never public_url: that is the agent API). A message links to it when it is
-	// an http or https URL; otherwise, or when empty, the message carries no link.
+	// an http or https URL; when empty, the message carries no link. A value that is not one is left out, the
+	// message is rendered exactly as without a link, and the sender logs it with class console_link
+	// (consoleLinkDropped, logConsoleLink): an alert is never lost for the sake of its link (P21-T7 V2).
 	ConsoleURL string
 	// DigestDate is the local date ("2006-01-02") a digest is for, shown in its subject and header;
 	// empty means the date of the view. A retried digest keeps the date of its key. The alert and
@@ -49,6 +52,26 @@ func (c Content) Message(to string) mail.Message {
 
 // errNothingToRender is what a renderer returns for an empty batch: a message about nothing is a bug.
 var errNothingToRender = errors.New("notify: no episode to render")
+
+// ClassConsoleLink is the class of the log line a sender writes when a message goes out without the
+// console link it was given (Options.ConsoleURL, from config admin_url) because the link cannot be
+// rendered. config.ParseAdminURL accepts only values the renderers render (a test holds them
+// together), so the line means a bug; the message itself is sent without the link and its button,
+// exactly as with admin_url unset, because an alert must never be lost for the sake of a link.
+const ClassConsoleLink = "console_link"
+
+// consoleLinkDropped reports whether raw is a console link that was given but cannot be rendered, so
+// the message leaves it out (consoleURL).
+func consoleLinkDropped(raw string) bool {
+	return strings.TrimSpace(raw) != "" && consoleURL(raw) == ""
+}
+
+// logConsoleLink is the one line a sender writes for a pass, or a message, that went out without its
+// console link: the kind and the class, never the link.
+func logConsoleLink(log *logx.Logger, kind string) {
+	log.Error("console link left out: the configured link cannot be rendered, messages go without it",
+		logx.Kind(kind), logx.Class(ClassConsoleLink))
+}
 
 // criticalAlarms are the alarm types that mail at once (ADR 0020 decision 4), in the order a
 // message lists them inside a customer: the §4.2 precedence of internal/state, MISSING first.
@@ -217,7 +240,7 @@ func render(v state.FleetView, eps []store.Episode, o Options, recovery bool) (C
 		}
 		return strings.ToLower(order[i].Customer) < strings.ToLower(order[j].Customer)
 	})
-	p := page{Recovery: recovery, Polled: when(v.ComputedAt, loc), ConsoleURL: consoleURL(o.ConsoleURL)}
+	p := page{Recovery: recovery, Polled: when(v.ComputedAt, loc), ConsoleURL: consoleURL(o.ConsoleURL)} // a link that cannot render is left out; the sender logs it
 	for _, g := range order {
 		sort.SliceStable(g.Lines, func(i, j int) bool {
 			if g.Lines[i].rank != g.Lines[j].rank {
@@ -262,7 +285,9 @@ func count(n int, one, many string) string {
 	return strconv.Itoa(n) + " " + many
 }
 
-// consoleURL returns raw when it is an absolute http or https URL with a host, else "".
+// consoleURL returns raw when it is an absolute http or https URL with a host, else "". Every value
+// config.ParseAdminURL accepts passes (TestEveryValidatedAdminURLRendersALink); a given link that does
+// not pass is left out of the message and logged by its sender (consoleLinkDropped).
 func consoleURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)

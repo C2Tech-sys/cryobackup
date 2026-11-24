@@ -18,6 +18,7 @@ import (
 
 	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/escrow"
+	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
 	"github.com/c2tech-sys/cryobackup/internal/console/ratelimit"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 )
@@ -168,7 +169,12 @@ type Manager struct {
 	// PublicHost, when set, is an additional host an Origin may name (the
 	// configured public_url host).
 	PublicHost string
-	Now        func() time.Time
+	// AdminHost, when set, is another host an Origin or Referer may name: the
+	// host of admin_url as a browser names it (config.Config.AdminHost), so a
+	// reverse proxy or a name that differs from the admin listener's own Host
+	// does not refuse every unsafe request.
+	AdminHost string
+	Now       func() time.Time
 
 	loginLimit *ratelimit.Bucket
 	mu         sync.Mutex
@@ -441,8 +447,15 @@ func (m *Manager) Logout(ctx context.Context, p *Principal) error {
 // host or a private/mesh address that says so with X-Forwarded-Proto: https. The
 // header is honoured only when the direct peer (r.RemoteAddr) is loopback or
 // private (config.IsLoopbackOrPrivate); from any other peer it is ignored, so
-// the open internet cannot steer the flag. Of a comma-separated chain the LAST
-// value is used, the hop the trusted proxy appended. The admin listener is plain
+// the open internet cannot steer the flag. With trusted_proxies set
+// (httpx.ProxyTrust reports the list in force) the rule narrows: only a peer in
+// that list may assert https, a loopback or private peer outside it may not.
+// Only the FIRST X-Forwarded-Proto line is read (Header.Get), and of a
+// comma-separated value on it the LAST entry, the hop the trusted proxy appended.
+// A proxy that overwrites the header, as deploy/README.md asks, sends exactly one
+// line with its own value, so that value decides; a client's line can come first
+// only behind a proxy that adds a second line, and then it only sets the flag on
+// that client's own cookie. The admin listener is plain
 // HTTP by design (bind it to loopback or a private address), and a browser never
 // sends a Secure cookie back over http://, so the flag has to follow the
 // connection or login would succeed and every following request would be
@@ -451,7 +464,11 @@ func secureConn(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	if !config.IsLoopbackOrPrivate(r.RemoteAddr) {
+	if set, trusted := httpx.ProxyTrust(r); set {
+		if !trusted {
+			return false
+		}
+	} else if !config.IsLoopbackOrPrivate(r.RemoteAddr) {
 		return false
 	}
 	v := r.Header.Get("X-Forwarded-Proto")
@@ -514,8 +531,8 @@ func (m *Manager) CheckCSRF(r *http.Request, p *Principal) error {
 // come from this site. Evidence precedence (FIX23b): a login nonce or a session
 // CSRF token may only make up for MISSING header evidence, never override
 // evidence that points elsewhere. Contradicting: an Origin other than "null"
-// that does not name this host (or the public host); a Referer that does not
-// name this host or cannot be parsed; Sec-Fetch-Site of anything but
+// that does not name this host (or the public or admin host); a Referer that does not
+// name this host (or the public or admin host) or cannot be parsed; Sec-Fetch-Site of anything but
 // same-origin or none (cross-site and same-site, even beside a matching Origin).
 func (m *Manager) HeadersContradict(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
@@ -525,7 +542,7 @@ func (m *Manager) HeadersContradict(r *http.Request) bool {
 	}
 	names := func(raw string) bool {
 		u, err := url.Parse(raw)
-		return err == nil && u.Host != "" && (u.Host == r.Host || (m.PublicHost != "" && u.Host == m.PublicHost))
+		return err == nil && m.hostAllowed(r, u.Host)
 	}
 	if o := r.Header.Get("Origin"); o != "" && o != "null" && !names(o) {
 		return true
@@ -568,18 +585,21 @@ func (m *Manager) originOK(r *http.Request) bool {
 	if r.Header.Get("Sec-Fetch-Site") == "same-origin" {
 		return true
 	}
-	allowed := func(host string) bool {
-		return host != "" && (host == r.Host || (m.PublicHost != "" && host == m.PublicHost))
-	}
 	if o := r.Header.Get("Origin"); o != "" && o != "null" {
 		u, err := url.Parse(o)
-		return err == nil && allowed(u.Host)
+		return err == nil && m.hostAllowed(r, u.Host)
 	}
 	if ref := r.Header.Get("Referer"); ref != "" {
 		u, err := url.Parse(ref)
-		return err == nil && allowed(u.Host)
+		return err == nil && m.hostAllowed(r, u.Host)
 	}
 	return false
+}
+
+// hostAllowed reports whether host (of an Origin or Referer) names this site: the
+// request's own Host, the public host (public_url) or the admin host (admin_url).
+func (m *Manager) hostAllowed(r *http.Request, host string) bool {
+	return host != "" && (host == r.Host || (m.PublicHost != "" && host == m.PublicHost) || (m.AdminHost != "" && host == m.AdminHost))
 }
 
 // Mode selects how Require answers an unauthenticated or forbidden request.
@@ -595,7 +615,7 @@ const (
 // LoginOriginOK is the CSRF rule for the login endpoints, which have no session
 // to bind a token to: a request the browser marks Sec-Fetch-Site: same-origin is
 // allowed; otherwise a request that names an Origin must name this host (or the
-// configured public host); a request with no Origin (a script) is allowed, since
+// configured public or admin host); a request with no Origin (a script) is allowed, since
 // a browser always sends one on a cross-site POST.
 func (m *Manager) LoginOriginOK(r *http.Request) bool {
 	if r.Header.Get("Origin") == "" && r.Header.Get("Referer") == "" {

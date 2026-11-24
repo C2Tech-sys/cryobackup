@@ -246,6 +246,8 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	if cfg.PublicURL != "" {
 		a.Auth.PublicHost = hostOf(cfg.PublicURL)
 	}
+	// P21-T7: an Origin or Referer may name admin_url's host too ("" when admin_url is unset).
+	a.Auth.AdminHost = cfg.AdminHost()
 	a.Auth.Master = a.Master // M2-W1A: TOTP secrets are wrapped under the master key
 	a.Restores = &restores.Service{Store: a.Store, Backend: a.Backend, Master: a.Master, ArtifactsDir: artifacts, Clock: a.clock, Log: a.log,
 		MinRateBytes: int64(cfg.RestoreStream.MinBytes), MinRateWindow: time.Duration(cfg.RestoreStream.WindowS) * time.Second,
@@ -279,9 +281,17 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	}
 	a.UI = u
 
+	proxies, err := config.ParseTrustedProxies(cfg.TrustedProxies) // validated at load; empty: the admin routes are registered unwrapped
+	if err != nil {
+		return nil, err
+	}
 	srv, err := server.New(cfg, server.Options{
-		RegisterAgent: func(r httpx.Registrar) { a.Agent.Register(r) },
-		RegisterAdmin: func(r httpx.Registrar) { a.Admin.Register(r); a.UI.Register(r) },
+		RegisterAgent: func(r httpx.Registrar) { a.Agent.Register(r) }, // never ForwardedFor: the agent listener believes no forwarded header
+		RegisterAdmin: func(r httpx.Registrar) {
+			r = httpx.ForwardedForRegistrar(r, proxies, a.log)
+			a.Admin.Register(r)
+			a.UI.Register(r)
+		},
 		AgentDisabled: fix,
 		Health:        server.StoreHealth(a.Store, a.Master, fix),
 		Log:           a.log,

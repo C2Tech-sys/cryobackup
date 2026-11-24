@@ -151,6 +151,7 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 			first = err
 		}
 	}
+	linkLogged := false
 	for _, d := range due {
 		if spent(sctx) {
 			res.Deferred++
@@ -172,6 +173,10 @@ func (r *Retrier) Run(ctx context.Context) (RetryResult, error) {
 			res.Left++
 			continue
 		default:
+			if !linkLogged && (d.Kind == store.DeliveryAlert || d.Kind == store.DeliveryRecovery) && consoleLinkDropped(r.ConsoleURL) {
+				linkLogged = true
+				logConsoleLink(r.log(), "notification_retry") // once per run; the messages go without the link
+			}
 			out, err = r.Dispatch.Deliver(sctx, d, *m)
 			switch {
 			case err != nil:
