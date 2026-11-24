@@ -99,16 +99,23 @@ The operator chooses one of three destinations. The first is the default:
   files (`p22-spike.md:174-180`). So the agent does not copy the file counts. It counts the `verbose_status` lines of
   `-vv`: `restored` or `updated` on an item that is not a folder (checked locally) is restored, `unchanged` is skipped.
   `bytes_restored` comes from the summary. The item paths in those lines never leave the device.
-- **Nothing matched is a failure.** A restore whose include file matched nothing exits 0 with an empty summary
-  (`p22-spike.md:176-177`). The agent reports it as FAILED with the class `nothing_matched`, never as delivered.
+- **Nothing matched is judged per anchor group.** A restic run whose include file matched nothing exits 0 with an
+  empty summary (`p22-spike.md:176-177`), so the agent checks each group's run. If every group matched nothing, the
+  restore is FAILED with the class `nothing_matched`, never delivered. If at least one group restored files and
+  another matched nothing, the restore ends RESTORED WITH ERRORS (class `partial`), and the number of groups that
+  matched nothing is reported under the class `nothing_matched` with the other per-class counts, never their paths.
 - **Errors are classified on the device.** A target file held open by another program is a per-file error: restic
   exits 1 and restores the rest; with `--overwrite never` the file is not opened and is simply skipped
   (`p22-spike.md:170-172`). restic's error line carries the absolute path, so the agent classifies each error locally
   (in use, access denied, other) and sends only the count per class.
 - **The outcome.** The console closes the request from the run. A success is `delivered`. Errors with some files
   restored are `delivered` with `error_class` `partial`, shown as RESTORED WITH ERRORS with the counts by class.
-  Anything else is `failed` or `cancelled`. The request row needs no migration: its `error_class` is free text
-  (`internal/console/migrations/0001_initial.sql:663`).
+  Anything else is `failed` or `cancelled`.
+- **One additive migration, on the run side only.** The runs table's `error_class` is a closed CHECK list
+  (`internal/console/migrations/0003_fleet_start_lease.sql:65`) without the restore classes (`nothing_matched` and the
+  per-file classes above). The console ticket of wave 2 (P22-E) adds them to that list in one additive migration. The
+  `restore_requests` side needs none: its `error_class` is free text
+  (`internal/console/migrations/0001_initial.sql:663`) and keeps the same class.
 - **Bytes never pass the console.** The agent reads its own repository through the gateway.
 
 ### What both restore modes share
@@ -174,7 +181,7 @@ The spike ran restic 0.19.1 and rclone 1.75.1 as a **non-elevated user** on a lo
 | 1 | Restore and reads through the append-only gateway with a device login: yes. | Device modes ship. Refusals are read from restic's error output. |
 | 2 | Drive-root form: no. It rewrites existing parents and unselected branches. | One run per anchor folder; the side folder keeps the drive-root form. |
 | 3 | No escape character; `[[]` and `[$]` work; case-sensitive; `$VAR` expanded in include files; lines trimmed. | The include-file rules; names with leading or trailing spaces refused. |
-| 4 | Summary omits zero fields and counts folders; nothing matched = exit 0; a locked file = exit 1 with an absolute path. | Counts from `-vv`; `nothing_matched` is FAILED; errors classified on the device. |
+| 4 | Summary omits zero fields and counts folders; nothing matched = exit 0; a locked file = exit 1 with an absolute path. | Counts from `-vv`; nothing matched judged per anchor group; errors classified on the device. |
 | 5 | Permissions and own-SID owner restored; 378-character path and empty folder restored; alternate data streams lost; under a new folder the snapshot's permissions stay explicit. | The side-folder reset; the known limit. |
 | 7 | Browse took 10-60 s per call on a loaded PC on local disk: not a measure of object storage. | ADR 0026 pilot-entry check; the in-memory cache stays the lever. |
 
@@ -186,6 +193,3 @@ untested: file symlinks in a snapshot, and selected names with leading spaces. I
 anchor form or the side-folder reset does not hold under that account, the device mode concerned does not ship in the
 pilot, and a new ADR records why.
 
-**Open point for the build (P22-A).** The run journal's `error_class` is a closed list
-(`internal/console/migrations/0003_fleet_start_lease.sql:65`) with no `nothing_matched`. The run needs either a
-migration that adds the class, or an existing class, with `nothing_matched` kept on the request row only.

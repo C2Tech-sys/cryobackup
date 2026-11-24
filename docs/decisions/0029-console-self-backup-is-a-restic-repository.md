@@ -31,7 +31,8 @@ not be equal to the device prefix, must not lie inside it, and must not be the d
 appended. An access policy whose resource is written `<prefix>*` (no slash) also matches `<prefix>-console/...`
 (`docs/lab/p22-spike.md:290`), so a name of that shape could fall inside the gateway credential's rights. The example
 `<prefix>-console` given while this was planned is withdrawn. The worker refuses to start the self-backup when the
-configured self-backup prefix breaks this rule.
+configured self-backup prefix breaks this rule, and says why. An unset prefix means the self-backup is not
+configured: nothing runs, and C11 raises "no self-backup has been written".
 
 **Password.** HKDF-SHA256 of the master key with info `cryobackup/self-backup/v1`, never stored, as for the probe
 repository (ADR 0017). The repository is created once, guarded by a settings row; a repository missing after that row
