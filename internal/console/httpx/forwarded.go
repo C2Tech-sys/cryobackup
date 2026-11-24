@@ -6,6 +6,10 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
+
+	"github.com/c2tech-sys/cryobackup/internal/console/config"
+	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
 
 // forwardedKey is its own key type: nothing that arrives over the wire can set a
@@ -35,43 +39,96 @@ type forwarded struct {
 // the peer as the client. A peer outside the list: the header is ignored entirely.
 // RFC 7239 Forwarded is never read.
 //
+// A loopback or private peer outside the list that sends X-Forwarded-For or
+// X-Forwarded-Proto is most likely the proxy, listed under the wrong address: log
+// receives one warning per such peer address (at most maxUnlistedWarned of them
+// per middleware), naming the peer and the key, never a header value. nil means
+// logx.Default().
+//
 // The decision is made once per request: a request that already carries one (a
 // page's in-process call to the admin API runs on the page request's context)
 // keeps it.
-func ForwardedFor(trusted []netip.Prefix, next http.Handler) http.Handler {
+func ForwardedFor(trusted []netip.Prefix, log *logx.Logger, next http.Handler) http.Handler {
 	if len(trusted) == 0 {
 		return next
 	}
+	return newForwardedFor(trusted, log).wrap(next)
+}
+
+// ForwardedForRegistrar returns a Registrar that wraps every handler registered on
+// it with ForwardedFor, all sharing one record of the peers already warned about.
+// With an empty list it returns reg itself.
+func ForwardedForRegistrar(reg Registrar, trusted []netip.Prefix, log *logx.Logger) Registrar {
+	if len(trusted) == 0 {
+		return reg
+	}
+	return forwardedRegistrar{reg: reg, f: newForwardedFor(trusted, log)}
+}
+
+type forwardedRegistrar struct {
+	reg Registrar
+	f   *forwardedFor
+}
+
+func (r forwardedRegistrar) Handle(pattern string, h http.Handler) {
+	r.reg.Handle(pattern, r.f.wrap(h))
+}
+
+// maxUnlistedWarned bounds the peers an unlisted-peer warning is kept for, so a
+// stream of distinct private peers cannot grow the map: past it, no more warnings.
+const maxUnlistedWarned = 32
+
+// forwardedFor is one ForwardedFor middleware: the list and the peers it warned about.
+type forwardedFor struct {
+	trusted []netip.Prefix
+	log     *logx.Logger
+	mu      sync.Mutex
+	warned  map[netip.Addr]struct{}
+}
+
+func newForwardedFor(trusted []netip.Prefix, log *logx.Logger) *forwardedFor {
+	if log == nil {
+		log = logx.Default()
+	}
+	return &forwardedFor{trusted: trusted, log: log, warned: map[netip.Addr]struct{}{}}
+}
+
+func (f *forwardedFor) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, done := r.Context().Value(forwardedKey{}).(forwarded); done {
 			next.ServeHTTP(w, r)
 			return
 		}
-		f := forwarded{}
-		if peer, ok := peerAddr(r.RemoteAddr); ok && inPrefixes(trusted, peer) {
-			f.peerTrusted = true
-			f.client = clientFromChain(trusted, r.Header.Values("X-Forwarded-For"))
+		d := forwarded{}
+		peer, ok := peerAddr(r.RemoteAddr)
+		switch {
+		case ok && inPrefixes(f.trusted, peer):
+			d.peerTrusted = true
+			d.client = clientFromChain(f.trusted, r.Header.Values("X-Forwarded-For"))
+		case ok && config.IsLoopbackOrPrivate(r.RemoteAddr) &&
+			(len(r.Header.Values("X-Forwarded-For")) > 0 || len(r.Header.Values("X-Forwarded-Proto")) > 0):
+			f.warnUnlisted(peer)
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), forwardedKey{}, f)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), forwardedKey{}, d)))
 	})
 }
 
-// ForwardedForRegistrar returns a Registrar that wraps every handler registered on
-// it with ForwardedFor. With an empty list it returns reg itself.
-func ForwardedForRegistrar(reg Registrar, trusted []netip.Prefix) Registrar {
-	if len(trusted) == 0 {
-		return reg
+// warnUnlisted logs, once per peer address, that a loopback or private peer outside
+// trusted_proxies sent forwarded headers and they were ignored. The line names the
+// peer (an address parsed from the connection, not from a header) and the key only.
+func (f *forwardedFor) warnUnlisted(peer netip.Addr) {
+	f.mu.Lock()
+	_, seen := f.warned[peer]
+	full := len(f.warned) >= maxUnlistedWarned
+	if !seen && !full {
+		f.warned[peer] = struct{}{}
 	}
-	return forwardedRegistrar{reg: reg, trusted: trusted}
-}
-
-type forwardedRegistrar struct {
-	reg     Registrar
-	trusted []netip.Prefix
-}
-
-func (f forwardedRegistrar) Handle(pattern string, h http.Handler) {
-	f.reg.Handle(pattern, ForwardedFor(f.trusted, h))
+	f.mu.Unlock()
+	if seen || full {
+		return
+	}
+	f.log.Warn("forwarded headers ignored: the peer is loopback or private but not a listed trusted proxy",
+		logx.Host("peer", peer.String()), logx.Str("key", "trusted_proxies"))
 }
 
 // ProxyTrust reports whether the trusted-proxy list is in force for this request

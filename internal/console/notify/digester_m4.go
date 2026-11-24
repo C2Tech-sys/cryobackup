@@ -313,6 +313,9 @@ func (g *Digester) send(ctx context.Context, to []store.Recipient, keyOf func(st
 	if err != nil {
 		return err
 	}
+	if consoleLinkDropped(g.ConsoleURL) {
+		logConsoleLink(g.log(), store.DeliveryDigest) // once per send; the digest goes without the link
+	}
 	budget := g.SendBudget
 	if budget <= 0 {
 		budget = DefaultSendBudget
@@ -380,6 +383,9 @@ func (g *Digester) Rerender(ctx context.Context, d store.Delivery, to store.Reci
 	c, err := g.render(ctx, digestKeyDate(d.DedupeKey))
 	if err != nil {
 		return mail.Message{}, "", err
+	}
+	if consoleLinkDropped(g.ConsoleURL) {
+		logConsoleLink(g.log(), store.DeliveryDigest) // the retried digest goes without the link
 	}
 	return c.Message(to.Address), "", nil
 }

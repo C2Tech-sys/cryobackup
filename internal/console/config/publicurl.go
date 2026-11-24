@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -45,22 +46,48 @@ func (c Config) AdminLink() string {
 }
 
 // AdminHost is the host[:port] of admin_url as a browser names it in an Origin or
-// Referer header: the port is left out when it is the scheme's default (443 for
-// https, 80 for http), because a browser leaves it out too. "" when admin_url is
-// unset or not valid. The admin listener accepts it beside its own Host and the
-// public host in the origin check of an unsafe request (package auth).
+// Referer header (the WHATWG URL serialisation): the host in lower case, an IPv6
+// literal in its canonical compressed form (an IPv4-mapped one in hex, as browsers
+// write it), the port without leading zeros and left out when it is the scheme's
+// default (443 for https, 80 for http). "" when admin_url is unset or not valid.
+// The admin listener accepts it beside its own Host and the public host in the
+// origin check of an unsafe request (package auth). It changes nothing about what
+// is validated or what AdminLink puts into e-mails.
 func (c Config) AdminHost() string {
 	u, err := ParseAdminURL(c.AdminURL)
 	if err != nil {
 		return ""
 	}
-	scheme, host, _ := strings.Cut(u, "://")
-	if scheme == "https" {
-		host = strings.TrimSuffix(host, ":443")
+	scheme, rest, _ := strings.Cut(u, "://")
+	host, port := rest, ""
+	if i := strings.LastIndexByte(rest, ':'); i >= 0 && !strings.HasSuffix(rest, "]") {
+		host, port = rest[:i], rest[i+1:]
+	}
+	if strings.HasPrefix(host, "[") {
+		a, _ := netip.ParseAddr(host[1 : len(host)-1]) // parseServerURL made sure it is IPv6
+		host = "[" + browserIPv6(a) + "]"
 	} else {
-		host = strings.TrimSuffix(host, ":80")
+		host = strings.ToLower(host)
+	}
+	if port != "" {
+		n, _ := strconv.Atoi(port) // 1-65535, digits only: parseServerURL checked
+		if (scheme == "https" && n == 443) || (scheme == "http" && n == 80) {
+			return host
+		}
+		return host + ":" + strconv.Itoa(n)
 	}
 	return host
+}
+
+// browserIPv6 is an IPv6 address as a browser serialises it: RFC 5952 text, which
+// netip writes, except that an IPv4-mapped address keeps hex groups
+// (::ffff:a00:5, not ::ffff:10.0.0.5).
+func browserIPv6(a netip.Addr) string {
+	if !a.Is4In6() {
+		return a.String()
+	}
+	b := a.As16()
+	return "::ffff:" + strconv.FormatUint(uint64(b[12])<<8|uint64(b[13]), 16) + ":" + strconv.FormatUint(uint64(b[14])<<8|uint64(b[15]), 16)
 }
 
 func parseServerURL(key, raw string) (string, error) {

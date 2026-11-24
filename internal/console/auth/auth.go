@@ -450,8 +450,12 @@ func (m *Manager) Logout(ctx context.Context, p *Principal) error {
 // the open internet cannot steer the flag. With trusted_proxies set
 // (httpx.ProxyTrust reports the list in force) the rule narrows: only a peer in
 // that list may assert https, a loopback or private peer outside it may not.
-// Of a comma-separated chain the LAST value is used, the hop the trusted proxy
-// appended. The admin listener is plain
+// Only the FIRST X-Forwarded-Proto line is read (Header.Get), and of a
+// comma-separated value on it the LAST entry, the hop the trusted proxy appended.
+// A proxy that overwrites the header, as deploy/README.md asks, sends exactly one
+// line with its own value, so that value decides; a client's line can come first
+// only behind a proxy that adds a second line, and then it only sets the flag on
+// that client's own cookie. The admin listener is plain
 // HTTP by design (bind it to loopback or a private address), and a browser never
 // sends a Secure cookie back over http://, so the flag has to follow the
 // connection or login would succeed and every following request would be

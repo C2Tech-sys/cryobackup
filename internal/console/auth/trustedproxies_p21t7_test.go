@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/c2tech-sys/cryobackup/internal/console/config"
 	"github.com/c2tech-sys/cryobackup/internal/console/httpx"
 )
 
@@ -45,7 +46,7 @@ func TestForwardedProtoFollowsTrustedProxiesWhenSet(t *testing.T) {
 				r.TLS = &tls.ConnectionState{}
 			}
 			var got bool
-			httpx.ForwardedFor(c.list, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = secureConn(r) })).
+			httpx.ForwardedFor(c.list, nil, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = secureConn(r) })).
 				ServeHTTP(httptest.NewRecorder(), r)
 			if got != c.secure {
 				t.Fatalf("secureConn = %v, want %v", got, c.secure)
@@ -103,5 +104,71 @@ func TestOriginCheckAcceptsTheAdminHost(t *testing.T) {
 				t.Errorf("csrfOriginOK = %v, want %v", got, c.ok)
 			}
 		})
+	}
+}
+
+// V5 (P21-T7 fix batch 1): the forwarded-scheme rule as built and documented. Only the FIRST
+// X-Forwarded-Proto line is read, and of a comma-separated value on it the LAST entry. A proxy that
+// overwrites the header (the configuration deploy/README.md asks for) sends exactly one line with one
+// value, its own, so that value decides; a client's line can only come first when the proxy appends a
+// second line, and then it only sets the flag on that client's own cookie. The same rule with the
+// list unset (a private peer) and set (a listed peer): unset behaviour is unchanged.
+func TestForwardedProtoReadsTheFirstLineAndItsLastValue(t *testing.T) {
+	trusted := []netip.Prefix{netip.MustParsePrefix("127.0.0.2/32")}
+	for _, c := range []struct {
+		name   string
+		list   []netip.Prefix
+		peer   string
+		lines  []string
+		secure bool
+	}{
+		{"unset: one line, one value", nil, "10.0.0.5:1", []string{"https"}, true},
+		{"unset: first line https, second http", nil, "10.0.0.5:1", []string{"https", "http"}, true},
+		{"unset: first line http, second https", nil, "10.0.0.5:1", []string{"http", "https"}, false},
+		{"unset: last value of the first line", nil, "10.0.0.5:1", []string{"http, https", "http"}, true},
+		{"set: one line, one value", trusted, "127.0.0.2:1", []string{"HTTPS"}, true},
+		{"set: first line https, second http", trusted, "127.0.0.2:1", []string{"https", "http"}, true},
+		{"set: first line http, second https", trusted, "127.0.0.2:1", []string{"http", "https"}, false},
+		{"set: last value of the first line", trusted, "127.0.0.2:1", []string{"https, http", "https"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "http://console.test/login", nil)
+			r.RemoteAddr = c.peer
+			for _, l := range c.lines {
+				r.Header.Add("X-Forwarded-Proto", l)
+			}
+			var got bool
+			httpx.ForwardedFor(c.list, nil, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = secureConn(r) })).
+				ServeHTTP(httptest.NewRecorder(), r)
+			if got != c.secure {
+				t.Fatalf("secureConn = %v, want %v", got, c.secure)
+			}
+		})
+	}
+}
+
+// V4 (P21-T7 fix batch 1): the admin host is compared in the form a browser writes in Origin and
+// Referer, whatever case, IPv6 spelling or port padding admin_url uses.
+func TestOriginCheckMatchesTheBrowserFormOfAdminURL(t *testing.T) {
+	for _, c := range []struct {
+		adminURL, origin string
+		ok               bool
+	}{
+		{"https://Console.Example.NET", "https://console.example.net", true},
+		{"https://console.example.net:0443", "https://console.example.net", true},
+		{"https://console.example.net:08443", "https://console.example.net:8443", true},
+		{"https://[2001:DB8::1]", "https://[2001:db8::1]", true},
+		{"https://[2001:0db8:0:0::1]:0443", "https://[2001:db8::1]", true},
+		{"https://[::ffff:10.0.0.5]:8080", "https://[::ffff:a00:5]:8080", true},
+		{"https://Console.Example.NET", "https://other.example.net", false},
+		{"https://console.example.net:0443", "https://console.example.net:8443", false},
+	} {
+		m := &Manager{AdminHost: config.Config{AdminURL: c.adminURL}.AdminHost()}
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/login", nil)
+		r.Host = "127.0.0.1:8080"
+		r.Header.Set("Origin", c.origin)
+		if got := m.originOK(r); got != c.ok {
+			t.Errorf("admin_url %q, Origin %q: originOK = %v, want %v (AdminHost %q)", c.adminURL, c.origin, got, c.ok, m.AdminHost)
+		}
 	}
 }

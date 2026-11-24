@@ -19,10 +19,13 @@
 // The cookie value is 32 random bytes in base64url; only its SHA-256 is stored.
 // Idle expiry is 12 h (sliding, written at most once a minute), absolute expiry
 // 7 d (both configurable). The cookie is HttpOnly and SameSite=Strict, and Secure
-// exactly when the request that set it arrived over TLS (r.TLS) or, from a
-// loopback or private peer only, carries X-Forwarded-Proto: https as the last
-// value of the header (a TLS front on the host or mesh; the header is ignored
-// from any other peer). The admin listener is plain HTTP by design, and browsers
+// exactly when the request that set it arrived over TLS (r.TLS) or carries
+// X-Forwarded-Proto: https from a peer allowed to say so: with trusted_proxies
+// unset a loopback or private peer, with it set only a listed proxy (a TLS front
+// on the host or mesh; the header is ignored from any other peer). Only the first
+// X-Forwarded-Proto line is read, and of a comma-separated value on it the last
+// entry: a proxy that overwrites the header sends one line with its own value.
+// The admin listener is plain HTTP by design, and browsers
 // never return a Secure cookie over http://, so an unconditional Secure flag
 // would lock every plain-HTTP deployment out. The CSRF
 // cookie and the logout clears follow the same rule.

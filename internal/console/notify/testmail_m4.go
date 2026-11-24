@@ -163,6 +163,9 @@ func (t *TestMailer) Send(ctx context.Context, to string, admit func(context.Con
 	}
 	res := TestMailResult{To: addr, Delivery: row}
 	m := t.message(now, addr)
+	if consoleLinkDropped(t.ConsoleURL) {
+		logConsoleLink(t.log(), store.DeliveryTest) // the test goes without the link
+	}
 	if m.From == "" {
 		m.From = d.From
 	}

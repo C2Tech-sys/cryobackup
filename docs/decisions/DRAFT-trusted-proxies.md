@@ -19,9 +19,12 @@ from anyone would let a caller choose the address the audit trail records and es
 1. **New optional key `trusted_proxies`** (environment `CRYO_TRUSTED_PROXIES`, comma-separated): a list of IP
    addresses or CIDR prefixes. Default empty. Empty means exactly the behaviour before this key existed.
 2. **Validation.** Every entry must parse as an IP address or a CIDR prefix. A prefix of length 0 (`0.0.0.0/0`,
-   `::/0`, or any address with `/0`) is refused with a plain message: it would trust the world. Zones and ports are
-   refused. IPv4-mapped IPv6 entries are compared unmapped. The console does not start with an invalid list, and
-   `cryo-console doctor` reports it as a config failure.
+   `::/0`, or any address with `/0`) is refused with a plain message: it would trust the world. So is a list whose
+   entries together cover every IPv4 or every IPv6 address (`0.0.0.0/1` with `128.0.0.0/1`): the same world in
+   pieces. A single wide prefix that leaves a gap (`0.0.0.0/1` alone) is the operator's choice. Zones and ports are
+   refused. IPv4-mapped IPv6 entries are compared unmapped. In `CRYO_TRUSTED_PROXIES` an empty entry (`,` alone, a
+   doubled or trailing comma) is malformed and refused, never dropped. The console does not start with an invalid
+   list, and `cryo-console doctor` reports it as a config failure.
 3. **One middleware, on the admin listener only** (`httpx.ForwardedFor`, wrapped around every admin route at
    registration). The agent listener never gets it: it is public, and its per-address limits must count the peer.
 4. **The client address.** When the direct peer is inside the list, the client address that everything downstream
@@ -37,12 +40,25 @@ from anyone would let a caller choose the address the audit trail records and es
    empty, the FIX17 rule stays: a loopback or private peer may assert it. A connection that is itself TLS is
    secure whoever the peer is, as before. Reason: an operator who names the proxy has said which hop speaks for
    the connection; letting other local or private peers speak for it as well would keep an exception the operator
-   just closed.
-6. **The decision is made once per request.** A page's in-process call to the admin API runs on the page
+   just closed. **Which value is read** (as built, unchanged from FIX17 and pinned by a test): only the FIRST
+   `X-Forwarded-Proto` line, and of a comma-separated value on it the LAST entry. The proxy is asked to overwrite
+   the header (deploy README), and an overwriting proxy sends exactly one line holding its own value, so that value
+   decides under this rule. A client's line can come first only behind a proxy that adds a second line instead of
+   overwriting; it then sets the `Secure` flag of that client's own cookie and nobody else's. Switching to the last
+   line would have changed the unset behaviour for multi-line requests, which this decision does not touch.
+6. **A listed address that does not match the proxy is not silent.** With the list set, a loopback or private
+   peer that is not listed but sends `X-Forwarded-For` or `X-Forwarded-Proto` is most likely the proxy, listed under
+   the wrong address. Its headers are ignored as for any unlisted peer, and the console logs one warning per such
+   peer address per process (at most 32 addresses), naming the peer address and the key `trusted_proxies`, never a
+   header value. A public unlisted peer is not reported: forged headers from the open internet are not a
+   misconfiguration. Doctor cannot see the proxy's source address, so the warning is the signal.
+7. **The decision is made once per request.** A page's in-process call to the admin API runs on the page
    request's context and keeps the client address that request was given.
-7. **Origin check.** The host of `admin_url`, when it is set, is accepted in an `Origin` or `Referer` beside the
-   request's own `Host` and the `public_url` host. A default port (443 for https, 80 for http) is left out, as a
-   browser leaves it out. This keeps a proxy or name that differs from the bind address from refusing every
+8. **Origin check.** The host of `admin_url`, when it is set, is accepted in an `Origin` or `Referer` beside the
+   request's own `Host` and the `public_url` host, in the form a browser writes there: the host in lower case, an
+   IPv6 literal in canonical compressed form (an IPv4-mapped one in hex groups), the port without leading zeros and
+   left out when it is the scheme's default (443 for https, 80 for http). What is validated and what goes into
+   e-mails is unchanged. This keeps a proxy or name that differs from the bind address from refusing every
    unsafe request; any other host is still refused.
 
 ## Consequences

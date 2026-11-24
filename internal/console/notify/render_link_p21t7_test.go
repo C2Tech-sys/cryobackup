@@ -1,7 +1,6 @@
 package notify
 
 import (
-	"errors"
 	"math/rand/v2"
 	"net/netip"
 	"strconv"
@@ -118,30 +117,49 @@ func TestEveryValidatedAdminURLRendersALink(t *testing.T) {
 	}
 }
 
-// A link that is given but cannot be rendered fails the alert and the recovery notice with
-// ErrConsoleLink (the sender's pass fails and the job runner logs it with its class), and the error
-// never carries the value. No link given: no error and no button, as before.
-func TestAGivenLinkThatCannotRenderIsAnError(t *testing.T) {
+// V2 (P21-T7 fix batch 1): a link that is given but cannot be rendered never costs the message.
+// Every renderer returns the message exactly as with no link (no button, no "Open the console:"
+// line), and no error; the sender logs it (TestNotifierSendsWithoutALinkThatCannotRender and the
+// tests below). No link given: no error and no button, as before.
+func TestAGivenLinkThatCannotRenderIsLeftOut(t *testing.T) {
 	v := renderView()
-	for _, bad := range []string{"javascript:alert(1)", "console.example.net", "https://", "https://[10.0.0.5]:8080"} {
+	for _, bad := range []string{"javascript:alert(1)", "console.example.net", "https://", "https://[10.0.0.5]:8080", "ftp://console.example.net"} {
+		if !consoleLinkDropped(bad) {
+			t.Errorf("consoleLinkDropped(%q) = false", bad)
+		}
 		for kind, render := range map[string]func(Options) (Content, error){
 			"alert":    func(o Options) (Content, error) { return RenderAlert(v, alertBatch(), o) },
 			"recovery": func(o Options) (Content, error) { return RenderRecovery(v, recoveryBatch(), o) },
+			"digest":   func(o Options) (Content, error) { return RenderDigest(greenView(2), nil, o) },
 		} {
 			c, err := render(Options{Loc: cst, ConsoleURL: bad})
-			if !errors.Is(err, ErrConsoleLink) {
-				t.Errorf("%s with link %q: err %v, want ErrConsoleLink", kind, bad, err)
+			if err != nil {
+				t.Errorf("%s with link %q: err %v, want the message without the link", kind, bad, err)
+				continue
 			}
-			if err != nil && strings.Contains(err.Error(), bad) {
-				t.Errorf("%s: the error echoes the link: %v", kind, err)
+			none, err := render(Options{Loc: cst})
+			if err != nil {
+				t.Fatalf("%s without a link: %v", kind, err)
 			}
-			if c.HTML != "" || c.Text != "" {
-				t.Errorf("%s with link %q: a message was rendered without its button", kind, bad)
+			if c.Text != none.Text || c.HTML != none.HTML || c.Subject != none.Subject || c.Text == "" || c.HTML == "" {
+				t.Errorf("%s with link %q: not the message rendered without a link", kind, bad)
 			}
-			c, err = render(Options{Loc: cst})
-			if err != nil || strings.Contains(c.HTML, ">Open the console</a>") {
-				t.Errorf("%s without a link: err %v, button present %v", kind, err, strings.Contains(c.HTML, ">Open the console</a>"))
+			if strings.Contains(c.HTML, ">Open the console</a>") || strings.Contains(c.Text, "Open the console:") {
+				t.Errorf("%s with link %q: a button or link line is present", kind, bad)
 			}
 		}
+		m := (&TestMailer{ConsoleURL: bad, Loc: func() *time.Location { return cst }}).message(renderNow, "ops@example.com")
+		none := (&TestMailer{Loc: func() *time.Location { return cst }}).message(renderNow, "ops@example.com")
+		if m.Text != none.Text || m.HTML != none.HTML {
+			t.Errorf("test message with link %q: not the message rendered without a link", bad)
+		}
+	}
+	for _, unset := range []string{"", "  "} {
+		if consoleLinkDropped(unset) {
+			t.Errorf("consoleLinkDropped(%q) = true: no link given is not a dropped link", unset)
+		}
+	}
+	if consoleLinkDropped("https://console.example.net/") {
+		t.Error("a valid link reported as dropped")
 	}
 }

@@ -288,7 +288,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	srv, err := server.New(cfg, server.Options{
 		RegisterAgent: func(r httpx.Registrar) { a.Agent.Register(r) }, // never ForwardedFor: the agent listener believes no forwarded header
 		RegisterAdmin: func(r httpx.Registrar) {
-			r = httpx.ForwardedForRegistrar(r, proxies)
+			r = httpx.ForwardedForRegistrar(r, proxies, a.log)
 			a.Admin.Register(r)
 			a.UI.Register(r)
 		},

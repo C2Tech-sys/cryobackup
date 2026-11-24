@@ -56,7 +56,8 @@ What the proxy must do:
 
 * **Keep the `Host` header** the browser sent (do not rewrite it to the backend address).
 * **Append the client to `X-Forwarded-For`** as a bare IP address (no port, no brackets), and set
-  **`X-Forwarded-Proto: https`**. RFC 7239 `Forwarded` is not read.
+  **`X-Forwarded-Proto: https`**, overwriting whatever the client sent (the console reads the first
+  `X-Forwarded-Proto` line only). RFC 7239 `Forwarded` is not read.
 * Connect to the admin listener from one fixed source address, the one you list below.
 
 What to put in `config.json` (the proxy connects from the host's private address here):
@@ -77,6 +78,14 @@ What to put in `config.json` (the proxy connects from the host's private address
   client. `0.0.0.0/0` and `::/0` are refused.
 * `cryo-console doctor` prints a `trusted proxies` line naming the list. Its `admin tls` warning for a
   non-loopback `admin_listen` still shows; with the proxy on the same host that hop never leaves it.
+* Doctor cannot see the address the proxy actually connects from. If the list names the wrong one,
+  the console logs a warning the first time each such address sends forwarded headers:
+  `forwarded headers ignored: the peer is loopback or private but not a listed trusted proxy`, with
+  `"peer"` the address the proxy really uses and `"key":"trusted_proxies"`. Put that `peer` address
+  in `trusted_proxies` (after checking it is your proxy) and restart. Until then the audit trail
+  shows the proxy's address and only TLS on the admin listener itself makes the session cookie
+  `Secure`. The warning appears once per address per process run, for at most 32 addresses, and
+  never for a public address.
 
 What the audit trail then shows: a sign-in through the proxy is recorded with the workstation's
 address (`192.0.2.10`) in the audit row, the session list and the account's last sign-in address,

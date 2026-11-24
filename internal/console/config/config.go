@@ -391,12 +391,15 @@ func applyEnv(v reflect.Value, prefix []string, getenv func(string) string) erro
 			if f.Type.Elem().Kind() != reflect.String {
 				return fmt.Errorf("config: %s has an unsupported type", key)
 			}
-			// A list is comma-separated; empty entries are dropped.
+			// A list is comma-separated, white space around an entry ignored. An empty
+			// entry (",", "a,,b", a trailing comma) is malformed and refused, not dropped:
+			// a typo must not shrink the list without a word.
 			var list []string
 			for _, s := range strings.Split(raw, ",") {
-				if s = strings.TrimSpace(s); s != "" {
-					list = append(list, s)
+				if s = strings.TrimSpace(s); s == "" {
+					return fmt.Errorf("config: %s has an empty entry: separate the entries with single commas", key)
 				}
+				list = append(list, s)
 			}
 			fv.Set(reflect.ValueOf(list))
 		default:

@@ -38,6 +38,7 @@ type Notifier struct {
 	// Loc returns the operator's display zone for the message times; nil means UTC.
 	Loc func() *time.Location
 	// ConsoleURL is the console address (config admin_url, never public_url) for the link in a message; empty means no link.
+	// One that cannot be rendered is left out and logged once per pass with class console_link.
 	ConsoleURL string
 	// SendBudget bounds the sends of one pass; zero means DefaultSendBudget.
 	SendBudget time.Duration
@@ -227,6 +228,9 @@ func (n *Notifier) Pass(ctx context.Context, v state.FleetView) (PassResult, err
 		return res, err
 	}
 	outs = append(outs, o...)
+	if len(outs) > 0 && consoleLinkDropped(n.ConsoleURL) {
+		logConsoleLink(n.log(), "alert_pass") // once per pass; the messages go without the link
+	}
 	if n.stopBeforeSend {
 		res.Deferred += len(outs) // the tests' crash after the marks: every row stays queued
 	} else {
