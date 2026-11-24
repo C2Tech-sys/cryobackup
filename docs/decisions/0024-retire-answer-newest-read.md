@@ -1,6 +1,6 @@
-# ADR NNNN - A retire whose wait runs out answers with the newest finished read
+# ADR 0024 - A retire whose wait runs out answers with the newest finished read
 
-**Date:** 2026-11-23 - **Status:** Accepted (operator, 2026-11-23) - **Decider:** the operator (ticket P21-T5), recorded by the foreman's worker
+**Date:** 2026-11-23 - **Status:** Accepted (operator, 2026-11-23) - **Decider:** the operator (ticket P21-T5), recorded by the foreman
 
 ADR 0016 stands. It says a retire signals the `htpasswd-sync` job and reads the gateway's login file for at most 5 s,
 that `gateway_login: removed` means a read after the commit found the login gone, and that anything else is `pending`
@@ -27,8 +27,8 @@ it found. `check_timed_out` remains only when no read finished at all.
   list), or `sync_busy`.
 - A read that finds the login **gone**, or the file **unreadable** with no login seen in it, still answers at once, as
   before. A kept read never holds the wait open.
-- Only reads made by this wait count. Each began after the wait began, so the answer never rests on a read from before
-  it. A read that met a busy slot can carry the newest clean read's list of logins (ADR 0016, `HtpasswdSync.Check`);
+- Only reads made by this wait count. Each began after the wait began, so the answer never rests on a read this wait did not make
+  itself. A read that met a busy slot can carry the newest clean read's list of logins (ADR 0016, `HtpasswdSync.Check`);
   that list is what a single read reports today, on the device page as well, and it can only make the answer `pending`,
   never `removed`.
 
