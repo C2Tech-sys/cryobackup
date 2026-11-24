@@ -10,9 +10,10 @@ import (
 // into a table cell; a cell that names no family is drawn in Times New Roman. Every cell that holds
 // text names its own stack.
 
-// The two stacks as the templates have always written them (their content and order do not change).
+// The two stacks as the templates write them. The sans stack names the console's body face first
+// (Open Sans since ADR 0023; mail embeds no font, so a client without it uses the next one).
 const (
-	sansStack = `'IBM Plex Sans','Segoe UI',Arial,sans-serif`
+	sansStack = `'Open Sans','Segoe UI',Arial,sans-serif`
 	monoStack = `Consolas,'Courier New',monospace`
 )
 

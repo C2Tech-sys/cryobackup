@@ -1,0 +1,12 @@
+JetBrains Mono, JetBrains (https://github.com/JetBrains/JetBrainsMono), SIL Open Font License 1.1.
+Release: v2.304, https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304
+Asset:   JetBrainsMono-2.304.zip
+         sha256 6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf
+Files:   fonts/webfonts/ from that zip, stored unmodified under the same names (static faces, upright only)
+         JetBrainsMono-Regular.woff2   weight 400  sha256 a9cb1cd82332b23a47e3a1239d25d13c86d16c4220695e34b243effa999f45f2
+         JetBrainsMono-Medium.woff2    weight 500  sha256 086c48dfbea9ddaff1320f7e09399b8e2924e88ce67453721255db3bdbb5a353
+         JetBrainsMono-SemiBold.woff2  weight 600  sha256 918edad542a1da608fd2ba8daebaff9ac802309103fe760eed465b8b4e47faf1
+         JetBrainsMono-Bold.woff2      weight 700  sha256 c503cc5ec5f8b2c7666b7ecda1adf44bd45f2e6579b2eba0fc292150416588a2
+Licence: OFL.txt, from the same zip (OFL.txt at its root), stored unmodified
+         sha256 30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad
+The hashes are computed locally from the downloaded files; GitHub publishes no digest for this asset.

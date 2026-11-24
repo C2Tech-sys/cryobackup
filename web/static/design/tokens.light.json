@@ -105,9 +105,9 @@
     ]
   ],
   "font": {
-    "display": "'Orbitron', 'Michroma', 'IBM Plex Sans', system-ui, sans-serif",
-    "sans": "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-    "mono": "'Martian Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace"
+    "display": "'Josefin Sans', 'JetBrains Mono', system-ui, sans-serif",
+    "sans": "'Open Sans', 'JetBrains Mono', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    "mono": "'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace"
   },
   "type": {
     "xs": {
@@ -195,7 +195,7 @@
     }
   },
   "display-usage": {
-    "_about": "Orbitron is rationed to these five roles. It never sets sentences, table cells, hostnames, state chips, forms, buttons, email body or tray text; weight floor 600; size floor 9.5px (eyebrow chips) / 12.5px (titles) / 18px (numbers).",
+    "_about": "The display face (Josefin Sans) is rationed to these four roles; big-number is set in the body face with tabular figures (ADR 0023). It never sets sentences, table cells, hostnames, state chips, forms, buttons, email body or tray text; weight floor 600; size floor 9.5px (eyebrow chips) / 12.5px (titles).",
     "hero-wordmark": {
       "weight": 900,
       "size": 40,
@@ -214,6 +214,7 @@
       "transform": "uppercase"
     },
     "big-number": {
+      "face": "sans, tabular-nums (not the display face)",
       "weight": 700,
       "size": "18-28",
       "tracking": ".02em",
@@ -230,7 +231,7 @@
     "content-ground": "radial-gradient(color-mix(in srgb, var(--accent) 9%, transparent) 1px, transparent 1px) 22px grid",
     "topbar-hairline": "0 1px 0 color-mix(in srgb, var(--accent) 22%, transparent)"
   },
-  "_approved": "2026-10-21: M1 mark, palette, state language, mocks, type O1 (Orbitron + IBM Plex Sans + IBM Plex Mono), dot-grid ground, hero weight 900 / 800 elsewhere",
+  "_approved": "2026-10-21: M1 mark, palette, state language, mocks, dot-grid ground, hero weight 900 / 800 elsewhere; type: set D (Josefin Sans + Open Sans + JetBrains Mono), 2026-11-22, ADR 0023",
   "soft": {
     "accent-soft": "rgba(10,111,174,.10)",
     "danger-soft": "rgba(180,35,35,.10)",

@@ -46,12 +46,19 @@ func (e *env) shot(t *testing.T, path, theme string, w, h int, extraJS string, m
 	t.Helper()
 	chrome := chromeOrSkip(t)
 	dir := t.TempDir()
-	for _, d := range []string{"static", filepath.Join("static", "js"), filepath.Join("static", "fonts", "ibmplexsans"), filepath.Join("static", "fonts", "martianmono"), filepath.Join("static", "fonts", "orbitron")} {
-		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+	// The font files are the ones fonts.css names, so the capture always has every house face.
+	files := []string{"app.css", "tokens.css", "fonts.css", "js/theme.js"}
+	_, fontsCSS := e.do("GET", "/static/fonts.css", nil)
+	for _, m := range regexp.MustCompile(`/static/(fonts/[^)?'"]+\.woff2)`).FindAllStringSubmatch(fontsCSS, -1) {
+		files = append(files, m[1])
+	}
+	if len(files) < 4+8 {
+		t.Fatalf("fonts.css names %d font files, want the eight house files (ADR 0023)", len(files)-4)
+	}
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, "static", filepath.FromSlash(f))), 0o755); err != nil {
 			t.Fatal(err)
 		}
-	}
-	for _, f := range []string{"app.css", "tokens.css", "fonts.css", "js/theme.js", "fonts/ibmplexsans/IBMPlexSans-var.woff2", "fonts/martianmono/MartianMono-var.woff2", "fonts/orbitron/Orbitron-var.woff2"} {
 		_, body := e.do("GET", "/static/"+f, nil)
 		body = regexp.MustCompile(`/static/(fonts/[^)?"]+)(\?v=[0-9a-f]+)?`).ReplaceAllString(body, "$1")
 		if err := os.WriteFile(filepath.Join(dir, "static", filepath.FromSlash(f)), []byte(body), 0o644); err != nil {

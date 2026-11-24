@@ -318,6 +318,12 @@ func pageHandler(dir func() *string) http.Handler {
 		if ct := mime.TypeByExtension(path.Ext(rel)); ct != "" {
 			w.Header().Set("Content-Type", ct)
 		}
+		// A .br file is a raw Brotli stream, sent as Content-Encoding: br so the browser decodes it
+		// (P21-T3: the glyph coverage test reads WOFF2 font data this way; Go has no Brotli decoder).
+		if path.Ext(rel) == ".br" {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Encoding", "br")
+		}
 		_, _ = w.Write(b)
 	})
 }

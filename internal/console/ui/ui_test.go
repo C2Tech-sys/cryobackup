@@ -279,7 +279,7 @@ func TestFixturesPagesRenderWithTheirMarkers(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Fatalf("design: %d", res.StatusCode)
 	}
-	mustContain(t, "design", design, "Built-in checks", "Token coverage", "Orbitron audit", "Contrast (WCAG AA)", "C01", "C16", "GATEWAY UNREACHABLE", "RELEASE MANIFEST REJECTED",
+	mustContain(t, "design", design, "Built-in checks", "Token coverage", "Display face audit", "Contrast (WCAG AA)", "C01", "C16", "GATEWAY UNREACHABLE", "RELEASE MANIFEST REJECTED",
 		`data-toggle="stale"`, `data-toggle="drop"`, `data-toggle="hit"`, "NEVER BACKED UP", "RETENTION FAILED", "UNKNOWN OUTCOME", "No devices are enrolled")
 	for _, r := range Catalogue() {
 		mustContain(t, "design catalogue "+string(r.State), design, ">"+string(r.State)+"<")
@@ -520,8 +520,13 @@ func TestStaticAssets(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	for path, ct := range map[string]string{"/static/app.css": "text/css", "/static/tokens.css": "text/css", "/static/fonts.css": "text/css", "/static/js/fresh.js": "text/javascript",
-		"/static/js/htmx.min.js": "text/javascript", "/static/fonts/orbitron/Orbitron-var.woff2": "font/woff2", "/static/fonts/ibmplexsans/OFL.txt": "text/plain",
-		"/static/fonts/martianmono/MartianMono-var.woff2": "font/woff2", "/static/fonts/martianmono/OFL.txt": "text/plain", "/static/fonts/martianmono/SOURCE.txt": "text/plain"} {
+		"/static/js/htmx.min.js": "text/javascript", "/static/fonts/josefinsans/JosefinSans-latin-var.woff2": "font/woff2", "/static/fonts/josefinsans/JosefinSans-latin-ext-var.woff2": "font/woff2",
+		"/static/fonts/josefinsans/OFL.txt": "text/plain", "/static/fonts/josefinsans/SOURCE.txt": "text/plain",
+		"/static/fonts/opensans/OpenSans-latin-var.woff2": "font/woff2", "/static/fonts/opensans/OpenSans-latin-ext-var.woff2": "font/woff2",
+		"/static/fonts/opensans/OFL.txt": "text/plain", "/static/fonts/opensans/SOURCE.txt": "text/plain",
+		"/static/fonts/jetbrainsmono/JetBrainsMono-Regular.woff2": "font/woff2", "/static/fonts/jetbrainsmono/JetBrainsMono-Medium.woff2": "font/woff2",
+		"/static/fonts/jetbrainsmono/JetBrainsMono-SemiBold.woff2": "font/woff2", "/static/fonts/jetbrainsmono/JetBrainsMono-Bold.woff2": "font/woff2",
+		"/static/fonts/jetbrainsmono/OFL.txt": "text/plain", "/static/fonts/jetbrainsmono/SOURCE.txt": "text/plain"} {
 		res, err := http.Get(e.srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -532,24 +537,37 @@ func TestStaticAssets(t *testing.T) {
 			t.Errorf("%s: %d %s", path, res.StatusCode, res.Header.Get("Content-Type"))
 		}
 	}
-	// The data face is Martian Mono; IBM Plex Mono is gone from the stylesheets and from the served tree.
-	for path, want := range map[string]string{"/static/fonts.css": "font-family: 'Martian Mono'", "/static/tokens.css": "--font-mono: 'Martian Mono'"} {
+	// The faces are set D (ADR 0023): Josefin Sans, Open Sans, JetBrains Mono. The families they
+	// replaced (and IBM Plex Mono before them) are gone from the stylesheets and the served tree.
+	for path, want := range map[string][]string{
+		"/static/fonts.css":  {"font-family: 'Josefin Sans'", "font-family: 'Open Sans'", "font-family: 'JetBrains Mono'"},
+		"/static/tokens.css": {"--font-display: 'Josefin Sans'", "--font-sans: 'Open Sans'", "--font-mono: 'JetBrains Mono'"}} {
 		res, err := http.Get(e.srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		b, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		if !strings.Contains(string(b), want) || strings.Contains(string(b), "Plex Mono") {
-			t.Errorf("%s: want %q and no 'Plex Mono'", path, want)
+		for _, w := range want {
+			if !strings.Contains(string(b), w) {
+				t.Errorf("%s: want %q", path, w)
+			}
+		}
+		for _, gone := range []string{"Plex", "Martian", "Orbitron", "Michroma"} {
+			if strings.Contains(string(b), gone) {
+				t.Errorf("%s still names %s", path, gone)
+			}
 		}
 	}
-	if res, err := http.Get(e.srv.URL + "/static/fonts/ibmplexmono/IBMPlexMono-Regular.woff2"); err != nil {
-		t.Fatal(err)
-	} else {
-		res.Body.Close()
-		if res.StatusCode == 200 {
-			t.Error("the IBM Plex Mono files must be gone")
+	for _, gone := range []string{"/static/fonts/ibmplexmono/IBMPlexMono-Regular.woff2", "/static/fonts/ibmplexsans/IBMPlexSans-var.woff2",
+		"/static/fonts/martianmono/MartianMono-var.woff2", "/static/fonts/orbitron/Orbitron-var.woff2"} {
+		if res, err := http.Get(e.srv.URL + gone); err != nil {
+			t.Fatal(err)
+		} else {
+			res.Body.Close()
+			if res.StatusCode == 200 {
+				t.Errorf("%s must be gone", gone)
+			}
 		}
 	}
 	// A versioned URL is immutable for a year; an unversioned one is short-lived.
@@ -566,7 +584,7 @@ func TestStaticAssets(t *testing.T) {
 	if cc := res.Header.Get("Cache-Control"); strings.Contains(cc, "immutable") {
 		t.Fatalf("unversioned asset cache: %q", cc)
 	}
-	for _, p := range []string{"/static/", "/static/fonts", "/static/fonts/", "/static/../go.mod", "/static/nope.css", "/static/fonts/orbitron/"} {
+	for _, p := range []string{"/static/", "/static/fonts", "/static/fonts/", "/static/../go.mod", "/static/nope.css", "/static/fonts/josefinsans/"} {
 		res, err := http.Get(e.srv.URL + p)
 		if err != nil {
 			t.Fatal(err)
@@ -1007,9 +1025,9 @@ func TestSSEOfAnUnknownDeviceIsRefused(t *testing.T) {
 
 // ---- design-system checks ----
 
-func TestOrbitronAuditAndTokenCoverage(t *testing.T) {
+func TestDisplayFaceAuditAndTokenCoverage(t *testing.T) {
 	t.Parallel()
-	for _, c := range []Check{TokenCoverage(), OrbitronAudit()} {
+	for _, c := range []Check{TokenCoverage(), DisplayFaceAudit()} {
 		if !c.Pass {
 			t.Errorf("%s failed:\n%s", c.Name, strings.Join(c.Details, "\n"))
 		}
@@ -1022,15 +1040,17 @@ func TestChecksCatchViolations(t *testing.T) {
 	if !hexColorRE.MatchString("a { color: #ff00aa; }") || !funcColorRE.MatchString("a { color: rgba(1,2,3,.5); }") {
 		t.Fatal("colour grep is blind")
 	}
-	css := stripComments(`.btn { font-family: var(--font-display); } .t-page-title { font: 600 12px var(--font-display); } /* #fff */`)
+	// ADR 0023: the big numbers left the display face (it has no tabular figures), so the role
+	// that sets them is a violation if it ever asks for the display face again.
+	css := stripComments(`.btn { font-family: var(--font-display); } .t-page-title { font: 600 12px var(--font-display); } .t-big-number { font: 700 23px var(--font-display); } /* #fff */`)
 	var bad []string
 	for _, m := range ruleRE.FindAllStringSubmatch(css, -1) {
-		if strings.Contains(m[2], "--font-display") && !orbitronRoles[strings.TrimSpace(m[1])] {
+		if strings.Contains(m[2], "--font-display") && !displayRoles[strings.TrimSpace(m[1])] {
 			bad = append(bad, strings.TrimSpace(m[1]))
 		}
 	}
-	if len(bad) != 1 || bad[0] != ".btn" {
-		t.Fatalf("orbitron audit logic: %v", bad)
+	if len(bad) != 2 || bad[0] != ".btn" || bad[1] != ".t-big-number" {
+		t.Fatalf("display face audit logic: %v", bad)
 	}
 	if hexColorRE.MatchString(css) {
 		t.Fatal("comments must be stripped before the grep")

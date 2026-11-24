@@ -67,18 +67,24 @@ func TokenCoverage() Check {
 	return c
 }
 
-var orbitronRoles = map[string]bool{
-	".t-hero-wordmark": true, ".t-wordmark": true, ".t-page-title": true, ".t-big-number": true, ".t-big-number.sm": true, ".t-eyebrow-chip": true,
+// displayRoles are the only selectors that may set the display face (ADR 0023). The big-number
+// role is not one of them: numbers that change in place are set in the body face with tabular
+// figures, because the display face has none.
+var displayRoles = map[string]bool{
+	".t-hero-wordmark": true, ".t-wordmark": true, ".t-page-title": true, ".t-eyebrow-chip": true,
 }
 
-// OrbitronAudit fails if the display face is referenced anywhere but the five
-// .t-* roles (and the @font-face rule and the custom property definition), in
-// any stylesheet or template.
-// fontPreloadRE finds <link> tags; OrbitronAudit drops the font preloads among them.
+// displayFaceName is the display face's family name, matched in lower case: naming the family
+// directly is a use of the face just as var(--font-display) is.
+const displayFaceName = "josefin"
+
+// fontPreloadRE finds <link> tags; DisplayFaceAudit drops the font preloads among them.
 var fontPreloadRE = regexp.MustCompile(`<link[^>]*>`)
 
-func OrbitronAudit() Check {
-	c := Check{Name: "Orbitron audit", Pass: true}
+// DisplayFaceAudit fails if the display face is referenced anywhere but its .t-* roles (and the
+// @font-face rules and the custom property definition), in any stylesheet or template.
+func DisplayFaceAudit() Check {
+	c := Check{Name: "Display face audit", Pass: true}
 	for _, f := range cssFiles() {
 		b, err := fs.ReadFile(web.Static, f)
 		if err != nil {
@@ -87,7 +93,7 @@ func OrbitronAudit() Check {
 		css := stripComments(string(b))
 		for _, m := range ruleRE.FindAllStringSubmatch(css, -1) {
 			sel, body := strings.TrimSpace(m[1]), m[2]
-			if !strings.Contains(body, "--font-display") && !strings.Contains(strings.ToLower(body), "orbitron") {
+			if !strings.Contains(body, "--font-display") && !strings.Contains(strings.ToLower(body), displayFaceName) {
 				continue
 			}
 			name := strings.TrimPrefix(f, "static/")
@@ -97,14 +103,14 @@ func OrbitronAudit() Check {
 				// the custom property definition (tokens.css) is not a use
 				for _, decl := range strings.Split(body, ";") {
 					d := strings.TrimSpace(decl)
-					if (strings.Contains(d, "--font-display") && !strings.HasPrefix(d, "--font-display:")) || (strings.Contains(strings.ToLower(d), "orbitron") && !strings.HasPrefix(d, "--font-display:")) {
+					if (strings.Contains(d, "--font-display") && !strings.HasPrefix(d, "--font-display:")) || (strings.Contains(strings.ToLower(d), displayFaceName) && !strings.HasPrefix(d, "--font-display:")) {
 						c.Details = append(c.Details, name+": "+d+" in "+sel)
 					}
 				}
 			default:
 				ok := true
 				for _, part := range strings.Split(sel, ",") {
-					if !orbitronRoles[strings.TrimSpace(part)] {
+					if !displayRoles[strings.TrimSpace(part)] {
 						ok = false
 					}
 				}
@@ -130,12 +136,12 @@ func OrbitronAudit() Check {
 			}
 			return tag
 		})
-		if strings.Contains(t, "orbitron") || strings.Contains(t, "font-display") {
+		if strings.Contains(t, displayFaceName) || strings.Contains(t, "font-display") {
 			c.Details = append(c.Details, f+": references the display face")
 		}
 	}
 	c.Pass = len(c.Details) == 0
-	c.Summary = "display face confined to .t-hero-wordmark, .t-wordmark, .t-page-title, .t-big-number, .t-eyebrow-chip"
+	c.Summary = "display face confined to .t-hero-wordmark, .t-wordmark, .t-page-title, .t-eyebrow-chip"
 	if !c.Pass {
 		c.Summary = fmt.Sprintf("%d violation(s)", len(c.Details))
 	}
