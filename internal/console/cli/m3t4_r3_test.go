@@ -243,6 +243,7 @@ func r3RealApp(t *testing.T, mod func(*config.Config)) *App {
 	cfg.AgentListen, cfg.AdminListen = "127.0.0.1:"+port, "127.0.0.1:0"
 	cfg.TLS = config.TLS{Cert: certPath, Key: keyPath}
 	cfg.PublicURL = "https://127.0.0.1:" + port
+	cfg.AdminURL = "https://console.example.net" // P21-T6 U2: mail is set up below, and a healthy console has its e-mail link (else the admin_url row warns)
 	cfg.AgentProbe.CAFile = certPath
 	cfg.GatewayURL = gw.URL
 	cfg.HealthProber.GatewayCAFile = certPath

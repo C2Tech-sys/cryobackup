@@ -37,7 +37,7 @@ type Notifier struct {
 	Configured bool
 	// Loc returns the operator's display zone for the message times; nil means UTC.
 	Loc func() *time.Location
-	// ConsoleURL is the console's public URL for the link in a message; empty means no link.
+	// ConsoleURL is the console address (config admin_url, never public_url) for the link in a message; empty means no link.
 	ConsoleURL string
 	// SendBudget bounds the sends of one pass; zero means DefaultSendBudget.
 	SendBudget time.Duration

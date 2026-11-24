@@ -96,16 +96,19 @@ func (a *App) addMonitorJobs(cfg config.Config, fleet *health.Evaluator) {
 		f, err := fleet.Alarms(ctx)
 		return f.View, err
 	}
+	link := cfg.AdminLink() // the e-mail link is admin_url, never public_url (the agent API serves no console page); unset: no link
 	n := &notify.Notifier{Store: a.Store, Dispatch: a.Dispatch, Configured: mail.SettingsFromConfig(cfg.SMTP).Configured(),
-		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}
+		Loc: a.Display.Loc, ConsoleURL: link, Log: a.log}
+	a.Notifier = n
 	a.Runner.Add((&jobs.AlarmEvaluator{Store: a.Store, View: view, Notify: jobs.NotifyStep(n)}).Job())
 	// The daily digest (ADR 0020 decision 8): its job, and its re-render for the retry job.
 	a.Digest = &notify.Digester{Store: a.Store, Dispatch: a.Dispatch, View: view, Configured: mail.SettingsFromConfig(cfg.SMTP).Configured(),
-		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log}
+		Loc: a.Display.Loc, ConsoleURL: link, Log: a.log}
 	a.Runner.Add((&jobs.DailyDigest{Digester: a.Digest}).Job())
-	a.Runner.Add((&jobs.NotificationRetry{Retrier: &notify.Retrier{Store: a.Store, Dispatch: a.Dispatch, View: view,
-		Loc: a.Display.Loc, ConsoleURL: cfg.PublicURL, Log: a.log,
-		Rerender: map[string]notify.RerenderFunc{store.DeliveryDigest: a.Digest.Rerender}}}).Job())
+	a.Retrier = &notify.Retrier{Store: a.Store, Dispatch: a.Dispatch, View: view,
+		Loc: a.Display.Loc, ConsoleURL: link, Log: a.log,
+		Rerender: map[string]notify.RerenderFunc{store.DeliveryDigest: a.Digest.Rerender}}
+	a.Runner.Add((&jobs.NotificationRetry{Retrier: a.Retrier}).Job())
 	a.Runner.Add((&jobs.AbandonedRunSweeper{Store: a.Store}).Job())
 	// The outbound heartbeat ping (ADR 0020 decision 12): registered only with a URL; its facts feed
 	// banner C19 through the prober either way (no URL: not configured, nothing raised).

@@ -129,6 +129,10 @@ func r5Feeds() map[string]r5Feed {
 			})
 			return feed
 		}(),
+		"admin_url": { // P21-T6 U2: configuration, not a probe. The row is a warning while mail is set up and admin_url is not.
+			r5FailedNewest: set(func(f *healthFacts) { f.MailLink = &mailLinkFacts{Configured: true} }),
+			r5PassedFresh:  set(func(*healthFacts) {}),
+		},
 		"storage_quota": {
 			r5None: set(func(f *healthFacts) { f.Probes.Quota = nil }, func(f *healthFacts) {
 				f.Probes.Quota = &state.QuotaFacts{WithQuota: 1, Targets: []state.TargetUsage{{SoftQuotaBytes: 10}}}
@@ -290,6 +294,7 @@ const (
 )
 
 var r5NoFact = map[string]map[r5Kind]string{
+	"admin_url":          {r5None: "a configuration fact is either set or not; mail not set up is not_applicable: TestAdminURLRow", r5SkippedFresh: "no attempt is ever made, so none is skipped", r5SkippedStale: "same", r5FailedThenSkipped: noSkips, r5Stale: "a configuration fact does not age"},
 	"storage_quota":      {r5FailedThenSkipped: noSkips, r5FailedNewest: "QuotaFacts records measurements, not attempts: a listing that fails ages into stale", r5SkippedFresh: "same", r5SkippedStale: "same"},
 	"digest":             {r5FailedThenSkipped: noSkips, r5FailedNewest: "DigestFacts records sends, not attempts: C14 names a missed send", r5SkippedFresh: "same", r5SkippedStale: "same"},
 	"agent_api":          {r5FailedThenSkipped: noSkips, r5SkippedFresh: "a self-probe run cut short is not recorded, and it has no other non-result", r5SkippedStale: "same"},

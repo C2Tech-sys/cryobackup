@@ -38,6 +38,7 @@ func fullEvidence(now time.Time, ran, next *time.Time) healthFacts {
 			Database:  &state.DatabaseFacts{IntegrityCheckedAt: ms(now.Add(-time.Hour)), IntegrityOK: true, MeasuredAt: ms(now.Add(-20 * time.Second)), SelfBackup: &state.SelfBackupFacts{NotInBuild: true}},
 			Digest:    &state.DigestFacts{NotInBuild: true}, Quota: &state.QuotaFacts{NotInBuild: true}, Release: &state.ReleaseFacts{NotInBuild: true}},
 		Endpoint: probe.Status{Runs: true, Known: true, Interval: time.Minute, Last: probe.Result{At: now.Add(-20 * time.Second), OK: true, NotAfter: now.Add(60 * 24 * time.Hour)}},
+		MailLink: &mailLinkFacts{Configured: true, Link: "https://console.example.net/"}, // P21-T6 U2: mail is set up and admin_url is set
 	}
 }
 

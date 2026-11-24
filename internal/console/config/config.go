@@ -189,6 +189,7 @@ type Config struct {
 	TLS              TLS             `json:"tls"`
 	Admin            Admin           `json:"admin"`
 	PublicURL        string          `json:"public_url"`
+	AdminURL         string          `json:"admin_url"` // the address an operator types to open the console; the link in e-mails. Empty: no link. Never public_url (the agent API serves no console page)
 	GatewayURL       string          `json:"gateway_url"`
 	GatewayAuthDir   string          `json:"gateway_auth_dir"`
 	ArtifactsDir     string          `json:"artifacts_dir"` // where the operator places the agent MSI (shown on /downloads, hashed for the deployment snippets) and agent releases (M11); never restore data (ADR 0008)
@@ -442,6 +443,11 @@ func (c Config) Validate() error {
 	}
 	if c.PublicURL != "" {
 		if _, err := ParsePublicURL(c.PublicURL); err != nil {
+			add("%s", err.Error())
+		}
+	}
+	if c.AdminURL != "" {
+		if _, err := ParseAdminURL(c.AdminURL); err != nil {
 			add("%s", err.Error())
 		}
 	}

@@ -99,7 +99,7 @@ type Digester struct {
 	Configured bool
 	// Loc returns the operator's display zone; nil means UTC. The digest time is local to it.
 	Loc func() *time.Location
-	// ConsoleURL is the console's public URL for the link in the digest; empty means no link.
+	// ConsoleURL is the console address (config admin_url, never public_url) for the link in the digest; empty means no link.
 	ConsoleURL string
 	// SendBudget bounds the sends of one call; zero means DefaultSendBudget. A recipient not
 	// attempted inside it gets no row, so the next run sends it.
