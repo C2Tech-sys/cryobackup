@@ -24,7 +24,8 @@ type Options struct {
 	// with the zone named.
 	Loc *time.Location
 	// ConsoleURL is the address an operator types to open the console (config admin_url, never public_url: that is the agent API). A message links to it when it is
-	// an http or https URL; otherwise, or when empty, the message carries no link.
+	// an http or https URL; when empty, the message carries no link. A value that is not one fails the alert and
+	// recovery renderers with ErrConsoleLink (P21-T7); the digest and the test message still leave it out.
 	ConsoleURL string
 	// DigestDate is the local date ("2006-01-02") a digest is for, shown in its subject and header;
 	// empty means the date of the view. A retried digest keeps the date of its key. The alert and
@@ -49,6 +50,12 @@ func (c Content) Message(to string) mail.Message {
 
 // errNothingToRender is what a renderer returns for an empty batch: a message about nothing is a bug.
 var errNothingToRender = errors.New("notify: no episode to render")
+
+// ErrConsoleLink is what the alert and recovery renderers return when they are given a console link
+// (Options.ConsoleURL, from config admin_url) that they cannot render. config.ParseAdminURL accepts only
+// values these renderers render (a test holds them together), so this is a bug, and it fails the send
+// loudly instead of mailing a message without its button. The text never carries the link.
+var ErrConsoleLink = errors.New("notify: console_link: the configured console link cannot be rendered")
 
 // criticalAlarms are the alarm types that mail at once (ADR 0020 decision 4), in the order a
 // message lists them inside a customer: the §4.2 precedence of internal/state, MISSING first.
@@ -218,6 +225,9 @@ func render(v state.FleetView, eps []store.Episode, o Options, recovery bool) (C
 		return strings.ToLower(order[i].Customer) < strings.ToLower(order[j].Customer)
 	})
 	p := page{Recovery: recovery, Polled: when(v.ComputedAt, loc), ConsoleURL: consoleURL(o.ConsoleURL)}
+	if p.ConsoleURL == "" && strings.TrimSpace(o.ConsoleURL) != "" {
+		return Content{}, ErrConsoleLink // a link was given and would be dropped: never silently
+	}
 	for _, g := range order {
 		sort.SliceStable(g.Lines, func(i, j int) bool {
 			if g.Lines[i].rank != g.Lines[j].rank {
@@ -262,7 +272,9 @@ func count(n int, one, many string) string {
 	return strconv.Itoa(n) + " " + many
 }
 
-// consoleURL returns raw when it is an absolute http or https URL with a host, else "".
+// consoleURL returns raw when it is an absolute http or https URL with a host, else "". Every value
+// config.ParseAdminURL accepts passes (TestEveryValidatedAdminURLRendersALink); the alert and recovery
+// renderers turn a given link that does not pass into ErrConsoleLink.
 func consoleURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)

@@ -12,6 +12,50 @@ create the -shm file next to it, and doctor says so when it cannot. On a databas
 schema version, the version the first start will migrate it to and the pending migrations, and
 reports the checks that need the new schema as NOT CHECKED.
 
+## The admin UI behind a reverse proxy: `trusted_proxies` (ADR draft "trusted proxies")
+
+**New optional config key `trusted_proxies`** (environment override `CRYO_TRUSTED_PROXIES`, entries
+comma-separated): the IP addresses or CIDR prefixes of the reverse proxies in front of the admin
+listener. Unset, the default, nothing changes. Set, a request whose direct peer is in the list is
+recorded with the client address the proxy put in `X-Forwarded-For` (the rightmost entry that is not
+itself a listed proxy): audit rows, session rows, the last sign-in address and the per-address login
+limit then see the operator's address instead of the proxy's. A request from any other peer is
+judged on its own address, whatever headers it carries. With the list set, only a listed proxy may
+say `X-Forwarded-Proto: https`; with it unset a loopback or private peer still may, as before. The
+agent listener never reads any of these headers. `0.0.0.0/0` and `::/0` are refused (they would trust
+everyone), as is any entry that is not an IP address or prefix; `cryo-console doctor` shows the
+problem, and prints one `trusted proxies` line naming the list when it is set. Setup:
+[`deploy/README.md`](../deploy/README.md), "Admin UI behind a reverse proxy on the same host".
+
+The host of `admin_url` is now also accepted in the `Origin` and `Referer` of a form post or API
+call, beside the address the browser connected to and the `public_url` host.
+
+`public_url` and `admin_url` now refuse brackets around anything that is not an IPv6 address, for
+example `https://[10.0.0.5]:8080`; write `https://10.0.0.5:8080`. Such a value was accepted before,
+but no URL parser of this toolchain reads it (an IPv4 address in brackets is not a valid URL host),
+so it never worked: agents could not use it as `public_url` and e-mails carried no link for it as
+`admin_url`. A bracketed IPv6 address such as `https://[2001:db8::1]:8443` is unchanged.
+
+## Rolling back after setting `admin_url` or `trusted_proxies`
+
+A console binary older than the key refuses a config.json that contains it, and does not start:
+`config: parsing the config file: json: unknown field "admin_url"` (or `"trusted_proxies"`). Before
+you put an older binary back, remove the keys it does not know from config.json (and from the
+environment, `CRYO_ADMIN_URL` and `CRYO_TRUSTED_PROXIES`, which an older binary ignores but which
+are harmless). Two things to know:
+
+- `cryo-console init` from the release that added `admin_url` writes `"admin_url": ""` into the
+  config.json it creates, set or not, so a config made by that `init` needs the key removed before
+  an older binary can read it. `init` does not write `trusted_proxies` while it is empty.
+- `cryo-upgrade.sh` does not handle this; you must. It reads config.json (for `db_path` and the
+  listener addresses) but never copies or edits it. The rollback commands it prints on a failed
+  start restore the old binary and the database copy, not the config. Its own early recovery path,
+  which starts the services again on the old binary when something fails after they were stopped and
+  before the new binary is installed, uses config.json as it is: if you added either key before
+  running the upgrade, the old binary refuses it and the services stay down. The "doctor before"
+  step shows this first, as a `FAIL config` line about the unknown field that the script reports
+  only as a warning. Upgrade first, check it, and add the new keys afterwards.
+
 ## The "Open the console" link in e-mails is `admin_url`
 
 **Set `admin_url` to get the console link in e-mails.** New optional config key (environment
