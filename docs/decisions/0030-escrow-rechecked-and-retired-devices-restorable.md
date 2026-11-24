@@ -80,9 +80,14 @@ can now be restored from the console, by download only.
 - **Alarms on the retired device itself.** RETIRED suppresses device alarms by design. The fleet banner carries the
   signal instead.
 
-## To be proven by spike P22-S1
+## Spike P22-S1
 
-None of the items in the spike. This ADR relies only on restic behaviour already in production use: `cat config` with
-the escrowed key through the admin path (enrollment and the scheduler, ADR 0014) and the streamed download (ADR 0008).
-One dependency: if the multi-path zip is cut (ADR 0028, spike item 6), a retired device's download is cut the same way
-to one file or one folder.
+This ADR rests on no new restic behaviour: `cat config` with the escrowed key through the admin path is already in
+production use (enrollment and the scheduler, ADR 0014), and so is the streamed download (ADR 0008). The spike
+confirmed the tar route of ADR 0028 (`docs/lab/p22-spike.md:361-374`), so a retired device's download is the same
+multi-path zip as any other device's.
+
+## Open points for the build (P22-H)
+
+- The fleet banner for retired devices whose verification fails has no code yet; the build ticket assigns one.
+- Whether `escrow_recheck_days` gets a minimum of 7 (see Consequences) is left to the build ticket.

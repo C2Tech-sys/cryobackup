@@ -29,8 +29,9 @@ they came from has most of its parts already defined, but none of them run:
   `--append-only --private-repos`; the flag refuses deletion (except of locks) and overwrite of existing objects and
   confines a login to its own repository (`deploy/rclone/gateway-flags.md:25-26`). A live test proves backup,
   snapshots and unlock through such a gateway, and that a second login is refused on the first login's repository
-  (`internal/console/maintain/doc.go:254-261`, `TestLiveAppendOnlyGateway`). No test in the repository proves a
-  restore through it.
+  (`internal/console/maintain/doc.go:254-261`, `TestLiveAppendOnlyGateway`). Spike P22-S1 proved restore, `ls`,
+  `dump` and `snapshots` through it with a device login: each exits 0, restic keeps one lock object while it runs and
+  none after, and the gateway accepts the lock refresh every 5 minutes (`docs/lab/p22-spike.md:54-78`).
 
 ## Decision
 
@@ -58,19 +59,56 @@ The operator chooses one of three destinations. The first is the default:
   It fetches the selection with its device token. The console answers it only when the device matches, the mode is a
   device mode, the request is not finished or expired, and the device is neither retired nor purging. The fetch writes
   the audit row `restore.fetch`.
-- **The agent runs restic** through the gateway, with its own login and its DPAPI-protected repository password. It
-  runs one `restic restore --json` per drive root: `<snapshot>:/<drive letter>` with `--target`, `--overwrite` as the
-  destination demands, and `--include-file` naming a file in a SYSTEM-only temporary folder, deleted on every exit.
-- **Guards on the device.** The target must be the original location, or a folder under
-  `<SystemDrive>\CryoBackup-Restore\<restore id>\`; anything else ends as `guard_refused`. One restic process at a
-  time: a restore waits for a running backup. A restore never resumes after the agent restarts; it ends as
-  `interrupted`.
+- **The agent runs restic** through the gateway, with its own login and its DPAPI-protected repository password, one
+  restic process at a time: `restic restore --json -vv` with `--overwrite` as the destination demands and
+  `--include-file` naming a file in a SYSTEM-only temporary folder, deleted on every exit.
+- **Original location: one restore per anchor folder.** The anchor of a selected item is the deepest folder above it
+  that exists on the device, normally its parent. Selected items are grouped by anchor, and each group is one run:
+  `restic restore --json -vv <snapshot>:/<L>/<anchor> --target <L>:\<anchor> --include-file <F>`. restic never
+  changes its target folder, so the anchor and everything above it keep their timestamps and permissions; folders
+  restic creates below the anchor get their metadata from the snapshot, which is what restoring a deleted folder
+  should do. **Rejected: one run per drive root** (`<snapshot>:/<L> --target <L>:\`). The spike showed that it resets
+  the timestamps and permissions of every existing folder between the drive root and the selected file, removing a
+  permission added after the backup, and changes permissions of files in branches nobody selected
+  (`docs/lab/p22-spike.md:92-120`).
+- **Side folder: one restore per drive.** `<snapshot>:/<L> --target <SystemDrive>\CryoBackup-Restore\<restore id>\<L>`.
+  Every folder below the target is created by restic, so the drive-root finding does not apply
+  (`p22-spike.md:329-330`). restic gives restored files the snapshot's permissions as explicit entries, and the side
+  folder's own permissions are only added to them (`p22-spike.md:203-205`). So after a side-folder restore the agent
+  resets the whole subtree to inherit from the side folder (Administrators and SYSTEM only) and checks one file. That
+  reset is what makes ruling C2 true and is part of this decision.
+- **The include file.** UTF-8 without BOM, LF line ends, one line per selected item, written relative to the
+  run's source folder with a leading `/`, in the exact case of the snapshot listing. Every `[` is written `[[]`, then
+  every `$` is written `[$]`. restic has no escape character, matches case-sensitively (the drive letter too), and
+  expands `$VAR` and `${VAR}` in an include file; `*` and `?` cannot occur in an NTFS name
+  (`p22-spike.md:122-156`). restic trims each line, so a selected name that begins or ends with a space is refused
+  when the selection is made. Names stay byte-exact: no case folding, no Unicode normalisation.
+- **Guards on the device.** The target must be an anchor folder of the original location, or a folder under
+  `<SystemDrive>\CryoBackup-Restore\<restore id>\`; anything else ends as `guard_refused`. A restore waits for a
+  running backup. A restore never resumes after the agent restarts; it ends as `interrupted`.
+- **A restore that stops moving is stopped.** With the gateway gone, restic retried for more than 20 minutes without
+  exiting (`p22-spike.md:239`). If no new status line arrives within a bound the build sets, the agent stops restic and
+  the restore is FAILED with a storage class. After any restic it stopped (watchdog or cancel), the agent runs
+  `restic unlock`, because a killed restic leaves its lock object in the repository (`p22-spike.md:345-349`); the
+  append-only gateway allows it.
 - **The run.** The agent journals a run of kind `restore`, trigger `manual`, whose run id is the restore id, so a
   `cancel` names it and a restore runs at most once. Its record goes through the outbox like every run, path-free, with
   three new stats: `files_restored`, `files_skipped`, `bytes_restored`.
+- **Where the counts come from.** restic's summary has `total_files`, `files_restored`, `files_skipped`,
+  `total_bytes`, `bytes_restored` and `bytes_skipped`; it leaves out every field that is zero, and it counts folders as
+  files (`p22-spike.md:174-180`). So the agent does not copy the file counts. It counts the `verbose_status` lines of
+  `-vv`: `restored` or `updated` on an item that is not a folder (checked locally) is restored, `unchanged` is skipped.
+  `bytes_restored` comes from the summary. The item paths in those lines never leave the device.
+- **Nothing matched is a failure.** A restore whose include file matched nothing exits 0 with an empty summary
+  (`p22-spike.md:176-177`). The agent reports it as FAILED with the class `nothing_matched`, never as delivered.
+- **Errors are classified on the device.** A target file held open by another program is a per-file error: restic
+  exits 1 and restores the rest; with `--overwrite never` the file is not opened and is simply skipped
+  (`p22-spike.md:170-172`). restic's error line carries the absolute path, so the agent classifies each error locally
+  (in use, access denied, other) and sends only the count per class.
 - **The outcome.** The console closes the request from the run. A success is `delivered`. Errors with some files
   restored are `delivered` with `error_class` `partial`, shown as RESTORED WITH ERRORS with the counts by class.
-  Anything else is `failed` or `cancelled`. No migration is needed.
+  Anything else is `failed` or `cancelled`. The request row needs no migration: its `error_class` is free text
+  (`internal/console/migrations/0001_initial.sql:663`).
 - **Bytes never pass the console.** The agent reads its own repository through the gateway.
 
 ### What both restore modes share
@@ -79,8 +117,10 @@ This applies to this ADR and to the download of ADR 0028:
 
 - **One wizard page.** It works without JavaScript and runs in four steps: point in time, browse and select (files
   and folders), destination, review. The selection travels as hidden form fields, capped at 64 KiB of POST body,
-  never in a URL or browser storage. Browsing gets an offset, so a folder is read in pages of 500
-  (today it stops at 500 and says "truncated", `internal/console/ui/restore.go:149-150`). "Refresh from repository"
+  never in a URL or browser storage. One browse call is one `ls --json` of one folder, never recursive. restic does
+  not page: a folder of 2 000 entries came back in one call (`p22-spike.md:274-276`). The worker pages restic's stream
+  itself, 500 entries a page, and keeps no copy (today the listing stops at 500 and says "truncated",
+  `internal/console/ui/restore.go:149-150`). "Refresh from repository"
   asks the worker for the snapshot list (the worker's `Snapshots` method, unused today,
   `internal/console/maintain/methods.go:285-301`), and the page does this by itself when the cache is empty. Today
   the list comes only from the cache the agent fills (`ui/restore.go:103-111`).
@@ -95,8 +135,10 @@ A device restore to an agent older than 0.4.0 is refused when the request is cre
 
 Worker or storage down, the master key missing, a customer-held key or a device being purged: a banner that says
 which. Device offline: "Queued. Last seen ... Starts when online, until <expiry>. For files now, use Download as zip."
-A backup running: "Waiting for the running backup". The gateway refuses the login: FAILED, class `auth`. Files kept:
-"N restored, M skipped because they already exist". Interrupted: FAILED, "files being written may be incomplete; run
+A backup running: "Waiting for the running backup". The gateway refuses the login: FAILED, class `auth`, read from
+restic's own error output, because the gateway logs no line for a refused request (`p22-spike.md:73-75`). Files kept:
+"N restored, M skipped because they already exist". Nothing matched: FAILED, "nothing in the backup matched the
+selection". restic stopped moving: FAILED, with the storage class. Interrupted: FAILED, "files being written may be incomplete; run
 the restore again". Past 24 hours: EXPIRED.
 
 ## Consequences
@@ -118,16 +160,32 @@ the restore again". Past 24 hours: EXPIRED.
 - **The replacement-PC relay** (DH28). It is a separate path; ADR 0008 already says it must stream.
 - **A tar download.** The download is a zip (ADR 0028).
 
-## To be proven by spike P22-S1
+**Known limit: alternate data streams are not restored.** restic 0.19.1 did not back up the spike's stream, so no
+restore can bring it back (`p22-spike.md:198`, `p22-spike.md:203-205`). The restore page's help and the runbook say
+so. The feature matrix's row for alternate data streams stays open.
 
-Each of these is assumed, not known (restic 0.19.1, rclone 1.75.1). If the spike says no, the fallback applies, and
-the change is recorded in a new ADR.
+## What spike P22-S1 showed, and what it could not
 
-| # | Assumed | Fallback if the spike says no |
+The spike ran restic 0.19.1 and rclone 1.75.1 as a **non-elevated user** on a local-disk rig
+(`docs/lab/p22-spike.md:1-52`). Shown there, and built on above:
+
+| Item | Result | Where it lands in this decision |
 |---|---|---|
-| 1 | A device login can restore through the append-only gateway: restic reads the repository and handles its lock files. | Device modes do not ship in the pilot slice. Restore is the download of ADR 0028. |
-| 2 | `<snapshot>:/C` with `--target C:\` restores to the original location; include patterns are relative to that root; existing parent folders keep their timestamps and ACLs. | The original-location modes are withheld. The side folder (ruling C2) is the only device destination. |
-| 3 | Include patterns survive names with `[`, `*` and `?`; `--include-file` does not expand `$VAR`. | Paths go as `--include` arguments, or a name that cannot be expressed is restored through its parent folder into the side folder. |
-| 4 | `--overwrite never` and `if-changed` report skipped files in the JSON summary; a target file held open is reported as an error, not a crash. | The status gives the restored count only and says that existing files were kept. |
-| 5 | restic running as SYSTEM restores ACLs, owner and long paths; the side folder's ACL holds. | The status page and the runbook say what is not restored. Files that fail count as errors (RESTORED WITH ERRORS). |
-| 7 | Browsing with `--no-cache` (ADR 0008) of a repository of about 50 GB and 200 000 files answers in a usable time. | An in-memory (tmpfs) cache for the worker, the only cache ADR 0008 allows. |
+| 1 | Restore and reads through the append-only gateway with a device login: yes. | Device modes ship. Refusals are read from restic's error output. |
+| 2 | Drive-root form: no. It rewrites existing parents and unselected branches. | One run per anchor folder; the side folder keeps the drive-root form. |
+| 3 | No escape character; `[[]` and `[$]` work; case-sensitive; `$VAR` expanded in include files; lines trimmed. | The include-file rules; names with leading or trailing spaces refused. |
+| 4 | Summary omits zero fields and counts folders; nothing matched = exit 0; a locked file = exit 1 with an absolute path. | Counts from `-vv`; `nothing_matched` is FAILED; errors classified on the device. |
+| 5 | Permissions and own-SID owner restored; 378-character path and empty folder restored; alternate data streams lost; under a new folder the snapshot's permissions stay explicit. | The side-folder reset; the known limit. |
+| 7 | Browse took 10-60 s per call on a loaded PC on local disk: not a measure of object storage. | ADR 0026 pilot-entry check; the in-memory cache stays the lever. |
+
+**Not tested, and checked in the lab before the pilot (ADR 0026):** everything as SYSTEM, the agent's account. That
+is restoring owner and permissions with the restore privilege, what a backup made as SYSTEM records for inherited
+permissions, writes to folders at the level of `C:\Users`, creating the side folder with an Administrators and SYSTEM
+permission set, and whether a user can open a restored file in it by its full path (`p22-spike.md:385-394`). Also
+untested: file symlinks in a snapshot, and selected names with leading spaces. If the SYSTEM checks show that the
+anchor form or the side-folder reset does not hold under that account, the device mode concerned does not ship in the
+pilot, and a new ADR records why.
+
+**Open point for the build (P22-A).** The run journal's `error_class` is a closed list
+(`internal/console/migrations/0003_fleet_start_lease.sql:65`) with no `nothing_matched`. The run needs either a
+migration that adds the class, or an existing class, with `nothing_matched` kept on the request row only.

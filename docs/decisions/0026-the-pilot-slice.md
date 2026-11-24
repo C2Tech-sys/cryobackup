@@ -96,6 +96,9 @@ Until the operator rules, nothing in the build or the docs uses these numbers ex
 - A pilot repository is never pruned during the pilot, so its storage use is what was written, plus the provider's
   own rules. The first prune after the pilot will remove more at once than a steady schedule would.
 - An integrity fault in a file that is not drilled can go unseen for up to 45 days. This is the known cost of C7.
+- Browsing slows down during the pilot. Each backup run adds one index file to the repository, only prune merges
+  them, and every uncached browse call reads them all. A policy of 4 runs a day gives some 180 index files by day 45
+  (`docs/lab/p22-spike.md:277-279`). This is one more reason forget and prune are the first tickets after the pilot.
 - The milestone table (architecture.md lines 1366-1367) is not edited; this ADR records which of its rows run earlier.
 
 ## What is deliberately left out and why
@@ -104,8 +107,26 @@ Until the operator rules, nothing in the build or the docs uses these numbers ex
 - **The should and could rows.** The pilot proves the must path first.
 - **A ruling on version numbers.** The operator has not made one. The table above is a proposal.
 
-## To be proven by spike P22-S1
+## What spike P22-S1 settled, and the checks before the pilot starts
 
-This ADR assumes nothing about restic itself. It depends on the assumptions of ADRs 0027, 0028 and 0029, each listed
-in that ADR with its fallback. The order matters in one way: if spike item 9 (restoring the console on a bare host
-with only the offline kit, ADR 0029) fails, step 2 is not done, and the pilot does not start until it is.
+The spike ran restic 0.19.1 and rclone 1.75.1 on one Windows workstation as a non-elevated user, against a gateway
+and a maintain path on local disk (`docs/lab/p22-spike.md`, lines 1-52). Its results are recorded where they decide
+something:
+
+- restore and reads through the append-only gateway with the device login work (item 1); the drive-root form of an
+  original-location restore is rejected and replaced by a restore per anchor folder (item 2); include files, counts,
+  locked files, ACLs and alternate data streams set the agent's rules (items 3-5). All in ADR 0027.
+- the tar route for folders in a multi-path zip holds, so no single-path cut line is needed (item 6). ADR 0028.
+- the self-backup through the worker's rclone backend, its prune, its full read check and a bare-host restore with
+  only the rclone file and the password all work (item 9). ADR 0029.
+
+**Pilot-entry checks.** The pilot client is not enrolled until each of these has passed:
+
+1. **Browse latency on the real bucket.** The spike measured 10 to 60 seconds per browse call on a heavily loaded PC
+   against local disk, which says nothing about object storage (`p22-spike.md:250-282`). Three cold
+   `ls --json --no-cache` calls on a real device repository through the admin path give the figure. If it is too
+   slow to use, the worker gets an in-memory cache (tmpfs), the only cache ADR 0008 allows.
+2. **The object-storage checks of ADR 0029** (spike item 8): the admin credential's rights on the self-backup
+   prefix, the gateway credential's policy, and the cost of prune under the bucket's versioning.
+3. **The restore checks that need the agent's account** (ADR 0027): everything the spike could not run as SYSTEM.
+4. **The console drill** of ADR 0029 on a throwaway machine.

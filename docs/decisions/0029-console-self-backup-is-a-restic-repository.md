@@ -25,9 +25,13 @@ directory, a weekly tested restore in a temporary directory, M5).
 
 ## Decision
 
-**Where (ruling C3).** The self-backup is a restic repository in the same bucket as the device repositories, under its own
-prefix that the gateway credential's policy does not cover (for example `<prefix>-console`). It is written through the
-worker's admin remote, never through the gateway.
+**Where (ruling C3).** The self-backup is a restic repository in the same bucket as the device repositories, under its
+own prefix. It is written through the worker's admin remote, never through the gateway. The self-backup prefix must
+not be equal to the device prefix, must not lie inside it, and must not be the device prefix with more characters
+appended. An access policy whose resource is written `<prefix>*` (no slash) also matches `<prefix>-console/...`
+(`docs/lab/p22-spike.md:290`), so a name of that shape could fall inside the gateway credential's rights. The example
+`<prefix>-console` given while this was planned is withdrawn. The worker refuses to start the self-backup when the
+configured self-backup prefix breaks this rule.
 
 **Password.** HKDF-SHA256 of the master key with info `cryobackup/self-backup/v1`, never stored, as for the probe
 repository (ADR 0017). The repository is created once, guarded by a settings row; a repository missing after that row
@@ -49,19 +53,27 @@ exists is a failure, never re-created.
 
 **Retention (ruling C4).** Keep every snapshot of the last 7 days, one a day for 30 days, one a month for 12 months.
 
-**Verify, weekly and on demand.** Restore the newest snapshot into the staging folder (removed afterwards, as
-after a run), run `PRAGMA integrity_check`, compare schema version, row counts and sha256 with the manifest, unwrap one
-escrow row with the master key, and run `restic check --read-data` on the self-backup repository. A failure sets `VerifyFailed`: C11 critical. The loader stops marking the self-backup
-not in this build.
+**Verify, weekly and on demand.** Restore `latest:<staging path>` into the 0700 staging folder (removed afterwards,
+as after a run), run `PRAGMA integrity_check`, compare schema version, row counts and sha256 with the manifest, unwrap
+one escrow row with the master key, and run `restic check --read-data` on the self-backup repository. A failure sets
+`VerifyFailed`: C11 critical. The loader stops marking the self-backup not in this build.
+
+**Why `latest:<staging path>`.** A snapshot stores the absolute path of the folder it backed up, so a plain
+`restore latest` recreates every folder of that path under the target (`p22-spike.md:311-312`). Naming the staging
+path as the snapshot's subfolder puts the database, `config.json` and `manifest.json` at the target's root
+(`internal/restic/commands.go:12-14`; the subfolder form in `p22-spike.md:84-87`). The CLI's
+restore does the same.
 
 **CLI.** `cryo-console self-backup run|list|verify`, and
 `cryo-console self-backup restore --rclone-config F --remote R --bucket B --prefix P --master-key K --out DIR`, which
 needs no database and works on a bare host.
 
-**What the self-backup does not hold: the operator's offline kit.** The master key, both rclone configurations (the
-worker's admin remote and the gateway's) and the mail password file are not in the self-backup. A backup encrypted
-with a key derived from the master key cannot be what recovers that key. The operator keeps them offline, and the
-disaster-recovery runbook names each one. TLS keys are not kept: they are issued again.
+**What the self-backup does not hold: the operator's offline kit.** The master key, both object-storage key pairs
+(the worker's admin credential and the gateway's) and the whole console configuration directory (both rclone
+configurations, the environment files, the mail password file) are kept offline by the operator, not in the
+self-backup. A backup encrypted with a key derived from the master key cannot be what recovers that key. The operator
+confirmed on 2026-11-24 that this kit is in place. The disaster-recovery runbook names each item. TLS keys are not
+kept: they are issued again.
 
 **Drill mode (ruling C8).** A console restored for a drill runs with `"drill": true` in `config.json`. It starts no agent
 listener and none of these jobs: notify, digest, health ping, htpasswd sync, device purge. The worker answers only its
@@ -95,15 +107,33 @@ again, and their old repositories remain in storage as orphans.
 - **The offline kit inside the backup.** It would make the backup self-locking.
 - **Backing up TLS keys.** They can be issued again, so a copy is only one more secret to protect.
 
-## To be proven by spike P22-S1
+## What spike P22-S1 showed
 
-| # | Assumed | Fallback if the spike says no |
-|---|---|---|
-| 8a | The admin credential may read, write and delete under the new prefix. | The operator grants it on the storage side before the first run. Until then every run fails with its class, and C11 reports that no self-backup has been written. |
-| 8b | `forget --prune` every 6 hours costs little under bucket versioning and a minimum storage duration. | Prune runs less often than forget (for example weekly). The schedule change is recorded in a new ADR with the measured cost. |
-| 8c | The gateway credential's policy is really scoped to its own prefix, so it cannot reach the self-backup prefix. | The self-backup moves to its own bucket that the gateway credential has no right to. |
-| 9a | `restic backup` of the staging folder through the worker's rclone backend works, and `check --read-data` runs through it. | The self-backup does not ship. The pilot (ADR 0026, step 2) waits for a working design. |
-| 9b | A bare host with only the binary, restic, rclone and the offline kit restores a working console. | The runbook and the CLI are fixed until it does. The pilot does not start before a drill passes. |
+Item 9 ran restic 0.19.1 through the rclone backend with the worker's own options (`--retry-lock 30s --no-cache` and
+`rclone serve restic --stdio`), on a separate prefix on local disk (`docs/lab/p22-spike.md:295-315`):
 
-Not settled by the spike: whether an offline copy of the master key and both rclone configurations exists today (the
-operator confirms before step 2 of ADR 0026), and the production database's size, which sets the free disk a run needs.
+- `init`, three `backup` runs of a staging folder (database, `config.json`, `manifest.json`), `forget --prune` with
+  the retention of ruling C4, a `forget --prune` that removed two snapshots and their packs, and `check --read-data`
+  all exit 0;
+- a restore on a bare environment holding only the rclone configuration file and the password gave a database whose
+  sha256 equals the last staging copy, and created no cache directory;
+- prune without a cache warns that it may be very slow. That is the cost ADR 0008 accepts.
+
+## Checks on the real object storage, before the self-backup ships
+
+The spike's rig had no object storage, so spike item 8 stays with the operator, on the production account
+(`p22-spike.md:284-293`). If a check fails, the self-backup does not ship until it passes, and C11 keeps saying that
+no self-backup has been written.
+
+1. **The admin credential's rights on the self-backup prefix.** `init`, `backup`, `forget --prune` and
+   `check --read-data` through the admin remote all exit 0. This needs list, get, put and delete under the prefix.
+2. **The gateway credential cannot reach it.** A device login through the gateway is refused on the self-backup
+   repository's `config`, and every resource in the gateway credential's policy ends in a slash.
+3. **The cost of `forget --prune` every 6 hours** under the bucket's versioning, its rule for non-current versions,
+   any minimum storage duration and any minimum billed object size (restic writes and deletes small lock objects on
+   every call). If the estimate is too high, prune runs less often than forget, and a new ADR records the schedule
+   with the measured cost.
+4. **The gateway credential's policy is prefix-scoped**, read from the storage side, because the repository cannot
+   show it.
+
+Still not settled: the production database's size, which sets the free disk a run needs.
