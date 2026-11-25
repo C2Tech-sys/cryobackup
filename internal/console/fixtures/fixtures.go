@@ -108,6 +108,8 @@ type Call struct {
 	Method   string
 	DeviceID string
 	Path     string
+	// Paths are a several-paths dump's selections (DumpRequest.Paths).
+	Paths []string
 }
 
 // Backend is an in-process adminpath.Backend with canned answers.
@@ -261,10 +263,22 @@ func (b *Backend) Ls(ctx context.Context, req adminpath.LsRequest) (adminpath.Ls
 		}
 		return nodes[i].Name < nodes[j].Name
 	})
-	if limit := req.Limit; limit > 0 && len(nodes) > limit {
-		return adminpath.LsResult{Snapshot: restic.LsSnapshot{ID: req.SnapshotID}, Nodes: nodes[:limit], Truncated: true}, nil
+	// The window of LsRequest.Offset and Limit, with the total, as the worker
+	// pages restic's stream.
+	total := len(nodes)
+	off := req.Offset
+	if off < 0 {
+		off = 0
 	}
-	return adminpath.LsResult{ResultMeta: adminpath.ResultMeta{Outcome: restic.OutcomeSuccess}, Snapshot: restic.LsSnapshot{ID: req.SnapshotID}, Nodes: nodes}, nil
+	if off > total {
+		off = total
+	}
+	window, truncated := nodes[off:], false
+	if limit := req.Limit; limit > 0 && len(window) > limit {
+		window, truncated = window[:limit], true
+	}
+	return adminpath.LsResult{ResultMeta: adminpath.ResultMeta{Outcome: restic.OutcomeSuccess}, Snapshot: restic.LsSnapshot{ID: req.SnapshotID},
+		Nodes: window, Truncated: truncated, Total: total}, nil
 }
 
 func childOf(dir, file string) (string, bool) {
@@ -294,28 +308,32 @@ func (b *Backend) Snapshots(ctx context.Context, req adminpath.DeviceRequest) ([
 	return []restic.Snapshot{{ID: b.snap(), ShortID: b.snap()[:8], Time: Now().Add(-26 * time.Hour), Paths: []string{"C:\\Users"}, Hostname: "fixture"}}, nil
 }
 
-// Dump implements adminpath.Backend like the maintain worker does (ADR 0008):
-// it streams a real zip into w and writes nothing to disk. A file is a
-// one-entry archive named after its base name; a directory holds every fake
-// file below it, by its path relative to the directory.
+// Dump implements adminpath.Backend like the maintain worker does (ADR 0008,
+// ADR 0028): it streams a real zip into w and writes nothing to disk. With
+// Path, a file is a one-entry archive named after its base name and a
+// directory holds every fake file below it, by its path relative to the
+// directory. With Paths (validated, nested selections collapsed), every
+// selection is named relative to its parent: a file by its base name, a folder
+// by its own entry ("name/") and its files below it; one selection that is not
+// in the fake tree is not_found before any byte.
 func (b *Backend) Dump(ctx context.Context, req adminpath.DumpRequest, w io.Writer) (adminpath.DumpResult, error) {
-	if err := b.record(Call{Method: adminpath.MethodDump, DeviceID: req.DeviceID, Path: req.Path}); err != nil {
+	if err := b.record(Call{Method: adminpath.MethodDump, DeviceID: req.DeviceID, Path: req.Path, Paths: append([]string(nil), req.Paths...)}); err != nil {
 		return adminpath.DumpResult{}, err
 	}
-	want := clean(req.Path)
-	type entry struct {
-		name    string
-		content []byte
-	}
-	var entries []entry
-	for _, f := range b.files() {
-		fp := clean(f.Path)
-		switch {
-		case fp == want:
-			entries = append(entries, entry{path.Base(fp), f.Content})
-		case want == "/" || strings.HasPrefix(fp, want+"/"):
-			entries = append(entries, entry{strings.TrimPrefix(strings.TrimPrefix(fp, want), "/"), f.Content})
+	var entries []fixtureEntry
+	if req.Paths != nil {
+		if err := req.Validate(); err != nil {
+			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
 		}
+		for _, sel := range adminpath.CollapsePaths(req.Paths) {
+			got := b.entriesOf(sel, path.Base(sel), true)
+			if len(got) == 0 {
+				return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeNotFound, "")
+			}
+			entries = append(entries, got...)
+		}
+	} else {
+		entries = b.entriesOf(clean(req.Path), "", false)
 	}
 	if len(entries) == 0 {
 		return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeNotFound, "")
@@ -330,7 +348,7 @@ func (b *Backend) Dump(ctx context.Context, req adminpath.DumpRequest, w io.Writ
 			return adminpath.DumpResult{}, err
 		}
 		fw, err := zw.Create(e.name)
-		if err == nil {
+		if err == nil && !e.dir {
 			_, err = fw.Write(e.content)
 		}
 		if err == nil {
@@ -344,6 +362,41 @@ func (b *Backend) Dump(ctx context.Context, req adminpath.DumpRequest, w io.Writ
 		return adminpath.DumpResult{}, b.dumpErr(out)
 	}
 	return adminpath.DumpResult{ResultMeta: adminpath.ResultMeta{RequestID: req.RequestID, Outcome: restic.OutcomeSuccess}}, nil
+}
+
+// fixtureEntry is one zip entry of a fake dump; dir entries end in "/".
+type fixtureEntry struct {
+	name    string
+	content []byte
+	dir     bool
+}
+
+// entriesOf lists the zip entries of one selected path of the fake tree. For
+// a single-path dump (multi false) a file is its base name and a folder's files
+// are named relative to the folder. For a several-paths dump (multi true) every
+// name starts with top, the selection's base name, and a folder gets its own
+// entry first. Nothing matches: no entries.
+func (b *Backend) entriesOf(want, top string, multi bool) []fixtureEntry {
+	var out []fixtureEntry
+	for _, f := range b.files() {
+		fp := clean(f.Path)
+		switch {
+		case fp == want && multi:
+			out = append(out, fixtureEntry{name: top, content: f.Content})
+		case fp == want:
+			out = append(out, fixtureEntry{name: path.Base(fp), content: f.Content})
+		case want == "/" || strings.HasPrefix(fp, want+"/"):
+			rel := strings.TrimPrefix(strings.TrimPrefix(fp, want), "/")
+			if multi {
+				if len(out) == 0 || out[0].name != top+"/" {
+					out = append([]fixtureEntry{{name: top + "/", dir: true}}, out...)
+				}
+				rel = top + "/" + rel
+			}
+			out = append(out, fixtureEntry{name: rel, content: f.Content})
+		}
+	}
+	return out
 }
 
 // dumpErr is the error of a Dump whose writer failed: the scripted mid-stream

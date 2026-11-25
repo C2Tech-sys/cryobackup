@@ -13,10 +13,12 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/restic"
 )
 
-// Dump implements adminpath.Backend (architecture §6.3, engine §1.13, ADR 0008).
-// It streams one snapshot path as a zip archive into dst and writes nothing to
-// disk: restic dump writes to its stdout, and the worker copies that pipe to
-// dst as it arrives.
+// Dump implements adminpath.Backend (architecture §6.3, engine §1.13, ADR 0008,
+// ADR 0028). It streams snapshot paths as a zip archive into dst and writes
+// nothing to disk: restic dump writes to its stdout, and the worker copies or
+// re-encodes that pipe into dst as it arrives. A request with Paths is the
+// several-paths download of dump_multi.go; a request with Path is the
+// single-path download below.
 //
 // restic 0.19.1 writes a zip only for a directory: `dump -a zip` of a single
 // file writes the file's raw bytes (verified live, recorded in doc.go). So the
@@ -29,16 +31,25 @@ import (
 // restic exited 0, so a failed run never ends in a well-formed zip.
 //
 // A failed write to dst (the console or the technician went away) cancels the
-// restic run at once. Bytes and SHA256 of the result are filled in by
-// adminpath.Handler from what crossed the socket.
+// restic run at once. A restic run that sends no byte for DumpIdleLimit is
+// stopped the same way (dumpIdleRun). Bytes and SHA256 of the result are filled
+// in by adminpath.Handler from what crossed the socket.
 //
 // A stream holds a restic slot for as long as the browser takes, so streams
 // have their own budget (Config.MaxStreams, below MaxConcurrent): one over the
 // budget is refused at once with CodeBusy, never queued, and maintenance always
-// keeps slots.
+// keeps slots. A several-paths download holds one stream slot for all its runs.
 func (w *Worker) Dump(ctx context.Context, req adminpath.DumpRequest, dst io.Writer) (adminpath.DumpResult, error) {
 	if dst == nil {
 		return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInternal, "")
+	}
+	multi := req.Paths != nil
+	if multi {
+		// In-process callers skip the Handler's validation; the path cap and
+		// the clean-path rule are what keep the archive's names safe.
+		if err := req.Validate(); err != nil {
+			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
+		}
 	}
 	select {
 	case w.streams <- struct{}{}:
@@ -55,6 +66,9 @@ func (w *Worker) Dump(ctx context.Context, req adminpath.DumpRequest, dst io.Wri
 	defer t.drop()
 	ctx, cancel := context.WithTimeout(ctx, w.cfg.Timeouts.Dump)
 	defer cancel()
+	if multi {
+		return w.dumpMulti(ctx, t, req, dst)
+	}
 	var elapsed time.Duration
 
 	// What is the path? "/" of the snapshot (or of its subfolder) is a directory
@@ -103,16 +117,15 @@ func (w *Worker) Dump(ctx context.Context, req adminpath.DumpRequest, dst io.Wri
 	}
 	// A failed write to dst cancels the run: restic must not keep reading the
 	// repository for a reader that is gone.
-	runCtx, stop := context.WithCancel(ctx)
-	defer stop()
-	out := &cancelWriter{w: dst, cancel: stop}
-	var zw *zip.Writer
+	streamCtx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+	out := &cancelWriter{w: dst, cancel: func() { stop(errDestFailed) }}
 	if !isDir {
 		entry := path.Base(req.Path)
 		if entry == "." || entry == "/" || entry == "" {
 			entry = "file"
 		}
-		zw = zip.NewWriter(out)
+		zw := zip.NewWriter(out)
 		hdr := &zip.FileHeader{Name: entry, Method: zip.Deflate}
 		if !mtime.IsZero() {
 			hdr.Modified = mtime
@@ -121,18 +134,12 @@ func (w *Worker) Dump(ctx context.Context, req adminpath.DumpRequest, dst io.Wri
 		if err != nil {
 			return adminpath.DumpResult{}, w.streamErr(ctx)
 		}
-		res, err := w.exec(runCtx, t, dumpCmd, w.cfg.Timeouts.Dump, func(r io.Reader) error {
+		res, err := w.dumpRun(streamCtx, t, dumpCmd, out, func(r io.Reader) error {
 			_, cerr := io.Copy(fw, r)
 			return cerr
 		})
-		if err != nil {
-			return adminpath.DumpResult{}, w.ctxOr(ctx, err)
-		}
 		elapsed += res.Elapsed
-		if out.failed {
-			return adminpath.DumpResult{}, w.streamErr(ctx)
-		}
-		if err := readError(runCtx, res); err != nil {
+		if err != nil {
 			return adminpath.DumpResult{}, err
 		}
 		if err := zw.Close(); err != nil {
@@ -140,18 +147,12 @@ func (w *Worker) Dump(ctx context.Context, req adminpath.DumpRequest, dst io.Wri
 		}
 		return adminpath.DumpResult{ResultMeta: okMeta(elapsed)}, nil
 	}
-	res, err := w.exec(runCtx, t, dumpCmd, w.cfg.Timeouts.Dump, func(r io.Reader) error {
+	res, err := w.dumpRun(streamCtx, t, dumpCmd, out, func(r io.Reader) error {
 		_, cerr := io.Copy(out, r)
 		return cerr
 	})
-	if err != nil {
-		return adminpath.DumpResult{}, w.ctxOr(ctx, err)
-	}
 	elapsed += res.Elapsed
-	if out.failed {
-		return adminpath.DumpResult{}, w.streamErr(ctx)
-	}
-	if err := readError(runCtx, res); err != nil {
+	if err != nil {
 		return adminpath.DumpResult{}, err
 	}
 	return adminpath.DumpResult{ResultMeta: okMeta(elapsed)}, nil
@@ -163,10 +164,10 @@ func (w *Worker) streamErr(ctx context.Context) error {
 	return w.ctxOr(ctx, adminpath.NewError(adminpath.CodeUnavailable, ""))
 }
 
-// cancelWriter forwards to w and cancels the run on the first failed write.
+// cancelWriter forwards to w and calls cancel on the first failed write.
 type cancelWriter struct {
 	w      io.Writer
-	cancel context.CancelFunc
+	cancel func()
 	failed bool
 }
 

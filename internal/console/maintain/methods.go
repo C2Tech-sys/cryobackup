@@ -188,9 +188,13 @@ func (w *Worker) CatConfig(ctx context.Context, req adminpath.DeviceRequest) (re
 // ("/" for the snapshot roots; without one restic 0.19.1 walks the whole
 // snapshot, architecture §13.3). restic prints the directory node itself before
 // its children; that node is dropped so Nodes are exactly the children of Dir.
-// At most Limit nodes (DefaultLsLimit when zero) are kept and the rest of the
-// stream is discarded: Truncated says so. The nodes are PATH-BEARING and are
-// returned, never logged.
+// restic has no paging (it returned 2 000 entries in one call in the P22 spike,
+// item 7), so the worker reads the whole JSON stream and keeps only the window
+// Offset..Offset+Limit (Limit DefaultLsLimit when zero, never above
+// MaxLsLimit), counting every child into Total; Truncated says children follow
+// the window. The order is restic's, the folder's tree order (sorted by name),
+// which is the same on every call for one snapshot. Memory holds the window
+// only. The nodes are PATH-BEARING and are returned, never logged.
 func (w *Worker) Ls(ctx context.Context, req adminpath.LsRequest) (adminpath.LsResult, error) {
 	limit := req.Limit
 	if limit <= 0 {
@@ -199,6 +203,10 @@ func (w *Worker) Ls(ctx context.Context, req adminpath.LsRequest) (adminpath.LsR
 	if limit > adminpath.MaxLsLimit {
 		limit = adminpath.MaxLsLimit
 	}
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
 	dir := req.Dir
 	if dir == "" {
 		dir = "/"
@@ -206,6 +214,7 @@ func (w *Worker) Ls(ctx context.Context, req adminpath.LsRequest) (adminpath.LsR
 	self := strings.TrimRight(dir, "/") // "" for the roots: no node to drop
 	var out adminpath.LsResult
 	out.Nodes = []restic.Node{}
+	total := 0
 	res, err := w.readCall(ctx, req.DeviceID, w.cfg.Timeouts.Ls,
 		func(c restic.Common) (restic.Command, error) { return restic.Ls(req.SnapshotID, dir, c) },
 		func(r io.Reader) error {
@@ -225,17 +234,18 @@ func (w *Worker) Ls(ctx context.Context, req adminpath.LsRequest) (adminpath.LsR
 					if self != "" && m.Path == self {
 						continue
 					}
-					if len(out.Nodes) >= limit {
-						out.Truncated = true
-						continue
+					if total >= offset && len(out.Nodes) < limit {
+						out.Nodes = append(out.Nodes, m)
 					}
-					out.Nodes = append(out.Nodes, m)
+					total++
 				}
 			}
 		})
 	if err != nil {
 		return adminpath.LsResult{}, err
 	}
+	out.Total = total
+	out.Truncated = total-len(out.Nodes) > offset // children after the window; no overflow for a huge Offset
 	out.ResultMeta = okMeta(res.Elapsed)
 	return out, nil
 }

@@ -69,10 +69,10 @@
 //	ping        5s       -                 PingResult               liveness: version, uptime, master key loaded, last storage probe
 //	init        120s     InitRequest       InitResult               idempotent: an existing repository whose key verifies is success (Created false), architecture DH17
 //	cat_config  60s      DeviceRequest     restic.Config            escrow verification, storage probe (architecture §4.6 C02)
-//	ls          120s     LsRequest         LsResult                 one level; Dir "/" lists roots; capped (DefaultLsLimit 5000, Truncated)
+//	ls          120s     LsRequest         LsResult                 one level; Dir "/" lists roots; a window (Offset, Limit: DefaultLsLimit 5000) of Total children, Truncated
 //	find        120s     FindRequest       []restic.FindResult      capped (DefaultFindLimit 1000)
 //	snapshots   120s     DeviceRequest     []restic.Snapshot
-//	dump        12h      DumpRequest       zip stream + DumpResult  the zip is the body, the result a trailer; one path per call (ADR 0008)
+//	dump        12h      DumpRequest       zip stream + DumpResult  the zip is the body, the result a trailer; Path, or up to MaxDumpPaths (50) Paths in one zip (ADR 0008, 0028)
 //	stats       120s     StatsRequest      restic.StatsResult       mode raw-data for usage sampling
 //	unlock      60s      UnlockRequest     UnlockResult             RemoveAll only with Quiesced, else invalid_request (architecture §6.3)
 //	forget      10m      ForgetRequest     ForgetResult             never --prune; KeepWithin required; DryRun first (architecture §7.3)

@@ -64,6 +64,7 @@ func fixLs() LsResult {
 		},
 		Nodes:     []restic.Node{fixNode()},
 		Truncated: true,
+		Total:     2,
 	}
 }
 

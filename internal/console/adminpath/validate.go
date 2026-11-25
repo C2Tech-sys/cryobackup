@@ -1,6 +1,8 @@
 package adminpath
 
 import (
+	"path"
+
 	"github.com/c2tech-sys/cryobackup/internal/restic"
 )
 
@@ -29,7 +31,8 @@ func (r DeviceRequest) Validate() error {
 func (r InitRequest) Validate() error { return r.DeviceRequest.Validate() }
 
 // Validate checks the device, the snapshot id (hex 8 to 64 digits or "latest"),
-// Dir (absolute, starting with "/") and Limit (0 to MaxLsLimit).
+// Dir (absolute, starting with "/"), Limit (0 to MaxLsLimit) and Offset (0 or
+// more).
 func (r LsRequest) Validate() error {
 	if err := r.DeviceRequest.Validate(); err != nil {
 		return err
@@ -42,6 +45,9 @@ func (r LsRequest) Validate() error {
 	}
 	if r.Limit < 0 || r.Limit > MaxLsLimit {
 		return invalidField("limit")
+	}
+	if r.Offset < 0 {
+		return invalidField("offset")
 	}
 	return nil
 }
@@ -72,17 +78,37 @@ func (r FindRequest) Validate() error {
 	return nil
 }
 
-// Validate checks the device, the snapshot id (optionally with ":<subfolder>")
-// and Path (absolute, starting with "/").
+// Validate checks the device and exactly one of Path and Paths. With Path: the
+// snapshot id (optionally with ":<subfolder>") and Path (absolute, starting
+// with "/"). With Paths: the snapshot id (no subfolder), 1 to MaxDumpPaths
+// paths, each absolute, clean (path.Clean leaves it unchanged, so no ".", ".."
+// or empty component and no trailing "/") and not "/".
 func (r DumpRequest) Validate() error {
 	if err := r.DeviceRequest.Validate(); err != nil {
 		return err
 	}
-	if !validSnapshot(r.SnapshotID, true) {
+	if r.Paths == nil {
+		if !validSnapshot(r.SnapshotID, true) {
+			return invalidField("snapshot_id")
+		}
+		if !validSnapPath(r.Path) {
+			return invalidField("path")
+		}
+		return nil
+	}
+	if r.Path != "" {
+		return invalidField("path")
+	}
+	if !validSnapshot(r.SnapshotID, false) {
 		return invalidField("snapshot_id")
 	}
-	if !validSnapPath(r.Path) {
-		return invalidField("path")
+	if len(r.Paths) == 0 || len(r.Paths) > MaxDumpPaths {
+		return invalidField("paths")
+	}
+	for _, p := range r.Paths {
+		if p == "/" || !validSnapPath(p) || path.Clean(p) != p {
+			return invalidField("paths")
+		}
 	}
 	return nil
 }

@@ -196,6 +196,40 @@ func DumpStdout(snapshotID, path string, c Common) (Command, error) {
 	return Command{Kind: KindDump, Args: c.tail(args)}, nil
 }
 
+// DumpTarStdout builds "dump -a tar SNAPSHOT PATH": a directory as a tar
+// stream on restic's stdout, for the several-paths zip that the maintenance
+// worker builds entry by entry (ADR 0028). Proven for restic 0.19.1 (P22
+// spike, item 6): the tar streams into a pipe, long and non-ASCII names carry
+// PAX records, every entry is named by its full snapshot path without the
+// leading "/", and the dumped directory itself has no entry. The snapshot is a
+// plain id or "latest" (no ":subfolder"), so those names keep that form.
+func DumpTarStdout(snapshotID, path string, c Common) (Command, error) {
+	if err := dumpStreamCheck(snapshotID, path, c); err != nil {
+		return Command{}, err
+	}
+	args := []string{"dump", "-a", "tar", snapshotID, path}
+	return Command{Kind: KindDump, Args: c.tail(args)}, nil
+}
+
+// DumpFileStdout builds "dump SNAPSHOT PATH": one file's raw bytes on restic's
+// stdout (restic 0.19.1 writes no archive for a file, whatever -a says; P22
+// spike, item 6). The snapshot is a plain id or "latest".
+func DumpFileStdout(snapshotID, path string, c Common) (Command, error) {
+	if err := dumpStreamCheck(snapshotID, path, c); err != nil {
+		return Command{}, err
+	}
+	args := []string{"dump", snapshotID, path}
+	return Command{Kind: KindDump, Args: c.tail(args)}, nil
+}
+
+// dumpStreamCheck is dumpCheck without the ":subfolder" snapshot form.
+func dumpStreamCheck(snapshotID, path string, c Common) error {
+	if !validSnapshotRef(snapshotID, false) {
+		return invalid("dump: snapshot id must be hex or latest")
+	}
+	return dumpCheck(snapshotID, path, c)
+}
+
 // dumpCheck is the validation Dump and DumpStdout share.
 func dumpCheck(snapshotID, path string, c Common) error {
 	if err := c.validate(); err != nil {

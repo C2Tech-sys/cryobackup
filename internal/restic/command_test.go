@@ -413,6 +413,23 @@ func TestReadOnlyCommandsGolden(t *testing.T) {
 			"dump to stdout subfolder", func() (Command, error) { return DumpStdout(snapID+":/C/Data", "/", common) }, KindDump,
 			cat([]string{"dump", "-a", "zip", snapID + ":/C/Data", "/"}, tail),
 		},
+		// ADR 0028: the several-paths zip reads a folder as a tar and a file as raw bytes.
+		{
+			"dump tar to stdout", func() (Command, error) { return DumpTarStdout(snapID, "/C/Data/x", Common{}) }, KindDump,
+			[]string{"dump", "-a", "tar", snapID, "/C/Data/x"},
+		},
+		{
+			"dump tar to stdout common", func() (Command, error) { return DumpTarStdout("latest", "/C/Data/x", common) }, KindDump,
+			cat([]string{"dump", "-a", "tar", "latest", "/C/Data/x"}, tail),
+		},
+		{
+			"dump file to stdout", func() (Command, error) { return DumpFileStdout(snapID, "/C/Data/x.txt", Common{}) }, KindDump,
+			[]string{"dump", snapID, "/C/Data/x.txt"},
+		},
+		{
+			"dump file to stdout common", func() (Command, error) { return DumpFileStdout(snapID, "/C/Data/x.txt", common) }, KindDump,
+			cat([]string{"dump", snapID, "/C/Data/x.txt"}, tail),
+		},
 		{"unlock", func() (Command, error) { return Unlock(false, Common{}) }, KindUnlock, []string{"unlock"}},
 		{"unlock remove-all", func() (Command, error) { return Unlock(true, common) }, KindUnlock, cat([]string{"unlock", "--remove-all"}, tail)},
 		{"cat config", func() (Command, error) { return CatConfig(Common{}) }, KindCatConfig, []string{"cat", "config"}},
@@ -454,6 +471,15 @@ func TestReadOnlyCommandsErrors(t *testing.T) {
 		{"dump to stdout bad snapshot", func() (Command, error) { return DumpStdout("--target=/etc/x", "/x", Common{}) }},
 		{"dump to stdout bad common", func() (Command, error) { return DumpStdout(snapID, "/x", Common{RetryLock: -1}) }},
 		{"snapshots host with newline", func() (Command, error) { return Snapshots("a\nb", Common{}) }},
+		{"dump tar relative path", func() (Command, error) { return DumpTarStdout(snapID, "x", Common{}) }},
+		{"dump tar subfolder snapshot", func() (Command, error) { return DumpTarStdout(snapID+":/C/Data", "/", Common{}) }},
+		{"dump tar flag-like snapshot", func() (Command, error) { return DumpTarStdout("--target=/etc/x", "/x", Common{}) }},
+		{"dump tar control char", func() (Command, error) { return DumpTarStdout(snapID, "/x\ny", Common{}) }},
+		{"dump tar bad common", func() (Command, error) { return DumpTarStdout(snapID, "/x", Common{RetryLock: -1}) }},
+		{"dump file relative path", func() (Command, error) { return DumpFileStdout(snapID, "x", Common{}) }},
+		{"dump file subfolder snapshot", func() (Command, error) { return DumpFileStdout(snapID+":/C", "/x", Common{}) }},
+		{"dump file empty path", func() (Command, error) { return DumpFileStdout(snapID, "", Common{}) }},
+		{"dump file bad common", func() (Command, error) { return DumpFileStdout(snapID, "/x", Common{LimitUpload: -1}) }},
 		{"unlock bad common", func() (Command, error) { return Unlock(false, Common{RetryLock: -1}) }},
 		{"cat config bad common", func() (Command, error) { return CatConfig(Common{LimitUpload: -1}) }},
 	}
@@ -595,6 +621,8 @@ func TestExtraRejectsForbiddenFlags(t *testing.T) {
 		"find":      func(c Common) (Command, error) { return Find(FindOptions{Common: c, Pattern: "p"}) },
 		"dump":      func(c Common) (Command, error) { return Dump(snapID, "/p", "t", c) },
 		"dump out":  func(c Common) (Command, error) { return DumpStdout(snapID, "/p", c) },
+		"dump tar":  func(c Common) (Command, error) { return DumpTarStdout(snapID, "/p", c) },
+		"dump file": func(c Common) (Command, error) { return DumpFileStdout(snapID, "/p", c) },
 		"unlock":    func(c Common) (Command, error) { return Unlock(false, c) },
 		"cat":       func(c Common) (Command, error) { return CatConfig(c) },
 		"stats":     func(c Common) (Command, error) { return Stats(StatsRawData, "", c) },

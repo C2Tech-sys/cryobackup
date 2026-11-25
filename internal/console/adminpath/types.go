@@ -3,6 +3,7 @@ package adminpath
 import (
 	"context"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/restic"
@@ -50,6 +51,10 @@ const (
 	// FindRequest.Limit is zero; MaxFindLimit is the largest Limit allowed.
 	DefaultFindLimit = 1000
 	MaxFindLimit     = 10000
+	// MaxDumpPaths is the most paths one DumpRequest.Paths may name (ADR
+	// 0028): each is its own restic run, and with --no-cache each run loads
+	// the repository index again, so the cap bounds the cost of one download.
+	MaxDumpPaths = 50
 )
 
 // Backend is the maintenance worker's side of the admin path (architecture DH1,
@@ -99,12 +104,15 @@ type Backend interface {
 	Find(ctx context.Context, req FindRequest) ([]restic.FindResult, error)
 	// Snapshots lists the snapshots of a device repository.
 	Snapshots(ctx context.Context, req DeviceRequest) ([]restic.Snapshot, error)
-	// Dump streams one path of a snapshot as a zip archive into w (ADR 0008):
-	// restore bytes travel only over the socket, never to a disk on either
-	// side. A directory is restic's own `dump -a zip`; a single file is wrapped
-	// into a one-entry zip on the fly. The implementation writes nothing but
-	// the archive into w and stops (cancelling restic) as soon as a write to w
-	// fails. Bytes and SHA256 of the result may be left zero: Handler and
+	// Dump streams snapshot paths as one zip archive into w (ADR 0008, ADR
+	// 0028): restore bytes travel only over the socket, never to a disk on
+	// either side. With Path, a directory is restic's own `dump -a zip` and a
+	// single file is wrapped into a one-entry zip on the fly. With Paths, every
+	// selected file and folder becomes entries of one zip, named relative to
+	// the selected item's parent, and the zip's central directory is written
+	// only after every restic run exited 0. The implementation writes nothing
+	// but the archive into w and stops (cancelling restic) as soon as a write
+	// to w fails. Bytes and SHA256 of the result may be left zero: Handler and
 	// Client count and hash what actually crossed the socket.
 	Dump(ctx context.Context, req DumpRequest, w io.Writer) (DumpResult, error)
 	// Stats runs restic stats in the requested mode (architecture §7.3 step 8).
@@ -206,17 +214,29 @@ type LsRequest struct {
 	// Limit caps the nodes returned: 0 means DefaultLsLimit, the maximum is
 	// MaxLsLimit.
 	Limit int `json:"limit,omitempty"`
+	// Offset skips that many children before the returned window: a page of
+	// a large folder is Offset n*Limit, Limit L. restic has no paging, so the
+	// worker reads the whole listing on every call and keeps only the window.
+	// 0 or more.
+	Offset int `json:"offset,omitempty"`
 }
 
-// LsResult is one directory level.
+// LsResult is one directory level, or one window of it (LsRequest.Offset and
+// Limit). Nodes come in restic's order, which for one snapshot is the same on
+// every call (the order of the folder's tree, sorted by name), so consecutive
+// windows neither repeat nor skip a child.
 //
 // PATH-BEARING: Snapshot and Nodes carry file names; never log them.
 type LsResult struct {
 	ResultMeta
 	Snapshot restic.LsSnapshot `json:"snapshot"`
 	Nodes    []restic.Node     `json:"nodes"`
-	// Truncated is set when the listing was cut at the limit.
+	// Truncated is set when children follow the returned window (the listing
+	// was cut at the limit).
 	Truncated bool `json:"truncated"`
+	// Total is the number of children of Dir, whatever the window. A worker
+	// that predates paging (P22) leaves it 0.
+	Total int `json:"total"`
 }
 
 // FindRequest searches snapshots for a name pattern.
@@ -234,15 +254,53 @@ type FindRequest struct {
 	Limit int `json:"limit,omitempty"`
 }
 
-// DumpRequest asks for one snapshot path as a zip stream (ADR 0008).
+// DumpRequest asks for one snapshot path (Path) or several (Paths) as one zip
+// stream (ADR 0008, ADR 0028). Exactly one of Path and Paths is set.
 type DumpRequest struct {
 	DeviceRequest
-	// SnapshotID is a hex id or "latest", optionally followed by ":<subfolder>".
+	// SnapshotID is a hex id or "latest", optionally followed by
+	// ":<subfolder>" with Path; with Paths it is a hex id or "latest" only.
 	SnapshotID string `json:"snapshot_id"`
 	// Path is an absolute snapshot path starting with "/": a file or a
-	// directory. One path per call (architecture DH27). PATH-BEARING: never
-	// log it.
-	Path string `json:"path"`
+	// directory (architecture DH27). PATH-BEARING: never log it.
+	Path string `json:"path,omitempty"`
+	// Paths are 1 to MaxDumpPaths absolute, clean snapshot paths, files or
+	// folders, never "/" (ADR 0028). A path inside another selected folder is
+	// dropped, because the folder holds it (CollapsePaths); the rest are
+	// streamed in the order given. Each selected item is a top-level entry of
+	// the zip named by its base name (a repeated name gets " (2)", " (3)", ...),
+	// a folder's contents are named relative to the folder's parent, and
+	// symlinks, junctions and devices are left out and counted in a final
+	// CRYOBACKUP-SKIPPED.txt entry that names no file. PATH-BEARING: never log
+	// them.
+	Paths []string `json:"paths,omitempty"`
+}
+
+// CollapsePaths returns paths without duplicates and without any path that
+// lies inside another of them (the outer folder already holds it), in the
+// order given. Paths are compared byte for byte: callers pass clean absolute
+// snapshot paths (DumpRequest.Validate requires them).
+func CollapsePaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for i, p := range paths {
+		if seen[p] {
+			continue
+		}
+		inner := false
+		for j, q := range paths {
+			if j != i && q != p && (q == "/" || strings.HasPrefix(p, q+"/")) {
+				inner = true
+				break
+			}
+		}
+		if inner {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // DumpResult describes the archive that was streamed. It is known only once
