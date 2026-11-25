@@ -98,6 +98,27 @@ type Config struct {
 	Bucket string
 	// Prefix is the key prefix inside the bucket; empty means the bucket root.
 	Prefix string
+	// SelfPrefix is the key prefix of the console's own self-backup repository
+	// (CRYO_MAINTAIN_SELF_PREFIX, ADR 0029): rclone:<Remote>:<Bucket>/<SelfPrefix>,
+	// written through the admin remote, never through the gateway. Empty: the
+	// self-backup does not run and its job row says not_configured (loud: C11
+	// then reports that no self-backup was ever written). A value that equals,
+	// lies inside or begins with Prefix, contains Prefix, or is set while Prefix
+	// is empty is refused (checkSelfPrefix).
+	SelfPrefix string
+	// StateDir is the console's state directory (config.json data_dir, else the
+	// database's directory; default: the directory of the store's file). The
+	// self-backup stages its copy in StateDir/self-backup-staging and restores
+	// its weekly test into StateDir/self-backup-verify, both 0700, swept at the
+	// start of every run and deleted at its end. It must be absolute.
+	StateDir string
+	// ConfigFile is the console config.json the self-backup copies beside the
+	// database. It holds paths and settings, and it can hold one credential: the
+	// heartbeat monitor URL (healthcheck_ping.url) often carries its token in the
+	// URL. It is copied on purpose: the snapshot is encrypted by restic, and a
+	// bare-host restore needs the whole file back. Empty: none is copied, and the
+	// manifest says so.
+	ConfigFile string
 	// StorageHost is the host of the storage endpoint (CRYO_MAINTAIN_STORAGE_HOST,
 	// else the endpoint of the Remote section of the rclone.conf the worker runs
 	// against; see resolveStorageHost). It is used for logs
@@ -135,7 +156,11 @@ type Config struct {
 	// keep slots while downloads run (a download holds its slot for as long as
 	// the browser takes). A stream over the budget is refused at once with
 	// adminpath.CodeBusy, never queued. Zero takes the default, lowered to
-	// MaxConcurrent-1 when MaxConcurrent is below 3.
+	// MaxConcurrent-1 when MaxConcurrent is below 3. The self-backup, the other
+	// long holder of a slot, keeps the same promise: it runs only while
+	// MaxConcurrent-MaxStreams leaves a slot for it and one more for the device
+	// maintenance (selfSlotRoom); with MaxStreams at MaxConcurrent-1 it does not
+	// run and its job row says no_slot.
 	MaxStreams int
 	// UsageInterval is how often step 8 (usage refresh) samples a device
 	// (default 6h). usage_samples keeps one row per hour bucket.
@@ -220,7 +245,92 @@ func (c Config) withDefaults() (Config, error) {
 	if c.ResticSHA256 != "" && !isHex(c.ResticSHA256, 64) {
 		return c, cfgErr("ResticSHA256 must be 64 hex digits")
 	}
+	if c.StateDir != "" && !filepath.IsAbs(c.StateDir) {
+		return c, fmt.Errorf("%w: %w", errConfig, errStateDir)
+	}
+	c.SelfPrefix = strings.Trim(c.SelfPrefix, "/")
+	if c.SelfPrefix != "" {
+		if err := checkSelfPrefix(c.Prefix, c.SelfPrefix); err != nil {
+			return c, err
+		}
+	}
 	return c, nil
+}
+
+// checkSelfPrefix is the rule for the self-backup prefix (ticket P22-C, spike
+// P22-S1 item 8.2). The gateway credential's IAM policy is scoped to the device
+// prefix, and a policy resource written "<bucket>/<prefix>*" (no slash) matches
+// every key that merely begins with the prefix, "<prefix>-console/..." included.
+// So with device prefix "cb" the self prefix is refused when it is "cb", inside
+// it ("cb/x"), or a string extension of it ("cb-console", "cbx"): the gateway
+// could then read or overwrite the console's own backup. With an empty device
+// prefix (bucket root) every self prefix is inside the device area: refused.
+// A self prefix that contains the device prefix ("a" with device "a/b") is
+// refused too: the device repositories would sit inside the self-backup
+// repository. Each segment must be letters, digits, '.', '_' or '-' (the
+// alphabet restic.AdminRepository accepts), never "." or "..".
+// Both prefixes are compared without their leading and trailing slashes.
+func checkSelfPrefix(devicePrefix, selfPrefix string) error {
+	d := strings.Trim(devicePrefix, "/")
+	s := strings.Trim(selfPrefix, "/")
+	var why error
+	for _, seg := range strings.Split(s, "/") {
+		if !validPrefixSegment(seg) {
+			why = errSelfPrefixForm
+		}
+	}
+	switch {
+	case why != nil:
+	case d == "":
+		why = errSelfPrefixRoot
+	case strings.HasPrefix(s, d):
+		why = errSelfPrefixGateway
+	case strings.HasPrefix(d, s+"/"):
+		why = errSelfPrefixContains
+	default:
+		return nil
+	}
+	return fmt.Errorf("%w: %w", errConfig, why)
+}
+
+// The configuration errors of the self-backup settings. Each is a fixed
+// sentence (no value, no path) that Run prints as it is (configText): the
+// prefix refusals name the IAM reason, so the operator knows why.
+var (
+	errSelfPrefixGateway = errors.New("CRYO_MAINTAIN_SELF_PREFIX must not equal, lie inside or begin with CRYO_MAINTAIN_PREFIX: " +
+		"the gateway credential's IAM policy covers <prefix>/* and, when written <prefix>* without the slash, also <prefix>-console, " +
+		"so the gateway could read or overwrite the console's self-backup; choose a prefix that does not begin with the device prefix")
+	errSelfPrefixRoot = errors.New("CRYO_MAINTAIN_SELF_PREFIX is set while CRYO_MAINTAIN_PREFIX is empty: with the device repositories at the bucket root " +
+		"the gateway credential's IAM policy covers the whole bucket and every self-backup prefix is inside it; " +
+		"device repositories must live under a prefix for self-backup to be safe")
+	errSelfPrefixContains = errors.New("CRYO_MAINTAIN_SELF_PREFIX must not contain CRYO_MAINTAIN_PREFIX: the device repositories would sit inside the self-backup repository")
+	errSelfPrefixForm     = errors.New("CRYO_MAINTAIN_SELF_PREFIX must be one or more segments of letters, digits, '.', '_' or '-' separated by '/' (no '.' or '..' segment)")
+	errStateDir           = errors.New("the console state directory (config.json data_dir or CRYO_DATA_DIR) must be an absolute path")
+)
+
+// configText is the line Run prints for a configuration error: the
+// self-backup sentence when it is one of those, classText otherwise.
+func configText(err error) string {
+	for _, e := range []error{errSelfPrefixGateway, errSelfPrefixRoot, errSelfPrefixContains, errSelfPrefixForm, errStateDir} {
+		if errors.Is(err, e) {
+			return "maintain: invalid configuration: " + e.Error()
+		}
+	}
+	return classText(err)
+}
+
+// validPrefixSegment: 1 to 64 of [A-Za-z0-9._-], not "." or "..".
+func validPrefixSegment(seg string) bool {
+	if seg == "" || seg == "." || seg == ".." || len(seg) > 64 {
+		return false
+	}
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // topLevel reports whether the absolute path p is a filesystem root ("/",

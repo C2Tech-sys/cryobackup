@@ -77,7 +77,7 @@ Files in `/etc/cryobackup` (all mode 0640 or 0400, group `cryobackup`; none is c
 | `rclone-gateway.conf`, `rclone-admin.conf` | the two rclone files; **both remotes need `no_check_bucket`**, see "The two rclone files" below |
 | `tls/agent.crt`, `tls/agent.key`, `tls/gateway.crt`, `tls/gateway.key` | see [`../rclone/tls.md`](../rclone/tls.md) |
 | `gateway.env` | `GATEWAY_PORT=9443`, `BUCKET=<bucket>`, `PREFIX=<prefix>` |
-| `maintain.env` | `CRYO_MAINTAIN_BUCKET=<bucket>`, `CRYO_MAINTAIN_PREFIX=<prefix>`, optionally `CRYO_MAINTAIN_RESTIC_SHA256=<sha256 of the restic binary>` and `CRYO_MAINTAIN_MAX_STREAMS=<1..3>` |
+| `maintain.env` | `CRYO_MAINTAIN_BUCKET=<bucket>`, `CRYO_MAINTAIN_PREFIX=<prefix>`, `CRYO_MAINTAIN_SELF_PREFIX=<self-backup prefix, not beginning with <prefix>>`, optionally `CRYO_MAINTAIN_RESTIC_SHA256=<sha256 of the restic binary>` and `CRYO_MAINTAIN_MAX_STREAMS=<1..3>` |
 
 ### The two rclone files
 

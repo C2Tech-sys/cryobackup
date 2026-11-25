@@ -171,6 +171,11 @@ services:
       CRYO_MAINTAIN_REMOTE: admin
       CRYO_MAINTAIN_BUCKET: ${BUCKET:?set BUCKET in .env}
       CRYO_MAINTAIN_PREFIX: ${PREFIX:-}
+      # Console self-backup (ADR 0029): a prefix in the same bucket that does NOT begin with
+      # PREFIX (the gateway credential's IAM reach); it stages its copy under data_dir (/data).
+      # Set it in .env (empty there means no self-backup, and the db-self-backup job row says
+      # not_configured: C11 alarms).
+      CRYO_MAINTAIN_SELF_PREFIX: ${CRYO_MAINTAIN_SELF_PREFIX:-}
       CRYO_MAINTAIN_SCRATCH_DIR: /tmp/cryo-maintain
     user: "10001:10001"
     restart: unless-stopped

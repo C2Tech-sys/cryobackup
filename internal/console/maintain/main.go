@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -61,8 +62,17 @@ var DefaultKeyUnwrapper KeyUnwrapperFactory
 //	CRYO_MAINTAIN_SCRATCH_DIR                            in-memory temp space, a tmpfs (default /tmp/cryo-maintain, ADR 0008);
 //	                                                     refused when it is a filesystem root, a top-level directory, not owned by the worker's user,
 //	                                                     or has a symlink in its path (/var/run/...: use /run/...)
-//	CRYO_MAINTAIN_MAX_STREAMS                            concurrent restore download streams, fleet wide (default 2, below the 4 restic slots)
+//	CRYO_MAINTAIN_MAX_STREAMS                            concurrent restore download streams, fleet wide (default 2, below the 4 restic slots;
+//	                                                     at 3 the self-backup has no slot and records no_slot)
+//	CRYO_MAINTAIN_SELF_PREFIX                            the console self-backup's prefix in the same bucket (ADR 0029); unset: no
+//	                                                     self-backup, job row db-self-backup says not_configured. Refused when it
+//	                                                     equals, lies inside or begins with CRYO_MAINTAIN_PREFIX (the gateway's
+//	                                                     IAM reach), or while CRYO_MAINTAIN_PREFIX is empty
 //	RCLONE_CONFIG                                       the mounted rclone.conf holding the admin credential
+//
+// The self-backup also reads data_dir (CRYO_DATA_DIR) from the config file: its
+// staging and verify folders go there (default: the database's directory), and
+// it copies the config file itself into each snapshot.
 func Main(args []string) int {
 	return Run(args, os.Stdout, os.Stderr, DefaultKeyUnwrapper)
 }
@@ -140,6 +150,13 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 		}
 		maxStreams = n
 	}
+	stateDir := fc.DataDir
+	if stateDir == "" {
+		stateDir = filepath.Dir(fc.DBPath)
+	}
+	if abs, err := filepath.Abs(stateDir); err == nil {
+		stateDir = abs
+	}
 	cfg := Config{
 		SocketPath:    fc.AdminpathSocket,
 		ResticProgram: os.Getenv("CRYO_MAINTAIN_RESTIC"),
@@ -148,6 +165,9 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 		Remote:        os.Getenv("CRYO_MAINTAIN_REMOTE"),
 		Bucket:        os.Getenv("CRYO_MAINTAIN_BUCKET"),
 		Prefix:        os.Getenv("CRYO_MAINTAIN_PREFIX"),
+		SelfPrefix:    os.Getenv("CRYO_MAINTAIN_SELF_PREFIX"),
+		StateDir:      stateDir,
+		ConfigFile:    fc.path,
 		StorageHost:   os.Getenv("CRYO_MAINTAIN_STORAGE_HOST"),
 		RcloneConfig:  os.Getenv("RCLONE_CONFIG"),
 		ScratchDir:    os.Getenv("CRYO_MAINTAIN_SCRATCH_DIR"),
@@ -168,7 +188,7 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 	w, err := New(cfg, st, kw, nil)
 	switch {
 	case errors.Is(err, errConfig):
-		fmt.Fprintln(stderr, classText(err))
+		fmt.Fprintln(stderr, configText(err))
 		return ExitUsage
 	case errors.Is(err, ErrResticBinary), errors.Is(err, ErrResticVersion):
 		fmt.Fprintln(stderr, classText(err))
@@ -178,11 +198,25 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 		return ExitFailed
 	}
 
+	if w.selfKeys == nil && cfg.SelfPrefix != "" {
+		// The console's unwrapper does not derive the self-backup key itself:
+		// load it from the same master key file (escrow.LoadMasterKey).
+		sk, err := NewSelfBackupKeys(fc.MasterKeyPath)
+		if err != nil {
+			fmt.Fprintln(stderr, "maintain: the master key could not be loaded")
+			return ExitFailed
+		}
+		w.selfKeys = sk
+	}
+
 	if *once {
 		rep, err := w.RunOnce(ctx)
 		fmt.Fprintf(stdout, "maintain: considered=%d sampled=%d preflight=%d deferred=%d unlocked=%d failed=%d m5_due=%d skipped=%t\n",
 			rep.Considered, rep.Sampled, rep.Preflight, rep.Deferred, rep.Unlocked, rep.Failed, rep.M5Due, rep.Skipped)
-		if err != nil || rep.Failed > 0 {
+		sb, serr := w.SelfBackupStep(ctx)
+		fmt.Fprintf(stdout, "maintain: self-backup %s\n", selfBackupLine(sb))
+		selfFailed := serr != nil || sb.NoSlot || sb.BackupRan && !sb.BackupOK || sb.VerifyRan && !(sb.VerifyVerdict && sb.VerifyOK)
+		if err != nil || rep.Failed > 0 || selfFailed {
 			return ExitFailed
 		}
 		return ExitOK
@@ -225,6 +259,50 @@ type fileConfig struct {
 	DBPath          string `json:"db_path"`
 	MasterKeyPath   string `json:"master_key_path"`
 	AdminpathSocket string `json:"adminpath_socket"`
+	// DataDir is the console's state directory: the self-backup stages there.
+	DataDir string `json:"data_dir"`
+	// path is the config file that was read ("" when none was): the
+	// self-backup copies it into each snapshot.
+	path string
+}
+
+// selfBackupLine is the --once summary of a self-backup step: words and
+// classes only.
+func selfBackupLine(r SelfBackupReport) string {
+	switch {
+	case r.Skipped:
+		return "skipped"
+	case r.NothingDue:
+		return "nothing_due"
+	case r.NotConfigured:
+		return "not_configured"
+	case r.NoSlot:
+		return "no_slot"
+	}
+	out := "backup="
+	switch {
+	case !r.BackupRan:
+		out += "not_due"
+	case r.BackupOK:
+		out += "ok"
+	default:
+		out += "error:" + r.BackupClass
+	}
+	out += " verify="
+	switch {
+	case !r.VerifyRan:
+		out += "not_due"
+	case r.VerifyVerdict && r.VerifyOK:
+		out += "ok"
+	case r.VerifyVerdict:
+		out += "failed:" + r.VerifyClass
+	default:
+		out += "inconclusive:" + r.VerifyClass
+	}
+	if r.LeaseLost {
+		out += " lease_lost"
+	}
+	return out
 }
 
 // loadFileConfig reads the config file (when it exists, or when --config named
@@ -246,6 +324,9 @@ func loadFileConfig(path string) (fileConfig, error) {
 		if err := json.Unmarshal(data, &fc); err != nil {
 			return fc, errConfigJSON
 		}
+		if abs, aerr := filepath.Abs(path); aerr == nil {
+			fc.path = abs
+		}
 	case errors.Is(err, os.ErrNotExist) && !explicit:
 		// no file: the environment may carry everything
 	default:
@@ -259,5 +340,6 @@ func loadFileConfig(path string) (fileConfig, error) {
 	override(&fc.DBPath, "CRYO_DB_PATH")
 	override(&fc.MasterKeyPath, "CRYO_MASTER_KEY_PATH")
 	override(&fc.AdminpathSocket, "CRYO_ADMINPATH_SOCKET")
+	override(&fc.DataDir, "CRYO_DATA_DIR")
 	return fc, nil
 }
