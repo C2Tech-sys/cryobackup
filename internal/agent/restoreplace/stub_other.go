@@ -20,8 +20,11 @@ func OpenRoot(string, Options) (*Root, error) { return nil, ErrUnsupported }
 // VerifyRoot refuses: device restore is Windows only.
 func VerifyRoot(string, Options) (*Root, error) { return nil, ErrUnsupported }
 
-// CreateFresh refuses: device restore is Windows only.
-func CreateFresh(string) error { return ErrUnsupported }
+// MakeChild refuses: device restore is Windows only.
+func (r *Root) MakeChild(...string) (string, error) { return "", ErrUnsupported }
+
+// RemoveChild refuses: device restore is Windows only.
+func (r *Root) RemoveChild(string) (int, error) { return 0, ErrUnsupported }
 
 // RemoveTree refuses: device restore is Windows only.
 func RemoveTree(string) (int, error) { return 0, ErrUnsupported }

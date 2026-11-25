@@ -188,8 +188,14 @@ func (a *Agent) removeSideFolder(id, top string, outcome restic.Outcome, st api.
 	}
 	var links int
 	err := restoreplace.WithPrivileges(func() error {
-		var err error
-		links, err = restoreplace.RemoveTree(top)
+		// Under the side root, re-checked by the root rule and held, the
+		// restore's own folder removed relative to the root's handle.
+		root, err := restoreplace.VerifyRoot(a.sideRoot(), a.placeOptions())
+		if err != nil {
+			return err
+		}
+		defer root.Close()
+		links, err = root.RemoveChild(id)
 		return err
 	})
 	outcome, st = sideRemovedVerdict(outcome, st)
@@ -418,6 +424,7 @@ func (a *Agent) restoreGroups(ctx context.Context, id, snap string, groups []res
 	}
 
 	// 2. The roots, the fresh folders, restic and the placement.
+	var sideRootH *restoreplace.Root
 	if side {
 		r, err := restoreplace.OpenRoot(a.sideRoot(), a.placeOptions())
 		if err != nil {
@@ -426,7 +433,8 @@ func (a *Agent) restoreGroups(ctx context.Context, id, snap string, groups []res
 			return
 		}
 		defer r.Close() // held for the whole restore
-		if err := restoreplace.CreateFresh(sideTop); err != nil {
+		sideRootH = r
+		if _, err := r.MakeChild(id); err != nil {
 			a.log.Error("restore refused: the restore's own side folder already exists or cannot be made", "restore", id, "err", errText(err))
 			out.fatal = api.RestoreResultGuardRefused
 			return
@@ -446,7 +454,7 @@ func (a *Agent) restoreGroups(ctx context.Context, id, snap string, groups []res
 		}
 		var ok bool
 		if side {
-			ok = a.restoreSideGroup(ctx, id, snap, g, files[i], targets[i], out)
+			ok = a.restoreSideGroup(ctx, sideRootH, id, snap, g, files[i], targets[i], out)
 		} else {
 			root := roots[g.letter]
 			if root == nil {
@@ -458,7 +466,7 @@ func (a *Agent) restoreGroups(ctx context.Context, id, snap string, groups []res
 				}
 				roots[g.letter], root = r, r
 			}
-			ok = a.restoreOriginalGroup(ctx, id, snap, g, files[i], targets[i], mode, out)
+			ok = a.restoreOriginalGroup(ctx, root, id, snap, g, files[i], targets[i], mode, out)
 		}
 		if !ok {
 			return
@@ -484,14 +492,20 @@ func (a *Agent) rootRefused(id, which, letter string, err error) {
 // places the files (ADR 0027, "Original location: restore into staging, then
 // place"). The staging folder is removed by the clean-up walk whatever
 // happens. It reports false when the restore must stop (out.fatal is set).
-func (a *Agent) restoreOriginalGroup(ctx context.Context, id, snap string, g restoreGroup, include, staging string, mode restoreplace.Mode, out *restoreOutcome) bool {
-	if err := restoreplace.CreateFresh(staging); err != nil {
+func (a *Agent) restoreOriginalGroup(ctx context.Context, root *restoreplace.Root, id, snap string, g restoreGroup, include, staging string, mode restoreplace.Mode, out *restoreOutcome) bool {
+	if _, err := root.MakeChild(id); err != nil {
 		a.log.Error("restore refused: the restore's own staging folder already exists or cannot be made", "restore", id, "drive", g.letter, "err", errText(err))
 		out.fatal = api.RestoreResultGuardRefused
 		return false
 	}
 	defer func() {
-		if _, err := restoreplace.RemoveTree(staging); err != nil {
+		// Relative to the held staging root, under the agent's privileges
+		// (fix batch 2, L1).
+		err := restoreplace.WithPrivileges(func() error {
+			_, err := root.RemoveChild(id)
+			return err
+		})
+		if err != nil {
 			a.log.Error("restore staging folder could not be removed; the next agent start removes it", "restore", id, "drive", g.letter, "err", errText(err))
 		}
 	}()
@@ -520,8 +534,8 @@ func (a *Agent) restoreOriginalGroup(ctx context.Context, id, snap string, g res
 // reparse point in it, resets it to inherit from the side folder with the
 // agent's own walk, checks one file and counts what is there (ADR 0027, "Side
 // folder").
-func (a *Agent) restoreSideGroup(ctx context.Context, id, snap string, g restoreGroup, include, target string, out *restoreOutcome) bool {
-	if err := restoreplace.CreateFresh(target); err != nil {
+func (a *Agent) restoreSideGroup(ctx context.Context, root *restoreplace.Root, id, snap string, g restoreGroup, include, target string, out *restoreOutcome) bool {
+	if _, err := root.MakeChild(id, g.key); err != nil {
 		// Two drive segments that differ only in case share one folder name:
 		// the second cannot have a fresh folder, so its items are refused.
 		a.log.Error("restore group refused: its side folder already exists", "restore", id, "drive", g.letter, "err", errText(err))

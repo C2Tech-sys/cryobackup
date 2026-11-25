@@ -343,3 +343,85 @@ func FixedDrives() []string {
 	}
 	return out
 }
+
+// NtCreateFile create options and dispositions used here (winternl.h).
+const (
+	ntOpenReparse = windows.FILE_OPEN_REPARSE_POINT
+	ntBackup      = windows.FILE_OPEN_FOR_BACKUP_INTENT
+	ntSync        = windows.FILE_SYNCHRONOUS_IO_NONALERT
+	ntDirectory   = windows.FILE_DIRECTORY_FILE
+	ntDispOpen    = windows.FILE_OPEN
+	ntDispCreate  = windows.FILE_CREATE
+	ntBaseOptions = ntOpenReparse | ntBackup | ntSync
+	objCaseInsens = windows.OBJ_CASE_INSENSITIVE
+)
+
+// ntAt opens (or, with disposition FILE_CREATE, creates) the single name
+// relative to the folder handle dir (OBJECT_ATTRIBUTES.RootDirectory), never
+// by a full path and never following a reparse point on the name
+// (FILE_OPEN_REPARSE_POINT). The held parent is the folder the name is
+// looked up in, whatever its path has become meanwhile (fix batch 2, H1:
+// ADR 0027 "No placement step reopens a file or folder by name"). A created
+// object gets no security descriptor of its own: it inherits from dir. NT
+// status codes come back as their Win32 errors, so notFound and existsErr
+// work on them.
+func ntAt(dir windows.Handle, name string, access, share, disposition, options uint32) (windows.Handle, error) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/`) {
+		return windows.InvalidHandle, windows.ERROR_INVALID_NAME
+	}
+	us, err := windows.NewNTUnicodeString(name)
+	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	oa := windows.OBJECT_ATTRIBUTES{RootDirectory: dir, ObjectName: us, Attributes: objCaseInsens}
+	oa.Length = uint32(unsafe.Sizeof(oa))
+	var iosb windows.IO_STATUS_BLOCK
+	var h windows.Handle
+	err = windows.NtCreateFile(&h, access|windows.SYNCHRONIZE, &oa, &iosb, nil, 0, share, disposition, options|ntBaseOptions, 0, 0)
+	if err != nil {
+		var st windows.NTStatus
+		if errors.As(err, &st) {
+			return windows.InvalidHandle, st.Errno()
+		}
+		return windows.InvalidHandle, err
+	}
+	return h, nil
+}
+
+// openAt opens an existing name relative to dir (ntAt with FILE_OPEN).
+func openAt(dir windows.Handle, name string, access, share uint32) (windows.Handle, error) {
+	return ntAt(dir, name, access, share, ntDispOpen, 0)
+}
+
+// createDirAt creates the folder name relative to dir and returns it open with
+// access (one call: no window between the creation and the open).
+func createDirAt(dir windows.Handle, name string, access, share uint32) (windows.Handle, error) {
+	return ntAt(dir, name, access, share, ntDispCreate, ntDirectory)
+}
+
+// finalPath is the object's full normalized path below its volume, read
+// through the handle ("\Users\x\Documents"): long names, as the object is
+// reached now.
+func finalPath(h windows.Handle) (string, error) {
+	buf := make([]uint16, 512)
+	for {
+		n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), fileNameNormalized|volumeNameNone)
+		if err != nil {
+			return "", err
+		}
+		if int(n) < len(buf) {
+			return windows.UTF16ToString(buf[:n]), nil
+		}
+		buf = make([]uint16, n+1)
+	}
+}
+
+// chainOK is the defence in depth of fix batch 2: the child's final path,
+// read through its own handle, must be exactly the parent's final path plus
+// the expected name (case-sensitive, as the name rule). An 8.3 or otherwise
+// inexact match, or a child reached through anything but the held parent,
+// fails it.
+func chainOK(child windows.Handle, parentPath, name string) bool {
+	got, err := finalPath(child)
+	return err == nil && got == strings.TrimRight(parentPath, `\`)+`\`+name
+}

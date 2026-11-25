@@ -185,21 +185,61 @@ func grantsOnly(dacl *windows.ACL, lab *windows.SID) bool {
 	return true
 }
 
-// CreateFresh creates one folder that must not exist yet: a restore's own
-// <restore id> folder, or the side folder's <L> folder (ADR 0027: created
-// fresh; if it already exists, the restore is refused). It inherits from its
-// parent, which is a held root or a folder created the same way. Anything at
-// the name, a reparse point included, is ErrExists.
-func CreateFresh(path string) error {
-	p, err := u16(longPath(path))
-	if err != nil {
-		return err
+// MakeChild creates the folder names[len-1] fresh below the held root, after
+// opening each earlier name relative to its held parent (never by a full
+// path, fix batch 2): a restore's own <restore id> folder (names = id) or the
+// side folder's <L> folder (names = id, L). ADR 0027: created fresh; if it
+// already exists, the restore is refused, so anything at the name, a reparse
+// point included, is ErrExists. The new folder inherits from its parent. It
+// returns the folder's path (for restic's --target).
+func (r *Root) MakeChild(names ...string) (string, error) {
+	if len(names) == 0 {
+		return "", ErrExists
 	}
-	err = windows.CreateDirectory(p, nil)
-	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
-		return ErrExists
+	parent := r.h
+	path := r.path
+	for i, n := range names {
+		path = join(path, n)
+		if i == len(names)-1 {
+			h, err := createDirAt(parent, n, holdAccess, shareRW)
+			if parent != r.h {
+				_ = windows.CloseHandle(parent)
+			}
+			if existsErr(err) {
+				return "", ErrExists
+			}
+			if err != nil {
+				return "", err
+			}
+			_ = windows.CloseHandle(h)
+			return path, nil
+		}
+		h, err := openAt(parent, n, holdAccess, shareRW)
+		if parent != r.h {
+			_ = windows.CloseHandle(parent)
+		}
+		if err != nil {
+			return "", err
+		}
+		if ti, err := tagOf(h); err != nil || ti.reparse() || !ti.dir() {
+			_ = windows.CloseHandle(h)
+			return "", errNotRealDir
+		}
+		parent = h
 	}
-	return err
+	return path, nil
+}
+
+// RemoveChild removes the entry name below the held root (and everything
+// below it) with the clean-up walk, opened relative to the root's handle. A
+// missing name is not an error. It returns the reparse points deleted.
+func (r *Root) RemoveChild(name string) (int, error) {
+	links := 0
+	err := removeAt(r.h, name, &links)
+	if notFound(err) {
+		err = nil
+	}
+	return links, err
 }
 
 // Children lists the names directly under the held root, through its handle.

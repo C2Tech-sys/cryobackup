@@ -478,7 +478,7 @@ func TestResetInheritNeverFollows(t *testing.T) {
 	}
 	defer root.Close()
 	side := filepath.Join(root.Path(), "01JB0000000000000000000R01")
-	if err := CreateFresh(side); err != nil {
+	if _, err := root.MakeChild(filepath.Base(side)); err != nil {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(base, "outside")
@@ -556,11 +556,11 @@ func TestRootRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CreateFresh(filepath.Join(good, "id1")); err != nil {
+	if _, err := r.MakeChild("id1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := CreateFresh(filepath.Join(good, "id1")); !errors.Is(err, ErrExists) {
-		t.Fatalf("second CreateFresh = %v, want ErrExists", err)
+	if _, err := r.MakeChild("id1"); !errors.Is(err, ErrExists) {
+		t.Fatalf("second MakeChild = %v, want ErrExists", err)
 	}
 	// The held root cannot be renamed.
 	if err := os.Rename(good, good+"-x"); err == nil {

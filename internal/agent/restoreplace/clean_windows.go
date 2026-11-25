@@ -8,29 +8,50 @@ import (
 
 // The clean-up walk (ADR 0027, "The clean-up walk"): every removal the agent
 // makes - staging at the end of a restore, the start-up sweep, the links in the
-// side folder - is this walk. It opens each entry with
-// FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, deletes a reparse
-// point itself through that handle, and never descends through one
-// (p22-spike.md:548-553). os.RemoveAll is not used. Each folder is held, with
-// a data right and without FILE_SHARE_DELETE, while its entries are removed,
-// so no ancestor can be renamed under the walk; the folder is then deleted
-// through the same handle.
+// side folder, a side folder that did not succeed - is this walk. Each entry is
+// opened relative to its held parent handle with FILE_OPEN_REPARSE_POINT and
+// backup intent (ntAt; never by a full path, fix batch 2, M1), a reparse point
+// is deleted itself through that handle and never descended into
+// (p22-spike.md:548-553). os.RemoveAll is not used. Each folder is held, with a
+// data right and without FILE_SHARE_DELETE, while its entries are removed, so
+// no ancestor can be renamed under the walk; the folder is then deleted
+// through the same handle (POSIX semantics where the volume has them).
 
 // walkDirAccess is how the walk opens a folder it will empty and delete.
 const walkDirAccess = holdAccess | windows.DELETE
 
-// openForDelete opens an entry for the walk without following it: with
-// FILE_WRITE_ATTRIBUTES where that is granted (needed to delete a read-only
-// copy), else without; with list rights (a folder), else with the rights a
-// file needs.
+// deleteAccesses are the opens the walk tries for an entry, most rights first:
+// with FILE_WRITE_ATTRIBUTES where granted (needed to delete a read-only
+// copy), else without; with list rights (a folder), else the rights a file
+// needs.
+var deleteAccesses = []uint32{
+	walkDirAccess | windows.FILE_WRITE_ATTRIBUTES,
+	walkDirAccess,
+	windows.DELETE | windows.FILE_READ_ATTRIBUTES | windows.FILE_WRITE_ATTRIBUTES,
+	windows.DELETE | windows.FILE_READ_ATTRIBUTES,
+}
+
+// openForDeleteAt opens name relative to the folder held as parent for the
+// walk.
+func openForDeleteAt(parent windows.Handle, name string) (windows.Handle, error) {
+	var first error
+	for _, access := range deleteAccesses {
+		h, err := openAt(parent, name, access, shareRW)
+		if err == nil {
+			return h, nil
+		}
+		if first == nil || notFound(err) {
+			first = err
+		}
+	}
+	return windows.InvalidHandle, first
+}
+
+// openForDelete opens a top folder by its path for the walk (the only open by
+// path: the top is the agent's own folder under a held root).
 func openForDelete(path string) (windows.Handle, error) {
 	var first error
-	for _, access := range []uint32{
-		walkDirAccess | windows.FILE_WRITE_ATTRIBUTES,
-		walkDirAccess,
-		windows.DELETE | windows.FILE_READ_ATTRIBUTES | windows.FILE_WRITE_ATTRIBUTES | windows.SYNCHRONIZE,
-		windows.DELETE | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE,
-	} {
+	for _, access := range deleteAccesses {
 		h, err := openNoFollow(path, access, shareRW)
 		if err == nil {
 			return h, nil
@@ -47,20 +68,31 @@ func openForDelete(path string) (windows.Handle, error) {
 // path itself may be a reparse point: it is then deleted as a link. A missing
 // path is not an error.
 func RemoveTree(path string) (links int, err error) {
-	err = removeEntry(path, &links)
+	h, err := openForDelete(path)
 	if notFound(err) {
-		err = nil
+		return 0, nil
 	}
+	if err != nil {
+		return 0, err
+	}
+	defer windows.CloseHandle(h)
+	err = removeHeld(h, &links)
 	return links, err
 }
 
-// removeEntry removes one entry (and, for a real folder, its contents).
-func removeEntry(path string, links *int) error {
-	h, err := openForDelete(path)
+// removeAt removes the entry name of the folder held as parent.
+func removeAt(parent windows.Handle, name string, links *int) error {
+	h, err := openForDeleteAt(parent, name)
 	if err != nil {
 		return err
 	}
 	defer windows.CloseHandle(h)
+	return removeHeld(h, links)
+}
+
+// removeHeld removes the open entry h: a reparse point as itself, a real
+// folder after its entries, a file.
+func removeHeld(h windows.Handle, links *int) error {
 	ti, err := tagOf(h)
 	if err != nil {
 		return err
@@ -76,7 +108,7 @@ func removeEntry(path string, links *int) error {
 		}
 		var first error
 		for _, e := range ents {
-			if err := removeEntry(join(path, e.name), links); err != nil && !notFound(err) && first == nil {
+			if err := removeAt(h, e.name, links); err != nil && !notFound(err) && first == nil {
 				first = err
 			}
 		}
@@ -106,25 +138,24 @@ func RemoveReparsePoints(path string) (int, error) {
 		return 0, errNotRealDir
 	}
 	n := 0
-	err = stripLinks(h, path, &n)
+	err = stripLinks(h, &n)
 	return n, err
 }
 
 // stripLinks deletes the reparse points among the entries of the held folder
-// and recurses into its real subfolders.
-func stripLinks(h windows.Handle, path string, n *int) error {
+// and recurses into its real subfolders, every entry opened relative to it.
+func stripLinks(h windows.Handle, n *int) error {
 	ents, err := listDir(h)
 	if err != nil {
 		return err
 	}
 	for _, e := range ents {
-		p := join(path, e.name)
 		if e.attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 && e.attrs&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
 			continue // a plain file: nothing to do (its handle-read tag is checked by every later step)
 		}
-		ch, err := openNoFollow(p, holdAccess|windows.DELETE, shareRW)
+		ch, err := openAt(h, e.name, holdAccess|windows.DELETE, shareRW)
 		if err != nil {
-			ch, err = openNoFollow(p, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, shareRW)
+			ch, err = openAt(h, e.name, windows.DELETE|windows.FILE_READ_ATTRIBUTES, shareRW)
 			if err != nil {
 				return err
 			}
@@ -137,7 +168,7 @@ func stripLinks(h windows.Handle, path string, n *int) error {
 				*n++
 			}
 		case ti.dir():
-			err = stripLinks(ch, p, n)
+			err = stripLinks(ch, n)
 		}
 		_ = windows.CloseHandle(ch)
 		if err != nil {

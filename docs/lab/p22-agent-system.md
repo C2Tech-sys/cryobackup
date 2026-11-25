@@ -54,7 +54,9 @@ $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $cmd
 Register-ScheduledTask -TaskName $TaskName -Action $action -User 'SYSTEM' -RunLevel Highest | Out-Null
 Start-ScheduledTask -TaskName $TaskName
 $t = 0
-do { Start-Sleep -Seconds 2; $t += 2; $info = Get-ScheduledTaskInfo -TaskName $TaskName } while ($info.LastTaskResult -eq 267009 -and $t -lt $WaitMax)
+# 267011 = the task has not run yet, 267009 = it is running: wait through both.
+do { Start-Sleep -Seconds 2; $t += 2; $info = Get-ScheduledTaskInfo -TaskName $TaskName } while (($info.LastTaskResult -eq 267009 -or $info.LastTaskResult -eq 267011) -and $t -lt $WaitMax)
+if ($t -ge $WaitMax) { Write-Output "the task did not finish within $WaitMax s"; Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
 
 # --- scrub --------------------------------------------------------------------
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -68,7 +70,9 @@ if ($ok) { exit 0 } else { exit 1 }
 
 The binary runs every test of the package as SYSTEM: the ordinary ones (they pass the lab trustee, which is then
 SYSTEM's own SID) and the four `TestLabSystem*` tests, which use the production options (no lab trustee) and the
-agent's backup and restore privileges. Their `LAB n` log lines are the evidence for checks 5, 6, 7 and 11.
+agent's backup and restore privileges. The flip regression tests (`TestFlipAttack*`, `TestResetRemovesHardLinks`)
+run as SYSTEM too; for check 10 also run `TestLabSystemFlipProtected` (below), which flips against a target that only
+Administrators may write. Their `LAB n` log lines are the evidence for checks 5, 6, 7 and 11.
 
 ## Checklist (ADR 0027 lab checks 1-11)
 
@@ -86,7 +90,7 @@ otherwise. "Descriptor" means `icacls <path>` output before and after, or `(Get-
 | 7 | Descriptor rule after a move | `TestLabSystemDescriptorRule` (`LAB 7` lines); and one real original restore of a file whose parent hands down an extra ACE | staging's inherited entry gone, the new parent's present; a protected descriptor unchanged |
 | 8 | Destination on another volume, staging on that volume | Back up `E:\data`; delete a file; restore it (original) | `E:\.cryobackup-restore` created with the root descriptor; restic target under it; nothing written to `C:\.cryobackup-restore`; staging removed after |
 | 9 | Free-space refusal, both destinations | Fill `E:` to within 10 MB (a large file); restore a 50 MB file to `E:` (original); then fill `C:` and restore the same to the side folder | FAILED `disk`; `agent.log` line with `needed_bytes` and `free_bytes`; no staging or side root written |
-| 10 | The hold as SYSTEM: another process, as `labuser` and as `labadmin`, cannot rename or remove a held folder; can a held empty folder be turned into a reparse point in place; a hard link to an outside file planted on the restore path is not replaced in replace mode | Start a replace-mode restore of a large selection under `C:\Users\labuser\Documents\big`; while the agent places (watch `agent.log`), as `labuser` and as `labadmin`: `Rename-Item C:\Users\labuser\Documents\big x`, `Remove-Item`; `fsutil reparsepoint` / `mklink /J` on an empty held folder; before the restore, `mklink /H C:\Users\labuser\Documents\big\h.txt C:\p22-outside.txt` | rename and remove refused (in use); the reparse attempt either refused or caught by the re-read (`guard_refused`); `C:\p22-outside.txt` content unchanged (the link is replaced as a directory entry, the outside file keeps its bytes) |
+| 10 | The hold as SYSTEM: another process, as `labuser` and as `labadmin`, cannot rename or remove a held folder; can a held empty folder be turned into a reparse point in place; a hard link to an outside file planted on the restore path is not replaced in replace mode | Start a replace-mode restore of a large selection under `C:\Users\labuser\Documents\big`; while the agent places (watch `agent.log`), as `labuser` and as `labadmin`: `Rename-Item C:\Users\labuser\Documents\big x`, `Remove-Item`; `fsutil reparsepoint` / `mklink /J` on an empty held folder; before the restore, `mklink /H C:\Users\labuser\Documents\big\h.txt C:\p22-outside.txt` | rename and remove refused (in use); the reparse attempt either refused or caught by the re-read (`guard_refused`); `C:\p22-outside.txt` content unchanged (the link is replaced as a directory entry, the outside file keeps its bytes); the flip attack as SYSTEM against a protected target: `TestLabSystemFlipProtected` (a scratch folder with an Administrators-only protected DACL stands in for a system folder) must log `entries_in_target=0`. |
 | 11 | Name-surrogate check on a real symbolic link and a mounted folder; a cloud-file placeholder is not a surrogate | `TestLabSystemSymlink` (`LAB 11`); mount `E:` at `C:\mnt\e` and restore an item under `/C/mnt/e/...` (original); restore a file into a OneDrive folder holding placeholders | symbolic link and mount point refused (`guard_refused`); the placeholder folder is placed into normally |
 
 Also untested in the spike and to be noted here: file symbolic links in a snapshot (`p22-spike.md:387-396`).

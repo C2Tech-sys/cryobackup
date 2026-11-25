@@ -33,8 +33,15 @@ var ErrSideCheck = errors.New("restoreplace: the side folder's check file is not
 // lab trustee (a non-elevated test, which cannot name Administrators) the
 // trustee is the owner instead.
 //
+// Every entry is opened relative to its held parent handle (ntAt), never by a
+// full path (fix batch 2, M1). A file with more than one link is never reset
+// or re-owned: its descriptor is shared with its other names, which may be
+// outside the side folder, so the side folder's link is removed through its
+// handle (the other names keep the file untouched) and counted with links.
+//
 // It returns the path of one file it reset (for CheckInherited), "" when the
-// tree holds no file.
+// tree holds no file; links counts the reparse points and extra hard links it
+// removed (skipped items).
 func ResetInherit(top string, o Options) (checkFile string, links int, err error) {
 	owner, err := sideOwner(o)
 	if err != nil {
@@ -97,7 +104,7 @@ func (r *resetter) dir(h windows.Handle, path string, parentDACL *windows.ACL) e
 		p := join(path, e.name)
 		ch, withOwner := windows.InvalidHandle, false
 		for _, o := range resetOpens {
-			if ch, err = openNoFollow(p, o.access, shareRW); err == nil {
+			if ch, err = openAt(h, e.name, o.access, shareRW); err == nil {
 				withOwner = o.owner
 				break
 			}
@@ -105,7 +112,7 @@ func (r *resetter) dir(h windows.Handle, path string, parentDACL *windows.ACL) e
 		if err != nil {
 			return err
 		}
-		err = r.entry(ch, p, parentDACL, withOwner)
+		err = r.entry(h, e.name, ch, p, parentDACL, withOwner)
 		_ = windows.CloseHandle(ch)
 		if err != nil {
 			return err
@@ -114,7 +121,7 @@ func (r *resetter) dir(h windows.Handle, path string, parentDACL *windows.ACL) e
 	return nil
 }
 
-func (r *resetter) entry(h windows.Handle, path string, parentDACL *windows.ACL, withOwner bool) error {
+func (r *resetter) entry(parent windows.Handle, name string, h windows.Handle, path string, parentDACL *windows.ACL, withOwner bool) error {
 	ti, err := tagOf(h)
 	if err != nil {
 		return err
@@ -125,6 +132,20 @@ func (r *resetter) entry(h windows.Handle, path string, parentDACL *windows.ACL,
 		}
 		r.links++
 		return nil
+	}
+	if !ti.dir() {
+		fi, err := fileInfo(h)
+		if err != nil {
+			return err
+		}
+		if fi.NumberOfLinks > 1 {
+			// Its descriptor is the other names' too: unlink this name only.
+			if err := deleteHandle(h); err != nil {
+				return err
+			}
+			r.links++
+			return nil
+		}
 	}
 	acl := inheritedFrom(parentDACL, ti.dir())
 	sd, err := windows.NewSecurityDescriptor()
@@ -152,7 +173,7 @@ func (r *resetter) entry(h windows.Handle, path string, parentDACL *windows.ACL,
 	if !withOwner {
 		// The new DACL now grants the side folder's trustees full control,
 		// WRITE_OWNER included.
-		if err := r.setOwnerReopened(h, path); err != nil {
+		if err := r.setOwnerReopened(parent, name, h); err != nil {
 			return err
 		}
 	}
@@ -165,18 +186,18 @@ func (r *resetter) entry(h windows.Handle, path string, parentDACL *windows.ACL,
 	return r.dir(h, path, acl)
 }
 
-// setOwnerReopened sets the side owner on the entry held as h, at path,
-// through a second no-follow open that asks for WRITE_OWNER now that the new
-// DACL grants it. Windows offers no handle-based way to add a right to an
-// open file handle (ReOpenFile and DuplicateHandle refuse it), so the entry is
-// opened by name once more; it cannot have been swapped meanwhile, because h
-// holds it without FILE_SHARE_DELETE (no rename, no delete) and every
-// ancestor is held the same way by the walk, and the two handles are compared
-// by volume serial and file id before the owner is written. Only a run whose
-// first open could not get WRITE_OWNER takes this path: as SYSTEM with the
-// restore privilege the first open always has it.
-func (r *resetter) setOwnerReopened(h windows.Handle, path string) error {
-	oh, err := openNoFollow(path, windows.WRITE_OWNER|windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, shareAll)
+// setOwnerReopened sets the side owner on the entry held as h (the entry name
+// of the folder held as parent) through a second no-follow open that asks for
+// WRITE_OWNER now that the new DACL grants it. Windows offers no handle-based
+// way to add a right to an open file handle (ReOpenFile and DuplicateHandle
+// refuse it), so the entry is opened once more, relative to its held parent
+// (never by a full path); it cannot have been swapped meanwhile, because h
+// holds it without FILE_SHARE_DELETE (no rename, no delete), and the two
+// handles are compared by volume serial and file id before the owner is
+// written. Only a run whose first open could not get WRITE_OWNER takes this
+// path: as SYSTEM with the restore privilege the first open always has it.
+func (r *resetter) setOwnerReopened(parent windows.Handle, name string, h windows.Handle) error {
+	oh, err := openAt(parent, name, windows.WRITE_OWNER|windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES, shareAll)
 	if err != nil {
 		return err
 	}
@@ -370,26 +391,25 @@ func CountSide(top string, sel []Rel) (Counts, error) {
 		return c, err
 	}
 	defer windows.CloseHandle(h)
-	err = countSide(h, top, nil, sel, &c)
+	err = countSide(h, nil, sel, &c)
 	return c, err
 }
 
-func countSide(h windows.Handle, path string, rel []string, sel []Rel, c *Counts) error {
+func countSide(h windows.Handle, rel []string, sel []Rel, c *Counts) error {
 	ents, err := listDir(h)
 	if err != nil {
 		return err
 	}
 	for _, e := range ents {
 		childRel := append(append([]string(nil), rel...), e.name)
-		p := join(path, e.name)
 		r, selected := relate(childRel, sel)
 		if r == relNone {
-			c.Add(ClassGuardRefused, countItems(p))
+			c.Add(ClassGuardRefused, countItemsAt(h, e.name))
 			continue
 		}
-		ch, err := openNoFollow(p, holdAccess, shareRW)
+		ch, err := openAt(h, e.name, holdAccess, shareRW)
 		if err != nil {
-			ch, err = openNoFollow(p, windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, shareRW)
+			ch, err = openAt(h, e.name, windows.FILE_READ_ATTRIBUTES, shareRW)
 			if err != nil {
 				c.Add(ClassOther, 1)
 				continue
@@ -405,7 +425,7 @@ func countSide(h windows.Handle, path string, rel []string, sel []Rel, c *Counts
 			if selected {
 				c.Restored++
 			}
-			err = countSide(ch, p, childRel, sel, c)
+			err = countSide(ch, childRel, sel, c)
 		case r == relUnder:
 			c.Restored++
 			if fi, ferr := fileInfo(ch); ferr == nil {

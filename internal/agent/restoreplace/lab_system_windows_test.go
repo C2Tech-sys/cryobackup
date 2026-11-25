@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -165,7 +166,7 @@ func TestLabSystemSideOwner(t *testing.T) {
 	}
 	defer root.Close()
 	side := filepath.Join(root.Path(), "01JB0000000000000000000R01")
-	if err := CreateFresh(side); err != nil {
+	if _, err := root.MakeChild(filepath.Base(side)); err != nil {
 		t.Fatal(err)
 	}
 	f := filepath.Join(side, "C", "Users", "labuser", "doc.txt")
@@ -190,5 +191,42 @@ func TestLabSystemSideOwner(t *testing.T) {
 	t.Logf("LAB 6 side file after the reset: %s", sd.String())
 	if err := CheckInherited(check, Options{}); err != nil || !strings.HasPrefix(sd.String(), "O:BA") {
 		t.Errorf("side owner after the reset: %v %s", err, sd.String())
+	}
+}
+
+// Check 10 (fix batch 2): the flip attack as SYSTEM, with the agent's
+// privileges, against a protected target that stands in for a system folder
+// (Administrators-only DACL): SYSTEM could write there, so only the relative
+// opens keep it out. Nothing may reach the target.
+func TestLabSystemFlipProtected(t *testing.T) {
+	dir := labSystem(t)
+	dest := filepath.Join(dir, "dest")
+	a := filepath.Join(dest, "a")
+	target := filepath.Join(dir, "protected-target")
+	mkdirs(t, a)
+	mkdirs(t, target)
+	setSDDL(t, target, "D:P(A;OICI;FA;;;BA)")
+	stop := make(chan struct{})
+	wg := flipper(stop, func(i int) { flipInPlace(a, target, i%2 == 0) })
+	placed := 0
+	for i := 0; i < flipTrials; i++ {
+		stage := filepath.Join(dir, "stage"+strconv.Itoa(i))
+		rel := []string{"a", "new" + strconv.Itoa(i), "f.txt"}
+		write(t, filepath.Join(append([]string{stage}, rel...)...), "restored")
+		_ = WithPrivileges(func() error {
+			c, err := Place(stage, dest, []Rel{Rel(rel)}, Keep)
+			placed += int(c.Restored)
+			return err
+		})
+		_ = os.Remove(filepath.Join(a, rel[1], rel[2]))
+		_ = os.Remove(filepath.Join(a, rel[1]))
+	}
+	close(stop)
+	wg.Wait()
+	flipInPlace(a, target, false)
+	got := entries(target)
+	t.Logf("LAB 10 flip as SYSTEM against a protected target: trials=%d restored=%d entries_in_target=%d", flipTrials, placed, got)
+	if got != 0 {
+		t.Errorf("%d entries reached the protected target", got)
 	}
 }

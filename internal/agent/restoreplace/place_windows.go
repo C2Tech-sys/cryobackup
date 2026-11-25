@@ -25,6 +25,13 @@ var testHookBeforeMove func(dest string)
 // (RemoveReparsePoints); one met here is skipped and left for the clean-up
 // walk.
 //
+// Only staging and the drive root are opened by path. Every component below
+// them, in staging and at the destination, is opened or created relative to
+// its held parent handle (ntAt: NtCreateFile with RootDirectory and the single
+// name, FILE_OPEN_REPARSE_POINT), never by a full path, so a component cannot
+// be resolved through a junction, whatever happens to the path meanwhile (fix
+// batch 2, H1; ADR 0027 "No placement step reopens a file or folder by name").
+//
 // The rules, each where it is applied:
 //
 //   - the destination is checked from the drive root down, every component
@@ -35,16 +42,19 @@ var testHookBeforeMove func(dest string)
 //   - every checked folder is held, with a data right and without
 //     FILE_SHARE_DELETE, until the items below it are placed (the recursion
 //     keeps the handle of every ancestor open);
-//   - a folder that does not exist is created by the agent and inherits from
-//     its parent, then opened and held like any other; a folder that exists is
-//     never changed (openDestDir);
-//   - names are compared exactly: the real long name read through the handle
-//     must equal the expected name (checkName);
+//   - a folder that does not exist is created by the agent relative to its
+//     held parent and inherits from it, in the same call that opens and holds
+//     it; a folder that exists is never changed (openDestDir);
+//   - names are compared exactly and the chain is confirmed: each component's
+//     final path, read through its handle, must equal its parent's final path
+//     plus the expected name (chainOK), which also refuses an 8.3 match;
 //   - one handle per placed file: opened once, renamed through it relative to
 //     the held parent with FileRenameInfoEx, descriptor applied through it
 //     (placeFile);
-//   - immediately before each move the parent's tag is read again through its
-//     held handle (placeFile);
+//   - immediately before each move the parent's tag and final path are read
+//     again through its held handle (placeFile), and after the move the
+//     file's final path is checked against the intended one (the ADR's
+//     fallback, counted under guard_refused if it ever differs);
 //   - a file that does not exist is moved in with a no-replace rename; a lost
 //     race is skipped and counted, never overwritten (foreman ruling,
 //     2026-11-25: counted in files_skipped);
@@ -77,20 +87,28 @@ func Place(staging, driveRoot string, sel []Rel, mode Mode) (Counts, error) {
 	if ti, err := tagOf(dh); err != nil || ti.surrogate() || !ti.dir() {
 		return c, errNotRealDir
 	}
+	rootPath, err := finalPath(dh)
+	if err != nil {
+		return c, err
+	}
 	p := &placer{sel: sel, mode: mode, c: &c}
-	return c, p.dir(sh, staging, dh, driveRoot, nil)
+	if len(driveRoot) >= 2 && driveRoot[1] == ':' {
+		p.vol = driveRoot[:2]
+	}
+	return c, p.dir(sh, dh, rootPath, nil)
 }
 
 type placer struct {
 	sel  []Rel
 	mode Mode
 	c    *Counts
+	vol  string // "C:", for the test hook's path only
 }
 
 // dir places the entries of one staged folder (held as sh) into the
-// destination folder held as dh. rel is the folder's path below the drive
-// root.
-func (p *placer) dir(sh windows.Handle, sPath string, dh windows.Handle, dPath string, rel []string) error {
+// destination folder held as dh, whose final path is dPath. rel is the
+// folder's path below the drive root.
+func (p *placer) dir(sh, dh windows.Handle, dPath string, rel []string) error {
 	ents, err := listDir(sh)
 	if err != nil {
 		return err
@@ -98,15 +116,14 @@ func (p *placer) dir(sh windows.Handle, sPath string, dh windows.Handle, dPath s
 	for _, e := range ents {
 		childRel := append(append([]string(nil), rel...), e.name)
 		r, selected := relate(childRel, p.sel)
-		sChild, dChild := join(sPath, e.name), join(dPath, e.name)
 		if r == relNone {
 			// restic restored something no selected path explains: the agent
 			// writes only at the original location of a selected item.
-			p.c.Add(ClassGuardRefused, countItems(sChild))
+			p.c.Add(ClassGuardRefused, countItemsAt(sh, e.name))
 			continue
 		}
 		if e.attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 && e.attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-			if err := p.subdir(sChild, dh, dChild, childRel, selected); err != nil {
+			if err := p.subdir(sh, dh, dPath, e.name, childRel, selected); err != nil {
 				return err
 			}
 			continue
@@ -116,17 +133,17 @@ func (p *placer) dir(sh windows.Handle, sPath string, dh windows.Handle, dPath s
 			p.c.Add(ClassGuardRefused, 1)
 			continue
 		}
-		p.placeFile(sChild, dh, dChild, e.name)
+		p.placeFile(sh, e.name, dh, dPath)
 	}
 	return nil
 }
 
 // subdir handles one staged folder: open (or create) and hold its destination
-// counterpart, then recurse.
-func (p *placer) subdir(sChild string, dh windows.Handle, dChild string, rel []string, selected bool) error {
-	sh, err := openNoFollow(sChild, holdAccess, shareRW)
+// counterpart relative to dh, then recurse.
+func (p *placer) subdir(sParent, dh windows.Handle, dPath, name string, rel []string, selected bool) error {
+	sh, err := openAt(sParent, name, holdAccess, shareRW)
 	if err != nil {
-		p.c.Add(ClassOther, countItems(sChild))
+		p.c.Add(ClassOther, countItemsAt(sParent, name))
 		return nil
 	}
 	defer windows.CloseHandle(sh)
@@ -134,9 +151,9 @@ func (p *placer) subdir(sChild string, dh windows.Handle, dChild string, rel []s
 		p.c.Skipped++ // a link restic made: left for the clean-up walk
 		return nil
 	}
-	ch, created, cls := openDestDir(dh, dChild, rel[len(rel)-1])
+	ch, chPath, created, cls := openDestDir(dh, dPath, name)
 	if cls != "" {
-		p.c.Add(cls, countItems(sChild))
+		p.c.Add(cls, countItemsAt(sParent, name))
 		return nil
 	}
 	defer windows.CloseHandle(ch)
@@ -149,36 +166,32 @@ func (p *placer) subdir(sChild string, dh windows.Handle, dChild string, rel []s
 			p.c.Skipped++
 		}
 	}
-	return p.dir(sh, sChild, ch, dChild, rel)
+	return p.dir(sh, ch, chPath, rel)
 }
 
-// openDestDir opens the destination folder dPath (whose parent is held as
-// dh) without following it and holds it, creating it first when it does not
-// exist. It returns a class when the items below must not be placed.
-func openDestDir(dh windows.Handle, dPath, name string) (h windows.Handle, created bool, cls Class) {
+// openDestDir opens the destination folder name relative to its held parent
+// dh (final path dPath), without following it, and holds it; it creates it
+// first, in the same call, when it does not exist. It returns the folder's
+// final path, or a class when the items below must not be placed.
+func openDestDir(dh windows.Handle, dPath, name string) (h windows.Handle, path string, created bool, cls Class) {
 	if ti, err := tagOf(dh); err != nil || ti.surrogate() {
-		return windows.InvalidHandle, false, ClassGuardRefused
+		return windows.InvalidHandle, "", false, ClassGuardRefused
 	}
-	h, err := openNoFollow(dPath, holdAccess, shareRW)
+	h, err := openAt(dh, name, holdAccess, shareRW)
 	if notFound(err) {
-		p, perr := u16(longPath(dPath))
-		if perr != nil {
-			return windows.InvalidHandle, false, ClassOther
-		}
-		// No security attributes: the new folder inherits from its parent
+		// No security descriptor: the new folder inherits from its parent
 		// (ADR 0027: recreated folders get their parent's permissions). If
 		// something appeared at the name meanwhile, creation fails and the
 		// existing item is checked like any other.
-		cerr := windows.CreateDirectory(p, nil)
-		if cerr == nil {
+		h, err = createDirAt(dh, name, holdAccess, shareRW)
+		if err == nil {
 			created = true
-		} else if !errors.Is(cerr, windows.ERROR_ALREADY_EXISTS) {
-			return windows.InvalidHandle, false, classify(cerr)
+		} else if existsErr(err) {
+			h, err = openAt(dh, name, holdAccess, shareRW)
 		}
-		h, err = openNoFollow(dPath, holdAccess, shareRW)
 	}
 	if err != nil {
-		return windows.InvalidHandle, false, classify(err)
+		return windows.InvalidHandle, "", false, classify(err)
 	}
 	ti, err := tagOf(h)
 	switch {
@@ -188,14 +201,23 @@ func openDestDir(dh windows.Handle, dPath, name string) (h windows.Handle, creat
 		cls = ClassGuardRefused // a junction, a symbolic link or a mount point on the path
 	case !ti.dir():
 		cls = ClassGuardRefused // a file where a folder is
-	case !checkName(h, name):
-		cls = ClassGuardRefused // an 8.3 or otherwise inexact match
+	case !chainOK(h, dPath, name):
+		cls = ClassGuardRefused // an 8.3 or otherwise inexact match, or a broken chain
 	}
 	if cls != "" {
 		_ = windows.CloseHandle(h)
-		return windows.InvalidHandle, false, cls
+		return windows.InvalidHandle, "", false, cls
 	}
-	return h, created, ""
+	return h, dPath + pathSep(dPath) + name, created, ""
+}
+
+// pathSep is the separator to put between a final path and a name ("" after
+// the volume root "\").
+func pathSep(p string) string {
+	if len(p) > 0 && p[len(p)-1] == '\\' {
+		return ""
+	}
+	return `\`
 }
 
 // checkName compares the real long name read through h with want, exactly.
@@ -208,10 +230,10 @@ func checkName(h windows.Handle, want string) bool {
 // READ_CONTROL and WRITE_DAC for its descriptor.
 const stagedAccess = windows.DELETE | windows.SYNCHRONIZE | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL | windows.WRITE_DAC
 
-// placeFile places one staged file at dPath, inside the destination folder
-// held as dh.
-func (p *placer) placeFile(sPath string, dh windows.Handle, dPath, name string) {
-	fh, err := openNoFollow(sPath, stagedAccess, windows.FILE_SHARE_READ)
+// placeFile places the staged file name (in the staged folder held as sh) at
+// the same name inside the destination folder held as dh (final path dPath).
+func (p *placer) placeFile(sh windows.Handle, name string, dh windows.Handle, dPath string) {
+	fh, err := openAt(sh, name, stagedAccess, windows.FILE_SHARE_READ)
 	if err != nil {
 		p.c.Add(ClassOther, 1)
 		return
@@ -232,12 +254,13 @@ func (p *placer) placeFile(sPath string, dh windows.Handle, dPath, name string) 
 		return
 	}
 	size := sizeOf(fi)
+	want := dPath + pathSep(dPath) + name
 
-	// What is at the destination name now.
+	// What is at the destination name now, looked up in the held parent.
 	replace := false
-	if xh, err := openNoFollow(dPath, windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, shareAll); err == nil {
+	if xh, err := openAt(dh, name, windows.FILE_READ_ATTRIBUTES, shareAll); err == nil {
 		xt, terr := tagOf(xh)
-		okName := checkName(xh, name)
+		okName := chainOK(xh, dPath, name)
 		_ = windows.CloseHandle(xh)
 		switch {
 		case terr != nil:
@@ -260,12 +283,12 @@ func (p *placer) placeFile(sPath string, dh windows.Handle, dPath, name string) 
 		// A file another program holds open cannot be replaced; probing with
 		// DELETE says so as a sharing violation (target_locked) rather than the
 		// access denied the rename itself would report.
-		if lh, lerr := openNoFollow(dPath, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, shareAll); lerr != nil {
+		lh, lerr := openAt(dh, name, windows.DELETE|windows.FILE_READ_ATTRIBUTES, shareAll)
+		if lerr != nil {
 			p.c.Add(classify(lerr), 1)
 			return
-		} else {
-			_ = windows.CloseHandle(lh)
 		}
+		_ = windows.CloseHandle(lh)
 		replace = true // a checked regular file with no name-surrogate tag
 	} else if !notFound(err) {
 		p.c.Add(classify(err), 1)
@@ -273,12 +296,16 @@ func (p *placer) placeFile(sPath string, dh windows.Handle, dPath, name string) 
 	}
 
 	if testHookBeforeMove != nil {
-		testHookBeforeMove(dPath)
+		testHookBeforeMove(p.vol + want)
 	}
-	// The parent's tag again, through its held handle, immediately before the
-	// move: the hold is not credited with stopping a held folder from being
-	// turned into a reparse point in place.
+	// The parent again, through its held handle, immediately before the move:
+	// its tag (the hold is not credited with stopping a held folder from being
+	// turned into a reparse point in place) and its final path (the chain).
 	if pt, err := tagOf(dh); err != nil || pt.surrogate() {
+		p.c.Add(ClassGuardRefused, 1)
+		return
+	}
+	if got, err := finalPath(dh); err != nil || got != dPath {
 		p.c.Add(ClassGuardRefused, 1)
 		return
 	}
@@ -291,6 +318,14 @@ func (p *placer) placeFile(sPath string, dh windows.Handle, dPath, name string) 
 		p.c.Add(classify(err), 1)
 		return
 	}
+	// The ADR's fallback check, kept as a second guard: the placed file's own
+	// final path. A difference means the move did not land where intended;
+	// it is counted as a refusal and its descriptor is left as staging gave
+	// it (Administrators and SYSTEM only), so nothing is opened up.
+	if got, err := finalPath(fh); err != nil || got != want {
+		p.c.Add(ClassGuardRefused, 1)
+		return
+	}
 	p.c.Restored++
 	p.c.BytesRestored += size
 	if err := fixDescriptor(fh); err != nil {
@@ -300,6 +335,49 @@ func (p *placer) placeFile(sPath string, dh windows.Handle, dPath, name string) 
 		p.c.Restored--
 		p.c.BytesRestored -= size
 		p.c.Add(ClassOther, 1)
+	}
+}
+
+// countItemsAt is how many items a refused staged entry (name, in the folder
+// held as parent) stands for: the files below a folder (at least one, the
+// folder itself), or one for a file. Opens are relative and never descend a
+// reparse point.
+func countItemsAt(parent windows.Handle, name string) int64 {
+	h, err := openAt(parent, name, holdAccess, shareRW)
+	if err != nil {
+		return 1
+	}
+	defer windows.CloseHandle(h)
+	ti, err := tagOf(h)
+	if err != nil || ti.reparse() || !ti.dir() {
+		return 1
+	}
+	var n int64
+	countFiles(h, &n)
+	if n == 0 {
+		return 1
+	}
+	return n
+}
+
+func countFiles(h windows.Handle, n *int64) {
+	ents, err := listDir(h)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if e.attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || e.attrs&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+			*n++
+			continue
+		}
+		ch, err := openAt(h, e.name, holdAccess, shareRW)
+		if err != nil {
+			continue
+		}
+		if ti, err := tagOf(ch); err == nil && !ti.reparse() && ti.dir() {
+			countFiles(ch, n)
+		}
+		_ = windows.CloseHandle(ch)
 	}
 }
 
@@ -370,51 +448,4 @@ func buildACL(aces [][]byte) *windows.ACL {
 		off += len(a)
 	}
 	return (*windows.ACL)(unsafe.Pointer(&buf[0]))
-}
-
-// countItems is how many items a refused staged entry stands for: the files
-// below a folder (at least one, the folder itself), or one for a file. It is
-// read with the walk's own no-follow opens and never descends a reparse point.
-func countItems(path string) int64 {
-	h, err := openNoFollow(path, holdAccess, shareRW)
-	if err != nil {
-		return 1
-	}
-	defer windows.CloseHandle(h)
-	ti, err := tagOf(h)
-	if err != nil || ti.reparse() || !ti.dir() {
-		return 1
-	}
-	var n int64
-	countFiles(h, path, &n)
-	if n == 0 {
-		return 1
-	}
-	return n
-}
-
-func countFiles(h windows.Handle, path string, n *int64) {
-	ents, err := listDir(h)
-	if err != nil {
-		return
-	}
-	for _, e := range ents {
-		if e.attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-			*n++
-			continue
-		}
-		if e.attrs&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
-			*n++
-			continue
-		}
-		p := join(path, e.name)
-		ch, err := openNoFollow(p, holdAccess, shareRW)
-		if err != nil {
-			continue
-		}
-		if ti, err := tagOf(ch); err == nil && !ti.reparse() && ti.dir() {
-			countFiles(ch, p, n)
-		}
-		_ = windows.CloseHandle(ch)
-	}
 }

@@ -308,9 +308,10 @@ func (a *Agent) sweepRestoreStaging(ctx context.Context) {
 			continue
 		}
 		for _, n := range names {
-			links, err := restoreplace.RemoveTree(root.Path() + `\` + n)
+			links, err := a.removeUnderRoot(root, n)
 			if err != nil {
-				a.log.Warn("a staging folder left by an interrupted restore could not be removed", "drive", l, "err", errText(err))
+				a.log.Error("a staging folder left by an interrupted restore could not be removed", "drive", l, "err", errText(err))
+				a.eventLog("error", eventRestoreFailed, "a staging folder left by an interrupted restore could not be removed at start")
 				continue
 			}
 			a.log.Warn("removed a staging folder left by an interrupted restore", "drive", l, "links_deleted", links, "folder", safeID(n))
@@ -352,13 +353,27 @@ func (a *Agent) sweepInterruptedSide(ctx context.Context) {
 		if err != nil || !ok || row.Kind != restic.KindRestore || !sweepSide(row.Outcome) {
 			continue
 		}
-		links, err := restoreplace.RemoveTree(root.Path() + `\` + n)
+		links, err := a.removeUnderRoot(root, n)
 		if err != nil {
-			a.log.Warn("the side folder of a restore that did not succeed could not be removed", "restore", n, "err", errText(err))
+			a.log.Error("the side folder of a restore that did not succeed could not be removed", "restore", n, "err", errText(err))
+			a.eventLog("error", eventRestoreFailed, "the side folder of a restore that did not succeed could not be removed at start")
 			continue
 		}
 		a.log.Warn("removed the side folder of a restore that did not succeed; run the restore again", "restore", n, "links_deleted", links)
 	}
+}
+
+// removeUnderRoot removes the entry name below a held root with the clean-up
+// walk, relative to the root's handle, under the agent's privileges (fix
+// batch 2, L1).
+func (a *Agent) removeUnderRoot(root *restoreplace.Root, name string) (int, error) {
+	var links int
+	err := restoreplace.WithPrivileges(func() error {
+		var err error
+		links, err = root.RemoveChild(name)
+		return err
+	})
+	return links, err
 }
 
 // sweepSide reports whether the start-up sweep removes the side folder of a
