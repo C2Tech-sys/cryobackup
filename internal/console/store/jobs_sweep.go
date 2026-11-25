@@ -33,8 +33,10 @@ type SweepResult struct {
 	// Examined is the number of open agent runs looked at; Abandoned how many were closed.
 	Examined, Abandoned int
 	// RestoresClosed is how many running device restores the sweep closed as
-	// FAILED interrupted (sweepStuckDeviceRestores).
-	RestoresClosed int
+	// FAILED interrupted (sweepStuckDeviceRestores), and RestoresClosedBy the same
+	// count by reason (no_run_record, agent_restarted); nil when none closed.
+	RestoresClosed   int
+	RestoresClosedBy map[string]int
 }
 
 // Running device restores that stop reporting (ADR 0027; ticket P22-E, fix E3).
@@ -103,7 +105,7 @@ func (r stuckRestore) stuckReason(now int64, activeWithin time.Duration) string 
 // sweepStuckDeviceRestores closes the running device restores stuckReason names,
 // one transaction per row with its audit row; a failed audit write leaves that
 // row running for the next sweep and is returned.
-func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.Duration) (int, error) {
+func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.Duration) (int, map[string]int, error) {
 	var rows []stuckRestore
 	err := s.Read(ctx, func(tx *Tx) error {
 		var err error
@@ -121,9 +123,10 @@ func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.
 		return err
 	})
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	closed := 0
+	var by map[string]int
 	var firstErr error
 	for _, r := range rows {
 		reason := r.stuckReason(msOf(s.Now()), activeWithin)
@@ -156,9 +159,13 @@ func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.
 			firstErr = err
 		case err == nil && did:
 			closed++
+			if by == nil {
+				by = map[string]int{}
+			}
+			by[reason]++
 		}
 	}
-	return closed, firstErr
+	return closed, by, firstErr
 }
 
 // openRun is one open agent run as the sweeper reads it.
@@ -257,7 +264,7 @@ func (s *Store) SweepAbandonedRuns(ctx context.Context, o SweepOptions) (SweepRe
 	if err != nil {
 		return res, err
 	}
-	res.RestoresClosed, err = s.sweepStuckDeviceRestores(ctx, o.ActiveWithin)
+	res.RestoresClosed, res.RestoresClosedBy, err = s.sweepStuckDeviceRestores(ctx, o.ActiveWithin)
 	return res, err
 }
 

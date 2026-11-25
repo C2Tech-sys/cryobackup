@@ -267,6 +267,44 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 		s.renderRestore(w, r, http.StatusOK, d)
 		return
 	}
+	// Every restore needs a fresh MFA check (ADR 0027 ruling C5), checked first,
+	// before any worker listing. A session that is not fresh goes through the
+	// console's step-up (the purge dialogs' flow, purge_adr19.go stepUp: POST
+	// /api/v1/auth/step-up with the authenticator code the form carries in
+	// "code"); without a code, or with one the step-up refuses, the wizard
+	// answers 403 with the reason and nothing is written or asked of the worker.
+	// The Actor is built once, here, and the same value gates this page and goes
+	// to the service, so the page cannot pass a check the service would refuse.
+	// refuse answers a refusal with its own banner; it replaces the page's
+	// standing notice (a retired or customer-held device), so the operator reads
+	// the rule that applied to this submit.
+	refuse := func(status int, b *Banner) {
+		d.Error = b
+		if d.Blocked != nil {
+			d.Blocked = b
+		}
+		s.renderRestore(w, r, status, d)
+	}
+	if code := strings.ReplaceAll(strings.TrimSpace(r.PostFormValue("code")), " ", ""); code != "" {
+		refusal, done := s.stepUp(w, r, p, code)
+		if done {
+			return
+		}
+		if refusal != nil {
+			d.steps()
+			refuse(refusal.status, &Banner{refusal.Note.Class, refusal.Note.Title, refusal.Note.Text})
+			return
+		}
+	}
+	who := restores.Actor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: "web",
+		FreshMFA: s.Auth.FreshMFA(p, s.Auth.Now())}
+	if !who.FreshMFA {
+		d.steps()
+		refuse(http.StatusForbidden, &Banner{ClassWarn, "A recent MFA check is required",
+			"Every restore needs an authenticator check from the last " + strconv.Itoa(int(auth.FreshMFAWindow/time.Minute)) +
+				" minutes on this session. Enter a current authenticator code and prepare the zip again; a recovery code is not accepted."})
+		return
+	}
 	filePath := r.PostFormValue("path")
 	s.browse(r.Context(), &d, p, snapshot, r.PostFormValue("cur"))
 	d.steps()
@@ -275,13 +313,22 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 		s.renderRestore(w, r, http.StatusUnprocessableEntity, d)
 		return
 	}
-	rr, err := s.Restores.Create(r.Context(), restores.Actor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: "web",
-		FreshMFA: s.Auth.FreshMFA(p, s.Auth.Now())}, p.Scope, id, snapshot, filePath)
+	rr, err := s.Restores.Create(r.Context(), who, p.Scope, id, snapshot, filePath)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
+		case errors.Is(err, restores.ErrStepUp):
+			status, d.Error = http.StatusForbidden, &Banner{ClassWarn, "A recent MFA check is required", "Enter a current authenticator code and prepare the zip again."}
 		case errors.Is(err, restores.ErrCustomerHeld):
 			status, d.Error = http.StatusConflict, &Banner{ClassWarn, "Customer-held key", "No technician restore for a customer-held key."}
+		case errors.Is(err, restores.ErrDevicePurging):
+			status, d.Error = http.StatusConflict, &Banner{ClassWarn, "This device is being purged", "Its backups are being removed, so nothing can be restored from it."}
+		case errors.Is(err, restores.ErrRetiredDownloadOnly):
+			status, d.Error = http.StatusConflict, &Banner{ClassWarn, "This device is retired: download only", "A retired device can be downloaded from as a zip, not restored to."}
+		case errors.Is(err, restores.ErrAgentTooOld):
+			status, d.Error = http.StatusConflict, &Banner{ClassWarn, "The agent on this device is too old", "Restoring to the device needs agent " + restores.MinDeviceRestoreAgent + " or newer. Download as zip instead."}
+		case errors.Is(err, restores.ErrRestoreActive):
+			status, d.Error = http.StatusConflict, &Banner{ClassWarn, "A restore is already active for this device", "Wait for it to finish, or download as zip."}
 		case errors.Is(err, restores.ErrMasterKey):
 			status, d.Error = http.StatusServiceUnavailable, &Banner{ClassCrit, "Master key unavailable", "Restores are disabled until the master key is loaded."}
 		case errors.Is(err, restores.ErrInvalid):
@@ -295,7 +342,7 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 			s.log().Error("restore: create failed", logx.Err(err))
 			d.Error = &Banner{ClassCrit, "The restore could not be started", "Try again shortly."}
 		}
-		s.renderRestore(w, r, status, d)
+		refuse(status, d.Error)
 		return
 	}
 	target := "/restores/" + rr.ID

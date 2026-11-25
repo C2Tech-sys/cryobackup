@@ -326,3 +326,28 @@ func addRestoreP22Global(g map[string]string) map[string]string {
 	g["ExpireDeviceRestores"] = "restore-purge job: closes unfetched device restores of every device, ids only"
 	return g
 }
+
+// TestDeviceRestoreClosedByUpdatedRecord (fix E5): the agent's normal sequence,
+// an open record when restic starts (created: the row becomes running) and the
+// closed record later (updated: the row closes), with nothing fetched first.
+func TestDeviceRestoreClosedByUpdatedRecord(t *testing.T) {
+	w := seed(t)
+	row, _, err := w.s.CreateDeviceRestoreAudited(w.ctx, ScopeAll(), p22Input(w.devA.ID, t0.Add(24*time.Hour)), p22Actor())
+	ok(t, err)
+	open := RunInput{ID: row.ID, Kind: "restore", Trigger: "manual", StartedAt: t0.Add(-10 * time.Minute)}
+	wantStatus(t, ingest(t, w, w.devA.ID, open)[0], IngestCreated, "")
+	if cur := must[RestoreRequest](t)(w.s.GetRestoreRequest(w.ctx, ScopeAll(), row.ID)); cur.Status != "running" || cur.StartedAt == nil {
+		t.Fatalf("after the open record: %+v", cur)
+	}
+	if n := len(p22Audit(t, w, "restore.finish", row.ID)); n != 0 {
+		t.Fatalf("an open record wrote %d finish rows", n)
+	}
+	fin := t0
+	closed := open
+	closed.FinishedAt, closed.Outcome, closed.Stats = &fin, "interrupted", []byte(`{"restore_result":"interrupted"}`)
+	wantStatus(t, ingest(t, w, w.devA.ID, closed)[0], IngestUpdated, "")
+	cur := must[RestoreRequest](t)(w.s.GetRestoreRequest(w.ctx, ScopeAll(), row.ID))
+	if cur.Status != "failed" || cur.ErrorClass != "interrupted" || cur.SelectionWrapped != nil || len(p22Audit(t, w, "restore.finish", row.ID)) != 1 {
+		t.Fatalf("after the updated record: %+v", cur)
+	}
+}

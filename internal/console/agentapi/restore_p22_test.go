@@ -303,3 +303,31 @@ func TestRestoreRunClosesWithClassAndCounts(t *testing.T) {
 	}
 	e.noSentinel(t)
 }
+
+// TestRestoreFetchRateLimit (fix E5): six fetches a minute per device, then 429
+// with Retry-After; another device keeps its own allowance; the next minute
+// allows again.
+func TestRestoreFetchRateLimit(t *testing.T) {
+	e := newP22Env(t)
+	tokA, tokB := string(e.a.DeviceToken), string(e.b.DeviceToken)
+	rr := e.create(t, e.a.DeviceID, restores.ModeDeviceSide)
+	for i := 0; i < restoreFetchPerMinute; i++ {
+		if r := e.fetch(tokA, rr.ID); r.code != 200 {
+			t.Fatalf("fetch %d: %d %s", i+1, r.code, r.body)
+		}
+	}
+	r := e.fetch(tokA, rr.ID)
+	if r.code != 429 || r.problem(t).Code != api.CodeRateLimited || r.hdr.Get(api.HeaderRetryAfter) == "" {
+		t.Fatalf("fetch 7: %d %s", r.code, r.body)
+	}
+	if r := e.fetch(tokB, "01J9ZZ0000000000000000ZZZZ"); r.code != 404 {
+		t.Fatalf("another device's allowance: %d", r.code)
+	}
+	if n := len(e.audits(t, "restore.fetch", rr.ID)); n != restoreFetchPerMinute {
+		t.Fatalf("%d fetch audit rows, want %d (a refused fetch is not audited)", n, restoreFetchPerMinute)
+	}
+	e.clk.Advance(time.Minute)
+	if r := e.fetch(tokA, rr.ID); r.code != 200 {
+		t.Fatalf("after a minute: %d %s", r.code, r.body)
+	}
+}

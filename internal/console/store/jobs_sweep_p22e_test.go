@@ -77,7 +77,7 @@ func TestSweepClosesSilentDeviceRestore(t *testing.T) {
 	r.exec(t, `DROP TRIGGER refuse_audits`)
 
 	res, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{})
-	if err != nil || res.RestoresClosed != 1 {
+	if err != nil || res.RestoresClosed != 1 || res.RestoresClosedBy["no_run_record"] != 1 {
 		t.Fatalf("sweep %+v %v", res, err)
 	}
 	if st, cl, cleared := r.restoreState(t, rsSilent); st != "failed" || cl != "interrupted" || !cleared {
@@ -135,7 +135,7 @@ func TestSweepKeepsReportedRestoreAndClosesAfterRestart(t *testing.T) {
 	// No run record at all, past the grace: closed.
 	r.exec(t, `DELETE FROM runs WHERE id = ?`, rsRestarted)
 	res, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{})
-	if err != nil || res.RestoresClosed != 1 {
+	if err != nil || res.RestoresClosed != 1 || res.RestoresClosedBy["agent_restarted"] != 1 {
 		t.Fatalf("restart sweep %+v %v", res, err)
 	}
 	if st, cl, _ := r.restoreState(t, rsRestarted); st != "failed" || cl != "interrupted" {
