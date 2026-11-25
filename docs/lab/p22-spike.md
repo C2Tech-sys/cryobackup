@@ -290,7 +290,7 @@ account, before P22-C ships:
 
 1. **Admin key on the self-backup prefix.** With the `[admin]` remote, `restic -o rclone.program=... -o "rclone.args=serve restic --stdio" --no-cache -r rclone:admin:<bucket>/<self_prefix> init`, then `backup`, `forget --prune --keep-last 1`, `check --read-data` (item 9 commands): all exit 0. This needs list, get, put and delete on `<bucket>/<self_prefix>/*`.
 2. **The gateway key cannot reach the self-backup prefix.** As a device login through the gateway, `GET /<self_prefix>/config` must fail; and in the storage policy the gateway key's resources must name the prefix followed by a slash and then `*`. A policy resource written as the prefix followed directly by `*`, without a slash, also matches `<prefix>-console/...`: the plan's example name `<prefix>-console` is only safe with the trailing slash, or choose a self-backup prefix that does not start with the gateway prefix.
-3. **Cost of `forget --prune` every 6 h under versioning and the 90-day minimum.** Item 9's prune of 2 snapshots deleted 4 packs and rewrote the index (3 old index files deleted). Under bucket versioning each deleted object stays as a non-current version, and the production object storage bills deleted objects for 90 days from upload. Read the bucket's versioning state, the lifecycle rule for non-current versions on `<self_prefix>/`, and estimate (database size x copies kept for 90 days). Lock objects (186 bytes) are created and deleted on every call: check the production object storage's minimum-object-size billing for them.
+3. **Cost of `forget --prune` every 6 h under versioning and the storage's billing rules.** Item 9's prune of 2 snapshots deleted 4 packs and rewrote the index (3 old index files deleted). Under bucket versioning each deleted object stays as a non-current version until a lifecycle rule removes it. Read the bucket's versioning state, the lifecycle rule for non-current versions on `<self_prefix>/` and the storage's own terms for deleted objects, and estimate (database size x copies kept). Lock objects (186 bytes) are created and deleted on every call: check whether the storage bills a minimum object size for them.
 4. **Browse latency against the bucket** (item 7 measured local disk only): `restic --no-cache ls --json <snap> <folder>` through the admin path on a real device repository, three calls, cold.
 5. **Production gateway policy is prefix-scoped** (plan F.8): read the policy attached to the gateway key; it is not visible from the repository.
 
@@ -438,7 +438,7 @@ reported `processed file: <side>\rid1\X\folder\junc\victim.txt` and the file out
 explicit ACE (owner-SID `FA` entry before; afterwards only inherited entries,
 `D:AI(A;ID;FR;;;BG)(A;ID;0x1301bf;;;AU)(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;0x1200a9;;;BU)`). The item 5
 fallback "reset the subtree with icacls" therefore changes DACLs outside the restore when the restored
-data contains a junction (item 6: restic restores junctions as links).
+data contains a junction (restic restores a junction as a symbolic link: second blind check, J1 below).
 
 **L1 - the anchor's own mtime changes when restic creates something in it.** Restore of
 `/gone/inner/f.txt` with anchor `X:\tG` (the deepest existing folder; `gone` was deleted):
@@ -456,3 +456,131 @@ Design consequences (one line each):
   reparse points, not with `icacls /reset /T`.
 - L1: with a staging folder restic never writes into the destination; a destination folder's mtime
   then changes only through the move step, as any file creation in it does.
+
+## Addendum 2: second blind check (2026-11-24, evening)
+
+A second independent run (same binaries, same non-elevated user, its own scratch folder `<S>`) checked
+the staging-and-place design. Evidence is quoted from its logs `verify2-d0s1-feas-*.log` (kept outside
+the repository), with scratch paths shortened to `<S>` and the user's SID to `<ME>`.
+
+**J1 - restic backs up a junction as a symlink node and restores it as a symbolic link.**
+
+```text
+restic ls --json:  {"name":"junc","type":"symlink","path":"<S>/src/d/junc",...,"permissions":"Lrw-rw-rw-",...}
+restic cat tree:   f.txt type=file generic_attributes=windows.creation_time,windows.file_attributes,windows.security_descriptor
+                   junc type=symlink generic_attributes=windows.creation_time,windows.file_attributes
+> restic restore --json latest:<S>/src --target <S>\stg
+{"message_type":"error","error":{"message":"symlink <S>\\out \\\\?\\<S>\\stg\\d\\junc: A required privilege is not held by the client."},"during":"restore","item":"\\d\\junc"}
+{"message_type":"summary","total_files":3,"files_restored":2,"total_bytes":3,"bytes_restored":3}
+{"message_type":"exit_error","code":1,"message":"Fatal: There were 1 errors"}
+```
+
+As a non-elevated user the link cannot be created: one error line, exit 1, the rest restored. A
+process holding the symbolic-link privilege (SYSTEM does by default) is expected to create a symbolic
+link to the junction's original absolute target (inference, SYSTEM not tested). The junction's node
+carries no security descriptor.
+
+**J2 - a move by path follows a junction that replaced a destination folder.** With a destination
+parent replaced by a junction to another folder, a same-volume `File.Move` by path put the file into
+the junction's target, and Go's `os.Rename(staged, <dest>\Documents\existing.cfg)` with `Documents` a
+junction replaced the file in the junction's target (`file in the junction target now
+"restored-replacement"`).
+
+**J3 - a staging root an ordinary user created first.** First run: the agent-style child folder was
+still readable by the user, and the user renamed it through the parent it owned and planted its own
+folder at the staging path (`rename of the protected child via the parent the user owns: SUCCEEDED`).
+Redo with the child set to `D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`: the child was not listable, the
+rename was refused, and it stayed refused after the user, as owner of the parent, granted itself full
+control on the parent (`user-planted folder now at the staging path: False`).
+
+**J4 - what a move does to permissions and folders** (restic restored into a fresh staging folder with a
+protected DACL: full control for Administrators, SYSTEM and the user, plus entries for Authenticated
+Users and Users; then `File.Move` into the original location):
+
+- restic changed nothing that existed: the existing folders' mtime and DACL were identical before the
+  restore and after it.
+- the moved `gone.txt` kept the inherited entry staging handed down, `(A;ID;FA;;;<ME>)`, and did not get
+  the inheritable `(A;ID;0x1200a9;;;BG)` entry its new parent hands to `keep.txt` beside it.
+- the existing folder `exist` kept its DACL, but its last-write time moved from 2001-02-03 to the move
+  time, because an entry was added to it; the agent-created `newdir` inherited from its parent.
+- a no-replace `File.Move` onto an existing name was refused (`Cannot create a file when that file
+  already exists.`, the old content kept).
+
+**J5 - Go's own helpers.** `os.Rename(a, b)` with `b` existing succeeded and replaced `b` (Go passes
+`MOVEFILE_REPLACE_EXISTING`). `os.RemoveAll` of a folder holding a junction left the junction's target
+in place in this run.
+
+## Addendum 3: placement feasibility test (non-elevated, 2026-11-24)
+
+[`test/lab/p22/feas/main.go`](../../test/lab/p22/feas/main.go), build tags `windows && p22lab` (outside
+`./...`), uses `golang.org/x/sys/windows` only. It creates one scratch folder under `%TEMP%`
+(`P22_FEAS_ROOT` overrides), removes it with its own delete walk of (d), and prints the scratch path as
+`<T>`. "Another process" in (a) is the same binary started again as a child.
+
+```text
+> go vet -tags p22lab ./test/lab/p22/feas
+(no output, exit 0)
+> go run -tags p22lab ./test/lab/p22/feas
+feas: scratch <T>, elevated=false
+(a) a folder held open without FILE_SHARE_DELETE, renamed by another process
+  [PASS] child renames the held folder (FILE_LIST_DIRECTORY|FILE_TRAVERSE, share READ|WRITE): child: error 32 (The process cannot access the file because it is being used by another process.)
+  [PASS] child removes the held folder: child: error 32 (The process cannot access the file because it is being used by another process.)
+  [PASS] child renames the held folder's parent: child: error 5 (Access is denied.)
+  [PASS] holder moves a file INTO the held folder (no-replace): ok
+  [PASS] control: after the handle is closed the child's rename succeeds: child: ok
+  [info] child renames a folder held with FILE_READ_ATTRIBUTES only (share READ|WRITE): child: ok
+(b) no-replace rename onto an existing name
+  [PASS] MoveFileEx(src, dst, 0) refused: error 183 (Cannot create a file when that file already exists.); dst="existing"; src still there=true
+  [PASS] dst content unchanged after MoveFileEx: "existing"
+  [PASS] FileRenameInfoEx(flags=0) refused: error 183 (Cannot create a file when that file already exists.); dst="existing"
+  [PASS] dst content unchanged after FileRenameInfoEx: "existing"
+  [info] contrast: Go os.Rename(src, dst): ok; dst now "restored"
+  [info] control: MoveFileEx(src, dst, MOVEFILE_REPLACE_EXISTING): ok; dst now "restored"
+  [info] MoveFileEx REPLACE_EXISTING onto a read-only file: error 5 (Access is denied.); target now "existing"
+  [info] MoveFileEx REPLACE_EXISTING onto a system file: ok; target now "restored"
+(c) IsReparseTagNameSurrogate on a junction, a symbolic link, an ordinary folder
+  [PASS] junction is a name surrogate: attrs=0x410 tag=0xA0000003 surrogate=true err=ok
+  [PASS] junction tag is IO_REPARSE_TAG_MOUNT_POINT (the tag a mounted folder carries too): tag=0xA0000003
+  [info] symbolic link: NOT CREATED: error 1314 (A required privilege is not held by the client.) (no SeCreateSymbolicLinkPrivilege, no Developer Mode); to be proven in the lab
+  [PASS] ordinary plain is not a name surrogate: attrs=0x10 reparse-point=false surrogate=false err=ok
+  [PASS] ordinary file.txt is not a name surrogate: attrs=0x20 reparse-point=false surrogate=false err=ok
+  [info] IsReparseTagNameSurrogate(IO_REPARSE_TAG_SYMLINK 0xA000000C), constant only: true
+(d) delete walk over a tree holding junctions to a folder outside it
+  [PASS] walk removed the tree: err=ok tree exists=false
+  [PASS] walk removed both junctions as links: reparse points deleted=2
+  [PASS] target folder and its file untouched: outside exists=true victim="outside-content"
+  [PASS] target file's DACL unchanged: DACL equal=true
+  [PASS] clean-up: scratch removed by the same walk: err=ok reparse points deleted=1 scratch exists=false
+feas: all expectations held
+exit=0
+```
+
+What it shows, one line each:
+
+- (a) YES: a folder held through a handle with a data right (`FILE_LIST_DIRECTORY | FILE_TRAVERSE`) and
+  without `FILE_SHARE_DELETE` can be neither renamed nor removed by another process, its parent cannot
+  be renamed either, and the holder can still move a file into it. A handle with attribute rights only
+  (`FILE_READ_ATTRIBUTES`) does NOT protect the folder: such a handle takes no part in sharing.
+- (b) YES: `MoveFileEx` without `MOVEFILE_REPLACE_EXISTING` and `FileRenameInfoEx` without the replace
+  flag both refuse an existing target (error 183) and leave it unchanged. `os.Rename` replaces. A
+  replacing `MoveFileEx` is refused on a read-only target (error 5) but NOT on a system file: an agent
+  that must not replace system files has to check the attributes itself.
+- (c) YES for a junction (tag `0xA0000003`, which a mounted folder carries too) and an ordinary folder
+  or file. A symbolic link could not be created here (error 1314); only the constant
+  `IO_REPARSE_TAG_SYMLINK` was checked.
+- (d) YES: a walk that opens each entry with `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`
+  and deletes a reparse point through its own handle removed two junctions and left their target, its
+  file and that file's DACL unchanged.
+
+### To be proven in the lab by P22-D (needs SYSTEM or a second account)
+
+1. (a) as SYSTEM, with the agent's real open flags and with `SeBackupPrivilege` / `SeRestorePrivilege`
+   enabled, against a second process running as an ordinary user and one running as an administrator.
+2. (c) on a real symbolic link (SYSTEM holds the privilege) and on a mounted folder; and the tag of a
+   cloud-file placeholder (expected non-surrogate) on a device with a file-sync client.
+3. J1 as SYSTEM: restic creating the symbolic link in staging, and the agent deleting it unfollowed.
+4. Creating `<L>:\.cryobackup-restore` and `C:\CryoBackup-Restore` with an Administrators + SYSTEM
+   protected descriptor, and refusing a pre-existing one that is a link, is owned by anyone else, or
+   grants anyone else.
+5. The re-application of a moved file's explicit entries with `UNPROTECTED_DACL_SECURITY_INFORMATION`
+   (J4): staging's inherited entries gone, the new parent's present; a protected descriptor unchanged.
