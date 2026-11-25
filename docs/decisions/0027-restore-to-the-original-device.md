@@ -114,7 +114,7 @@ part of restic.
    volume as the destination, under the root rule of the shared rules below. restic restores the selection into it:
    `restic restore --json -vv <snapshot>:/<L> --target <L>:\.cryobackup-restore\<restore id> --include-file <F>`.
    Every folder below that target is created by restic, so restic changes nothing that existed before.
-3. **Reparse points.** Every reparse point with a name-surrogate tag that restic restored into staging (a junction in
+3. **Reparse points.** Every reparse point that restic restored into staging (a junction in
    the snapshot comes back as a symbolic link) is deleted there by the clean-up walk of the shared rules, never
    followed, never moved into place, and counted as skipped.
 4. **Placement never resolves through a link the agent did not make** (foreman ruling). For each item:
@@ -127,8 +127,10 @@ part of restic.
      is full of placeholders, and refusing them would refuse the folders users keep their documents in.
    - **Each checked folder is held until the item is placed.** The agent keeps the handle of every verified ancestor
      open, opened with a data right (`FILE_LIST_DIRECTORY | FILE_TRAVERSE`) and without `FILE_SHARE_DELETE`, so no
-     ancestor can be renamed, removed or swapped for a link between the check and the move. A handle with attribute
-     rights only does not do this (`p22-spike.md:525-531`). Assumed for the agent's account: the addendum test proves
+     ancestor can be renamed or removed between the check and the move. A handle with attribute rights only does not
+     do this (`p22-spike.md:525-531`). The hold is not credited with stopping a held folder from being turned into a
+     reparse point in place, so immediately before each move the agent re-reads the parent's reparse tag through its
+     held handle, and the move itself is made relative to that handle (below). Assumed for the agent's account: the addendum test proves
      it for a non-elevated user (`p22-spike.md:560-563`), and the lab proves it as SYSTEM (below). If the lab says no,
      the fallback is: after each move the agent reads the placed file's final path through
      `GetFinalPathNameByHandle` on its own handle, and a path other than the intended one is counted under
@@ -140,10 +142,17 @@ part of restic.
      creation fails and the existing item is checked like any other.
    - **A folder that exists** is never touched by the agent: it changes no permission, owner, timestamp or attribute
      on it. The file system still updates its last-write time when an item is added to it.
-   - **A file that does not exist** at its destination is moved in with a no-replace rename: `MoveFileEx` without
-     `MOVEFILE_REPLACE_EXISTING`, or `FileRenameInfoEx` without `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` (foreman ruling).
-     A file that appears at that name between the check and the move makes the rename fail; the item is skipped and
-     counted, never overwritten. Go's `os.Rename` is not used: it replaces.
+   - **One handle per placed file** (foreman ruling). The agent opens the staged file once, without following, renames
+     it through that handle with `FileRenameInfoEx` whose `RootDirectory` is the held parent handle, and applies the
+     descriptor below through the same handle. No placement step reopens a file or folder by name.
+   - **Names are compared exactly** (foreman ruling). Every path the agent opens is in the `\\?\` form, and after
+     opening a component or the item being replaced the agent compares the item's real long name, read through the
+     handle, with the expected name. A mismatch (a name that only matched an 8.3 short name, or one whose trailing dot
+     or space was dropped) is counted under `guard_refused` and nothing is placed or replaced.
+   - **A file that does not exist** at its destination is moved in with a no-replace rename: `FileRenameInfoEx`
+     without `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` (foreman ruling). A file that appears at that name between the check
+     and the move makes the rename fail; the item is skipped and counted, never overwritten. Go's `os.Rename` and a
+     path-based `MoveFileEx` are not used.
    - **A file that exists** is skipped in keep mode. In replace mode, the agent uses the replace flag only for an item
      it checked: a regular file with no name-surrogate tag.
    - **A file where a folder exists, or a folder where a file exists**, is never placed, in any mode, and is counted
@@ -185,7 +194,9 @@ part of restic.
   it is present, it must be a real directory (no name-surrogate tag), owned by Administrators or SYSTEM, with a
   protected DACL that grants only those two. Otherwise the restore is refused under `guard_refused`, with a log line
   on the device that names the failed check, and the agent does not repair the root: an operator removes it. Each
-  restore's own `<restore id>` folder is created fresh; if it already exists, the restore is refused.
+  restore's own `<restore id>` folder is created fresh; if it already exists, the restore is refused. The agent holds
+  the root's handle (as for an ancestor above) for the whole restore, and the start-up sweep applies this root rule
+  before it walks anything: a root that fails it is left alone and logged.
 - **The clean-up walk** (foreman ruling). Every removal (staging at the end of a restore, the sweep when the agent
   starts, the removal of links in the side folder) is the agent's own walk. It opens each entry with
   `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`, deletes a reparse point itself through that handle,
@@ -337,7 +348,8 @@ The spike ran restic 0.19.1 and rclone 1.75.1 as a **non-elevated user** on a lo
 3. which permissions a backup made as SYSTEM records for inherited entries;
 4. profile junctions in both destinations;
 5. the reparse-point rule: links in staging and in the side folder are removed by the clean-up walk without being
-   followed, including the symbolic link restic makes as SYSTEM for a junction in the snapshot;
+   followed, including the symbolic link restic makes as SYSTEM for a junction in the snapshot, and whether restic, as
+   SYSTEM, applies that junction node's attributes or times through the link it created;
 6. creating the staging and side roots with an Administrators and SYSTEM protected descriptor, refusing a root that
    fails the root rule, and whether a user can open a restored file in the side folder by its full path;
 7. the descriptor rule after a move: staging's inherited entries gone, the new parent's present, a protected
@@ -345,7 +357,9 @@ The spike ran restic 0.19.1 and rclone 1.75.1 as a **non-elevated user** on a lo
 8. a destination on a volume other than the system drive, with staging on that volume;
 9. the free-space refusal, in both destinations;
 10. the hold as SYSTEM, with the agent's open flags and its backup and restore privileges enabled: another process,
-    as an ordinary user and as an administrator, cannot rename or remove a held folder;
+    as an ordinary user and as an administrator, cannot rename or remove a held folder; whether a held, empty folder
+    can be turned into a reparse point in place (the re-read before each move covers it either way); and a hard link
+    to a file outside the destination, placed by a user on the restore path, is not replaced in replace mode;
 11. the name-surrogate check on a real symbolic link and a mounted folder, and that a cloud-file placeholder is not a
     name surrogate.
 
