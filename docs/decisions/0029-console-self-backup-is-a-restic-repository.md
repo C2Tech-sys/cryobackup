@@ -29,7 +29,7 @@ directory, a weekly tested restore in a temporary directory, M5).
 own prefix. It is written through the worker's admin remote, never through the gateway. The self-backup prefix must
 not be equal to the device prefix, must not lie inside it, and must not be the device prefix with more characters
 appended. An access policy whose resource is written `<prefix>*` (no slash) also matches `<prefix>-console/...`
-(`docs/lab/p22-spike.md:290`), so a name of that shape could fall inside the gateway credential's rights. The example
+(`docs/lab/p22-spike.md:292`), so a name of that shape could fall inside the gateway credential's rights. The example
 `<prefix>-console` given while this was planned is withdrawn. The worker refuses to start the self-backup when the
 configured self-backup prefix breaks this rule, and says why (foreman ruling: fail loudly). An unset prefix means the
 self-backup is not configured: nothing runs, and C11 raises "no self-backup has been written" (foreman ruling).
@@ -60,9 +60,9 @@ one escrow row with the master key, and run `restic check --read-data` on the se
 `VerifyFailed`: C11 critical. The loader stops marking the self-backup not in this build.
 
 **Why `latest:<staging path>`.** A snapshot stores the absolute path of the folder it backed up, so a plain
-`restore latest` recreates every folder of that path under the target (`p22-spike.md:311-312`). Naming the staging
+`restore latest` recreates every folder of that path under the target (`p22-spike.md:313-314`). Naming the staging
 path as the snapshot's subfolder puts the database, `config.json` and `manifest.json` at the target's root
-(`internal/restic/commands.go:12-14`; the subfolder form in `p22-spike.md:84-87`). The CLI's
+(`internal/restic/commands.go:12-14`; the subfolder form in `p22-spike.md:86-89`). The CLI's
 restore does the same.
 
 **CLI.** `cryo-console self-backup run|list|verify`, and
@@ -111,7 +111,7 @@ again, and their old repositories remain in storage as orphans.
 ## What spike P22-S1 showed
 
 Item 9 ran restic 0.19.1 through the rclone backend with the worker's own options (`--retry-lock 30s --no-cache` and
-`rclone serve restic --stdio`), on a separate prefix on local disk (`docs/lab/p22-spike.md:295-315`):
+`rclone serve restic --stdio`), on a separate prefix on local disk (`docs/lab/p22-spike.md:297-317`):
 
 - `init`, three `backup` runs of a staging folder (database, `config.json`, `manifest.json`), `forget --prune` with
   the retention of ruling C4, a `forget --prune` that removed two snapshots and their packs, and `check --read-data`
@@ -123,7 +123,7 @@ Item 9 ran restic 0.19.1 through the rclone backend with the worker's own option
 ## Checks on the real object storage, before the self-backup ships
 
 The spike's rig had no object storage, so spike item 8 stays with the operator, on the production account
-(`p22-spike.md:284-293`). If a check fails, the self-backup does not ship until it passes, and C11 keeps saying that
+(`p22-spike.md:286-295`). If a check fails, the self-backup does not ship until it passes, and C11 keeps saying that
 no self-backup has been written.
 
 1. **The admin credential's rights on the self-backup prefix.** `init`, `backup`, `forget --prune` and

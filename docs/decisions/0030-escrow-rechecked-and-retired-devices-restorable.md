@@ -84,7 +84,7 @@ can now be restored from the console, by download only.
 
 This ADR rests on no new restic behaviour: `cat config` with the escrowed key through the admin path is already in
 production use (enrollment and the scheduler, ADR 0014), and so is the streamed download (ADR 0008). The spike
-confirmed the tar route of ADR 0028 (`docs/lab/p22-spike.md:361-374`), so a retired device's download is the same
+confirmed the tar route of ADR 0028 (`docs/lab/p22-spike.md:363-376`), so a retired device's download is the same
 multi-path zip as any other device's.
 
 ## Open points for the build (P22-H)

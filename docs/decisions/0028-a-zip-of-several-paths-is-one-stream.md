@@ -11,7 +11,7 @@ to a pipe-backed archive or one dump per path into one zip stream); restore-to-t
 - **One path today.** A download is one file or one folder (`internal/console/restores/restores.go:209-259`, one
   selection). The worker streams it (`internal/console/maintain/dump.go:39-158`) and writes nothing to disk.
 - **The worker asks what a path is first.** `restic dump` of a single file writes the file's raw bytes whatever
-  archive format is asked for (`internal/console/maintain/doc.go:84-86`; spike P22-S1, `docs/lab/p22-spike.md:222`).
+  archive format is asked for (`internal/console/maintain/doc.go:84-86`; spike P22-S1, `docs/lab/p22-spike.md:224`).
   So the worker runs `ls`, copies a folder's zip through unchanged, and wraps a file's raw bytes into a one-entry zip
   on the fly (`dump.go:60-157`).
 - **Fail closed, in code.** The one-entry zip's central directory is written only after restic exited 0
@@ -24,16 +24,16 @@ to a pipe-backed archive or one dump per path into one zip stream); restore-to-t
   archive writer, which this product does not have.
 - **Why folders come as tar.** A zip is read reliably from its central directory, which comes at its end, so restic's
   zip of a folder cannot be merged into a larger zip as it arrives. A tar is read forwards, entry by entry.
-- **What spike P22-S1 showed about `restic dump -a tar`** (restic 0.19.1, `docs/lab/p22-spike.md:207-248`):
+- **What spike P22-S1 showed about `restic dump -a tar`** (restic 0.19.1, `docs/lab/p22-spike.md:209-250`):
   - it streams into a pipe without seeking, and carries PAX records for long and non-ASCII names;
   - entry names are the full snapshot path without the leading `/` (`R/data/names/<name>`), and the dumped folder
     itself has no entry, so an empty selected folder gives an empty archive;
-  - one path per call: a second path is refused (`p22-spike.md:223`);
+  - one path per call: a second path is refused (`p22-spike.md:225`);
   - a junction comes out as a symlink entry; restic's own `-a zip` writes the link target as the content of a
-    47-byte file instead (`p22-spike.md:232-233`);
+    47-byte file instead (`p22-spike.md:234-235`);
   - a cut stream is detectably truncated: the tar reader fails with "unexpected end of data";
   - with the gateway gone restic retried for more than 20 minutes without exiting; with the maintain path's rclone
-    child gone it exited 1 within 2 s and left its lock object in the repository (`p22-spike.md:239-240`).
+    child gone it exited 1 within 2 s and left its lock object in the repository (`p22-spike.md:241-242`).
 
 ## Decision
 
@@ -69,7 +69,7 @@ to a pipe-backed archive or one dump per path into one zip stream); restore-to-t
 - A download of several files and folders is one click and one file, with nothing written on the console host.
 - A dropped download starts again from the beginning: no resume, no Range (ADR 0008).
 - Each path is a separate restic run, and every uncached run reads every index file of the repository
-  (`p22-spike.md:265-267`). A download of many paths pays that once per path. The 50-path cap bounds it.
+  (`p22-spike.md:267-269`). A download of many paths pays that once per path. The 50-path cap bounds it.
 - A download keeps one stream slot for as long as its paths take.
 - A dead gateway or storage cannot hold a stream slot for 20 minutes: the watchdog frees it.
 - Fixture mode and tests cover: a failing run in the middle never gives a readable zip; a truncated tar never gives a
@@ -89,7 +89,7 @@ to a pipe-backed archive or one dump per path into one zip stream); restore-to-t
 
 ## What spike P22-S1 showed, and what it did not
 
-The tar route holds; the single-path cut line the plan held in reserve is not needed (`p22-spike.md:361-374`). Not
+The tar route holds; the single-path cut line the plan held in reserve is not needed (`p22-spike.md:363-376`). Not
 tested: an object-storage outage behind a live rclone, where rclone's own retries decide how long restic waits
-(`p22-spike.md:242`); the watchdog covers that case as well. File symlinks in a snapshot were not tested either, and
+(`p22-spike.md:244`); the watchdog covers that case as well. File symlinks in a snapshot were not tested either, and
 are skipped by the same rule as junctions.

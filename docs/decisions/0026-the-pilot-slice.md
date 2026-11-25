@@ -99,7 +99,7 @@ Until the operator rules, nothing in the build or the docs uses these numbers ex
 - An integrity fault in a file that is not drilled can go unseen for up to 45 days. This is the known cost of C7.
 - Browsing slows down during the pilot. Each backup run adds one index file to the repository, only prune merges
   them, and every uncached browse call reads them all. A policy of 4 runs a day gives some 180 index files by day 45
-  (`docs/lab/p22-spike.md:277-279`). This is one more reason forget and prune are the first tickets after the pilot.
+  (`docs/lab/p22-spike.md:279-281`). This is one more reason forget and prune are the first tickets after the pilot.
 - The milestone table (architecture.md lines 1366-1367) is not edited; this ADR records which of its rows run earlier.
 
 ## What is deliberately left out and why
@@ -125,7 +125,7 @@ something:
 **Pilot-entry checks.** The pilot client is not enrolled until each of these has passed:
 
 1. **Browse latency on the real bucket.** The spike measured 10 to 60 seconds per browse call on a heavily loaded PC
-   against local disk, which says nothing about object storage (`p22-spike.md:250-282`). Three cold
+   against local disk, which says nothing about object storage (`p22-spike.md:252-284`). Three cold
    `ls --json --no-cache` calls on a real device repository through the admin path give the figure. If it is too
    slow to use, the worker gets an in-memory cache (tmpfs), the only cache ADR 0008 allows.
 2. **The object-storage checks of ADR 0029** (spike item 8): the admin credential's rights on the self-backup
