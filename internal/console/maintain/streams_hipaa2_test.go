@@ -39,7 +39,7 @@ func (d *heldDest) Write(p []byte) (int, error) {
 // maintenance (here: snapshots) still runs while both streams are held. A slot
 // freed by a finished stream can be used again.
 func TestDumpStreamsHaveTheirOwnBudget(t *testing.T) {
-	src, _ := realZip(t, map[string]string{"report.txt": strings.Repeat("quarterly report\n", 4096)})
+	src := treeTar(t, map[string]string{"report.txt": noise(64 << 10)})
 	e := newTenv(t, []fakeRule{
 		{Cmd: "ls", Stdout: "inline:" + lsDirJSON},
 		{Cmd: "dump", StdoutFile: src},

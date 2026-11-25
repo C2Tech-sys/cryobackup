@@ -204,8 +204,8 @@ func TestLiveAdminPathLocal(t *testing.T) {
 	}
 	t.Logf("live: stats raw-data total_size>0 snapshots=%d blobs=%d", st.SnapshotsCount, st.TotalBlobCount)
 
-	// dump (ADR 0008): a directory (restic's own zip) and a single file (wrapped on
-	// the fly) stream through the admin-path socket; nothing appears on disk in
+	// dump (ADR 0008, 0028): a directory (restic's tar, re-encoded) and a single
+	// file (wrapped on the fly) stream through the admin-path socket; nothing appears on disk in
 	// the scratch space, the harness or restic's default cache, during or after.
 	userCache := ""
 	if d, err := os.UserCacheDir(); err == nil {
