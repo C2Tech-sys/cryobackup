@@ -144,6 +144,11 @@ type Result struct {
 	// sorted, each once ("C"); a fallback on a volume without a letter is in
 	// VSSFallbacks only.
 	VSSFallbackVolumes []string
+	// RestoreSummary is restic's restore summary (KindRestore), nil when none
+	// was decoded. restic leaves every zero field out, so a restore whose
+	// include file matched nothing has a summary with every count 0
+	// (p22-spike.md:176-182).
+	RestoreSummary *restic.RestoreSummary
 	// MemoryLimitHit is true when the job object reported that the child hit
 	// Spec.MemoryLimitMiB (JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT). A child that
 	// then died on its own is classified failed/memory.
@@ -284,6 +289,7 @@ type runState struct {
 	mu      sync.Mutex
 	kind    restic.Kind
 	summary *restic.BackupSummary
+	restore *restic.RestoreSummary
 	counts  restic.ErrorCounts
 	// plain counts the plain-text (non-JSON) stderr lines that classify. They
 	// are kept apart from counts so that a memory death can replace them:
@@ -331,6 +337,20 @@ func (r *runState) handle(m restic.Message, now time.Time) {
 	case restic.BackupSummary:
 		sum := v
 		r.summary = &sum
+	case restic.RestoreStatus:
+		// A restore's progress (ADR 0027: the watchdog of a restore that stops
+		// moving reads it). Files and bytes restored stand in for done.
+		r.latest = Progress{
+			Kind: r.kind, PercentDone: clamp01(v.PercentDone), BytesDone: v.BytesRestored + v.BytesSkipped,
+			TotalBytes: v.TotalBytes, FilesDone: v.FilesRestored + v.FilesSkipped, TotalFiles: v.TotalFiles,
+			SecondsElapsed: v.SecondsElapsed, UpdatedAt: now,
+		}
+		if done := v.BytesRestored + v.BytesSkipped; done != r.lastBytes {
+			r.lastBytes, r.lastMoved = done, now
+		}
+	case restic.RestoreSummary:
+		sum := v
+		r.restore = &sum
 	case restic.ErrorEvent:
 		r.counts.Add(v)
 		if v.During == "archival" {
@@ -618,7 +638,7 @@ func (s *Supervisor) Run(ctx context.Context, spec Spec) (Result, error) {
 		}
 	}
 	res := Result{
-		ExitCode: exit, Summary: st.summary, Counts: counts, ExitError: st.exitErr,
+		ExitCode: exit, Summary: st.summary, RestoreSummary: st.restore, Counts: counts, ExitError: st.exitErr,
 		FailedFiles: st.failedFiles, Unparsed: st.unparsed, Elapsed: finished.Sub(started),
 		LongRun: longRun.Load(), Cancel: cause, Progress: st.latest, Stdout: captured.Bytes(),
 		VSSFallbacks: st.vssFallbacks, MemoryLimitHit: memHit,
@@ -639,7 +659,7 @@ func (s *Supervisor) Run(ctx context.Context, spec Spec) (Result, error) {
 		res.CancelMode = CancelTerminated
 	}
 	res.Restic = restic.Map(spec.Command.Kind, exit, restic.Evidence{
-		SummarySeen: res.Summary != nil,
+		SummarySeen: res.Summary != nil || res.RestoreSummary != nil,
 		Cancel:      cause,
 		Stderr:      restic.StderrClass(res.ExitError, res.Counts),
 	})

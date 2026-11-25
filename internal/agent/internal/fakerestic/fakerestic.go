@@ -92,6 +92,10 @@ func MaybeRun() {
 		os.Exit(0)
 	case "backup":
 		os.Exit(backup(scenario))
+	case "restore":
+		os.Exit(restore(scenario, args))
+	case "unlock":
+		os.Exit(0)
 	}
 	os.Exit(2)
 }

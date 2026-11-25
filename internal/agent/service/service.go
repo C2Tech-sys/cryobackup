@@ -20,13 +20,14 @@ const (
 // rejected, 1003 stopped, 1004 state directory refused, 1005 lab flag in use,
 // 1006 state directory tampered, 1007 quarantined, 1008 the console refuses the
 // device token (ADR 0018), 1009 service configuration repaired, 1010 backup
-// finished, 1011 backup failed, 1012 backup deferred. Each has the message
+// finished, 1011 backup failed, 1012 backup deferred, 1020 restore finished
+// (ADR 0027), 1021 restore failed, cancelled or interrupted. Each has the message
 // text "%1" (the agent's own line) in the message table compiled into
 // cryo-agent.exe (deploy/windows/eventlog/messages.mc), which the source names
 // as its EventMessageFile. EventCreate.exe, the earlier message file, only has
 // texts for ids 1 to 1000, so Event Viewer could not show 1001 and above
 // (L-EVT-1).
-var EventIDs = []uint32{1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012}
+var EventIDs = []uint32{1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1020, 1021}
 
 // Opening a source this process has just registered can fail for a moment
 // with "Access is denied" (FIX6: seen once on the elevated CI runner), so

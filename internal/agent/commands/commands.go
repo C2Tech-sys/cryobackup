@@ -22,6 +22,14 @@ const (
 	ReasonRunMismatch      = "run_mismatch"
 	ReasonStartFailed      = "start_failed"
 	ReasonFailed           = "failed"
+	// ReasonRestoreActive: a restore is already running on this device (the
+	// console allows one active device restore per device, ADR 0027).
+	ReasonRestoreActive = "restore_active"
+	// ReasonAlreadyRun: a restore with this request id has already run here;
+	// a restore never runs twice, and never resumes after a restart.
+	ReasonAlreadyRun = "already_run"
+	// ReasonStopping: the agent is stopping and starts nothing new.
+	ReasonStopping = "stopping"
 )
 
 // Handlers is what the agent offers the executor. A nil handler makes the
@@ -40,6 +48,14 @@ type Handlers struct {
 	RefreshPolicy func(ctx context.Context) error
 	// CheckIn sends a heartbeat now.
 	CheckIn func(ctx context.Context) error
+	// Restore accepts the restore request named by requestID and runs it on
+	// its own goroutine, outside the executor (ADR 0027: the agent accepts the
+	// command at once). It must return at once: accepted, or not and why
+	// (ReasonRestoreActive, ReasonAlreadyRun, ReasonStopping). The executor
+	// journals the answer like any result, so a restart re-runs only a command
+	// whose answer was never journaled, and the handler refuses a request id
+	// that already has a run.
+	Restore func(ctx context.Context, requestID string) (accepted bool, reason string)
 }
 
 // Executor runs commands exactly once per id and records every result in the
@@ -151,8 +167,26 @@ func (e *Executor) run(ctx context.Context, cmd api.Command) api.CommandResultRe
 			return failedClass(ReasonFailed, classOf(err))
 		}
 		return succeeded(nil)
+	case api.CommandRestore:
+		if h.Restore == nil {
+			return failed(ReasonNotImplementedM0)
+		}
+		var p api.RestoreParams
+		if err := json.Unmarshal(cmd.Params, &p); err != nil || p.Validate() != nil {
+			return failed(ReasonInvalid)
+		}
+		accepted, why := h.Restore(ctx, p.RestoreRequestID)
+		if accepted {
+			return succeeded(map[string]any{"accepted": true})
+		}
+		switch why {
+		case ReasonRestoreActive, ReasonAlreadyRun, ReasonStopping:
+		default:
+			why = ReasonFailed // only fixed reasons reach the wire
+		}
+		return failed(why)
 	case api.CommandPause, api.CommandResume, api.CommandHold, api.CommandRestartService,
-		api.CommandUpdateAgent, api.CommandRestore, api.CommandUninstall:
+		api.CommandUpdateAgent, api.CommandUninstall:
 		// Journaled as failed, never silently dropped (milestones M1, M5, M6, M8, M11).
 		return failed(ReasonNotImplementedM0)
 	}

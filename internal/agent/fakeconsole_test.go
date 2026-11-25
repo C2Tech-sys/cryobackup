@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -71,6 +72,22 @@ type fakeConsole struct {
 	leaseRetryS  atomic.Int32
 	leaseReqs    []api.StartLeaseRequest
 	leaseRelease chan struct{}
+
+	// Restore selections (GET /restores/{id}, ADR 0027; the console side is
+	// P22-E): restoreAnswers by request id; restoreFetches counts the GETs.
+	restoreAnswers map[string]restoreAnswer
+	restoreFetches map[string]int
+	// gatewayURL replaces the enroll response's gateway URL (the live restore
+	// test points the agent at a real rclone gateway).
+	gatewayURL string
+}
+
+// restoreAnswer is how the fake console answers one restore fetch: the
+// selection, or a problem code, after hold (when set) is closed.
+type restoreAnswer struct {
+	sel  api.RestoreSelection
+	code string
+	hold chan struct{}
 }
 
 // Answers of the fake console's start-lease route.
@@ -211,6 +228,8 @@ func (f *fakeConsole) serve(w http.ResponseWriter, r *http.Request) {
 		f.snapshots = append(f.snapshots, req)
 		f.mu.Unlock()
 		f.json(w, 200, api.SnapshotsResponse{Upserted: len(req.Snapshots), ServerTime: time.Now()})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, api.PathPrefix+"/restores/"):
+		f.restoreFetch(w, r, strings.TrimPrefix(r.URL.Path, api.PathPrefix+"/restores/"))
 	case r.URL.Path == api.RouteCommands && r.Method == http.MethodGet:
 		f.commands(w, r)
 	case r.Method == http.MethodPost && len(r.URL.Path) > len(api.PathPrefix+"/commands/") && r.URL.Path[:len(api.PathPrefix+"/commands/")] == api.PathPrefix+"/commands/":
@@ -262,9 +281,13 @@ func (f *fakeConsole) enroll(w http.ResponseWriter, r *http.Request, body []byte
 	}
 	f.tokensIssued++
 	f.deviceToken = "device-token-" + strconv.Itoa(f.tokensIssued) // a retry revokes the earlier token
+	gw := "https://gateway.example:9443"
+	if f.gatewayURL != "" {
+		gw = f.gatewayURL
+	}
 	resp := api.EnrollResponse{
 		DeviceID: id, CustomerID: testCustomerID, DeviceToken: api.Secret(f.deviceToken),
-		Gateway:      api.Gateway{URL: "https://gateway.example:9443", Username: id, Password: testGatewaySec},
+		Gateway:      api.Gateway{URL: gw, Username: id, Password: testGatewaySec},
 		RepoPassword: testRepoSecret, Custody: api.CustodyEscrowed, Policy: f.policy, ServerTime: time.Now(),
 	}
 	f.mu.Unlock()
@@ -458,4 +481,47 @@ func (f *fakeConsole) postCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.runPosts)
+}
+
+// setRestore makes the fake console answer the fetch of request id with a.
+func (f *fakeConsole) setRestore(id string, a restoreAnswer) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.restoreAnswers == nil {
+		f.restoreAnswers = map[string]restoreAnswer{}
+	}
+	f.restoreAnswers[id] = a
+}
+
+func (f *fakeConsole) restoreFetch(w http.ResponseWriter, r *http.Request, id string) {
+	f.mu.Lock()
+	if f.restoreFetches == nil {
+		f.restoreFetches = map[string]int{}
+	}
+	f.restoreFetches[id]++
+	a, ok := f.restoreAnswers[id]
+	f.mu.Unlock()
+	if !ok {
+		f.problem(w, api.CodeNotFound)
+		return
+	}
+	if a.hold != nil {
+		select {
+		case <-a.hold:
+		case <-r.Context().Done():
+			return
+		}
+	}
+	if a.code != "" {
+		f.problem(w, a.code)
+		return
+	}
+	f.json(w, 200, a.sel)
+}
+
+// restoreFetchCount is how many times the agent fetched request id.
+func (f *fakeConsole) restoreFetchCount(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.restoreFetches[id]
 }

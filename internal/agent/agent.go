@@ -25,6 +25,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/agent/uplink"
 	"github.com/c2tech-sys/cryobackup/internal/api"
 	"github.com/c2tech-sys/cryobackup/internal/policy"
+	"github.com/c2tech-sys/cryobackup/internal/restic"
 	"github.com/c2tech-sys/cryobackup/internal/ulid"
 )
 
@@ -122,6 +123,17 @@ type Options struct {
 	gatewayProbeEvery time.Duration                                    // 0 = gatewayProbeEvery
 	refusedProbe      time.Duration                                    // 0 = refusedProbeEvery (loops.go)
 	eventHook         func(level string, id uint32, msg string)        // nil in production; tests see every Event Log line through it
+
+	// Restore (restore.go, ADR 0027). Production leaves every one unset.
+	restoreDriveRoot    func(letter string) string          // nil = the root of drive <L>
+	restoreStagingRoot  func(letter string) string          // nil = <drive root>.cryobackup-restore
+	restoreSideRoot     string                              // "" = <SystemDrive>\CryoBackup-Restore
+	restoreLabTrustee   string                              // a SID the root rule also accepts (non-elevated tests only)
+	restoreFreeBytes    func(volume string) (uint64, error) // nil = the volume's real free space
+	restoreSweepLetters func() []string                     // nil = the fixed drives
+	restoreIdle         time.Duration                       // 0 = restoreIdleBound
+	restoreSlotPoll     time.Duration                       // 0 = restoreSlotPoll
+	restoreFetchFor     time.Duration                       // 0 = restoreFetchFor
 }
 
 // Agent is the endpoint: config, secrets, journal, uplink, scheduler,
@@ -150,10 +162,13 @@ type Agent struct {
 	gatewayPW   string
 	repoPW      string
 
-	mu          sync.Mutex
-	pol         *api.PolicyResponse
-	polETag     string
-	running     *activeRun
+	mu      sync.Mutex
+	pol     *api.PolicyResponse
+	polETag string
+	running *activeRun
+	// restoring is the accepted restore, from acceptance to its closed run
+	// (restore.go); running is set to it only while it holds the restic slot.
+	restoring   *restoreRun
 	forceNow    bool
 	forceAt     time.Time
 	bootPending bool
@@ -219,12 +234,19 @@ type Agent struct {
 	planned string
 }
 
-// activeRun is the backup in progress.
+// activeRun is the run that holds the restic slot: a backup, or a restore
+// while its restic children and placement run (one restic child at a time,
+// ADR 0027). kind is restic.KindBackup or restic.KindRestore; the zero value
+// is a backup.
 type activeRun struct {
 	id     string
+	kind   restic.Kind
 	cancel context.CancelCauseFunc
 	start  time.Time
 }
+
+// isRestore reports whether the run in the slot is a restore.
+func (r *activeRun) isRestore() bool { return r != nil && r.kind == restic.KindRestore }
 
 // New runs the boot sequence of architecture §6.1 up to, not including,
 // starting the loops: validate and create the layout and its ACLs, open the log,
@@ -384,7 +406,10 @@ func New(ctx context.Context, o Options) (*Agent, error) {
 		for _, r := range closed {
 			a.log.Warn("closed a run left open by the previous process", "run", r.ID, "outcome", string(r.Outcome))
 		}
-		_ = emptyDir(a.layout.TempDir())
+		_ = emptyDir(a.layout.TempDir()) // include files a killed restore left behind go here too
+		// Staging folders of a restore cut short (closed as interrupted just
+		// above) are removed by the clean-up walk (ADR 0027).
+		a.sweepRestoreStaging()
 		if n, _ := logs.PruneRunLogs(a.layout.RunLogsDir(), a.clock(), logs.RunLogRetention); n > 0 {
 			a.log.Info("pruned old run logs", "count", n)
 		}
@@ -433,6 +458,7 @@ func New(ctx context.Context, o Options) (*Agent, error) {
 		},
 		Handlers: commands.Handlers{
 			BackupNow: a.cmdBackupNow, CancelRun: a.cmdCancel, RefreshPolicy: a.pullPolicy, CheckIn: a.cmdCheckIn,
+			Restore: a.cmdRestore,
 		},
 	}
 

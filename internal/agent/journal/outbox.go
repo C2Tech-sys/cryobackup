@@ -181,6 +181,11 @@ const (
 	// (RFC 3339 UTC) while the console refuses the device token (ADR 0018), and
 	// deleted when a heartbeat is accepted again and on every agent start.
 	KVTokenRefusedSince = "token_refused_since"
+	// KVRestoreWaiting is set while a restore waits for the running backup
+	// (ADR 0027: "Waiting for the running backup"), to "<restore id> <RFC 3339
+	// UTC since>", and deleted when the restore gets the restic slot or ends.
+	// It holds no path.
+	KVRestoreWaiting = "restore_waiting"
 )
 
 // PlannedStart is the value of KVPlannedStart: when the scheduler plans to

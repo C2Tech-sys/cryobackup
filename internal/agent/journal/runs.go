@@ -157,9 +157,13 @@ func (j *Journal) InsertFinished(ctx context.Context, rec api.RunRecord) error {
 
 // OpenRunsOnStart closes rows left open by a previous process: as interrupted
 // when the previous process recorded a stop (interrupted is true), otherwise as
-// abandoned (§6.2: "no record of why"). The finish time is the last journal
-// activity of the row, never earlier than its start. The closed records are
-// queued for upload and returned.
+// abandoned (§6.2: "no record of why"). A restore run is always closed as
+// interrupted, with the restore result interrupted and no counts, whatever the
+// stop marker says (ADR 0027: a restore never resumes after the agent restarts;
+// it ends as interrupted), so its record satisfies the restore couplings of
+// api.RunRecord.Validate. The finish time is the last journal activity of the
+// row, never earlier than its start. The closed records are queued for upload
+// and returned.
 func (j *Journal) OpenRunsOnStart(ctx context.Context, interrupted bool, agentVersion string) ([]api.RunRecord, error) {
 	outcome := restic.OutcomeAbandoned
 	if interrupted {
@@ -178,6 +182,11 @@ func (j *Journal) OpenRunsOnStart(ctx context.Context, interrupted bool, agentVe
 		rec := r.RunRecord
 		rec.Outcome = outcome
 		rec.FinishedAt = &finished
+		if rec.Kind == restic.KindRestore {
+			rec.Outcome = restic.OutcomeInterrupted
+			rec.Stats = api.RunStats{RestoreResult: api.RestoreResultInterrupted}
+			rec.ErrorClass, rec.ErrorCounts, rec.ExitCode = "", nil, nil
+		}
 		if rec.AgentVersion == "" {
 			rec.AgentVersion = agentVersion
 		}
