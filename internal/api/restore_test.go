@@ -270,6 +270,25 @@ func TestRestorePathsAreByteExact(t *testing.T) {
 	}
 }
 
+// The reserved-name fold is ASCII only (windowsReservedName, asciiUpper). The
+// dotless i (U+0131) upper-cases to I under strings.ToUpper, so a Unicode fold
+// would turn "conın$" into the device CONIN$; Win32 does not, and the name is a
+// different file, so it is accepted and matched literally.
+func TestReservedNamesFoldASCIIOnly(t *testing.T) {
+	dotlessI := string(rune(0x131))
+	for _, p := range []string{"/C/con" + dotlessI + "n$", "/C/con" + dotlessI + "n$.txt", "/C/x/CON" + dotlessI + "N$"} {
+		if err := ValidateRestorePath(p); err != nil {
+			t.Errorf("%q is not a reserved name and must pass: %v", p, err)
+		}
+	}
+	// The same names with the ASCII i are the device and stay refused.
+	for _, p := range []string{"/C/conin$", "/C/conin$.txt", "/C/CONIN$"} {
+		if ValidateRestorePath(p) == nil {
+			t.Errorf("%q is the CONIN$ device and passed", p)
+		}
+	}
+}
+
 // The wire shape: exactly these keys, and no target, include list or artifact
 // field of the old draft. The golden file pins the values.
 func TestRestoreSelectionKeys(t *testing.T) {
@@ -514,6 +533,20 @@ func TestOldShapeRunRecordStillValidates(t *testing.T) {
 	}
 }
 
+// MaxRestoreCount is 2^53-1, the largest integer an IEEE-754 double carries
+// exactly. The test pins the literal so a change to the constant is a decision
+// and not a typo (runs.go, MaxRestoreCount).
+func TestMaxRestoreCountIsTheJSONSafeInteger(t *testing.T) {
+	if MaxRestoreCount != 9007199254740991 {
+		t.Errorf("MaxRestoreCount = %d, want 9007199254740991 (2^53-1)", int64(MaxRestoreCount))
+	}
+	// 2^53 is the last integer whose successor is still exact; 2^53+1 rounds back to 2^53.
+	a := int64(MaxRestoreCount)
+	if int64(float64(a)) != a || float64(a+2) != float64(a+1) {
+		t.Error("2^53-1 is not the edge of exact double arithmetic")
+	}
+}
+
 func TestValidateRunStatsRestoreBlock(t *testing.T) {
 	// One row per class is the most; every row past the first repeats "other".
 	tooMany := []string{"restore_errors"}
@@ -527,6 +560,14 @@ func TestValidateRunStatsRestoreBlock(t *testing.T) {
 		{"errors empty", func(s *RunStats) { s.RestoreErrors = nil }, nil},
 		{"nothing_matched counted as restic runs", func(s *RunStats) {
 			s.RestoreErrors = []RestoreClassCount{{Class: RestoreResultNothingMatched, Count: 1}, {Class: RestoreResultOther, Count: 4}}
+		}, nil},
+		{"guard_refused counted per item", func(s *RunStats) {
+			s.RestoreErrors = []RestoreClassCount{{Class: RestoreResultGuardRefused, Count: 2}}
+		}, nil},
+		{"guard_refused with the other counted classes", func(s *RunStats) {
+			s.RestoreErrors = []RestoreClassCount{
+				{Class: RestoreResultGuardRefused, Count: 2}, {Class: RestoreResultAccessDenied, Count: 1}, {Class: RestoreResultTargetLocked, Count: 3},
+			}
 		}, nil},
 		{"files_restored negative", func(s *RunStats) { s.FilesRestored = -1 }, []string{"files_restored"}},
 		{"files_skipped negative", func(s *RunStats) { s.FilesSkipped = -1 }, []string{"files_skipped"}},
@@ -595,6 +636,21 @@ func TestRestoreCouplings(t *testing.T) {
 				"stats.bytes_restored", "stats.bytes_skipped", "stats.files_restored", "stats.files_skipped", "stats.restore_errors", "stats.restore_result",
 			}},
 		},
+		"open": {
+			{"an open restore with an empty block", func(r *RunRecord) { open(r); r.Stats = RunStats{} }, nil},
+			{"files_restored on an open restore", func(r *RunRecord) { open(r); r.Stats = RunStats{FilesRestored: 1} }, []string{"stats.files_restored"}},
+			{"files_skipped on an open restore", func(r *RunRecord) { open(r); r.Stats = RunStats{FilesSkipped: 1} }, []string{"stats.files_skipped"}},
+			{"bytes_restored on an open restore", func(r *RunRecord) { open(r); r.Stats = RunStats{BytesRestored: 1} }, []string{"stats.bytes_restored"}},
+			{"bytes_skipped on an open restore", func(r *RunRecord) { open(r); r.Stats = RunStats{BytesSkipped: 1} }, []string{"stats.bytes_skipped"}},
+			{"restore_result on an open restore", func(r *RunRecord) { open(r); r.Stats = RunStats{RestoreResult: RestoreResultDisk} }, []string{"stats.restore_result"}},
+			{"error rows on an open restore", func(r *RunRecord) {
+				open(r)
+				r.Stats = RunStats{RestoreErrors: []RestoreClassCount{{Class: RestoreResultAccessDenied, Count: 1}}}
+			}, []string{"stats.restore_errors"}},
+			{"the whole block on an open restore", open, []string{
+				"stats.bytes_restored", "stats.bytes_skipped", "stats.files_restored", "stats.files_skipped", "stats.restore_errors", "stats.restore_result",
+			}},
+		},
 		"success": {
 			{"files restored", func(r *RunRecord) { success(r); r.Stats.FilesSkipped = 0 }, nil},
 			{"every file kept (skipped), nothing replaced", func(r *RunRecord) { success(r); r.Stats.FilesRestored, r.Stats.BytesRestored = 0, 0 }, nil},
@@ -612,10 +668,6 @@ func TestRestoreCouplings(t *testing.T) {
 		},
 		"nothing_matched": {
 			{"failed, nothing counted", nothing, nil},
-			{"failed, the runs counted", func(r *RunRecord) {
-				nothing(r)
-				r.Stats.RestoreErrors = []RestoreClassCount{{Class: RestoreResultNothingMatched, Count: 2}}
-			}, nil},
 			{"outcome partial", func(r *RunRecord) { nothing(r); r.Outcome = restic.OutcomePartial }, []string{"stats.restore_result"}},
 			{"outcome cancelled", func(r *RunRecord) { nothing(r); r.Outcome = restic.OutcomeCancelled }, []string{"stats.restore_result"}},
 			{"on an open record", func(r *RunRecord) { nothing(r); open(r) }, []string{"stats.restore_result"}},
@@ -625,11 +677,47 @@ func TestRestoreCouplings(t *testing.T) {
 				r.Stats.FilesRestored, r.Stats.FilesSkipped, r.Stats.BytesRestored, r.Stats.BytesSkipped = 1, 2, 3, 4
 			}, []string{"stats.bytes_restored", "stats.bytes_skipped", "stats.files_restored", "stats.files_skipped"}},
 		},
+		"nothing_rows": {
+			{"nothing matched, no rows", nothing, nil},
+			{"nothing matched with the runs counted", func(r *RunRecord) {
+				nothing(r)
+				r.Stats.RestoreErrors = []RestoreClassCount{{Class: RestoreResultNothingMatched, Count: 2}}
+			}, []string{"stats.restore_errors"}},
+			{"nothing matched with a file error row", func(r *RunRecord) {
+				nothing(r)
+				r.Stats.RestoreErrors = []RestoreClassCount{{Class: RestoreResultAccessDenied, Count: 1}}
+			}, []string{"stats.restore_errors"}},
+			{"some runs matched nothing inside a partial restore", nil, nil},
+		},
 		"partial": {
 			{"outcome partial", nil, nil},
 			{"outcome failed", func(r *RunRecord) { r.Outcome = restic.OutcomeFailed }, []string{"stats.restore_result"}},
 			{"outcome interrupted", func(r *RunRecord) { r.Outcome = restic.OutcomeInterrupted }, []string{"stats.restore_result"}},
-			{"on an open record", open, []string{"stats.restore_result"}},
+			{"placement refusals counted under guard_refused", func(r *RunRecord) {
+				r.Stats.RestoreErrors = []RestoreClassCount{{Class: RestoreResultGuardRefused, Count: 2}}
+			}, nil},
+			{"every countable class counted", func(r *RunRecord) {
+				r.Stats.RestoreErrors = []RestoreClassCount{
+					{Class: RestoreResultTargetLocked, Count: 1}, {Class: RestoreResultAccessDenied, Count: 2},
+					{Class: RestoreResultGuardRefused, Count: 3}, {Class: RestoreResultOther, Count: 4}, {Class: RestoreResultNothingMatched, Count: 5},
+				}
+			}, nil},
+			{"on an open record is the open row's", open, []string{
+				"stats.bytes_restored", "stats.bytes_skipped", "stats.files_restored", "stats.files_skipped", "stats.restore_errors", "stats.restore_result",
+			}},
+		},
+		"partial_rows": {
+			{"partial with error rows", nil, nil},
+			{"partial with no error rows", func(r *RunRecord) { r.Stats.RestoreErrors = nil }, []string{"stats.restore_errors"}},
+			{"partial with an empty row list", func(r *RunRecord) { r.Stats.RestoreErrors = []RestoreClassCount{} }, []string{"stats.restore_errors"}},
+			{"the other classes need no rows", func(r *RunRecord) { closeAs(r, restic.OutcomeFailed, RestoreResultAuth); r.Stats.RestoreErrors = nil }, nil},
+		},
+		"outcome_partial": {
+			{"outcome partial, result partial", nil, nil},
+			{"outcome partial, no class", func(r *RunRecord) { r.Stats.RestoreResult = "" }, []string{"stats.restore_result"}},
+			{"outcome partial, no class, no block", func(r *RunRecord) { r.Stats = RunStats{} }, []string{"stats.restore_result"}},
+			{"outcome failed needs no class", func(r *RunRecord) { closeAs(r, restic.OutcomeFailed, "") }, nil},
+			{"outcome partial on a backup is not a restore's", func(r *RunRecord) { backup(r); r.Outcome, r.DeferredReason = restic.OutcomePartial, "" }, nil},
 		},
 		"cancelled": {
 			{"outcome cancelled", func(r *RunRecord) { closeAs(r, restic.OutcomeCancelled, RestoreResultCancelled) }, nil},
@@ -651,7 +739,11 @@ func TestRestoreCouplings(t *testing.T) {
 			{"auth on a cancelled run", func(r *RunRecord) { closeAs(r, restic.OutcomeCancelled, RestoreResultAuth) }, []string{"stats.restore_result"}},
 			{"disk on a partial run", func(r *RunRecord) { closeAs(r, restic.OutcomePartial, RestoreResultDisk) }, []string{"stats.restore_result"}},
 			{"target_locked on an interrupted run", func(r *RunRecord) { closeAs(r, restic.OutcomeInterrupted, RestoreResultTargetLocked) }, []string{"stats.restore_result"}},
-			{"guard_refused on an open record", func(r *RunRecord) { r.Stats.RestoreResult = RestoreResultGuardRefused; open(r) }, []string{"stats.restore_result"}},
+			{"guard_refused refuses the whole restore", func(r *RunRecord) {
+				closeAs(r, restic.OutcomeFailed, RestoreResultGuardRefused)
+				r.Stats = RunStats{RestoreResult: RestoreResultGuardRefused}
+			}, nil},
+			{"guard_refused on an open record", func(r *RunRecord) { r.Stats = RunStats{RestoreResult: RestoreResultGuardRefused}; open(r) }, []string{"stats.restore_result"}},
 		},
 	}
 	for _, rc := range restoreCouplings {
@@ -696,6 +788,7 @@ func TestEveryRestoreClassHasExactlyOneOutcome(t *testing.T) {
 			}
 			if c == RestoreResultNothingMatched {
 				r.Stats.FilesRestored, r.Stats.FilesSkipped, r.Stats.BytesRestored, r.Stats.BytesSkipped = 0, 0, 0, 0
+				r.Stats.RestoreErrors = nil
 			}
 			if r.Validate() == nil {
 				accepted = append(accepted, o)
@@ -733,10 +826,14 @@ func TestRestoreVocabularies(t *testing.T) {
 			}
 		}
 	}
-	// Run-level only: partial, interrupted, cancelled and disk (a refusal before
-	// anything was written) are never tallied per file.
+	// Run-level only: partial, interrupted, auth, repo_unreachable, cancelled and
+	// disk (a refusal before anything was written) are never tallied. The
+	// countable set is every class ADR 0027 says is "counted under" (guard_refused
+	// for each refused placement, access_denied for a read-only or system file,
+	// target_locked for a file in use, nothing_matched per restic run) plus other.
 	countable := map[RestoreResultClass]bool{
-		RestoreResultNothingMatched: true, RestoreResultTargetLocked: true, RestoreResultAccessDenied: true, RestoreResultOther: true,
+		RestoreResultNothingMatched: true, RestoreResultTargetLocked: true, RestoreResultAccessDenied: true,
+		RestoreResultGuardRefused: true, RestoreResultOther: true,
 	}
 	for _, c := range restoreResultClasses {
 		if c.Countable() != countable[c] {

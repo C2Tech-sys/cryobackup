@@ -153,15 +153,20 @@ type restoreCoupling struct {
 }
 
 // restoreCouplings is the whole coupling table. An open record (no outcome
-// yet) is judged by it too: it may carry no restore_result, because every
-// class names how a run ended and requires the outcome it ended with.
+// yet) is judged by it too: the open row refuses every restore field on it, and
+// the outcome rows leave an open record to that row so one mistake is one
+// problem.
 //
 //	id                 rule                                                      reason
 //	kind               restore block only on kind=restore                        a backup or maintenance record with restore numbers is a mixed-up record, and the console would count it as a restore
+//	open               open restore: no counts, no result, no error rows         the numbers and the class say how a run ended; on a run that has not ended they are a guess the console would show as fact, and the agent writes the row open before restic starts, with nothing to report yet
 //	success            success: no restore_result, no restore_errors,            restic exits 0 when nothing matched (spike item 4); a success that placed no file is the quiet green this product exists to prevent
 //	                   files_restored+files_skipped > 0
 //	nothing_matched    nothing_matched: outcome failed, all four counts 0        spike item 4 / ADR 0027: never delivered; a restored or skipped file or byte means something matched, which is partial
+//	nothing_rows       nothing_matched: no error rows                            ADR 0027 reports the runs that matched nothing under nothing_matched only when another run restored files, which is partial; with the whole restore nothing_matched a row would claim files or runs that the class says do not exist
 //	partial            partial: outcome partial                                  ADR 0027: restored with errors is delivered with error class partial, from the run's outcome
+//	partial_rows       partial: at least one error row                           "with errors" that names no error is the quiet green: the operator is told RESTORED WITH ERRORS and can see none
+//	outcome_partial    outcome partial: restore_result partial                   outcome partial with no class says a restore had errors and not which; a partial outcome with another class is refused by that class's own row
 //	cancelled          cancelled: outcome cancelled                              the console closes the request from the outcome; a mismatch would show one state and count another
 //	interrupted        interrupted: outcome interrupted                          a restore never resumes after a restart (ADR 0027); the outcome is what the console reads
 //	failed             every other class: outcome failed                         the class names why it failed; on any other outcome it contradicts the outcome
@@ -170,18 +175,11 @@ var restoreCouplings = []restoreCoupling{
 		if r.Kind == restic.KindRestore {
 			return
 		}
-		s := r.Stats
-		for _, f := range []struct {
-			name string
-			set  bool
-		}{
-			{"files_restored", s.FilesRestored != 0}, {"files_skipped", s.FilesSkipped != 0},
-			{"bytes_restored", s.BytesRestored != 0}, {"bytes_skipped", s.BytesSkipped != 0},
-			{"restore_result", s.RestoreResult != ""}, {"restore_errors", len(s.RestoreErrors) != 0},
-		} {
-			if f.set {
-				c.add("stats."+f.name, "is only allowed on a restore run")
-			}
+		restoreFieldsSet(r.Stats, c, "is only allowed on a restore run")
+	}},
+	{"open", "a restore that has not ended has nothing to report yet", func(r RunRecord, c *collector) {
+		if r.Kind == restic.KindRestore && r.Open() {
+			restoreFieldsSet(r.Stats, c, "is not allowed on an open restore")
 		}
 	}},
 	{"success", "a successful restore placed or kept at least one file and has nothing to report", func(r RunRecord, c *collector) {
@@ -216,9 +214,24 @@ var restoreCouplings = []restoreCoupling{
 			}
 		}
 	}},
+	{"nothing_rows", "a restore that matched nothing has no error rows to count", func(r RunRecord, c *collector) {
+		if restoreClosedNotSuccess(r) && r.Stats.RestoreResult == RestoreResultNothingMatched && len(r.Stats.RestoreErrors) != 0 {
+			c.add("stats.restore_errors", "is not allowed when nothing matched")
+		}
+	}},
 	{"partial", "restored with errors is outcome partial", func(r RunRecord, c *collector) {
 		if r.Kind == restic.KindRestore && r.Stats.RestoreResult == RestoreResultPartial {
 			requireRestoreOutcome(r, c, restic.OutcomePartial)
+		}
+	}},
+	{"partial_rows", "restored with errors names at least one error", func(r RunRecord, c *collector) {
+		if restoreClosedNotSuccess(r) && r.Stats.RestoreResult == RestoreResultPartial && len(r.Stats.RestoreErrors) == 0 {
+			c.add("stats.restore_errors", "is required when the result is partial")
+		}
+	}},
+	{"outcome_partial", "a partial restore outcome says which class it is", func(r RunRecord, c *collector) {
+		if r.Kind == restic.KindRestore && r.Outcome == restic.OutcomePartial && r.Stats.RestoreResult == "" {
+			c.add("stats.restore_result", "is required (partial) when the outcome is partial")
 		}
 	}},
 	{"cancelled", "a cancelled restore is outcome cancelled", func(r RunRecord, c *collector) {
@@ -243,11 +256,37 @@ var restoreCouplings = []restoreCoupling{
 	}},
 }
 
+// restoreClosedNotSuccess reports whether r is a restore that has ended other than in
+// success: the records the error-row rules judge. An open restore belongs to the
+// open row and a successful one to the success row, which report the block
+// themselves, so one mistake is one problem.
+func restoreClosedNotSuccess(r RunRecord) bool {
+	return r.Kind == restic.KindRestore && !r.Open() && r.Outcome != restic.OutcomeSuccess
+}
+
+// restoreFieldsSet records a problem, with msg, for every restore field of s
+// that is set: the four counts, the result and the error rows.
+func restoreFieldsSet(s RunStats, c *collector, msg string) {
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"files_restored", s.FilesRestored != 0}, {"files_skipped", s.FilesSkipped != 0},
+		{"bytes_restored", s.BytesRestored != 0}, {"bytes_skipped", s.BytesSkipped != 0},
+		{"restore_result", s.RestoreResult != ""}, {"restore_errors", len(s.RestoreErrors) != 0},
+	} {
+		if f.set {
+			c.add("stats."+f.name, msg)
+		}
+	}
+}
+
 // requireRestoreOutcome records a problem when the record's outcome is not
-// want. A successful record is left to the success row, which reports the
-// class itself, so one mistake is one problem.
+// want. A successful record is left to the success row and an open record to
+// the open row, which report the class themselves, so one mistake is one
+// problem.
 func requireRestoreOutcome(r RunRecord, c *collector, want restic.Outcome) {
-	if r.Outcome != want && r.Outcome != restic.OutcomeSuccess {
+	if r.Outcome != want && r.Outcome != restic.OutcomeSuccess && !r.Open() {
 		c.add("stats.restore_result", "requires outcome "+string(want))
 	}
 }

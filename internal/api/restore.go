@@ -337,9 +337,12 @@ func asciiUpper(s string) string {
 //
 // Two kinds share the vocabulary. Run-level classes say how the whole run ended
 // and travel in RunStats.RestoreResult next to the run's outcome; countable
-// classes (Countable) are tallied in RunStats.RestoreErrors: what a failed file
-// hit (target_locked, access_denied, other) and how many restic runs matched
-// nothing (nothing_matched).
+// classes (Countable) are tallied in RunStats.RestoreErrors: what a failed or
+// refused item hit (target_locked, access_denied, guard_refused, other) and how
+// many restic runs matched nothing (nothing_matched). guard_refused is both: a
+// placement refusal counted per item (ADR 0027 counts links, wrong-type items and
+// name mismatches under it) and the class of a restore refused as a whole (a
+// staging or side root that fails the root rule).
 //
 // A restore runs restic once per volume the selection touches (ADR 0027) and
 // the agent judges nothing matched per run: every run matched nothing is
@@ -351,12 +354,15 @@ func asciiUpper(s string) string {
 //
 // Pairing with the run outcome: RunRecord.Validate enforces it, one row of
 // restoreCouplings per rule (runs.go). nothing_matched is outcome failed with
-// all four counts 0 (restic exits 0 with an empty summary when no include
-// matched anything, spike item 4; the restore must still end FAILED, never
-// delivered); partial is outcome partial; cancelled is cancelled; interrupted
-// is interrupted; every other class is failed; a successful restore carries no
-// class and no error rows, and restored or skipped at least one file. The
-// vocabulary has no "ok" word: success is the absence of a class.
+// all four counts 0 and no error rows (restic exits 0 with an empty summary
+// when no include matched anything, spike item 4; the restore must still end
+// FAILED, never delivered); partial is outcome partial and has at least one
+// error row, and outcome partial on a restore needs the class partial;
+// cancelled is cancelled; interrupted is interrupted; every other class is
+// failed; a successful restore carries no class and no error rows, and
+// restored or skipped at least one file; an open restore carries no restore
+// field at all. The vocabulary has no "ok" word: success is the absence of a
+// class.
 //
 // None of these values is in the runs.error_class CHECK list of the database
 // except auth, guard_refused and disk; the classes ride in runs.stats (JSON), which
@@ -375,7 +381,11 @@ const (
 	RestoreResultPartial RestoreResultClass = "partial"
 	// RestoreResultInterrupted: the agent stopped mid-restore; it never resumes.
 	RestoreResultInterrupted RestoreResultClass = "interrupted"
-	// RestoreResultGuardRefused: the agent's target guard refused to write.
+	// RestoreResultGuardRefused: the agent's target guard refused to write. As a
+	// count it is the items the guard refused to place (a link on the path, a
+	// file where a folder is, a name that did not match exactly); as the run's
+	// result it is a restore refused as a whole (a staging or side root that fails
+	// the root rule).
 	RestoreResultGuardRefused RestoreResultClass = "guard_refused"
 	// RestoreResultAuth: the gateway refused the device's login.
 	RestoreResultAuth RestoreResultClass = "auth"
@@ -384,8 +394,10 @@ const (
 	// RestoreResultCancelled: the operator cancelled the run.
 	RestoreResultCancelled RestoreResultClass = "cancelled"
 	// RestoreResultDisk: a destination volume had too little free space for the
-	// selection, so the agent refused before writing anything (ADR 0027, "Size
-	// check"). Run-level only.
+	// selection, so the agent refused before writing anything (ADR 0027, "Rules
+	// shared by both device destinations", Free space). Run-level only. The
+	// space needed and the space free are the device's own log line: there is no
+	// wire field for them, so no number about the volume leaves the device.
 	RestoreResultDisk RestoreResultClass = "disk"
 	// RestoreResultOther: a per-file error the agent could not classify. It is
 	// counted so that no failure vanishes into a smaller number.
@@ -401,10 +413,15 @@ var restoreResultClasses = []RestoreResultClass{
 // Valid reports whether c is in the vocabulary.
 func (c RestoreResultClass) Valid() bool { return has(restoreResultClasses, c) }
 
-// Countable reports whether c may be tallied in RunStats.RestoreErrors.
+// Countable reports whether c may be tallied in RunStats.RestoreErrors: every
+// class ADR 0027 says is counted per item or per restic run (nothing_matched,
+// target_locked, access_denied, guard_refused) and other. Skipped items (kept
+// files, removed reparse points) are counted in RunStats.FilesSkipped, not as a
+// class. partial, interrupted, auth, repo_unreachable, cancelled and disk say how
+// the whole run ended and are never tallied.
 func (c RestoreResultClass) Countable() bool {
 	switch c {
-	case RestoreResultNothingMatched, RestoreResultTargetLocked, RestoreResultAccessDenied, RestoreResultOther:
+	case RestoreResultNothingMatched, RestoreResultTargetLocked, RestoreResultAccessDenied, RestoreResultGuardRefused, RestoreResultOther:
 		return true
 	}
 	return false
