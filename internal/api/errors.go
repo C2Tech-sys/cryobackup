@@ -22,6 +22,22 @@ const (
 	CodeMFAStepUpRequired = "mfa_step_up_required" // 403
 )
 
+// Codes of the restore-to-device refusals (ADR 0027, P22). The console answers
+// with one of them when it refuses to create or serve a device restore, so the
+// operator's page and the agent can each say which rule applied and never fall
+// back on a generic conflict. CodeCustomerHeld is the restore-specific sibling
+// of CodeCustodyCustomerHeld: it names the refusal of a device restore for a
+// customer-held key, the other names any operation that needs the escrowed key.
+const (
+	CodeAgentTooOld               = "agent_too_old"                // 409: the device's agent predates device restore (0.4.0)
+	CodeCustomerHeld              = "customer_held"                // 409: a customer-held key is refused at every layer, device modes included
+	CodeDeviceRetiredDownloadOnly = "device_retired_download_only" // 409: a retired device can be downloaded from, not restored to
+	CodeDevicePurging             = "device_purging"               // 409: the device is being purged
+	CodeDeviceRestoreActive       = "device_restore_active"        // 409: one active device restore per device
+	CodeRestoreExpired            = "restore_expired"              // 410: the request waited past its expiry (24 h)
+	CodeRestoreNotYours           = "restore_not_yours"            // 404: the restore belongs to another device; the status does not reveal it exists
+)
+
 // errorTable is the one place that maps a code to its HTTP status and its
 // fixed sentence. A message is never built from a request, a path or an
 // exception text (architecture §8.4).
@@ -43,6 +59,13 @@ var errorTable = []struct {
 	{CodeUnavailable, 503, "The service is temporarily unavailable."},
 	{CodeInternal, 500, "Internal error."},
 	{CodeMFAStepUpRequired, 403, "A recent MFA check is required. Confirm with a current authenticator code."},
+	{CodeAgentTooOld, 409, "The agent on this device is too old for this operation."},
+	{CodeCustomerHeld, 409, "The repository key is held by the customer, so a restore to the device is not available."},
+	{CodeDeviceRetiredDownloadOnly, 409, "This device is retired: only a download is available."},
+	{CodeDevicePurging, 409, "This device is being purged."},
+	{CodeDeviceRestoreActive, 409, "A restore is already active for this device."},
+	{CodeRestoreExpired, 410, "The restore request has expired."},
+	{CodeRestoreNotYours, 404, "No such restore for this device."},
 }
 
 const (

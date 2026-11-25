@@ -16,6 +16,18 @@ import (
 // is how the fleet start lease went (ADR 0005); it lives in runs.stats rather
 // than in a column because it is a per-run fact the console only shows and
 // counts, never filters on, and runs.stats is already free-form JSON.
+//
+// The last six fields are the restore block (ADR 0027): a restore is a run of
+// kind restore whose id is the restore request id, and these are its numbers.
+// They are additive and omitted when empty, so a backup record encodes exactly
+// as before and an old record still validates. The four counters are named after
+// restic's own restore summary but are NOT copied from it: restic counts
+// directories as restored files and reports a selection that matched nothing as
+// an empty summary with exit 0, so the agent counts the files itself from the
+// verbose status lines (spike P22-S1 item 4) and takes bytes_restored from the
+// summary. RestoreResult is how the whole restore ended and RestoreErrors counts
+// files and groups by countable class; both are fixed words and numbers, never a path
+// or a message (RestoreResultClass).
 type RunStats struct {
 	FilesNew            int64        `json:"files_new"`
 	FilesChanged        int64        `json:"files_changed"`
@@ -32,6 +44,13 @@ type RunStats struct {
 	VSSFallbackVolumes  []string     `json:"vss_fallback_volumes,omitempty"`
 	LongRun             bool         `json:"long_run"`
 	Lease               LeaseOutcome `json:"lease,omitempty"`
+
+	FilesRestored int64               `json:"files_restored,omitempty"`
+	FilesSkipped  int64               `json:"files_skipped,omitempty"`
+	BytesRestored uint64              `json:"bytes_restored,omitempty"`
+	BytesSkipped  uint64              `json:"bytes_skipped,omitempty"`
+	RestoreResult RestoreResultClass  `json:"restore_result,omitempty"`
+	RestoreErrors []RestoreClassCount `json:"restore_errors,omitempty"`
 }
 
 // maxVSSVolumes is the number of drive letters.
@@ -62,6 +81,30 @@ func (s RunStats) Validate() error {
 	}
 	if s.Lease != "" && !s.Lease.Valid() {
 		c.add("lease", msgUnknown)
+	}
+	c.notNegative("files_restored", s.FilesRestored)
+	c.notNegative("files_skipped", s.FilesSkipped)
+	if s.RestoreResult != "" && !s.RestoreResult.Valid() {
+		c.add("restore_result", msgUnknown)
+	}
+	if len(s.RestoreErrors) > len(restoreResultClasses) {
+		c.add("restore_errors", "has too many rows")
+	}
+	seen := map[RestoreResultClass]bool{}
+	for i, e := range s.RestoreErrors {
+		path := idx("restore_errors", i)
+		switch {
+		case !e.Class.Valid():
+			c.add(path+".class", msgUnknown)
+		case !e.Class.Countable():
+			c.add(path+".class", "is not a countable class")
+		case seen[e.Class]:
+			c.add(path+".class", "is listed twice")
+		}
+		seen[e.Class] = true
+		if e.Count < 1 {
+			c.add(path+".count", "must be at least 1")
+		}
 	}
 	return c.err()
 }
@@ -139,6 +182,12 @@ func (r RunRecord) Validate() error {
 		}
 	}
 	c.sub("stats", r.Stats.Validate())
+	// "Nothing matched" is a failure whatever restic's exit code said (spike
+	// item 4): a record that closes the run with any other outcome is refused.
+	// The other pairings are a convention, see RestoreResultClass.
+	if r.Stats.RestoreResult == RestoreResultNothingMatched && r.Outcome != "" && r.Outcome != restic.OutcomeFailed {
+		c.add("stats.restore_result", "nothing_matched must end the run failed")
+	}
 	if len(r.ErrorCounts) > maxErrorRows {
 		c.add("error_counts", "has too many rows")
 	}

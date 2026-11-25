@@ -96,7 +96,8 @@ var enumBindings = []enumBinding{
 
 // protocolOnly are enums with no database column: they exist on the wire only.
 // EnumLeaseOutcome lives in runs.stats (JSON), not in a column of its own.
-var protocolOnly = map[string]bool{EnumRunResultStatus: true, EnumReleaseChannel: true, EnumErrorCode: true, EnumLeaseOutcome: true}
+var protocolOnly = map[string]bool{EnumRunResultStatus: true, EnumReleaseChannel: true, EnumErrorCode: true, EnumLeaseOutcome: true,
+	EnumDeviceRestoreMode: true, EnumDeviceRestoreOverwrite: true, EnumRestoreResultClass: true}
 
 func TestEnumsAgreeWithSchema(t *testing.T) {
 	schema := readSchema(t)

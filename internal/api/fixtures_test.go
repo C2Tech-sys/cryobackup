@@ -91,6 +91,10 @@ func okRun() RunRecord {
 			TotalFilesProcessed: 7, DataAdded: 8, DataAddedPacked: 9, TotalBytesProcessed: 10,
 			TotalDurationS: 11.5, FailedFiles: 12, VSSFallbackVolumes: []string{"C", "D"}, LongRun: true,
 			Lease: LeaseGranted,
+			// the restore block (P22): set so the round trip and the golden file pin its keys
+			FilesRestored: 13, FilesSkipped: 14, BytesRestored: 15, BytesSkipped: 16,
+			RestoreResult: RestoreResultPartial,
+			RestoreErrors: []RestoreClassCount{{Class: RestoreResultTargetLocked, Count: 2}, {Class: RestoreResultAccessDenied, Count: 1}},
 		},
 		ErrorCounts: []restic.ErrorProjection{
 			{During: "archival", Class: restic.ClassPermission, Ext: "docx", Count: 3},
@@ -108,6 +112,8 @@ func closedRun() RunRecord {
 	r.DeferredReason = ""
 	r.ErrorClass = ""
 	r.ExitCode = ptr(0)
+	r.Stats.FilesRestored, r.Stats.FilesSkipped, r.Stats.BytesRestored, r.Stats.BytesSkipped = 0, 0, 0, 0
+	r.Stats.RestoreResult, r.Stats.RestoreErrors = "", nil
 	return r
 }
 
@@ -192,9 +198,9 @@ func okTokenRotate() TokenRotateResponse {
 
 func okRestoreSelection() RestoreSelection {
 	return RestoreSelection{
-		ID: ulidA, SnapshotID: hex6, Mode: RestoreDeviceRelay, Target: `C:\Restore\Out`,
-		Includes: []string{`C:\Users\x\Documents`, `/home/x/y`}, IncludeFile: true, Overwrite: OverwriteIfNewer,
-		Verify: true, Simulate: true, ArtifactURL: RouteRestoreArtifact(ulidA), ArtifactSHA256: hex7, ExpiresAt: at(240),
+		ID: ulidA, SnapshotID: hex6, Mode: DeviceRestoreOriginal, Overwrite: DeviceOverwriteIfChanged,
+		Paths:     []string{"/C/Users/x/Documents", "/D/Data/[a] $b/Report.docx"},
+		ExpiresAt: at(240),
 	}
 }
 

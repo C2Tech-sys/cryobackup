@@ -210,8 +210,10 @@ func TestAssertPathFreeAllowedExtension(t *testing.T) {
 // it, whether it is passed directly, by pointer, in a slice, a map or a struct.
 func TestAssertPathFreeSkipsRestoreSelection(t *testing.T) {
 	sel := okRestoreSelection()
-	if looksLikePath(sel.Target) == false {
-		t.Fatal("the fixture must actually hold paths")
+	for _, p := range sel.Paths {
+		if !looksLikePath(p) {
+			t.Fatalf("the fixture must actually hold paths: %.20q is not path-like", p)
+		}
 	}
 	type wrapper struct {
 		Sel  RestoreSelection  `json:"sel"`
