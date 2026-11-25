@@ -3,16 +3,18 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/c2tech-sys/cryobackup/internal/policy"
 	"github.com/c2tech-sys/cryobackup/internal/restic"
 )
 
@@ -82,6 +84,54 @@ func TestRestorePathLimits(t *testing.T) {
 	}
 }
 
+// The 64 KiB total on its own: every path well under MaxRestorePathBytes and
+// the count under MaxRestorePaths, so the total is the only rule that can fire.
+func TestRestorePathsTotalAlone(t *testing.T) {
+	const n, each = 32, MaxRestorePathsTotalBytes / 32 // 32 x 2048 = 65536
+	if each >= MaxRestorePathBytes || n > MaxRestorePaths {
+		t.Fatalf("the test no longer isolates the total: each %d, n %d", each, n)
+	}
+	sel := okRestoreSelection()
+	sel.Paths = make([]string, n)
+	for i := range sel.Paths {
+		p := fmt.Sprintf("/C/f%02d/", i)
+		sel.Paths[i] = p + strings.Repeat("a", each-len(p))
+	}
+	total := 0
+	for _, p := range sel.Paths {
+		total += len(p)
+	}
+	if total != MaxRestorePathsTotalBytes {
+		t.Fatalf("total = %d, want %d", total, MaxRestorePathsTotalBytes)
+	}
+	if err := sel.Validate(); err != nil {
+		t.Fatalf("exactly %d total bytes refused: %v", MaxRestorePathsTotalBytes, err)
+	}
+	sel.Paths[n-1] += "a" // 2049 bytes, total 65537
+	err := sel.Validate()
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "paths" || ve.Problems[0].Message != "are too large together" {
+		t.Fatalf("a total of %d bytes: want only paths: are too large together, got %v", MaxRestorePathsTotalBytes+1, err)
+	}
+}
+
+// The Windows-name rules say which rule a name broke.
+func TestWindowsNameRulesSayWhy(t *testing.T) {
+	for p, want := range map[string]string{
+		"/C/a.":        "has a name that ends with a dot",
+		"/C/x/.../y":   "has a name that ends with a dot",
+		"/C/CON":       "has a name Windows reserves for a device",
+		"/C/lpt\u00b2": "has a name Windows reserves for a device",
+		"/C/x/nul.txt": "has a name Windows reserves for a device",
+	} {
+		err := ValidateRestorePath(p)
+		var ve *ValidationError
+		if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Message != want {
+			t.Errorf("%q: got %v, want %q", p, err, want)
+		}
+	}
+}
+
 func TestRestorePathRules(t *testing.T) {
 	good := []string{
 		"/C/a",
@@ -90,9 +140,15 @@ func TestRestorePathRules(t *testing.T) {
 		"/D/Data/[a] $b/Report 2026.docx",    // [ and $ are allowed: the agent escapes them
 		"/C/dir with spaces/in the middle/f", // interior spaces are fine
 		"/C/Ünïcödé/日本語/файл.txt",
-		"/C/a..b/..c/d..",                  // ".." inside a name is a name
+		"/C/a..b/..c/d..e",                 // ".." inside a name is a name
 		"/C/%APPDATA%/100%/#hash/a,b;c=d!", // not special to restic's include file (spike item 3)
 		"/C/" + strings.Repeat("n", 255),
+		// Look-alike dots and invisible characters are matched literally (harmless).
+		"/C/\u2024\u2024/x", "/C/\uff0e\uff0e/x", "/C/.\u0301/x", "/C/..\u200b/x", "/C/\u200bx",
+		"/C/x\u00ady", "/C/\u202ex", "/C/x\ufeff",
+		// Names that only resemble a reserved device name are ordinary names.
+		"/C/CONSOLE", "/C/con1", "/C/COM10", "/C/LPT", "/C/COM", "/C/NULL.txt", "/C/xCON", "/C/AUX_x.txt",
+		"/C/COM\u2074", "/C/c\u00f6n", "/C/CON\u200b", "/C/.CON", "/C/.hidden", "/C/a.b.c",
 	}
 	for _, p := range good {
 		if err := ValidateRestorePath(p); err != nil {
@@ -141,6 +197,37 @@ func TestRestorePathRules(t *testing.T) {
 		"/C/x/file\u3000": "trailing ideographic space",
 		"/C/x/\xff":       "invalid UTF-8",
 		"/C/" + strings.Repeat("a", MaxRestorePathBytes): "over the length cap",
+		// Win32 cannot create these, so no Windows snapshot holds them.
+		"/C/a.":          "trailing dot",
+		"/C/a..":         "two trailing dots",
+		"/C/...":         "dots only",
+		"/C/....":        "four dots",
+		"/C/. .":         "dot space dot",
+		"/C/x./y":        "trailing dot in a folder",
+		"/C/CON":         "CON",
+		"/C/con":         "con, lower case",
+		"/C/PRN":         "PRN",
+		"/C/AUX":         "AUX",
+		"/C/NUL":         "NUL",
+		"/C/nUl":         "NUL, mixed case",
+		"/C/CONIN$":      "CONIN$",
+		"/C/conout$":     "CONOUT$, lower case",
+		"/C/COM0":        "COM0",
+		"/C/COM1":        "COM1",
+		"/C/com9":        "COM9, lower case",
+		"/C/LPT0":        "LPT0",
+		"/C/LPT1":        "LPT1",
+		"/C/lpt9":        "LPT9, lower case",
+		"/C/COM\u00b9":   "COM superscript one",
+		"/C/COM\u00b2":   "COM superscript two",
+		"/C/lpt\u00b3":   "LPT superscript three",
+		"/C/con.txt":     "CON with an extension",
+		"/C/NUL.tar.gz":  "NUL with two extensions",
+		"/C/CON .txt":    "CON, a space before the extension",
+		"/C/COM1.log":    "COM1 with an extension",
+		"/C/LPT\u00b9.x": "LPT superscript one with an extension",
+		"/C/CONIN$.txt":  "CONIN$ with an extension",
+		"/C/x/PRN/y":     "PRN as a folder",
 	}
 	for p, why := range bad {
 		err := ValidateRestorePath(p)
@@ -268,12 +355,15 @@ func TestRestoreParamsCarryOnlyTheID(t *testing.T) {
 // FuzzRestoreSelectionValidate: Validate never panics, and whatever it accepts
 // is safe to turn into include-file lines: absolute, a drive letter, no "."
 // or ".." segment, no control character, no forbidden character, no leading or
-// trailing space on a name, within the limits.
+// trailing space on a name, no name ending in '.', no reserved device name,
+// within the limits.
 func FuzzRestoreSelectionValidate(f *testing.F) {
 	for _, s := range []string{
 		"/C/a", "/C/Users/x/Documents/a.docx", "/c/x/y", "/D/[a] $b/c", "/C/../x", "/C/x/..", "/C/./x", "/C//x", "/C/x/",
 		"/C", "/", "", "C/x", `/C/a\b`, "/C/a\nb", "/C/a\x00b", "/C/a*", "/C/a?", "/C/ a", "/C/a ", "/C/\u00a0a", "/C/a\xffb",
 		"/C/a:b", "/C/a..b", "/C/" + strings.Repeat("a", 300), "/\u0130/x",
+		"/C/a.", "/C/...", "/C/. .", "/C/x./y", "/C/CON", "/C/con.txt", "/C/NUL.tar.gz", "/C/CON .txt", "/C/COM\u00b9",
+		"/C/lpt0", "/C/CONIN$", "/C/conout$.x", "/C/x/PRN/y", "/C/CONSOLE", "/C/COM10", "/C/\u2024\u2024/x", "/C/..\u200b/x",
 	} {
 		f.Add(s, s, uint8(1))
 		f.Add(s, "/C/ok", uint8(0))
@@ -322,12 +412,33 @@ func assertSafeAccepted(t *testing.T, p string) {
 		if unicode.IsSpace(first) || unicode.IsSpace(last) {
 			t.Fatalf("accepted a name with leading or trailing white space: %q", p)
 		}
+		if strings.HasSuffix(seg, ".") {
+			t.Fatalf("accepted a name that ends with a dot: %q", p)
+		}
+		if reservedOracleRE.MatchString(reservedOracleBase(seg)) {
+			t.Fatalf("accepted a reserved device name: %q", p)
+		}
 	}
 	for _, r := range p {
 		if unicode.IsControl(r) || strings.ContainsRune(nameForbidden, r) {
 			t.Fatalf("accepted a control or forbidden character %U: %q", r, p)
 		}
 	}
+}
+
+// The fuzz oracle for reserved names, written apart from windowsReservedName:
+// the part before the first dot, trailing spaces removed, ASCII upper-cased.
+var reservedOracleRE = regexp.MustCompile(`^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9\x{00b9}\x{00b2}\x{00b3}]|LPT[0-9\x{00b9}\x{00b2}\x{00b3}])$`)
+
+func reservedOracleBase(seg string) string {
+	base, _, _ := strings.Cut(seg, ".")
+	base = strings.TrimRight(base, " ")
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' {
+			return r - 'a' + 'A'
+		}
+		return r
+	}, base)
 }
 
 func containsSegment(p, seg string) bool {
@@ -404,12 +515,17 @@ func TestOldShapeRunRecordStillValidates(t *testing.T) {
 }
 
 func TestValidateRunStatsRestoreBlock(t *testing.T) {
+	// One row per class is the most; every row past the first repeats "other".
+	tooMany := []string{"restore_errors"}
+	for i := 1; i <= len(restoreResultClasses); i++ {
+		tooMany = append(tooMany, fmt.Sprintf("restore_errors[%d].class", i))
+	}
 	runValidate(t, func() RunStats { return okRun().Stats }, []vcase[RunStats]{
 		{"valid", nil, nil},
 		{"every class a result", func(s *RunStats) { s.RestoreResult = RestoreResultAuth }, nil},
 		{"result empty", func(s *RunStats) { s.RestoreResult = "" }, nil},
 		{"errors empty", func(s *RunStats) { s.RestoreErrors = nil }, nil},
-		{"nothing_matched counted as groups", func(s *RunStats) {
+		{"nothing_matched counted as restic runs", func(s *RunStats) {
 			s.RestoreErrors = []RestoreClassCount{{Class: RestoreResultNothingMatched, Count: 1}, {Class: RestoreResultOther, Count: 4}}
 		}, nil},
 		{"files_restored negative", func(s *RunStats) { s.FilesRestored = -1 }, []string{"files_restored"}},
@@ -419,6 +535,17 @@ func TestValidateRunStatsRestoreBlock(t *testing.T) {
 		{"error class bogus", func(s *RunStats) { s.RestoreErrors[0].Class = "oops" }, []string{"restore_errors[0].class"}},
 		{"error class not countable", func(s *RunStats) { s.RestoreErrors[1].Class = RestoreResultPartial }, []string{"restore_errors[1].class"}},
 		{"error class twice", func(s *RunStats) { s.RestoreErrors[1].Class = s.RestoreErrors[0].Class }, []string{"restore_errors[1].class"}},
+		{"files_restored at the JSON-safe bound", func(s *RunStats) { s.FilesRestored = MaxRestoreCount }, nil},
+		{"files_restored over the bound", func(s *RunStats) { s.FilesRestored = MaxRestoreCount + 1 }, []string{"files_restored"}},
+		{"files_skipped at the bound", func(s *RunStats) { s.FilesSkipped = MaxRestoreCount }, nil},
+		{"files_skipped over the bound", func(s *RunStats) { s.FilesSkipped = MaxRestoreCount + 1 }, []string{"files_skipped"}},
+		{"bytes_restored at the bound", func(s *RunStats) { s.BytesRestored = MaxRestoreCount }, nil},
+		{"bytes_restored over the bound", func(s *RunStats) { s.BytesRestored = MaxRestoreCount + 1 }, []string{"bytes_restored"}},
+		{"bytes_restored max uint64", func(s *RunStats) { s.BytesRestored = math.MaxUint64 }, []string{"bytes_restored"}},
+		{"bytes_skipped at the bound", func(s *RunStats) { s.BytesSkipped = MaxRestoreCount }, nil},
+		{"bytes_skipped over the bound", func(s *RunStats) { s.BytesSkipped = MaxRestoreCount + 1 }, []string{"bytes_skipped"}},
+		{"error count at the bound", func(s *RunStats) { s.RestoreErrors[0].Count = MaxRestoreCount }, nil},
+		{"error count over the bound", func(s *RunStats) { s.RestoreErrors[1].Count = math.MaxInt64 }, []string{"restore_errors[1].count"}},
 		{"error count 0", func(s *RunStats) { s.RestoreErrors[0].Count = 0 }, []string{"restore_errors[0].count"}},
 		{"error count negative", func(s *RunStats) { s.RestoreErrors[0].Count = -3 }, []string{"restore_errors[0].count"}},
 		{"too many error rows", func(s *RunStats) {
@@ -426,52 +553,160 @@ func TestValidateRunStatsRestoreBlock(t *testing.T) {
 			for i := range s.RestoreErrors {
 				s.RestoreErrors[i] = RestoreClassCount{Class: RestoreResultOther, Count: 1}
 			}
-		}, []string{"restore_errors", "restore_errors[1].class", "restore_errors[2].class", "restore_errors[3].class", "restore_errors[4].class", "restore_errors[5].class", "restore_errors[6].class", "restore_errors[7].class", "restore_errors[8].class", "restore_errors[9].class", "restore_errors[10].class"}},
+		}, tooMany},
 	})
 }
 
-// A restore is a run of kind restore: the couplings of its result class.
-func TestValidateRestoreRun(t *testing.T) {
-	restoreRun := func() RunRecord {
-		r := okRun()
-		r.Kind, r.SnapshotID, r.DeferredReason, r.Trigger = restic.KindRestore, "", "", TriggerManual
-		r.Outcome, r.ExitCode = restic.OutcomePartial, ptr(1)
-		r.Stats.RestoreResult = RestoreResultPartial
-		return r
+// The coupling table of a restore run (restoreCouplings): every row has a test
+// of its own here, with at least one record it accepts and one it refuses, and
+// no test names a row the table does not have.
+func TestRestoreCouplings(t *testing.T) {
+	closeAs := func(r *RunRecord, o restic.Outcome, c RestoreResultClass) {
+		r.Outcome, r.Stats.RestoreResult = o, c
 	}
-	runValidate(t, restoreRun, []vcase[RunRecord]{
-		{"partial restore", nil, nil},
-		{"nothing matched is failed", func(r *RunRecord) {
-			r.Outcome, r.Stats.RestoreResult = restic.OutcomeFailed, RestoreResultNothingMatched
-		}, nil},
-		{"nothing matched may not be a success (restic exits 0)", func(r *RunRecord) {
-			r.Outcome, r.ExitCode, r.Stats.RestoreResult = restic.OutcomeSuccess, ptr(0), RestoreResultNothingMatched
-		}, []string{"stats.restore_result"}},
-		{"nothing matched may not be partial", func(r *RunRecord) { r.Stats.RestoreResult = RestoreResultNothingMatched }, []string{"stats.restore_result"}},
-		{"nothing matched may not be cancelled", func(r *RunRecord) {
-			r.Outcome, r.Stats.RestoreResult = restic.OutcomeCancelled, RestoreResultNothingMatched
-		}, []string{"stats.restore_result"}},
-		{"nothing matched on an open run is not judged yet", func(r *RunRecord) {
-			r.Outcome, r.FinishedAt, r.ExitCode, r.Stats.RestoreResult = "", nil, nil, RestoreResultNothingMatched
-		}, nil},
-		{"interrupted", func(r *RunRecord) {
-			r.Outcome, r.Stats.RestoreResult = restic.OutcomeInterrupted, RestoreResultInterrupted
-		}, nil},
-		{"guard refused", func(r *RunRecord) { r.Outcome, r.Stats.RestoreResult = restic.OutcomeFailed, RestoreResultGuardRefused }, nil},
-		{"a successful restore carries no result", func(r *RunRecord) {
-			r.Outcome, r.Stats.RestoreResult, r.Stats.RestoreErrors = restic.OutcomeSuccess, "", nil
-		}, nil},
-		{"an open restore", func(r *RunRecord) {
-			r.Outcome, r.FinishedAt, r.ExitCode, r.Stats.RestoreResult, r.Stats.RestoreErrors = "", nil, nil, "", nil
-		}, nil},
-	})
-	// Every class of the vocabulary is accepted on a failed run; the other pairings
-	// are conventions, not rules.
+	success := func(r *RunRecord) {
+		r.Outcome, r.ExitCode, r.Stats.RestoreResult, r.Stats.RestoreErrors = restic.OutcomeSuccess, ptr(0), "", nil
+	}
+	nothing := func(r *RunRecord) {
+		r.Outcome, r.Stats = restic.OutcomeFailed, RunStats{RestoreResult: RestoreResultNothingMatched}
+	}
+	open := func(r *RunRecord) { r.Outcome, r.FinishedAt, r.ExitCode = "", nil, nil }
+	backup := func(r *RunRecord) { *r = okBackupRun() }
+
+	rows := map[string][]vcase[RunRecord]{
+		"kind": {
+			{"a restore carries the block", nil, nil},
+			{"a backup without the block (old shape)", backup, nil},
+			{"files_restored on a backup", func(r *RunRecord) { backup(r); r.Stats.FilesRestored = 1 }, []string{"stats.files_restored"}},
+			{"files_skipped on a backup", func(r *RunRecord) { backup(r); r.Stats.FilesSkipped = 1 }, []string{"stats.files_skipped"}},
+			{"bytes_restored on a backup", func(r *RunRecord) { backup(r); r.Stats.BytesRestored = 1 }, []string{"stats.bytes_restored"}},
+			{"bytes_skipped on a backup", func(r *RunRecord) { backup(r); r.Stats.BytesSkipped = 1 }, []string{"stats.bytes_skipped"}},
+			{"restore_result on a backup", func(r *RunRecord) { backup(r); r.Stats.RestoreResult = RestoreResultPartial }, []string{"stats.restore_result"}},
+			{"nothing_matched on a failed backup", func(r *RunRecord) {
+				backup(r)
+				r.Outcome, r.DeferredReason, r.Stats.RestoreResult = restic.OutcomeFailed, "", RestoreResultNothingMatched
+			}, []string{"stats.restore_result"}},
+			{"restore_errors on a prune", func(r *RunRecord) {
+				backup(r)
+				r.Kind, r.SnapshotID = restic.KindPrune, ""
+				r.Stats.RestoreErrors = []RestoreClassCount{{Class: RestoreResultOther, Count: 1}}
+			}, []string{"stats.restore_errors"}},
+			{"the whole block on a backup", func(r *RunRecord) { *r = okRun() }, []string{
+				"stats.bytes_restored", "stats.bytes_skipped", "stats.files_restored", "stats.files_skipped", "stats.restore_errors", "stats.restore_result",
+			}},
+		},
+		"success": {
+			{"files restored", func(r *RunRecord) { success(r); r.Stats.FilesSkipped = 0 }, nil},
+			{"every file kept (skipped), nothing replaced", func(r *RunRecord) { success(r); r.Stats.FilesRestored, r.Stats.BytesRestored = 0, 0 }, nil},
+			{"success with a result", func(r *RunRecord) { success(r); r.Stats.RestoreResult = RestoreResultPartial }, []string{"stats.restore_result"}},
+			{"success with error rows", func(r *RunRecord) {
+				success(r)
+				r.Stats.RestoreErrors = []RestoreClassCount{{Class: RestoreResultAccessDenied, Count: 1}}
+			}, []string{"stats.restore_errors"}},
+			{"success that placed no file", func(r *RunRecord) { success(r); r.Stats = RunStats{BytesRestored: 9} }, []string{"stats.files_restored"}},
+			{"success with no block at all (restic exit 0, empty summary)", func(r *RunRecord) { success(r); r.Stats = RunStats{} }, []string{"stats.files_restored"}},
+			{"nothing matched reported as a success", func(r *RunRecord) {
+				success(r)
+				r.Stats = RunStats{RestoreResult: RestoreResultNothingMatched}
+			}, []string{"stats.files_restored", "stats.restore_result"}},
+		},
+		"nothing_matched": {
+			{"failed, nothing counted", nothing, nil},
+			{"failed, the runs counted", func(r *RunRecord) {
+				nothing(r)
+				r.Stats.RestoreErrors = []RestoreClassCount{{Class: RestoreResultNothingMatched, Count: 2}}
+			}, nil},
+			{"outcome partial", func(r *RunRecord) { nothing(r); r.Outcome = restic.OutcomePartial }, []string{"stats.restore_result"}},
+			{"outcome cancelled", func(r *RunRecord) { nothing(r); r.Outcome = restic.OutcomeCancelled }, []string{"stats.restore_result"}},
+			{"on an open record", func(r *RunRecord) { nothing(r); open(r) }, []string{"stats.restore_result"}},
+			{"a file restored", func(r *RunRecord) { nothing(r); r.Stats.FilesRestored = 5 }, []string{"stats.files_restored"}},
+			{"every count set", func(r *RunRecord) {
+				nothing(r)
+				r.Stats.FilesRestored, r.Stats.FilesSkipped, r.Stats.BytesRestored, r.Stats.BytesSkipped = 1, 2, 3, 4
+			}, []string{"stats.bytes_restored", "stats.bytes_skipped", "stats.files_restored", "stats.files_skipped"}},
+		},
+		"partial": {
+			{"outcome partial", nil, nil},
+			{"outcome failed", func(r *RunRecord) { r.Outcome = restic.OutcomeFailed }, []string{"stats.restore_result"}},
+			{"outcome interrupted", func(r *RunRecord) { r.Outcome = restic.OutcomeInterrupted }, []string{"stats.restore_result"}},
+			{"on an open record", open, []string{"stats.restore_result"}},
+		},
+		"cancelled": {
+			{"outcome cancelled", func(r *RunRecord) { closeAs(r, restic.OutcomeCancelled, RestoreResultCancelled) }, nil},
+			{"outcome partial", func(r *RunRecord) { closeAs(r, restic.OutcomePartial, RestoreResultCancelled) }, []string{"stats.restore_result"}},
+			{"outcome failed", func(r *RunRecord) { closeAs(r, restic.OutcomeFailed, RestoreResultCancelled) }, []string{"stats.restore_result"}},
+		},
+		"interrupted": {
+			{"outcome interrupted", func(r *RunRecord) { closeAs(r, restic.OutcomeInterrupted, RestoreResultInterrupted) }, nil},
+			{"outcome failed", func(r *RunRecord) { closeAs(r, restic.OutcomeFailed, RestoreResultInterrupted) }, []string{"stats.restore_result"}},
+			{"outcome cancelled", func(r *RunRecord) { closeAs(r, restic.OutcomeCancelled, RestoreResultInterrupted) }, []string{"stats.restore_result"}},
+		},
+		"failed": {
+			{"auth failed", func(r *RunRecord) { closeAs(r, restic.OutcomeFailed, RestoreResultAuth) }, nil},
+			{"disk refused before writing", func(r *RunRecord) {
+				closeAs(r, restic.OutcomeFailed, RestoreResultDisk)
+				r.Stats = RunStats{RestoreResult: RestoreResultDisk}
+			}, nil},
+			{"failed before any class was known", func(r *RunRecord) { closeAs(r, restic.OutcomeFailed, "") }, nil},
+			{"auth on a cancelled run", func(r *RunRecord) { closeAs(r, restic.OutcomeCancelled, RestoreResultAuth) }, []string{"stats.restore_result"}},
+			{"disk on a partial run", func(r *RunRecord) { closeAs(r, restic.OutcomePartial, RestoreResultDisk) }, []string{"stats.restore_result"}},
+			{"target_locked on an interrupted run", func(r *RunRecord) { closeAs(r, restic.OutcomeInterrupted, RestoreResultTargetLocked) }, []string{"stats.restore_result"}},
+			{"guard_refused on an open record", func(r *RunRecord) { r.Stats.RestoreResult = RestoreResultGuardRefused; open(r) }, []string{"stats.restore_result"}},
+		},
+	}
+	for _, rc := range restoreCouplings {
+		if rc.id == "" || rc.reason == "" || rc.check == nil {
+			t.Errorf("coupling row %q lacks an id, a reason or a check", rc.id)
+		}
+		cases, ok := rows[rc.id]
+		if !ok {
+			t.Errorf("coupling row %q has no test", rc.id)
+			continue
+		}
+		delete(rows, rc.id)
+		t.Run(rc.id, func(t *testing.T) { runValidate(t, okRestoreRun, cases) })
+	}
+	for id := range rows {
+		t.Errorf("a test names coupling row %q, which the table does not have", id)
+	}
+	// An open restore with no class yet is fine: that is how the agent writes the
+	// row before restic starts.
+	r := okRestoreRun()
+	open(&r)
+	r.Stats = RunStats{}
+	if err := r.Validate(); err != nil {
+		t.Errorf("an open restore with an empty block: %v", err)
+	}
+}
+
+// Every run-level class is accepted with exactly one outcome, the one the
+// coupling table names, and never with success.
+func TestEveryRestoreClassHasExactlyOneOutcome(t *testing.T) {
+	want := map[RestoreResultClass]restic.Outcome{
+		RestoreResultNothingMatched: restic.OutcomeFailed, RestoreResultPartial: restic.OutcomePartial,
+		RestoreResultCancelled: restic.OutcomeCancelled, RestoreResultInterrupted: restic.OutcomeInterrupted,
+	}
 	for _, c := range restoreResultClasses {
-		r := restoreRun()
-		r.Outcome, r.Stats.RestoreResult = restic.OutcomeFailed, c
-		if err := r.Validate(); err != nil {
-			t.Errorf("class %q on a failed restore: %v", c, err)
+		var accepted []restic.Outcome
+		for _, o := range outcomes {
+			r := okRestoreRun()
+			r.Outcome, r.Stats.RestoreResult = o, c
+			if o == restic.OutcomeDeferred {
+				r.DeferredReason = restic.DeferredLock
+			}
+			if c == RestoreResultNothingMatched {
+				r.Stats.FilesRestored, r.Stats.FilesSkipped, r.Stats.BytesRestored, r.Stats.BytesSkipped = 0, 0, 0, 0
+			}
+			if r.Validate() == nil {
+				accepted = append(accepted, o)
+			}
+		}
+		w, ok := want[c]
+		if !ok {
+			w = restic.OutcomeFailed
+		}
+		if len(accepted) != 1 || accepted[0] != w {
+			t.Errorf("class %q is accepted with outcomes %v, want exactly [%s]", c, accepted, w)
 		}
 	}
 }
@@ -482,7 +717,7 @@ func TestRestoreVocabularies(t *testing.T) {
 		EnumDeviceRestoreOverwrite: {"never", "if_changed"},
 		EnumRestoreResultClass: {
 			"nothing_matched", "target_locked", "access_denied", "partial", "interrupted",
-			"guard_refused", "auth", "repo_unreachable", "cancelled", "other",
+			"guard_refused", "auth", "repo_unreachable", "cancelled", "disk", "other",
 		},
 	}
 	for name, vals := range want {
@@ -498,77 +733,54 @@ func TestRestoreVocabularies(t *testing.T) {
 			}
 		}
 	}
+	// Run-level only: partial, interrupted, cancelled and disk (a refusal before
+	// anything was written) are never tallied per file.
+	countable := map[RestoreResultClass]bool{
+		RestoreResultNothingMatched: true, RestoreResultTargetLocked: true, RestoreResultAccessDenied: true, RestoreResultOther: true,
+	}
 	for _, c := range restoreResultClasses {
-		if c.Countable() && c == RestoreResultPartial {
-			t.Error("partial must not be countable")
+		if c.Countable() != countable[c] {
+			t.Errorf("%q Countable() = %v, want %v", c, c.Countable(), countable[c])
 		}
 	}
-	// Problem codes of the console's refusals.
-	for _, code := range []string{CodeAgentTooOld, CodeCustomerHeld, CodeDeviceRetiredDownloadOnly, CodeDevicePurging, CodeDeviceRestoreActive, CodeRestoreExpired, CodeRestoreNotYours} {
-		if !has(ErrorCodes(), code) {
-			t.Errorf("%q is not in the error table", code)
+	// Problem codes of the console's refusals: the final list.
+	for code, status := range map[string]int{
+		CodeAgentTooOld: 409, CodeDeviceRetiredDownloadOnly: 409, CodeDevicePurging: 409, CodeDeviceRestoreActive: 409, CodeRestoreExpired: 410,
+	} {
+		if !has(ErrorCodes(), code) || HTTPStatus(code) != status {
+			t.Errorf("%q is not in the error table with status %d", code, status)
 		}
 		if looksLikePath(code) || MessageFor(code) == unknownCodeMessage {
 			t.Errorf("%q has no fixed path-free message", code)
 		}
 	}
+	// Removed (blind check of P22-A, L4 and L6): another device's restore answers
+	// 404 not_found exactly like a missing one, and a customer-held key answers
+	// the existing custody_customer_held.
+	for _, gone := range []string{"restore_not_yours", "customer_held"} {
+		if has(ErrorCodes(), gone) {
+			t.Errorf("%q is in the error table; it was removed", gone)
+		}
+	}
+	if HTTPStatus(CodeNotFound) != 404 || HTTPStatus(CodeCustodyCustomerHeld) != 409 {
+		t.Error("the codes that replace the removed ones changed status")
+	}
 }
 
 // The path-free guard has exactly two exemptions. Put a path into every string
-// field of every wire type, one at a time: each must be caught, except inside a
-// RestoreSelection (the marker) and restic.Snapshot.Paths (the field skip). A new
-// field anywhere, the restore block of RunStats included, is covered without
-// anyone remembering to extend a test.
+// of every wire type, one at a time (struct fields, slice and array elements,
+// map keys and values, the value behind an interface; plantPaths): each must
+// be caught, except inside a RestoreSelection (the marker) and
+// restic.Snapshot.Paths (the field skip). A new field anywhere, the restore
+// block of RunStats included, is covered without anyone remembering to extend
+// a test.
 func TestAssertPathFreeCatchesAPathInEveryStringFieldButTheTwoExemptions(t *testing.T) {
-	const leak = `C:\Users\leak\secret.docx`
 	visited := map[string]bool{}
 	exemptSeen := map[string]bool{}
 	for _, v := range wireValues() {
 		typ := reflect.TypeOf(v)
 		ptr := reflect.New(typ)
 		ptr.Elem().Set(reflect.ValueOf(v))
-		var walk func(rv reflect.Value, jsonPath string)
-		walk = func(rv reflect.Value, jsonPath string) {
-			if rv.Type() == reflect.TypeOf(policy.Policy{}) || rv.Type() == reflect.TypeOf(time.Time{}) || rv.Type() == reflect.TypeOf(json.RawMessage(nil)) {
-				return
-			}
-			switch rv.Kind() {
-			case reflect.Pointer:
-				if !rv.IsNil() {
-					walk(rv.Elem(), jsonPath)
-				}
-			case reflect.String:
-				old := rv.String()
-				rv.SetString(leak)
-				err := AssertPathFree(ptr.Interface())
-				rv.SetString(old)
-				if err == nil {
-					t.Errorf("%s.%s: a path in this field passed the guard", typ.Name(), jsonPath)
-				}
-				visited[typ.Name()+"."+jsonPath] = true
-			case reflect.Struct:
-				for i := 0; i < rv.NumField(); i++ {
-					f := rv.Type().Field(i)
-					if !f.IsExported() {
-						continue
-					}
-					name, skip := jsonName(f)
-					if skip {
-						continue
-					}
-					if rv.Type() == reflect.TypeOf(restic.Snapshot{}) && f.Name == "Paths" {
-						exemptSeen["Snapshot.Paths"] = true
-						continue
-					}
-					child := joinPath(jsonPath, name)
-					walk(rv.Field(i), child)
-				}
-			case reflect.Slice:
-				for i := 0; i < rv.Len(); i++ {
-					walk(rv.Index(i), jsonPath+"[]")
-				}
-			}
-		}
 		if _, ok := v.(pathBearing); ok {
 			exemptSeen[typ.Name()] = true
 			if err := AssertPathFree(ptr.Interface()); err != nil {
@@ -576,7 +788,16 @@ func TestAssertPathFreeCatchesAPathInEveryStringFieldButTheTwoExemptions(t *test
 			}
 			continue
 		}
-		walk(ptr.Elem(), "")
+		res := plantPaths(ptr, func() error { return AssertPathFree(ptr.Interface()) })
+		for _, m := range res.missed {
+			t.Errorf("%s.%s: a path here passed the guard", typ.Name(), m)
+		}
+		for p := range res.visited {
+			visited[typ.Name()+"."+p] = true
+		}
+		for e := range res.exempt {
+			exemptSeen[e] = true
+		}
 	}
 	if len(exemptSeen) != 2 || !exemptSeen["RestoreSelection"] || !exemptSeen["Snapshot.Paths"] {
 		t.Errorf("the guard's exemptions seen = %v, want exactly RestoreSelection and Snapshot.Paths", exemptSeen)
@@ -590,8 +811,8 @@ func TestAssertPathFreeCatchesAPathInEveryStringFieldButTheTwoExemptions(t *test
 		}
 	}
 	// And in the shape the console really ingests: a restore run with a path in a class.
-	req := RunsRequest{Runs: []RunRecord{okRun()}}
-	req.Runs[0].Stats.RestoreErrors[1].Class = RestoreResultClass(leak)
+	req := RunsRequest{Runs: []RunRecord{okRestoreRun()}}
+	req.Runs[0].Stats.RestoreErrors[1].Class = RestoreResultClass(plantLeak)
 	if pe := pathErr(t, req); pe.Path != "runs[0].stats.restore_errors[1].class" {
 		t.Errorf("path = %q", pe.Path)
 	}

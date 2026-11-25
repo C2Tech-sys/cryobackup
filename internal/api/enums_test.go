@@ -181,14 +181,14 @@ func TestValidatorsUseTheEnumLists(t *testing.T) {
 		}
 	}
 	for _, v := range Enums()[EnumRunTrigger] {
-		r := okRun()
+		r := okBackupRun()
 		r.Trigger = Trigger(v)
 		if r.Validate() != nil {
 			t.Errorf("trigger %q rejected", v)
 		}
 	}
 	for _, v := range Enums()[EnumRunOutcome] {
-		r := okRun()
+		r := okBackupRun()
 		r.Outcome, r.DeferredReason = restic.Outcome(v), ""
 		if v == string(restic.OutcomeDeferred) {
 			r.DeferredReason = restic.DeferredLock

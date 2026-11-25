@@ -7,7 +7,7 @@ const (
 	CodeInvalidRequest       = "invalid_request"        // 400: malformed body, failed Validate, unknown enum value, failed AssertPathFree
 	CodeUnauthorized         = "unauthorized"           // 401: missing, unknown, revoked or expired token
 	CodeForbidden            = "forbidden"              // 403: the token is valid but not for this route or device
-	CodeNotFound             = "not_found"              // 404: no such command, restore, release or lobby request
+	CodeNotFound             = "not_found"              // 404: no such command, restore (another device's restore included), release or lobby request
 	CodeConflict             = "conflict"               // 409: state conflict, for example a second concurrent long poll (§5.5)
 	CodeCustodyCustomerHeld  = "custody_customer_held"  // 409: the operation needs the escrowed key (DH22)
 	CodeRateLimited          = "rate_limited"           // 429: §5.5; carries Retry-After
@@ -25,17 +25,25 @@ const (
 // Codes of the restore-to-device refusals (ADR 0027, P22). The console answers
 // with one of them when it refuses to create or serve a device restore, so the
 // operator's page and the agent can each say which rule applied and never fall
-// back on a generic conflict. CodeCustomerHeld is the restore-specific sibling
-// of CodeCustodyCustomerHeld: it names the refusal of a device restore for a
-// customer-held key, the other names any operation that needs the escrowed key.
+// back on a generic conflict.
+//
+// Two refusals deliberately have no code of their own. A customer-held key
+// answers CodeCustodyCustomerHeld, the code every operation that needs the
+// escrowed key already uses. A restore that belongs to another device answers
+// exactly like one that does not exist, 404 CodeNotFound, so a device token
+// cannot learn that another device's restore id is real.
+//
+// CodeRestoreExpired is 410 with a code of its own, unlike the admin download,
+// which answers an expired restore with CodeNotFound under status 410
+// (adminapi's fail, via httpx.ProblemStatus). The browser only needs "gone";
+// the agent must be able to tell from the code alone an expired request, which
+// it ends as EXPIRED and never retries, from an unknown one, which is a fault.
 const (
 	CodeAgentTooOld               = "agent_too_old"                // 409: the device's agent predates device restore (0.4.0)
-	CodeCustomerHeld              = "customer_held"                // 409: a customer-held key is refused at every layer, device modes included
 	CodeDeviceRetiredDownloadOnly = "device_retired_download_only" // 409: a retired device can be downloaded from, not restored to
 	CodeDevicePurging             = "device_purging"               // 409: the device is being purged
 	CodeDeviceRestoreActive       = "device_restore_active"        // 409: one active device restore per device
-	CodeRestoreExpired            = "restore_expired"              // 410: the request waited past its expiry (24 h)
-	CodeRestoreNotYours           = "restore_not_yours"            // 404: the restore belongs to another device; the status does not reveal it exists
+	CodeRestoreExpired            = "restore_expired"              // 410: the request waited past its expiry (24 h); see above for why not not_found
 )
 
 // errorTable is the one place that maps a code to its HTTP status and its
@@ -60,12 +68,10 @@ var errorTable = []struct {
 	{CodeInternal, 500, "Internal error."},
 	{CodeMFAStepUpRequired, 403, "A recent MFA check is required. Confirm with a current authenticator code."},
 	{CodeAgentTooOld, 409, "The agent on this device is too old for this operation."},
-	{CodeCustomerHeld, 409, "The repository key is held by the customer, so a restore to the device is not available."},
 	{CodeDeviceRetiredDownloadOnly, 409, "This device is retired: only a download is available."},
 	{CodeDevicePurging, 409, "This device is being purged."},
 	{CodeDeviceRestoreActive, 409, "A restore is already active for this device."},
 	{CodeRestoreExpired, 410, "The restore request has expired."},
-	{CodeRestoreNotYours, 404, "No such restore for this device."},
 }
 
 const (

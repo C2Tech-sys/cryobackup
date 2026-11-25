@@ -95,9 +95,11 @@ var (
 // device prefix (two backslashes, \\?\), a POSIX path of two or more
 // '/'-separated segments after any non-word character or at the start, a "~/",
 // "./" or "../" prefix, a file: or smb: URI, a %VAR% expansion, or a backslash
-// followed by a word character. It walks the exported fields, slices and maps
-// of v by their JSON names, looks inside json.RawMessage values (command
-// Params and Result, the release Manifest) as JSON, and also checks map keys.
+// followed by a word character. It walks the exported fields of v by their
+// JSON names, every slice and array element, every map value (whatever the key
+// type) and the dynamic value behind an interface or a pointer, looks inside
+// json.RawMessage values (command Params and Result, the release Manifest) as
+// JSON, and also checks string map keys.
 // On the first offender it returns a *PathFreeError holding the JSON path,
 // never the value; it returns nil when v is clean.
 //
@@ -205,6 +207,14 @@ func walkValue(rv reflect.Value, path string, depth int) error {
 		}
 	case reflect.Map:
 		if t.Key().Kind() != reflect.String {
+			// A key that is not a string (an int) cannot hold a path, but its
+			// value can: encoding/json writes such a map as an object too.
+			iter := rv.MapRange()
+			for iter.Next() {
+				if err := walkValue(iter.Value(), joinPath(path, "*"), depth+1); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 		keys := rv.MapKeys()

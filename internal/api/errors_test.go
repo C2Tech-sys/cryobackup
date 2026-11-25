@@ -25,12 +25,10 @@ func TestHTTPStatusTable(t *testing.T) {
 		"mfa_step_up_required":   403, // ADR 0019: admin-side step-up
 		// P22 restore refusals
 		"agent_too_old":                409,
-		"customer_held":                409,
 		"device_retired_download_only": 409,
 		"device_purging":               409,
 		"device_restore_active":        409,
 		"restore_expired":              410,
-		"restore_not_yours":            404,
 	}
 	codes := ErrorCodes()
 	if len(codes) != len(want) {

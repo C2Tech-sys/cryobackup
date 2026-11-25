@@ -80,7 +80,8 @@ func okHeartbeatResponse() HeartbeatResponse {
 	}
 }
 
-// okRun sets every field of RunRecord; it is a fixture, not a realistic run.
+// okRun sets every field of RunRecord; it is a fixture, not a realistic run,
+// and it does not validate (see okBackupRun).
 func okRun() RunRecord {
 	return RunRecord{
 		ID: ulidA, Kind: restic.KindBackup, Trigger: TriggerCatchup,
@@ -105,22 +106,52 @@ func okRun() RunRecord {
 	}
 }
 
-// closedRun is a realistic closed backup.
-func closedRun() RunRecord {
+// okRun sets the restore block on a backup record, which RunRecord.Validate
+// refuses (restoreCouplings row "kind"): it is the round-trip and golden
+// fixture only. okBackupRun is the same record without the restore block, the
+// base of the validation tests.
+func okBackupRun() RunRecord {
 	r := okRun()
-	r.Outcome = restic.OutcomeSuccess
-	r.DeferredReason = ""
-	r.ErrorClass = ""
-	r.ExitCode = ptr(0)
 	r.Stats.FilesRestored, r.Stats.FilesSkipped, r.Stats.BytesRestored, r.Stats.BytesSkipped = 0, 0, 0, 0
 	r.Stats.RestoreResult, r.Stats.RestoreErrors = "", nil
 	return r
 }
 
+// okRestoreRun is a valid closed restore that ended restored with errors.
+func okRestoreRun() RunRecord {
+	r := okBackupRun()
+	r.Kind, r.Trigger, r.SnapshotID, r.DeferredReason, r.ErrorClass, r.Initial = restic.KindRestore, TriggerManual, "", "", "", false
+	r.Outcome, r.ExitCode = restic.OutcomePartial, ptr(1)
+	r.Stats = RunStats{
+		FilesRestored: 13, FilesSkipped: 14, BytesRestored: 15, BytesSkipped: 16,
+		RestoreResult: RestoreResultPartial,
+		RestoreErrors: []RestoreClassCount{{Class: RestoreResultTargetLocked, Count: 2}, {Class: RestoreResultNothingMatched, Count: 1}},
+	}
+	return r
+}
+
+// closedRun is a realistic closed backup.
+func closedRun() RunRecord {
+	r := okBackupRun()
+	r.Outcome = restic.OutcomeSuccess
+	r.DeferredReason = ""
+	r.ErrorClass = ""
+	r.ExitCode = ptr(0)
+	return r
+}
+
+// okRunsRequest is the round-trip fixture (its records are okRun).
 func okRunsRequest() RunsRequest {
 	second := okRun()
 	second.ID = ulidB
 	return RunsRequest{Runs: []RunRecord{okRun(), second}}
+}
+
+// validRunsRequest is okRunsRequest with records that validate.
+func validRunsRequest() RunsRequest {
+	second := okBackupRun()
+	second.ID = ulidB
+	return RunsRequest{Runs: []RunRecord{okBackupRun(), second}}
 }
 
 func okRunsResponse() RunsResponse {

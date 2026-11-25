@@ -58,19 +58,23 @@ var (
 // for its value; a change is a decision for an ADR (docs/decisions), because the
 // console, the agent and the wizard must agree on it.
 const (
-	// MaxRestorePaths is the number of items one restore may name. In original
-	// mode the agent runs one restic child per anchor folder, one after another,
-	// and every child loads the repository index again (spike P22-S1 items 2
-	// and 7: 10 to 60 s a call on a loaded PC). 100 paths is then at worst
-	// roughly 17 to 100 minutes, far inside the 24 hours a queued request waits
-	// (ruling C6). The wizard collapses a file into its selected folder, so a
-	// user who needs more selects a parent folder.
+	// MaxRestorePaths is the number of items one restore may name. It is a
+	// chosen cap, not one restic imposes. The number of restic runs does not
+	// grow with it: the agent runs restic once per volume the selection touches
+	// (ADR 0027, "How a request travels"), so at most 26 runs, each loading the
+	// repository index once. What grows with it is per item: one include-file
+	// line, one placement walk on the device, and one row the operator reads on
+	// the wizard's review step before confirming. 100 keeps that review
+	// readable. The wizard collapses a file into its selected folder, so an
+	// operator who needs more selects a parent folder.
 	MaxRestorePaths = 100
-	// MaxRestorePathBytes is the length of one path. Windows allows 32 767
-	// UTF-16 units in an extended-length path, but MAX_PATH is 260 and the
-	// longest path in the spike was 378 characters (item 5). 4096 bytes is about
-	// sixteen times MAX_PATH: nothing a backup meets is longer, and a path that is
-	// longer is refused loudly (the user downloads it instead) rather than cut.
+	// MaxRestorePathBytes is the length of one path, in bytes of UTF-8. It is a
+	// chosen cap, not a Windows limit: an extended-length (\\?\) path reaches
+	// 32 767 UTF-16 units, which is up to about 98 000 bytes of UTF-8, and NTFS
+	// can hold such paths. 4096 bounds one include-file line and one row of the
+	// wizard. The longest path in the spike was 378 characters (item 5), so few
+	// real selections come near it; a deeper one is refused loudly, never cut,
+	// and the operator restores a parent folder instead.
 	MaxRestorePathBytes = 4096
 	// MaxRestorePathsTotalBytes is the sum of all paths of one selection. The
 	// wizard's basket travels as hidden form fields in a POST body capped at
@@ -101,9 +105,16 @@ const (
 // Handling rules (§8.4 item 4): it travels only on this device-authenticated
 // response, never in the command queue; the console stores it encrypted with a
 // purge date; the agent writes it to a SYSTEM-only temp file and deletes it
-// after the restore; nobody logs it (String and LogValue print the id and the
-// number of paths, nothing else). AssertPathFree skips this type by its
+// after the restore; nobody logs it. AssertPathFree skips this type by its
 // pathBearing marker.
+//
+// String, GoString and LogValue print the id and the number of paths, and they
+// cover direct logging only: a selection handed straight to fmt's %v, %+v, %#v,
+// %s or %q, or to log/slog as an attribute value. They do not make a selection
+// safe to log in general. A struct that holds one (in an unexported field, or
+// any field under slog's JSON handler), encoding/json, a verb such as %d, and
+// %v of a slice or map of such structs all print the paths. So callers must
+// never log a selection or any struct, slice or map that holds one.
 type RestoreSelection struct {
 	ID         string                 `json:"id"`          // restore request id, 26-character ULID
 	SnapshotID string                 `json:"snapshot_id"` // 64 lowercase hex
@@ -116,7 +127,8 @@ type RestoreSelection struct {
 func (RestoreSelection) pathBearing() {}
 
 // String prints the id and the number of paths and nothing else, so a selection
-// that reaches a log through %v or %+v carries no path.
+// that is itself the operand of %v or %+v prints no path. It does not protect a
+// selection nested in another value (see RestoreSelection).
 func (s RestoreSelection) String() string {
 	return fmt.Sprintf("restore selection %s (%d paths)", s.ID, len(s.Paths))
 }
@@ -211,9 +223,20 @@ const nameForbidden = `\:*?"<>|`
 //     include-file line, and a literal match of such a name is untested (spike
 //     item 3), so it is refused until a test against the real binary proves a
 //     form for it.
+//   - no name that ends with '.', and no name Windows reserves for a device
+//     (windowsReservedName): Win32 cannot create either (it strips the trailing
+//     dot, and opens the device instead of a file), so no Windows snapshot holds
+//     one legitimately, and a placement call without the \\?\ prefix would be
+//     redirected to the device or to a different name.
 //
 // Case is never touched: "/c/x" and "/C/x" are different paths. '[' and '$'
 // are allowed; the agent escapes them when it writes the include file.
+//
+// Look-alike dots (U+2024, U+FF0E, a dot with a combining mark) and invisible
+// characters (U+200B, U+FEFF, U+202E, a soft hyphen) are accepted on purpose.
+// None of them is '.' or a separator to restic, NTFS or the include file, so a
+// name made of them is matched literally, byte for byte, and can only select
+// that same name in the snapshot: harmless, and possibly a real file name.
 func restorePathProblem(p string) string {
 	switch {
 	case p == "":
@@ -252,8 +275,59 @@ func restorePathProblem(p string) string {
 		if unicode.IsSpace(first) || unicode.IsSpace(last) {
 			return "has a name with leading or trailing white space"
 		}
+		if last == '.' {
+			return "has a name that ends with a dot"
+		}
+		if windowsReservedName(seg) {
+			return "has a name Windows reserves for a device"
+		}
 	}
 	return ""
+}
+
+// windowsReservedName reports whether Win32 treats name as a device: CON, PRN,
+// AUX, NUL, CONIN$, CONOUT$, COM0 to COM9 and LPT0 to LPT9, the last two also
+// with the superscript digits ¹ ² ³, in any ASCII case, alone or with any
+// extension ("con.txt", "NUL.tar.gz"), and with spaces before the first dot
+// ("CON .txt"), which Win32 ignores. Only ASCII letters are folded, so a
+// non-ASCII look-alike is accepted and matched literally.
+func windowsReservedName(name string) bool {
+	base := name
+	if i := strings.IndexByte(base, '.'); i >= 0 {
+		base = base[:i]
+	}
+	base = asciiUpper(strings.TrimRight(base, " "))
+	switch base {
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
+		return true
+	}
+	if len(base) < 4 {
+		return false
+	}
+	switch base[:3] {
+	case "COM", "LPT":
+		switch digit := base[3:]; {
+		case len(digit) == 1 && digit[0] >= '0' && digit[0] <= '9':
+			return true
+		case digit == "\u00b9", digit == "\u00b2", digit == "\u00b3":
+			return true
+		}
+	}
+	return false
+}
+
+// asciiUpper upper-cases the ASCII letters of s and leaves every other byte as
+// it is. strings.ToUpper is not used because it also maps non-ASCII letters
+// (the dotless ı becomes I), which would widen the reserved list beyond the
+// names Windows documents.
+func asciiUpper(s string) string {
+	b := []byte(s)
+	for i, ch := range b {
+		if ch >= 'a' && ch <= 'z' {
+			b[i] = ch - 'a' + 'A'
+		}
+	}
+	return string(b)
 }
 
 // RestoreResultClass is how a restore ended or what went wrong in it, as a
@@ -264,32 +338,34 @@ func restorePathProblem(p string) string {
 // Two kinds share the vocabulary. Run-level classes say how the whole run ended
 // and travel in RunStats.RestoreResult next to the run's outcome; countable
 // classes (Countable) are tallied in RunStats.RestoreErrors: what a failed file
-// hit (target_locked, access_denied, other) and how many selection groups
-// matched nothing (nothing_matched).
+// hit (target_locked, access_denied, other) and how many restic runs matched
+// nothing (nothing_matched).
 //
-// A restore runs one restic child per anchor group (original mode) and the
-// agent combines the groups like this: every group matched nothing is
-// nothing_matched and the run ends failed; some groups restored files and some
-// matched nothing (or had file errors) is partial, with RestoreErrors holding
-// the count per class (nothing_matched counts groups). No group restoring
-// anything and some having file errors ends failed with the dominant class.
+// A restore runs restic once per volume the selection touches (ADR 0027) and
+// the agent judges nothing matched per run: every run matched nothing is
+// nothing_matched and the restore ends failed; some runs restored files and
+// some matched nothing (or had file errors) is partial, with RestoreErrors
+// holding the count per class (nothing_matched counts restic runs). No run
+// restoring anything and some having file errors ends failed with the dominant
+// class.
 //
-// Pairing with the run outcome: nothing_matched is outcome failed (restic exits
-// 0 with an empty summary when no include matched anything, spike item 4; the
-// restore must still end FAILED, never delivered), and RunRecord.Validate
-// enforces that one on a closed record. The rest is the convention the agent
-// and the console follow and Validate does not enforce: partial is outcome
-// partial, interrupted is interrupted, cancelled is cancelled, every other
-// class is failed, and a successful restore carries no class.
+// Pairing with the run outcome: RunRecord.Validate enforces it, one row of
+// restoreCouplings per rule (runs.go). nothing_matched is outcome failed with
+// all four counts 0 (restic exits 0 with an empty summary when no include
+// matched anything, spike item 4; the restore must still end FAILED, never
+// delivered); partial is outcome partial; cancelled is cancelled; interrupted
+// is interrupted; every other class is failed; a successful restore carries no
+// class and no error rows, and restored or skipped at least one file. The
+// vocabulary has no "ok" word: success is the absence of a class.
 //
 // None of these values is in the runs.error_class CHECK list of the database
-// except auth and guard_refused; the classes ride in runs.stats (JSON), which
+// except auth, guard_refused and disk; the classes ride in runs.stats (JSON), which
 // needs no migration. RunRecord.ErrorClass stays a restic.ErrorClass.
 type RestoreResultClass string
 
 // Restore result classes.
 const (
-	// RestoreResultNothingMatched: the selection (or, as a count, a group of it) matched nothing in the snapshot.
+	// RestoreResultNothingMatched: the selection (or, as a count, one restic run of it) matched nothing in the snapshot.
 	RestoreResultNothingMatched RestoreResultClass = "nothing_matched"
 	// RestoreResultTargetLocked: a target file was held open by another process.
 	RestoreResultTargetLocked RestoreResultClass = "target_locked"
@@ -307,6 +383,10 @@ const (
 	RestoreResultRepoUnreachable RestoreResultClass = "repo_unreachable"
 	// RestoreResultCancelled: the operator cancelled the run.
 	RestoreResultCancelled RestoreResultClass = "cancelled"
+	// RestoreResultDisk: a destination volume had too little free space for the
+	// selection, so the agent refused before writing anything (ADR 0027, "Size
+	// check"). Run-level only.
+	RestoreResultDisk RestoreResultClass = "disk"
 	// RestoreResultOther: a per-file error the agent could not classify. It is
 	// counted so that no failure vanishes into a smaller number.
 	RestoreResultOther RestoreResultClass = "other"
@@ -315,7 +395,7 @@ const (
 var restoreResultClasses = []RestoreResultClass{
 	RestoreResultNothingMatched, RestoreResultTargetLocked, RestoreResultAccessDenied, RestoreResultPartial,
 	RestoreResultInterrupted, RestoreResultGuardRefused, RestoreResultAuth, RestoreResultRepoUnreachable,
-	RestoreResultCancelled, RestoreResultOther,
+	RestoreResultCancelled, RestoreResultDisk, RestoreResultOther,
 }
 
 // Valid reports whether c is in the vocabulary.
@@ -330,7 +410,8 @@ func (c RestoreResultClass) Countable() bool {
 	return false
 }
 
-// RestoreClassCount is how many files (or, for nothing_matched, selection groups) ended in one countable class.
+// RestoreClassCount is how many files (or, for nothing_matched, restic runs)
+// ended in one countable class. Count is at most MaxRestoreCount.
 type RestoreClassCount struct {
 	Class RestoreResultClass `json:"class"`
 	Count int64              `json:"count"`
