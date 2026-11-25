@@ -45,6 +45,9 @@ func printFixturesLogin(w io.Writer, supplied bool, password string) {
 	fmt.Fprintf(w, "fixtures mode: the fleet is fictional. Sign in as %q with password %q (set CRYO_FIXTURES_PASSWORD to choose one).\n", "admin", password)
 }
 
+// drillNotice is what serve prints in drill mode, after the admin listener line (ADR 0029, ruling C8).
+const drillNotice = "DRILL COPY: this console is a restored copy. It does not talk to agents, send mail or change storage. No agent listener is open."
+
 func runServe(args []string, io IO) int {
 	fs := newFlags("serve", io)
 	cfgPath := fs.String("config", "", "path of config.json (optional with --fixtures)")
@@ -105,6 +108,9 @@ func runServe(args []string, io IO) int {
 			scheme = "http (lab, no TLS)"
 		}
 		fmt.Fprintf(io.Stdout, "agent listener: %s on %s\n", scheme, a)
+	}
+	if app.drill {
+		fmt.Fprintln(io.Stdout, drillNotice)
 	}
 	if cfg.Fixtures {
 		printFixturesLogin(io.Stdout, suppliedPassword != "", app.FixturesPassword)

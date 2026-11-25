@@ -96,6 +96,7 @@ type App struct {
 
 	log      *logx.Logger
 	clock    func() time.Time
+	drill    bool // cfg.Drill outside fixtures mode: see drillJobs
 	cleanup  []func()
 	closeErr error // what closing the database answered; Run returns it
 }
@@ -104,12 +105,21 @@ type App struct {
 // private in-memory store, loads the fictional fleet with a frozen clock, runs
 // with an in-process fake admin path and starts no agent listener: the same
 // code paths as production, no second one.
+//
+// In drill mode (cfg.Drill, a console restored from its self-backup, ADR 0029 ruling C8) it opens
+// the real database and the admin listener as production does, and opens no agent listener, sends
+// no mail (an in-process fake sender, mail not configured), offers no probe-now and schedules only
+// the jobs drillJobs lists as on.
 func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error) {
 	a := &App{Cfg: cfg, log: o.Log, clock: o.Clock}
 	if a.log == nil {
 		a.log = logx.Default()
 	}
 	fix := cfg.Fixtures
+	// drill: a console restored from its self-backup (ADR 0029, ruling C8). config.Validate refuses
+	// drill with fixtures; a caller that skipped Validate gets fixtures, which touches nothing either.
+	drill := cfg.Drill && !fix
+	a.drill = drill
 	if a.clock == nil {
 		a.clock = time.Now
 		if fix {
@@ -215,8 +225,14 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	}
 	a.Display = disp
 	a.Mail, a.Dispatch = newMailer(cfg, fix, a)
+	if drill {
+		// A drill copy sends no mail. Every sender ends at an in-process fake whatever the smtp block
+		// says, and mail counts as not configured, so the console offers no test message and no digest.
+		a.Mail = mail.NewFakeSender()
+		a.Dispatch = &notify.Dispatcher{Store: a.Store, Sender: a.Mail, From: cfg.SMTP.From, Log: a.log}
+	}
 	smtpSet := mail.SettingsFromConfig(cfg.SMTP)
-	mailOn := fix || smtpSet.Configured() // fixtures: the FakeSender is the relay and nothing leaves the process
+	mailOn := fix || (smtpSet.Configured() && !drill) // fixtures: the FakeSender is the relay and nothing leaves the process
 	// The link in every e-mail is admin_url (the address an operator types to open the console), never
 	// public_url: that is the agent API and serves no console page. Unset: no link and no button.
 	link := cfg.AdminLink()
@@ -292,7 +308,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 			a.Admin.Register(r)
 			a.UI.Register(r)
 		},
-		AgentDisabled: fix,
+		AgentDisabled: cfg.AgentListenerOff(), // fixtures and drill: the agent port is never opened
 		Health:        server.StoreHealth(a.Store, a.Master, fix),
 		Log:           a.log,
 		Clock:         a.clock,
@@ -308,17 +324,32 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	if fix {
 		a.Admin.Jobs = a.UI.PageJobs() // the fictional jobs the page offers, so the API and the page agree (the App's runner has none)
 	}
-	if a.Prober != nil {
-		a.Admin.Prober = a.Prober // the storage probe runs the probes now and waits for them (M3-INT); never a typed nil
+	if a.Prober != nil && !drill {
+		// The storage probe runs the probes now and waits for them (M3-INT); never a typed nil. A drill
+		// copy has none: its probes would reach the production gateway and mail relay (drillJobs).
+		a.Admin.Prober = a.Prober
 	}
 	if !fix {
-		a.Runner.Add(a.Htpasswd.Job())
-		a.Runner.Add((&jobs.HeartbeatRingTrim{Store: a.Store}).Job())
-		a.Runner.Add((&jobs.RestorePurge{Svc: a.Restores}).Job())
-		a.Runner.Add((&jobs.SessionExpire{Store: a.Store}).Job())
-		a.Runner.Add((&jobs.CommandExpiry{Store: a.Store}).Job())
-		a.Runner.Add((&jobs.DevicePurge{Store: a.Store, Purger: a.Backend, ArtifactsDir: artifacts, Log: a.log}).Job()) // ADR 0019
-		a.addMonitorJobs(cfg, fleet)
+		for _, j := range []jobs.Job{
+			a.Htpasswd.Job(),
+			(&jobs.HeartbeatRingTrim{Store: a.Store}).Job(),
+			(&jobs.RestorePurge{Svc: a.Restores}).Job(),
+			(&jobs.SessionExpire{Store: a.Store}).Job(),
+			(&jobs.CommandExpiry{Store: a.Store}).Job(),
+			(&jobs.DevicePurge{Store: a.Store, Purger: a.Backend, ArtifactsDir: artifacts, Log: a.log}).Job(), // ADR 0019
+		} {
+			if drill && !DrillRunsJob(j.Name) {
+				continue
+			}
+			a.Runner.Add(j)
+		}
+		if !drill {
+			a.addMonitorJobs(cfg, fleet) // every one of them is off in a drill copy (drillJobs)
+		}
+	}
+	if drill {
+		a.log.Warn("drill mode: this console is a restored copy; no agent listener, no mail, no job that pings outside or writes to storage",
+			logx.Class("drill"), logx.Int("jobs", len(a.Runner.Names())))
 	}
 	// The M4 routes (P20-W3A). In fixtures mode no job runs and a.Digest stays nil, so the preview and
 	// send-now get a digester of their own over the fixture world, sending through the FakeSender.
@@ -341,6 +372,48 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		a.Admin.Mail.Digest = digest // never a typed nil in the interface
 	}
 	return a, nil
+}
+
+// DrillJob is one job serve schedules and whether a drill copy runs it.
+type DrillJob struct {
+	Name string
+	On   bool
+	Why  string
+}
+
+// drillJobs lists every job serve schedules, whether a drill copy (config "drill", ADR 0029 ruling
+// C8) runs it, and why. A drill copy may point at the production storage key and the production
+// mail relay, so it runs only what touches nothing but its own database and its own disk. A job
+// that is not listed here does not run in a drill copy (DrillRunsJob): a job added to serve later
+// stays off there until someone decides otherwise in this table. Not a job, and off as well: the
+// self-probe of the public agent endpoint (it would connect to the production agent listener).
+var drillJobs = []DrillJob{
+	{jobs.NameHtpasswdSync, false, "writes the gateway's login file; a drill copy has no gateway and must not touch the real one's"},
+	{jobs.NameHeartbeatRingTrim, true, "deletes old heartbeat rows in the drill copy's own database"},
+	{jobs.NameRestorePurge, true, "expires spent restores in the drill copy's own database and scrubs only its own artifacts directory"},
+	{jobs.NameSessionExpire, true, "deletes expired sign-in sessions in the drill copy's own database"},
+	{jobs.NameCommandExpiry, true, "expires queued agent commands in the drill copy's own database; no agent can fetch them"},
+	{jobs.NameDevicePurge, false, "deletes retired devices' repositories from storage (purge_repo)"},
+	{jobs.NameHealthProber, false, "connects to the production gateway and mail relay, and its storage probe may create the probe repository"},
+	{jobs.NameAlarmEvaluator, false, "its notify step sends alert mail"},
+	{jobs.NameDailyDigest, false, "sends the daily digest"},
+	{jobs.NameNotificationRetry, false, "sends failed mail again"},
+	{jobs.NameAbandonedRunSweeper, false, "no agent can report to a drill copy, so it would mark open runs abandoned because of the drill itself"},
+	{jobs.NameHealthcheckPing, false, "pings the external heartbeat monitor"},
+}
+
+// DrillJobs returns the drill job table (a copy), for the tests and the record.
+func DrillJobs() []DrillJob { return append([]DrillJob(nil), drillJobs...) }
+
+// DrillRunsJob reports whether a drill copy runs the job named name: false for every job the
+// table does not list as on, unknown names included.
+func DrillRunsJob(name string) bool {
+	for _, j := range drillJobs {
+		if j.Name == name {
+			return j.On
+		}
+	}
+	return false
 }
 
 func holderID() string {
@@ -368,9 +441,12 @@ func (a *App) Run(parent context.Context) (err error) {
 	ctx, cancel := context.WithCancel(parent) // ends with parent, or when the servers end on their own
 	defer cancel()
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
 	go func() { defer wg.Done(); a.Hub.Run(ctx) }()
-	go func() { defer wg.Done(); a.Endpoint.Run(ctx) }() // after Listen: the first probe meets a bound listener
+	if !a.drill { // a drill copy never connects to the production agent endpoint (drillJobs)
+		wg.Add(1)
+		go func() { defer wg.Done(); a.Endpoint.Run(ctx) }() // after Listen: the first probe meets a bound listener
+	}
 	a.Runner.Start(ctx)
 	// Every step below is bounded: shutdownWorstCase is the sum. Serve returns when ctx
 	// ends or when a listener fails, which it reports as its error. Either way ctx ends

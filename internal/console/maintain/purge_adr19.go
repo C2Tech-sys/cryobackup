@@ -168,6 +168,11 @@ var _ adminpath.RepoPurger = (*Worker)(nil)
 // call that reaches purgeDeadline is adminpath.CodeTimeout; a cancelled call
 // returns the context error.
 func (w *Worker) PurgeRepo(ctx context.Context, req adminpath.PurgeRepoRequest) (adminpath.PurgeRepoResult, error) {
+	if w.inDrill() {
+		// A drill copy never deletes (ADR 0029, ruling C8; drill.go). drillBackend refuses purge_repo
+		// on the socket; this refuses a call that reaches the Worker any other way.
+		return adminpath.PurgeRepoResult{}, w.drillRefused(adminpath.MethodPurgeRepo)
+	}
 	pctx, cancel := context.WithTimeout(ctx, purgeDeadline)
 	defer cancel()
 	res, err := w.purgeRepo(pctx, req)

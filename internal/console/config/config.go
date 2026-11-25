@@ -205,6 +205,12 @@ type Config struct {
 	HealthProber     HealthProber    `json:"health_prober"`
 	HealthcheckPing  HealthcheckPing `json:"healthcheck_ping"`
 	Fixtures         bool            `json:"fixtures"`
+	// Drill marks a console restored from its self-backup for a disaster-recovery drill (ADR 0029,
+	// ruling C8). serve then opens no agent listener, sends no mail and runs no job that pings
+	// outside, writes to storage or changes the fleet; maintain serves only the read methods of the
+	// admin path and runs no scheduler pass. A drill copy may point at the production storage key:
+	// it reads, it never writes. Default false. Cannot be combined with fixtures.
+	Drill bool `json:"drill"`
 }
 
 // Default returns the defaults: loopback admin listener, public agent listener
@@ -442,7 +448,12 @@ func (c Config) Validate() error {
 	if !c.AdminAllowPublic && !IsLoopbackOrPrivate(c.AdminListen) {
 		add("admin_listen %q is not a loopback or private address: bind it to 127.0.0.1 or a mesh/private IP, or set admin_allow_public", c.AdminListen)
 	}
-	if !c.Fixtures {
+	if c.Drill && c.Fixtures {
+		add("drill and fixtures cannot both be set: fixtures serves a fictional fleet, drill a console restored from its self-backup")
+	}
+	// A drill copy opens no agent listener (AgentListenerOff), so it needs no agent certificate:
+	// the drill VM has none, and it must not hold the production one.
+	if !c.AgentListenerOff() {
 		hasCert, hasKey := c.TLS.Cert != "", c.TLS.Key != ""
 		switch {
 		case hasCert != hasKey:
@@ -570,6 +581,10 @@ func (c Config) Validate() error {
 	}
 	return nil
 }
+
+// AgentListenerOff reports whether serve opens no agent listener: in fixtures mode (the fleet is
+// fictional) and in drill mode (a restored copy must never answer the real agents).
+func (c Config) AgentListenerOff() bool { return c.Fixtures || c.Drill }
 
 // Error lists every problem Validate found.
 type Error struct{ Problems []string }

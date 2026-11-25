@@ -153,18 +153,53 @@ machine that can reach production in a way that matters.
 1. Create the VM. Install the binaries and the offline kit (section 3, steps 1 and 2).
 2. Run `self-backup restore` (step 3). It must end in `ok`: the manifest checks and the escrow unwrap
    passed.
-3. Place the files (step 4).
-4. Start the console in **drill mode (P22-K)**. In drill mode the console starts no agent listener and
-   no notify, digest, health ping, htpasswd sync or device purge, and the worker answers read methods
-   only. Log in, browse a real snapshot, download one file, and confirm that no mail arrived.
-5. Destroy the VM.
+3. Place the files (step 4). Skip step 5: a drill issues no certificate and changes no DNS.
+4. **Turn drill mode on before anything starts.** In `/etc/cryobackup/config.json` set
+   `"drill": true`. Both `cryo-console` and `cryo-maintain` read it from that file. `CRYO_DRILL=true`
+   in a unit's environment does the same for that unit only, so prefer the file. Then check:
 
-**Until drill mode (P22-K) exists, stop after step 3.** Do not start `cryo-console`, `cryo-maintain`
-or the gateway on the drill VM. Without drill mode, a restored console runs every production job:
-it sends mail, pings the health monitor, and its worker writes and prunes on production storage as a
-second console on the same bucket, which is unsupported. Steps 1 to 3 already prove the parts that
-matter most. The kit opens the backup, the copy is intact, and your master key unwraps its escrowed
-keys.
+```sh
+cryo-console doctor --config /etc/cryobackup/config.json
+```
+
+   It must print `WARN  drill  on: drill copy. ...`. If it prints `OK  drill  off`, stop and fix the
+   file. The agent certificate is not needed: in drill mode `tls.cert` and `tls.key` are not
+   checked, because no agent listener is opened. If `admin.tls` names certificate files, issue a
+   throwaway self-signed pair on the VM or clear both keys. Keep `admin_listen` on `127.0.0.1` and
+   reach it through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 <drill VM>`).
+5. **Start the console and the worker, never the gateway:**
+
+```sh
+systemctl daemon-reload
+systemctl start cryo-maintain cryo-console     # start, not enable; do not start rclone-gateway
+journalctl -u cryo-console -n 20               # must show the line "DRILL COPY: this console is a restored copy. ..."
+ss -ltn                                        # no listener on the agent port (agent_listen, 8443 by default)
+```
+
+   What drill mode does: `cryo-console` opens no agent listener (the port is not opened at all),
+   sends no mail (every sender is an in-process fake, and mail counts as not configured), and runs
+   no health prober, alarm evaluator with its mail, digest, mail retry, heartbeat ping, gateway login
+   file sync, device purge or abandoned-run sweep. Nor does it probe its public agent address. It
+   still expires sessions, queued commands and spent restores in its own database. `cryo-maintain`
+   serves only `ping`, `ls`, `dump`, `cat_config` and `snapshots`, refuses every other admin-path
+   method, including `purge_repo`, with `unavailable`, and runs no scheduler pass: no device
+   maintenance, no usage sample, no escrow verify, no self-backup. `self-backup run` and `verify`
+   exit 2 on a drill copy.
+6. **Log in, browse a real snapshot, download one file.** Sign in through the tunnel as an owner from
+   the restored database. Open a device that had backups before the snapshot, open its restore page,
+   browse a snapshot and download one small file as a zip. Open the file. The worker reads production
+   storage with the admin credential for this, as any browse does. restic holds one lock object in
+   that device's repository while each read runs and removes it after.
+7. **Confirm that no mail arrived.** No alert recipient and no digest recipient received anything
+   from the drill copy, and the agents kept reporting to the production console.
+8. **Destroy the VM**, disks included: it holds the master key and the admin credential.
+
+**Never start `cryo-console` or `cryo-maintain` on a drill VM without drill mode on.** Without it,
+a restored console runs every production job: it sends mail, pings the health monitor, rewrites the
+gateway's login file, and its worker writes and prunes on production storage as a second console on
+the same bucket, which is unsupported. If drill mode cannot be confirmed in step 4, stop after
+step 3. Steps 1 to 3 already prove the parts that matter most: the kit opens the backup, the copy
+is intact, and your master key unwraps its escrowed keys.
 
 Record the date, the snapshot id and the result. Repeat the drill after every change to the offline
 kit.
