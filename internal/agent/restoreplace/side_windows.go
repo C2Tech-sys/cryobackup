@@ -11,7 +11,7 @@ import (
 
 // ErrSideCheck: the file checked after the side folder's reset does not carry
 // only inherited entries for Administrators and SYSTEM.
-var ErrSideCheck = errors.New("restoreplace: the side folder's check file is not reset to inherit")
+var ErrSideCheck = errors.New("restoreplace: the side folder's check file is not reset to inherit or not owned by Administrators")
 
 // ResetInherit resets every entry below top (not top itself) to inherit from
 // its parent, with nothing explicit, top-down (ADR 0027, "Side folder": the
@@ -24,9 +24,22 @@ var ErrSideCheck = errors.New("restoreplace: the side folder's check file is not
 // propagates nothing to children: no API walks the tree on the agent's behalf
 // (icacls /T follows junctions, p22-spike.md:435-441).
 //
+// In the same call through the same handle it sets every entry's owner to
+// BUILTIN\Administrators (foreman ruling D1, 2026-11-25, tightening ruling C2):
+// a restored file keeps the snapshot's owner otherwise, and an owner has
+// implicit READ_CONTROL and WRITE_DAC, so the snapshot's user could read the
+// new DACL and grant itself access back. SYSTEM may name Administrators as
+// owner (a group of its token); WithPrivileges adds SeRestorePrivilege. With a
+// lab trustee (a non-elevated test, which cannot name Administrators) the
+// trustee is the owner instead.
+//
 // It returns the path of one file it reset (for CheckInherited), "" when the
 // tree holds no file.
-func ResetInherit(top string) (checkFile string, links int, err error) {
+func ResetInherit(top string, o Options) (checkFile string, links int, err error) {
+	owner, err := sideOwner(o)
+	if err != nil {
+		return "", 0, err
+	}
 	h, err := openNoFollow(top, holdAccess|windows.READ_CONTROL, shareRW)
 	if err != nil {
 		return "", 0, err
@@ -39,17 +52,41 @@ func ResetInherit(top string) (checkFile string, links int, err error) {
 	if err != nil {
 		return "", 0, err
 	}
-	r := &resetter{}
+	r := &resetter{owner: owner}
 	err = r.dir(h, top, parent)
 	return r.check, r.links, err
 }
 
 type resetter struct {
+	owner *windows.SID
 	check string
 	links int
 }
 
-const resetAccess = holdAccess | windows.READ_CONTROL | windows.WRITE_DAC | windows.DELETE
+// sideOwner is the owner every side-folder entry gets: Administrators, or the
+// lab trustee in a non-elevated test.
+func sideOwner(o Options) (*windows.SID, error) {
+	if lab, err := labSID(o); err != nil || lab != nil {
+		return lab, err
+	}
+	return windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+}
+
+const resetAccess = holdAccess | windows.READ_CONTROL | windows.WRITE_DAC | windows.WRITE_OWNER | windows.DELETE
+
+// The opens the reset tries, most rights first. As SYSTEM with the restore
+// privilege the first always works. A restored entry whose snapshot DACL does
+// not grant WRITE_OWNER (a non-elevated test) is opened without it; its owner
+// is then set through a second, checked open (setOwnerReopened).
+var resetOpens = []struct {
+	access uint32
+	owner  bool
+}{
+	{resetAccess, true},
+	{resetAccess &^ windows.WRITE_OWNER, false},
+	{windows.READ_CONTROL | windows.WRITE_DAC | windows.WRITE_OWNER | windows.DELETE | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE, true},
+	{windows.READ_CONTROL | windows.WRITE_DAC | windows.DELETE | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE, false},
+}
 
 func (r *resetter) dir(h windows.Handle, path string, parentDACL *windows.ACL) error {
 	ents, err := listDir(h)
@@ -58,14 +95,17 @@ func (r *resetter) dir(h windows.Handle, path string, parentDACL *windows.ACL) e
 	}
 	for _, e := range ents {
 		p := join(path, e.name)
-		ch, err := openNoFollow(p, resetAccess, shareRW)
-		if err != nil {
-			ch, err = openNoFollow(p, windows.READ_CONTROL|windows.WRITE_DAC|windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, shareRW)
-			if err != nil {
-				return err
+		ch, withOwner := windows.InvalidHandle, false
+		for _, o := range resetOpens {
+			if ch, err = openNoFollow(p, o.access, shareRW); err == nil {
+				withOwner = o.owner
+				break
 			}
 		}
-		err = r.entry(ch, p, parentDACL)
+		if err != nil {
+			return err
+		}
+		err = r.entry(ch, p, parentDACL, withOwner)
 		_ = windows.CloseHandle(ch)
 		if err != nil {
 			return err
@@ -74,7 +114,7 @@ func (r *resetter) dir(h windows.Handle, path string, parentDACL *windows.ACL) e
 	return nil
 }
 
-func (r *resetter) entry(h windows.Handle, path string, parentDACL *windows.ACL) error {
+func (r *resetter) entry(h windows.Handle, path string, parentDACL *windows.ACL, withOwner bool) error {
 	ti, err := tagOf(h)
 	if err != nil {
 		return err
@@ -99,8 +139,22 @@ func (r *resetter) entry(h windows.Handle, path string, parentDACL *windows.ACL)
 	if err := sd.SetControl(windows.SE_DACL_AUTO_INHERITED|windows.SE_DACL_PROTECTED, windows.SE_DACL_AUTO_INHERITED); err != nil {
 		return err
 	}
-	if err := windows.SetKernelObjectSecurity(h, windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION, sd); err != nil {
+	info := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.UNPROTECTED_DACL_SECURITY_INFORMATION)
+	if withOwner {
+		if err := sd.SetOwner(r.owner, false); err != nil {
+			return err
+		}
+		info |= windows.OWNER_SECURITY_INFORMATION
+	}
+	if err := windows.SetKernelObjectSecurity(h, info, sd); err != nil {
 		return err
+	}
+	if !withOwner {
+		// The new DACL now grants the side folder's trustees full control,
+		// WRITE_OWNER included.
+		if err := r.setOwnerReopened(h, path); err != nil {
+			return err
+		}
 	}
 	if !ti.dir() {
 		if r.check == "" {
@@ -109,6 +163,43 @@ func (r *resetter) entry(h windows.Handle, path string, parentDACL *windows.ACL)
 		return nil
 	}
 	return r.dir(h, path, acl)
+}
+
+// setOwnerReopened sets the side owner on the entry held as h, at path,
+// through a second no-follow open that asks for WRITE_OWNER now that the new
+// DACL grants it. Windows offers no handle-based way to add a right to an
+// open file handle (ReOpenFile and DuplicateHandle refuse it), so the entry is
+// opened by name once more; it cannot have been swapped meanwhile, because h
+// holds it without FILE_SHARE_DELETE (no rename, no delete) and every
+// ancestor is held the same way by the walk, and the two handles are compared
+// by volume serial and file id before the owner is written. Only a run whose
+// first open could not get WRITE_OWNER takes this path: as SYSTEM with the
+// restore privilege the first open always has it.
+func (r *resetter) setOwnerReopened(h windows.Handle, path string) error {
+	oh, err := openNoFollow(path, windows.WRITE_OWNER|windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, shareAll)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(oh)
+	a, err := fileInfo(h)
+	if err != nil {
+		return err
+	}
+	b, err := fileInfo(oh)
+	if err != nil {
+		return err
+	}
+	if a.VolumeSerialNumber != b.VolumeSerialNumber || a.FileIndexHigh != b.FileIndexHigh || a.FileIndexLow != b.FileIndexLow {
+		return errNotRealDir
+	}
+	sd, err := windows.NewSecurityDescriptor()
+	if err != nil {
+		return err
+	}
+	if err := sd.SetOwner(r.owner, false); err != nil {
+		return err
+	}
+	return windows.SetKernelObjectSecurity(oh, windows.OWNER_SECURITY_INFORMATION, sd)
 }
 
 // daclOf reads a DACL through the handle.
@@ -225,8 +316,9 @@ func inheritedFrom(parent *windows.ACL, dir bool) *windows.ACL {
 }
 
 // CheckInherited is the check after the reset (ADR 0027: "It then checks one
-// file"): the file's DACL holds no explicit entry, and every entry that grants
-// is for Administrators, SYSTEM or the lab trustee.
+// file"): the file is owned by Administrators (the lab trustee in a test,
+// ruling D1), its DACL holds no explicit entry, and every entry that grants is
+// for Administrators, SYSTEM or the lab trustee.
 func CheckInherited(path string, o Options) error {
 	lab, err := labSID(o)
 	if err != nil {
@@ -237,9 +329,16 @@ func CheckInherited(path string, o Options) error {
 		return err
 	}
 	defer windows.CloseHandle(h)
-	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return err
+	}
+	want, err := sideOwner(o)
+	if err != nil {
+		return err
+	}
+	if owner, _, err := sd.Owner(); err != nil || owner == nil || !owner.Equals(want) {
+		return ErrSideCheck
 	}
 	dacl, _, err := sd.DACL()
 	if err != nil || dacl == nil || dacl.AceCount == 0 {

@@ -149,3 +149,46 @@ func TestLabSystemDescriptorRule(t *testing.T) {
 		t.Error("the descriptor rule does not hold as SYSTEM")
 	}
 }
+
+// Check 6 (owner, ruling D1): as SYSTEM, the side-folder reset makes
+// Administrators the owner of an entry that a snapshot gave to an ordinary
+// user, and the check accepts it with the production rule.
+func TestLabSystemSideOwner(t *testing.T) {
+	dir := labSystem(t)
+	user := os.Getenv("CRYO_P22_LAB_USER_SID")
+	if user == "" {
+		t.Skip("CRYO_P22_LAB_USER_SID is not set")
+	}
+	root, err := OpenRoot(filepath.Join(dir, "CryoBackup-Restore"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	side := filepath.Join(root.Path(), "01JB0000000000000000000R01")
+	if err := CreateFresh(side); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(side, "C", "Users", "labuser", "doc.txt")
+	write(t, f, "doc")
+	sid, err := windows.StringToSid(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = WithPrivileges(func() error {
+		return windows.SetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION, sid, nil, nil, nil)
+	})
+	var check string
+	err = WithPrivileges(func() error {
+		var err error
+		check, _, err = ResetInherit(side, Options{})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd, _ := windows.GetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	t.Logf("LAB 6 side file after the reset: %s", sd.String())
+	if err := CheckInherited(check, Options{}); err != nil || !strings.HasPrefix(sd.String(), "O:BA") {
+		t.Errorf("side owner after the reset: %v %s", err, sd.String())
+	}
+}

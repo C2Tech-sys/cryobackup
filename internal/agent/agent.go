@@ -408,8 +408,9 @@ func New(ctx context.Context, o Options) (*Agent, error) {
 		}
 		_ = emptyDir(a.layout.TempDir()) // include files a killed restore left behind go here too
 		// Staging folders of a restore cut short (closed as interrupted just
-		// above) are removed by the clean-up walk (ADR 0027).
-		a.sweepRestoreStaging()
+		// above), and the side folders of interrupted restores, are removed by
+		// the clean-up walk (ADR 0027, ruling D2).
+		a.sweepRestoreStaging(ctx)
 		if n, _ := logs.PruneRunLogs(a.layout.RunLogsDir(), a.clock(), logs.RunLogRetention); n > 0 {
 			a.log.Info("pruned old run logs", "count", n)
 		}

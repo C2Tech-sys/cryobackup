@@ -33,7 +33,7 @@ func RemoveReparsePoints(string) (int, error) { return 0, ErrUnsupported }
 func Place(string, string, []Rel, Mode) (Counts, error) { return Counts{}, ErrUnsupported }
 
 // ResetInherit refuses: device restore is Windows only.
-func ResetInherit(string) (string, int, error) { return "", 0, ErrUnsupported }
+func ResetInherit(string, Options) (string, int, error) { return "", 0, ErrUnsupported }
 
 // CheckInherited refuses: device restore is Windows only.
 func CheckInherited(string, Options) error { return ErrUnsupported }

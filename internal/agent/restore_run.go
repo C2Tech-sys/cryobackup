@@ -285,8 +285,9 @@ func errText(err error) string {
 // by a restore that was cut short is removed by the clean-up walk, after the
 // root rule is applied to its root; a root that fails the rule is left alone
 // and logged. The run itself was closed as interrupted by OpenRunsOnStart.
-// Side folders are restore results and are never swept.
-func (a *Agent) sweepRestoreStaging() {
+// Then sweepInterruptedSide removes the side folders of interrupted restores.
+func (a *Agent) sweepRestoreStaging(ctx context.Context) {
+	defer a.sweepInterruptedSide(ctx)
 	letters := restoreplace.FixedDrives()
 	if a.o.restoreSweepLetters != nil {
 		letters = a.o.restoreSweepLetters()
@@ -315,6 +316,47 @@ func (a *Agent) sweepRestoreStaging() {
 			a.log.Warn("removed a staging folder left by an interrupted restore", "drive", l, "links_deleted", links, "folder", safeID(n))
 		}
 		root.Close()
+	}
+}
+
+// sweepInterruptedSide removes, at start, the side folder of every restore
+// that ended interrupted (foreman ruling D2, 2026-11-25): such a restore never
+// reached its inherit reset and owner change, so its files may still carry the
+// snapshot's permissions and owner, and the operator is told to run it again.
+// The side root must pass the root rule (a root that fails it is left alone
+// and logged); each <restore id> folder is removed with the clean-up walk only
+// when the journal holds a restore run of that id whose outcome is
+// interrupted. A finished side restore's folder, or a folder the journal does
+// not know, is never touched.
+func (a *Agent) sweepInterruptedSide(ctx context.Context) {
+	root, err := restoreplace.VerifyRoot(a.sideRoot(), a.placeOptions())
+	if errors.Is(err, restoreplace.ErrNotExist) || errors.Is(err, restoreplace.ErrUnsupported) {
+		return
+	}
+	if err != nil {
+		a.rootRefused("sweep", "side", a.sideVolume(), err)
+		return
+	}
+	defer root.Close()
+	names, err := root.Children()
+	if err != nil {
+		a.log.Warn("restore side root could not be listed at start", "err", errText(err))
+		return
+	}
+	for _, n := range names {
+		if safeID(n) != n {
+			continue
+		}
+		row, ok, err := a.jr.Run(ctx, n)
+		if err != nil || !ok || row.Kind != restic.KindRestore || row.Outcome != restic.OutcomeInterrupted {
+			continue
+		}
+		links, err := restoreplace.RemoveTree(root.Path() + `\` + n)
+		if err != nil {
+			a.log.Warn("the side folder of an interrupted restore could not be removed", "restore", n, "err", errText(err))
+			continue
+		}
+		a.log.Warn("removed the side folder of an interrupted restore; run the restore again", "restore", n, "links_deleted", links)
 	}
 }
 

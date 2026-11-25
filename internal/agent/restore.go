@@ -348,6 +348,14 @@ func (a *Agent) restoreGroups(ctx context.Context, id, snap string, groups []res
 	// restic writes to (each destination volume, or the system drive for the
 	// side folder), against that volume's free space. Short: FAILED disk,
 	// before anything is written; the numbers go to the device log only.
+	//
+	// Why a dry run and not "restic ls" as ADR 0027 words it (foreman ruling
+	// R-size, 2026-11-25): the builder lists one folder level only
+	// (--recursive is a forbidden flag), so ls cannot sum a selected folder;
+	// the dry run is restic's own sizing with exactly the include semantics
+	// of the real run, and writes nothing. A dry run that fails maps like the
+	// real run (auth, repo_unreachable, other: superviseRestore), and one
+	// without a summary is other: the agent never assumes the selection fits.
 	need := map[string]uint64{}
 	for i, g := range groups {
 		size, fatal, exit := a.restoreDryRun(ctx, id, snap, g, files[i], targets[i])
@@ -496,7 +504,7 @@ func (a *Agent) restoreSideGroup(ctx context.Context, id, snap string, g restore
 		if err != nil {
 			return err
 		}
-		check, more, err := restoreplace.ResetInherit(target)
+		check, more, err := restoreplace.ResetInherit(target, a.placeOptions())
 		out.counts.Skipped += int64(more)
 		if err != nil {
 			return err

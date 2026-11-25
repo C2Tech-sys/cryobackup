@@ -490,9 +490,15 @@ func TestResetInheritNeverFollows(t *testing.T) {
 	// The snapshot's explicit entries, as restic restores them.
 	setSDDL(t, filepath.Join(vol, "Users", "bob"), "D:P(A;OICI;FA;;;"+user+")(A;OICI;FA;;;WD)")
 	setSDDL(t, filepath.Join(vol, "Users", "bob", "doc.txt"), "D:P(A;;FA;;;"+user+")(A;;FA;;;WD)")
+	// A file whose snapshot DACL grants no WRITE_OWNER (its owner only has
+	// the implicit READ_CONTROL and WRITE_DAC): the owner is set through the
+	// checked second open once the new DACL grants it.
+	narrow := filepath.Join(vol, "Users", "bob", "narrow.txt")
+	write(t, narrow, "n")
+	setSDDL(t, narrow, "D:P(A;;FR;;;WD)")
 	junction(t, filepath.Join(vol, "Users", "bob", "junc"), outside)
 
-	check, links, err := ResetInherit(side)
+	check, links, err := ResetInherit(side, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,6 +514,22 @@ func TestResetInheritNeverFollows(t *testing.T) {
 	if err := CheckInherited(check, o); err != nil {
 		t.Fatalf("check: %v (%s)", err, sddlOf(t, check))
 	}
+	// D1: every entry got the side owner (here the lab trustee, as a
+	// non-elevated test cannot name Administrators) ...
+	for _, p := range []string{filepath.Join(vol, "Users"), filepath.Join(vol, "Users", "bob"), filepath.Join(vol, "Users", "bob", "doc.txt"), narrow} {
+		sd, err := windows.GetNamedSecurityInfo(p, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if own, _, _ := sd.Owner(); own == nil || own.String() != user {
+			t.Errorf("owner of %s = %v, want the side owner", filepath.Base(p), own)
+		}
+	}
+	// ... and the check refuses a file whose owner is not the production side
+	// owner (Administrators): this user owns it.
+	if err := CheckInherited(check, Options{}); !errors.Is(err, ErrSideCheck) {
+		t.Fatalf("check with the production owner rule = %v, want ErrSideCheck", err)
+	}
 	doc := sddlOf(t, filepath.Join(vol, "Users", "bob", "doc.txt"))
 	if strings.Contains(doc, ";;;WD)") || strings.Contains(doc, "D:P") {
 		t.Fatalf("doc.txt still carries the snapshot's entries: %s", doc)
@@ -517,7 +539,7 @@ func TestResetInheritNeverFollows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Restored != 2 || c.BytesRestored != 3 { // the selected folder itself and doc.txt
+	if c.Restored != 3 || c.BytesRestored != 4 { // the selected folder itself, doc.txt and narrow.txt
 		t.Fatalf("side counts = %+v", c)
 	}
 }

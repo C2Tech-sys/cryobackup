@@ -585,12 +585,16 @@ func TestRestoreSideFolder(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(r.o.restoreSideRoot, id, "C", "junction-from-snapshot")); err == nil {
 		t.Fatal("the junction restic made is still in the side folder")
 	}
-	sd, err := windows.GetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s := sd.String(); !strings.Contains(s, "ID;") || strings.Contains(s, "D:P") {
 		t.Fatalf("side file descriptor = %s", s)
+	}
+	// D1: the side owner (the lab trustee here; Administrators as SYSTEM).
+	if own, _, _ := sd.Owner(); own == nil || own.String() != r.o.restoreLabTrustee {
+		t.Fatalf("side file owner = %v", own)
 	}
 }
 
@@ -687,5 +691,69 @@ func TestRestoreOneAtATime(t *testing.T) {
 	run.stop()
 	if _, ok := r.fc.run(id2); ok {
 		t.Fatal("a run was journaled for the refused restore")
+	}
+}
+
+// D2: the start-up sweep removes the side folder of a restore that ended
+// interrupted (it never reached its reset), under the root rule and with the
+// clean-up walk; the side folder of a finished restore and a folder the
+// journal does not know are left alone.
+func TestRestoreSweepsInterruptedSideFolder(t *testing.T) {
+	r := newRestoreRig(t, "restore_ok")
+	ctx := context.Background()
+	const cut, done, unknown = "01JB0000000000000000000S01", "01JB0000000000000000000S02", "01JB0000000000000000000S03"
+	layout := config.Layout{Root: r.dir}
+	jr, err := journal.Open(ctx, journal.Options{Path: layout.JournalFile()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start0 := time.Now().UTC().Add(-time.Hour)
+	if err := jr.StartRun(ctx, api.RunRecord{ID: cut, Kind: restic.KindRestore, Trigger: api.TriggerManual, StartedAt: start0, Attempt: 1, AgentVersion: "0.4.0"}); err != nil {
+		t.Fatal(err)
+	}
+	fin := start0.Add(time.Minute)
+	if err := jr.InsertFinished(ctx, api.RunRecord{ID: done, Kind: restic.KindRestore, Trigger: api.TriggerManual, StartedAt: start0,
+		FinishedAt: &fin, Outcome: restic.OutcomeSuccess, Stats: api.RunStats{FilesRestored: 1}, Attempt: 1, AgentVersion: "0.4.0"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = jr.Close()
+	root := r.o.restoreSideRoot
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setRootSDDL(t, root, r.o.restoreLabTrustee)
+	outside := filepath.Join(r.base, "outside")
+	_ = os.MkdirAll(outside, 0o755)
+	_ = os.WriteFile(filepath.Join(outside, "victim.txt"), []byte("outside"), 0o644)
+	for _, id := range []string{cut, done, unknown} {
+		p := filepath.Join(root, id, "C", "Users", "x")
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.WriteFile(filepath.Join(p, "f.txt"), []byte("f"), 0o644)
+	}
+	if out, err := exec.Command("cmd.exe", "/c", "mklink", "/J", filepath.Join(root, cut, "C", "junc"), outside).CombinedOutput(); err != nil {
+		t.Fatalf("mklink: %v %s", err, out)
+	}
+
+	run := start(t, r.o)
+	rec := r.waitClosed(t, cut)
+	run.stop()
+	if rec.Outcome != restic.OutcomeInterrupted {
+		t.Fatalf("cut-short restore closed as %s", rec.Outcome)
+	}
+	if _, err := os.Lstat(filepath.Join(root, cut)); err == nil {
+		t.Error("the side folder of the interrupted restore was not removed")
+	}
+	for _, id := range []string{done, unknown} {
+		if _, err := os.Stat(filepath.Join(root, id, "C", "Users", "x", "f.txt")); err != nil {
+			t.Errorf("the side folder %s was touched: %v", id, err)
+		}
+	}
+	if readOr(filepath.Join(outside, "victim.txt")) != "outside" {
+		t.Error("the sweep followed the junction")
+	}
+	if log := readFile(t, layout.AgentLog()); !strings.Contains(log, "removed the side folder of an interrupted restore") {
+		t.Error("the device log does not say the side folder was removed")
 	}
 }
