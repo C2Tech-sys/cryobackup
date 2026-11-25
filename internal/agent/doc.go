@@ -305,7 +305,12 @@
 // The record's restore block follows the coupling table of api.RunRecord
 // (restore_plan.go, restoreVerdict). A restore never resumes: a run left open
 // is closed as interrupted at start (journal.OpenRunsOnStart) and its staging
-// folder removed by the clean-up walk (sweepRestoreStaging). Cancel by run id
+// folder removed by the clean-up walk (sweepRestoreStaging). A side restore
+// that does not succeed (any outcome but success, or partial before every
+// reset completed) removes its side folder before its run is closed, and the
+// start-up sweep removes the side folder of any restore closed without
+// success or partial, so no file keeps the snapshot's owner and DACL there
+// (foreman rulings, 2026-11-25). Cancel by run id
 // works from acceptance to the end; restic stopped by a cancel or by the
 // no-progress watchdog is followed by "restic unlock". No path, file name or
 // selection is ever logged: device log lines carry ids, drive letters, classes

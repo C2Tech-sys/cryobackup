@@ -231,3 +231,48 @@ func TestMatchedNothingAndResticErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestSideRemovalRule: which side restores remove their folder, and the
+// record after the removal validates with zero counts.
+func TestSideRemovalRule(t *testing.T) {
+	for _, tc := range []struct {
+		o         restic.Outcome
+		unsecured bool
+		remove    bool
+	}{
+		{restic.OutcomeSuccess, false, false},
+		{restic.OutcomePartial, false, false},
+		{restic.OutcomePartial, true, true},
+		{restic.OutcomeFailed, false, true},
+		{restic.OutcomeCancelled, true, true},
+		{restic.OutcomeInterrupted, true, true},
+	} {
+		if got := removeSide(tc.o, tc.unsecured); got != tc.remove {
+			t.Errorf("removeSide(%s, %v) = %v", tc.o, tc.unsecured, got)
+		}
+	}
+	gr := restoreplace.ClassGuardRefused
+	for _, o := range []restoreOutcome{
+		{fatal: api.RestoreResultCancelled, runs: 1, counts: counts(3, 1, nil)},
+		{fatal: api.RestoreResultRepoUnreachable, runs: 1, counts: counts(2, 0, map[restoreplace.Class]int64{gr: 1})},
+		{fatal: api.RestoreResultInterrupted, runs: 1, counts: counts(1, 0, nil)},
+		{runs: 1, counts: counts(2, 0, map[restoreplace.Class]int64{gr: 1})}, // partial
+	} {
+		rec := restoreRecord(o)
+		rec.Outcome, rec.Stats = sideRemovedVerdict(rec.Outcome, rec.Stats)
+		if err := rec.Validate(); err != nil {
+			t.Errorf("%+v: %v", o, err)
+		}
+		if rec.Stats.FilesRestored != 0 || rec.Stats.FilesSkipped != 0 || rec.Stats.BytesRestored != 0 || rec.Outcome == restic.OutcomePartial || rec.Outcome == restic.OutcomeSuccess {
+			t.Errorf("after removal: %s %+v", rec.Outcome, rec.Stats)
+		}
+	}
+	for o, want := range map[restic.Outcome]bool{
+		restic.OutcomeSuccess: false, restic.OutcomePartial: false, restic.OutcomeFailed: true,
+		restic.OutcomeCancelled: true, restic.OutcomeInterrupted: true, restic.OutcomeAbandoned: true, "": false,
+	} {
+		if sweepSide(o) != want {
+			t.Errorf("sweepSide(%q) = %v", o, !want)
+		}
+	}
+}

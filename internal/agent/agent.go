@@ -125,15 +125,16 @@ type Options struct {
 	eventHook         func(level string, id uint32, msg string)        // nil in production; tests see every Event Log line through it
 
 	// Restore (restore.go, ADR 0027). Production leaves every one unset.
-	restoreDriveRoot    func(letter string) string          // nil = the root of drive <L>
-	restoreStagingRoot  func(letter string) string          // nil = <drive root>.cryobackup-restore
-	restoreSideRoot     string                              // "" = <SystemDrive>\CryoBackup-Restore
-	restoreLabTrustee   string                              // a SID the root rule also accepts (non-elevated tests only)
-	restoreFreeBytes    func(volume string) (uint64, error) // nil = the volume's real free space
-	restoreSweepLetters func() []string                     // nil = the fixed drives
-	restoreIdle         time.Duration                       // 0 = restoreIdleBound
-	restoreSlotPoll     time.Duration                       // 0 = restoreSlotPoll
-	restoreFetchFor     time.Duration                       // 0 = restoreFetchFor
+	restoreDriveRoot        func(letter string) string          // nil = the root of drive <L>
+	restoreStagingRoot      func(letter string) string          // nil = <drive root>.cryobackup-restore
+	restoreSideRoot         string                              // "" = <SystemDrive>\CryoBackup-Restore
+	restoreLabTrustee       string                              // a SID the root rule also accepts (non-elevated tests only)
+	restoreFreeBytes        func(volume string) (uint64, error) // nil = the volume's real free space
+	restoreSweepLetters     func() []string                     // nil = the fixed drives
+	restoreIdle             time.Duration                       // 0 = restoreIdleBound
+	restoreSlotPoll         time.Duration                       // 0 = restoreSlotPoll
+	restoreFetchFor         time.Duration                       // 0 = restoreFetchFor
+	restoreBeforeSideRemove func(top string)                    // tests: runs just before a failed side restore's folder is removed
 }
 
 // Agent is the endpoint: config, secrets, journal, uplink, scheduler,

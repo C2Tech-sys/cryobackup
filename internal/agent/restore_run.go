@@ -285,7 +285,7 @@ func errText(err error) string {
 // by a restore that was cut short is removed by the clean-up walk, after the
 // root rule is applied to its root; a root that fails the rule is left alone
 // and logged. The run itself was closed as interrupted by OpenRunsOnStart.
-// Then sweepInterruptedSide removes the side folders of interrupted restores.
+// Then sweepInterruptedSide removes the side folders of restores that did not succeed.
 func (a *Agent) sweepRestoreStaging(ctx context.Context) {
 	defer a.sweepInterruptedSide(ctx)
 	letters := restoreplace.FixedDrives()
@@ -320,14 +320,15 @@ func (a *Agent) sweepRestoreStaging(ctx context.Context) {
 }
 
 // sweepInterruptedSide removes, at start, the side folder of every restore
-// that ended interrupted (foreman ruling D2, 2026-11-25): such a restore never
-// reached its inherit reset and owner change, so its files may still carry the
-// snapshot's permissions and owner, and the operator is told to run it again.
+// that ended interrupted or with another non-success outcome (sweepSide;
+// foreman rulings of 2026-11-25): such a folder may hold files that
+// never got their inherit reset and owner change, and the operator is told to
+// run the restore again.
 // The side root must pass the root rule (a root that fails it is left alone
 // and logged); each <restore id> folder is removed with the clean-up walk only
-// when the journal holds a restore run of that id whose outcome is
-// interrupted. A finished side restore's folder, or a folder the journal does
-// not know, is never touched.
+// when the journal holds a restore run of that id whose outcome sweepSide
+// accepts. A successful or partial side restore's folder, or a folder the
+// journal does not know, is never touched.
 func (a *Agent) sweepInterruptedSide(ctx context.Context) {
 	root, err := restoreplace.VerifyRoot(a.sideRoot(), a.placeOptions())
 	if errors.Is(err, restoreplace.ErrNotExist) || errors.Is(err, restoreplace.ErrUnsupported) {
@@ -348,16 +349,31 @@ func (a *Agent) sweepInterruptedSide(ctx context.Context) {
 			continue
 		}
 		row, ok, err := a.jr.Run(ctx, n)
-		if err != nil || !ok || row.Kind != restic.KindRestore || row.Outcome != restic.OutcomeInterrupted {
+		if err != nil || !ok || row.Kind != restic.KindRestore || !sweepSide(row.Outcome) {
 			continue
 		}
 		links, err := restoreplace.RemoveTree(root.Path() + `\` + n)
 		if err != nil {
-			a.log.Warn("the side folder of an interrupted restore could not be removed", "restore", n, "err", errText(err))
+			a.log.Warn("the side folder of a restore that did not succeed could not be removed", "restore", n, "err", errText(err))
 			continue
 		}
-		a.log.Warn("removed the side folder of an interrupted restore; run the restore again", "restore", n, "links_deleted", links)
+		a.log.Warn("removed the side folder of a restore that did not succeed; run the restore again", "restore", n, "links_deleted", links)
 	}
+}
+
+// sweepSide reports whether the start-up sweep removes the side folder of a
+// restore run closed with outcome: every closed outcome but success and
+// partial (foreman ruling, 2026-11-25). A partial side restore kept its
+// folder only because every reset completed (removeSide); any other
+// non-success one had its folder removed before its run was closed, so a
+// folder still there is one that removal failed on, or one a crash or stop
+// cut short (interrupted).
+func sweepSide(o restic.Outcome) bool {
+	switch o {
+	case "", restic.OutcomeSuccess, restic.OutcomePartial:
+		return false
+	}
+	return true
 }
 
 // safeID returns n when it looks like a restore id (a ULID), else "?": a

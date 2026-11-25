@@ -27,6 +27,9 @@ const (
 	LinkTarget = "CRYO_FAKE_LINK_TARGET"
 	// DryBytes overrides the total_bytes a dry run reports.
 	DryBytes = "CRYO_FAKE_DRY_BYTES"
+	// FailFor names drive letters whose real (not dry) run writes half of its
+	// items and then fails: the gateway went away (exit 1, no summary).
+	FailFor = "CRYO_FAKE_FAIL_FOR"
 )
 
 func restore(scenario string, args []string) int {
@@ -80,6 +83,15 @@ func restore(scenario string, args []string) int {
 		}
 		fmt.Printf(`{"message_type":"summary","total_files":%d,"files_restored":%d,"total_bytes":%d,"bytes_restored":%d}`+"\n", len(lines), len(lines), total, total)
 		return 0
+	}
+	for _, l := range strings.Split(os.Getenv(FailFor), ",") {
+		if l != "" && l == letter {
+			if len(lines) > 0 {
+				makeItem(target, lines[0])
+			}
+			fmt.Fprintln(os.Stderr, `{"message_type":"exit_error","code":1,"message":"Fatal: load(<data/0123456789>): dial tcp 10.0.0.9:443: connect: connection refused"}`)
+			return 1
+		}
 	}
 	switch scenario {
 	case "restore_stall":

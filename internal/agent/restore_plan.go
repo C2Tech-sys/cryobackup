@@ -111,6 +111,45 @@ type restoreOutcome struct {
 	nothing int
 	counts  restoreplace.Counts
 	exit    *int
+
+	// The side folder (side mode): sideTop is <side root>\<restore id> once
+	// the agent created it; sideWritten is set before restic's first real run
+	// into it; sideUnsecured is true from that run until the group's reset,
+	// owner change and check completed (foreman ruling, 2026-11-25: a side
+	// restore that does not succeed removes its side folder, so no file keeps
+	// the snapshot's owner and DACL).
+	sideTop       string
+	sideWritten   bool
+	sideUnsecured bool
+}
+
+// removeSide reports whether a side restore that ended with outcome must
+// remove its side folder before its run is closed: every outcome but success,
+// except a partial one whose resets all completed (that folder is secured and
+// is the operator's result).
+func removeSide(outcome restic.Outcome, unsecured bool) bool {
+	switch outcome {
+	case restic.OutcomeSuccess:
+		return false
+	case restic.OutcomePartial:
+		return unsecured
+	}
+	return true
+}
+
+// sideRemovedVerdict is the record of a side restore whose folder was removed
+// (removeSide): nothing it wrote is left, so the four counts are 0; a
+// cancelled or interrupted restore keeps its outcome; anything else ends
+// failed, keeping its run-level class (other for a partial one). The rows
+// stay: they say what went wrong.
+func sideRemovedVerdict(outcome restic.Outcome, st api.RunStats) (restic.Outcome, api.RunStats) {
+	st.FilesRestored, st.FilesSkipped, st.BytesRestored, st.BytesSkipped = 0, 0, 0, 0
+	switch outcome {
+	case restic.OutcomeCancelled, restic.OutcomeInterrupted, restic.OutcomeFailed:
+		return outcome, st
+	}
+	st.RestoreResult = api.RestoreResultOther
+	return restic.OutcomeFailed, st
 }
 
 // restoreVerdict turns an outcome into the run's outcome and the restore block

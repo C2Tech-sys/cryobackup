@@ -144,6 +144,9 @@ func (a *Agent) runRestore(ctx context.Context, rec api.RunRecord) {
 
 	out := a.executeRestore(ctx, rec.ID)
 	outcome, stats := restoreVerdict(out)
+	if out.sideTop != "" && out.sideWritten && removeSide(outcome, out.sideUnsecured) {
+		outcome, stats = a.removeSideFolder(rec.ID, out.sideTop, outcome, stats)
+	}
 	finished := a.clock().UTC()
 	if finished.Before(rec.StartedAt) {
 		finished = rec.StartedAt
@@ -170,6 +173,35 @@ func (a *Agent) runRestore(ctx context.Context, rec api.RunRecord) {
 	default:
 		a.eventLog("error", eventRestoreFailed, "restore "+string(closed.Outcome)+": "+string(closed.Stats.RestoreResult))
 	}
+}
+
+// removeSideFolder removes the side folder of a side restore that did not
+// succeed, with the clean-up walk and the agent's privileges, before its run
+// is closed (foreman ruling, 2026-11-25): files restic wrote there may still
+// carry the snapshot's owner and DACL, so none is left behind; the operator
+// sees a FAILED or CANCELLED restore and runs it again. If the removal fails
+// the restore ends FAILED (class other), loudly: a device-log line and Event
+// Log 1021; the next start's sweep tries again.
+func (a *Agent) removeSideFolder(id, top string, outcome restic.Outcome, st api.RunStats) (restic.Outcome, api.RunStats) {
+	if a.o.restoreBeforeSideRemove != nil {
+		a.o.restoreBeforeSideRemove(top)
+	}
+	var links int
+	err := restoreplace.WithPrivileges(func() error {
+		var err error
+		links, err = restoreplace.RemoveTree(top)
+		return err
+	})
+	outcome, st = sideRemovedVerdict(outcome, st)
+	if err != nil {
+		a.log.Error("the side folder of a restore that did not succeed could not be removed; the restore failed and the next start tries again",
+			"restore", id, "err", errText(err))
+		a.eventLog("error", eventRestoreFailed, "the side folder of a restore that did not succeed could not be removed; the next agent start tries again")
+		st.RestoreResult = api.RestoreResultOther
+		return restic.OutcomeFailed, st
+	}
+	a.log.Warn("removed the side folder of a restore that did not succeed; run the restore again", "restore", id, "links_deleted", links)
+	return outcome, st
 }
 
 // cancelClass maps how ctx ended to a run-level class: the operator's cancel
@@ -399,6 +431,7 @@ func (a *Agent) restoreGroups(ctx context.Context, id, snap string, groups []res
 			out.fatal = api.RestoreResultGuardRefused
 			return
 		}
+		out.sideTop = sideTop // made by the agent: removed if the restore does not succeed
 	}
 	roots := map[string]*restoreplace.Root{}
 	defer func() {
@@ -495,7 +528,11 @@ func (a *Agent) restoreSideGroup(ctx context.Context, id, snap string, g restore
 		out.counts.Add(restoreplace.ClassGuardRefused, int64(len(g.rels)))
 		return true
 	}
+	out.sideWritten, out.sideUnsecured = true, true
 	if !a.restoreRun(ctx, id, snap, g, include, target, out) {
+		if out.fatal == "" {
+			out.sideUnsecured = false // the run matched nothing: restic wrote nothing to secure
+		}
 		return out.fatal == ""
 	}
 	err := restoreplace.WithPrivileges(func() error {
@@ -524,5 +561,6 @@ func (a *Agent) restoreSideGroup(ctx context.Context, id, snap string, g restore
 		out.fatal = api.RestoreResultOther
 		return false
 	}
+	out.sideUnsecured = false // reset, owner change and check completed for this group
 	return true
 }

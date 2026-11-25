@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -702,6 +704,7 @@ func TestRestoreSweepsInterruptedSideFolder(t *testing.T) {
 	r := newRestoreRig(t, "restore_ok")
 	ctx := context.Background()
 	const cut, done, unknown = "01JB0000000000000000000S01", "01JB0000000000000000000S02", "01JB0000000000000000000S03"
+	const failed, cancelled, partial = "01JB0000000000000000000S04", "01JB0000000000000000000S05", "01JB0000000000000000000S06"
 	layout := config.Layout{Root: r.dir}
 	jr, err := journal.Open(ctx, journal.Options{Path: layout.JournalFile()})
 	if err != nil {
@@ -716,6 +719,23 @@ func TestRestoreSweepsInterruptedSideFolder(t *testing.T) {
 		FinishedAt: &fin, Outcome: restic.OutcomeSuccess, Stats: api.RunStats{FilesRestored: 1}, Attempt: 1, AgentVersion: "0.4.0"}); err != nil {
 		t.Fatal(err)
 	}
+	// Closed runs: failed and cancelled (their in-process removal failed, so
+	// the folder is still there) are swept; partial (all resets completed) is
+	// kept.
+	for id, st := range map[string]struct {
+		o restic.Outcome
+		s api.RunStats
+	}{
+		failed:    {restic.OutcomeFailed, api.RunStats{RestoreResult: api.RestoreResultOther}},
+		cancelled: {restic.OutcomeCancelled, api.RunStats{RestoreResult: api.RestoreResultCancelled}},
+		partial: {restic.OutcomePartial, api.RunStats{FilesRestored: 1, RestoreResult: api.RestoreResultPartial,
+			RestoreErrors: []api.RestoreClassCount{{Class: api.RestoreResultTargetLocked, Count: 1}}}},
+	} {
+		if err := jr.InsertFinished(ctx, api.RunRecord{ID: id, Kind: restic.KindRestore, Trigger: api.TriggerManual, StartedAt: start0,
+			FinishedAt: &fin, Outcome: st.o, Stats: st.s, Attempt: 1, AgentVersion: "0.4.0"}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_ = jr.Close()
 	root := r.o.restoreSideRoot
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -725,7 +745,7 @@ func TestRestoreSweepsInterruptedSideFolder(t *testing.T) {
 	outside := filepath.Join(r.base, "outside")
 	_ = os.MkdirAll(outside, 0o755)
 	_ = os.WriteFile(filepath.Join(outside, "victim.txt"), []byte("outside"), 0o644)
-	for _, id := range []string{cut, done, unknown} {
+	for _, id := range []string{cut, done, unknown, failed, cancelled, partial} {
 		p := filepath.Join(root, id, "C", "Users", "x")
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			t.Fatal(err)
@@ -742,10 +762,12 @@ func TestRestoreSweepsInterruptedSideFolder(t *testing.T) {
 	if rec.Outcome != restic.OutcomeInterrupted {
 		t.Fatalf("cut-short restore closed as %s", rec.Outcome)
 	}
-	if _, err := os.Lstat(filepath.Join(root, cut)); err == nil {
-		t.Error("the side folder of the interrupted restore was not removed")
+	for _, id := range []string{cut, failed, cancelled} {
+		if _, err := os.Lstat(filepath.Join(root, id)); err == nil {
+			t.Errorf("the side folder of the non-success restore %s was not removed", id)
+		}
 	}
-	for _, id := range []string{done, unknown} {
+	for _, id := range []string{done, unknown, partial} {
 		if _, err := os.Stat(filepath.Join(root, id, "C", "Users", "x", "f.txt")); err != nil {
 			t.Errorf("the side folder %s was touched: %v", id, err)
 		}
@@ -753,7 +775,134 @@ func TestRestoreSweepsInterruptedSideFolder(t *testing.T) {
 	if readOr(filepath.Join(outside, "victim.txt")) != "outside" {
 		t.Error("the sweep followed the junction")
 	}
-	if log := readFile(t, layout.AgentLog()); !strings.Contains(log, "removed the side folder of an interrupted restore") {
+	if log := readFile(t, layout.AgentLog()); !strings.Contains(log, "removed the side folder of a restore that did not succeed") {
 		t.Error("the device log does not say the side folder was removed")
+	}
+}
+
+func (r *restoreRig) sideFolder(id string) string { return filepath.Join(r.o.restoreSideRoot, id) }
+
+// A side restore cancelled while restic runs removes its side folder before
+// the run is closed: CANCELLED, nothing left, counts 0.
+func TestSideRestoreCancelledRemovesFolder(t *testing.T) {
+	r := newRestoreRig(t, "restore_slow")
+	const id = "01JB0000000000000000000T01"
+	r.fc.setRestore(id, restoreAnswer{sel: selection(id, api.DeviceRestoreSide, api.DeviceOverwriteNever, "/C/c.txt")})
+	run := start(t, r.o)
+	r.fc.enqueue(restoreCommand(t, id))
+	waitFor(t, "restic restoring", 30*time.Second, func() bool {
+		for _, a := range r.fakeArgs(t) {
+			if strings.HasPrefix(a, "restore") && !strings.Contains(a, "--dry-run") {
+				return true
+			}
+		}
+		return false
+	})
+	r.fc.enqueue(cancelCommand(id))
+	rec := r.waitClosed(t, id)
+	run.stop()
+	if rec.Outcome != restic.OutcomeCancelled || rec.Stats.FilesRestored != 0 {
+		t.Fatalf("record = %s / %+v", rec.Outcome, rec.Stats)
+	}
+	if _, err := os.Lstat(r.sideFolder(id)); err == nil {
+		t.Fatal("the cancelled side restore left its folder")
+	}
+}
+
+// A side restore that fails at run level after restic wrote (the second
+// volume's run loses the gateway after the first volume was reset) removes
+// the whole side folder: FAILED repo_unreachable, nothing left, counts 0.
+func TestSideRestoreFailedRemovesFolder(t *testing.T) {
+	r := newRestoreRig(t, "restore_ok")
+	t.Setenv(fakerestic.FailFor, "D")
+	const id = "01JB0000000000000000000T02"
+	r.fc.setRestore(id, restoreAnswer{sel: selection(id, api.DeviceRestoreSide, api.DeviceOverwriteNever, "/C/a.txt", "/D/b.txt")})
+	run := start(t, r.o)
+	r.fc.enqueue(restoreCommand(t, id))
+	rec := r.waitClosed(t, id)
+	run.stop()
+	if rec.Outcome != restic.OutcomeFailed || rec.Stats.RestoreResult != api.RestoreResultRepoUnreachable || rec.Stats.FilesRestored != 0 {
+		t.Fatalf("record = %s / %+v", rec.Outcome, rec.Stats)
+	}
+	if _, err := os.Lstat(r.sideFolder(id)); err == nil {
+		t.Fatal("the failed side restore left its folder")
+	}
+	if log := readFile(t, config.Layout{Root: r.dir}.AgentLog()); !strings.Contains(log, "removed the side folder of a restore that did not succeed") {
+		t.Error("the device log does not say the side folder was removed")
+	}
+}
+
+// A partial side restore whose resets completed keeps its folder.
+func TestSideRestorePartialKeepsFolder(t *testing.T) {
+	r := newRestoreRig(t, "restore_file_error")
+	const id = "01JB0000000000000000000T03"
+	r.fc.setRestore(id, restoreAnswer{sel: selection(id, api.DeviceRestoreSide, api.DeviceOverwriteNever, "/C/ok.txt")})
+	run := start(t, r.o)
+	r.fc.enqueue(restoreCommand(t, id))
+	rec := r.waitClosed(t, id)
+	run.stop()
+	if rec.Outcome != restic.OutcomePartial || rec.Stats.FilesRestored != 1 {
+		t.Fatalf("record = %s / %+v", rec.Outcome, rec.Stats)
+	}
+	if readOr(filepath.Join(r.sideFolder(id), "C", "ok.txt")) != "restored:/ok.txt" {
+		t.Fatal("the partial side restore lost its folder")
+	}
+}
+
+// If the side folder of a failed restore cannot be removed, the restore ends
+// FAILED other with a device-log line and Event Log 1021; the next start's
+// sweep removes the folder (its run is closed failed).
+func TestSideRemovalFailureFailsLoudlyAndIsSwept(t *testing.T) {
+	r := newRestoreRig(t, "restore_ok")
+	t.Setenv(fakerestic.FailFor, "D")
+	const id = "01JB0000000000000000000T04"
+	r.fc.setRestore(id, restoreAnswer{sel: selection(id, api.DeviceRestoreSide, api.DeviceOverwriteNever, "/C/a.txt", "/D/b.txt")})
+	var evMu sync.Mutex
+	var events []string
+	r.o.eventHook = func(level string, eid uint32, msg string) {
+		evMu.Lock()
+		events = append(events, strconv.Itoa(int(eid))+" "+msg)
+		evMu.Unlock()
+	}
+	var held windows.Handle
+	r.o.restoreBeforeSideRemove = func(top string) {
+		// Another program holds a file in the folder without FILE_SHARE_DELETE.
+		p, _ := windows.UTF16PtrFromString(filepath.Join(top, "C", "a.txt"))
+		h, err := windows.CreateFile(p, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, 0, 0)
+		if err == nil {
+			held = h
+		}
+	}
+	run := start(t, r.o)
+	r.fc.enqueue(restoreCommand(t, id))
+	rec := r.waitClosed(t, id)
+	run.stop()
+	if held == 0 {
+		t.Fatal("the test could not hold the file")
+	}
+	if rec.Outcome != restic.OutcomeFailed || rec.Stats.RestoreResult != api.RestoreResultOther {
+		t.Fatalf("record = %s / %+v", rec.Outcome, rec.Stats)
+	}
+	if _, err := os.Lstat(r.sideFolder(id)); err != nil {
+		t.Fatal("the folder is gone although its removal was blocked")
+	}
+	evMu.Lock()
+	loud := false
+	for _, e := range events {
+		loud = loud || strings.HasPrefix(e, "1021 the side folder of a restore that did not succeed could not be removed")
+	}
+	evMu.Unlock()
+	if !loud {
+		t.Errorf("no Event Log 1021 for the failed removal: %q", events)
+	}
+	if log := readFile(t, config.Layout{Root: r.dir}.AgentLog()); !strings.Contains(log, "could not be removed; the restore failed") {
+		t.Error("no device-log line for the failed removal")
+	}
+	windows.CloseHandle(held)
+	r.o.restoreBeforeSideRemove = nil
+	again := start(t, r.o)
+	again.stop()
+	if _, err := os.Lstat(r.sideFolder(id)); err == nil {
+		t.Fatal("the next start's sweep did not remove the folder")
 	}
 }
