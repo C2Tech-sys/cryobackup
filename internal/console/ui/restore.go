@@ -275,7 +275,8 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 		s.renderRestore(w, r, http.StatusUnprocessableEntity, d)
 		return
 	}
-	rr, err := s.Restores.Create(r.Context(), restores.Actor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: "web"}, p.Scope, id, snapshot, filePath)
+	rr, err := s.Restores.Create(r.Context(), restores.Actor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: "web",
+		FreshMFA: s.Auth.FreshMFA(p, s.Auth.Now())}, p.Scope, id, snapshot, filePath)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {

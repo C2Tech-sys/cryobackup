@@ -214,9 +214,12 @@ func ValidPath(p string) bool {
 // file or a directory). There is nothing to build: the returned row is ready,
 // and the archive is produced only while a download streams it. A retired
 // device may be downloaded from (ADR 0030); a device being purged may not
-// (ErrDevicePurging). It does not check fresh MFA: CreateRestore, the entry
-// point of every new restore since P22, does.
+// (ErrDevicePurging). Like CreateRestore it fails closed without a fresh MFA
+// check (Actor.FreshMFA, ruling C5): ErrStepUp, before anything is read.
 func (s *Service) Create(ctx context.Context, who Actor, scope store.Scope, deviceID, snapshotID, filePath string) (store.RestoreRequest, error) {
+	if !who.FreshMFA {
+		return store.RestoreRequest{}, ErrStepUp
+	}
 	if !snapshotIDRE.MatchString(snapshotID) || !ValidPath(filePath) {
 		return store.RestoreRequest{}, ErrInvalid
 	}

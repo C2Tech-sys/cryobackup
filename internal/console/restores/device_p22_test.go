@@ -200,7 +200,7 @@ func TestRetiredDeviceDownloadOnly(t *testing.T) {
 	if _, err := e.svc.CreateRestore(ctx, fresh, store.ScopeAll(), e.device.ID, deviceIn(ModeDownloadZip, goodPath)); err != nil {
 		t.Fatalf("zip of a retired device: %v", err)
 	}
-	if _, err := e.svc.Create(ctx, Actor{}, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, goodPath); err != nil {
+	if _, err := e.svc.Create(ctx, fresh, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, goodPath); err != nil {
 		t.Fatalf("single-path create for a retired device: %v", err)
 	}
 	for _, m := range []string{ModeDeviceOriginal, ModeDeviceSide} {
@@ -215,7 +215,7 @@ func TestRetiredDeviceDownloadOnly(t *testing.T) {
 	if _, err := e.svc.CreateRestore(ctx, fresh, store.ScopeAll(), e.device.ID, deviceIn(ModeDeviceSide, p22Sentinel)); !errors.Is(err, ErrDevicePurging) {
 		t.Fatalf("device mode on a purging device: %v", err)
 	}
-	if _, err := e.svc.Create(ctx, Actor{}, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, goodPath); !errors.Is(err, ErrDevicePurging) {
+	if _, err := e.svc.Create(ctx, fresh, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, goodPath); !errors.Is(err, ErrDevicePurging) {
 		t.Fatalf("single-path create for a purging device: %v", err)
 	}
 }
@@ -313,4 +313,31 @@ func TestFetchForDeviceSelection(t *testing.T) {
 		t.Fatalf("row %+v", got)
 	}
 	p22NoSentinel(t, e)
+}
+
+// TestEveryCreatePathNeedsFreshMFA (ruling C5): both entry points, Create (the
+// web wizard's single-path download) and CreateRestore (the admin API, every
+// mode), refuse a caller without a fresh MFA check before anything is read or
+// written; with it they create.
+func TestEveryCreatePathNeedsFreshMFA(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.setAgent(t, e.device.ID, "0.4.0")
+	stale := Actor{AdminID: "", Username: "tech", Method: "web"}
+	if _, err := e.svc.Create(ctx, stale, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, goodPath); !errors.Is(err, ErrStepUp) {
+		t.Fatalf("Create without a fresh check: %v", err)
+	}
+	for _, in := range []CreateInput{deviceIn(ModeDownloadZip, goodPath), deviceIn(ModeDeviceSide, p22Sentinel), deviceIn(ModeDeviceOriginal, p22Sentinel)} {
+		if _, err := e.svc.CreateRestore(ctx, stale, store.ScopeAll(), e.device.ID, in); !errors.Is(err, ErrStepUp) {
+			t.Fatalf("CreateRestore %s without a fresh check: %v", in.Mode, err)
+		}
+	}
+	l, err := e.st.ListRestoreRequests(ctx, store.ScopeAll(), e.device.ID, store.Page{Limit: 10})
+	if err != nil || len(l.Items) != 0 {
+		t.Fatalf("a refused create stored %d restores (%v)", len(l.Items), err)
+	}
+	stale.FreshMFA = true
+	if _, err := e.svc.Create(ctx, stale, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, goodPath); err != nil {
+		t.Fatalf("Create with a fresh check: %v", err)
+	}
 }
