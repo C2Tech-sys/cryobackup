@@ -1,56 +1,47 @@
 package maintain
 
 import (
-	"archive/zip"
 	"context"
-	"errors"
 	"io"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
-	"github.com/c2tech-sys/cryobackup/internal/restic"
 )
 
 // Dump implements adminpath.Backend (architecture §6.3, engine §1.13, ADR 0008,
-// ADR 0028). It streams snapshot paths as a zip archive into dst and writes
-// nothing to disk: restic dump writes to its stdout, and the worker copies or
-// re-encodes that pipe into dst as it arrives. A request with Paths is the
-// several-paths download of dump_multi.go; a request with Path is the
-// single-path download below.
+// ADR 0028). It streams snapshot paths as one zip archive into dst and writes
+// nothing to disk: restic dump writes to its stdout, and the worker re-encodes
+// that pipe into dst as it arrives (dump_multi.go).
 //
-// restic 0.19.1 writes a zip only for a directory: `dump -a zip` of a single
-// file writes the file's raw bytes (verified live, recorded in doc.go). So the
-// worker first asks `ls` what the path is. A directory is restic's own zip
-// stream, copied through unchanged; a file's raw bytes are wrapped on the fly
-// by archive/zip into a one-entry archive (archive/zip needs no seeking: it
-// writes a data descriptor after the entry), so the result is a zip in both
-// cases and a file that is itself a zip is never mistaken for the archive. The
-// one-entry archive is closed (its central directory written) only after
-// restic exited 0, so a failed run never ends in a well-formed zip.
+// A request with Path is the download of Paths: [Path] (ADR 0028: a single
+// selected folder goes the same way as several, so restic's own folder zip,
+// which writes a link's target as the content of a file, is not used). The
+// subfolder of a "<snapshot>:<subfolder>" id is joined in front of Path. The
+// snapshot root itself ("/" with no subfolder) has no name of its own: its
+// tar entries keep their snapshot paths without the leading "/", so the zip's
+// top-level entries are the snapshot's roots.
 //
 // A failed write to dst (the console or the technician went away) cancels the
 // restic run at once. A restic run that sends no byte for DumpIdleLimit is
-// stopped the same way (dumpIdleRun). Bytes and SHA256 of the result are filled
-// in by adminpath.Handler from what crossed the socket.
+// stopped the same way (Worker.dumpRun). Bytes and SHA256 of the result are
+// filled in by adminpath.Handler from what crossed the socket; Skipped counts
+// what was left out.
 //
 // A stream holds a restic slot for as long as the browser takes, so streams
 // have their own budget (Config.MaxStreams, below MaxConcurrent): one over the
 // budget is refused at once with CodeBusy, never queued, and maintenance always
-// keeps slots. A several-paths download holds one stream slot for all its runs.
+// keeps slots. A download holds one stream slot for all its runs.
 func (w *Worker) Dump(ctx context.Context, req adminpath.DumpRequest, dst io.Writer) (adminpath.DumpResult, error) {
 	if dst == nil {
 		return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInternal, "")
 	}
-	multi := req.Paths != nil
-	if multi {
-		// In-process callers skip the Handler's validation; the path cap and
-		// the clean-path rule are what keep the archive's names safe.
-		if err := req.Validate(); err != nil {
-			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
-		}
+	// In-process callers skip the Handler's validation; the path cap and the
+	// clean-path rule are what keep the archive's names safe.
+	if err := req.Validate(); err != nil {
+		return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
 	}
+	snapID, sels := dumpSelections(req)
 	select {
 	case w.streams <- struct{}{}:
 		defer func() { <-w.streams }()
@@ -66,96 +57,27 @@ func (w *Worker) Dump(ctx context.Context, req adminpath.DumpRequest, dst io.Wri
 	defer t.drop()
 	ctx, cancel := context.WithTimeout(ctx, w.cfg.Timeouts.Dump)
 	defer cancel()
-	if multi {
-		return w.dumpMulti(ctx, t, req, dst)
-	}
-	var elapsed time.Duration
+	return w.dumpMulti(ctx, t, snapID, sels, dst)
+}
 
-	// What is the path? "/" of the snapshot (or of its subfolder) is a directory
-	// by definition; anything else is looked up.
+// dumpSelections turns a validated request into the snapshot id the restic
+// runs use and the download's selections. Paths are collapsed (a path inside
+// another selected folder is dropped). Path is cleaned and joined to the
+// snapshot id's subfolder; the snapshot root is the one selection with no name.
+func dumpSelections(req adminpath.DumpRequest) (string, []*selection) {
+	if req.Paths != nil {
+		var sels []*selection
+		for _, p := range adminpath.CollapsePaths(req.Paths) {
+			sels = append(sels, &selection{path: p})
+		}
+		return req.SnapshotID, sels
+	}
 	snapID, sub, _ := strings.Cut(req.SnapshotID, ":")
 	full := path.Join("/", sub, req.Path)
-	isDir, mtime := true, time.Time{}
-	if full != "/" {
-		lsCmd, err := restic.Ls(snapID, full, w.common())
-		if err != nil {
-			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
-		}
-		found := false
-		res, err := w.exec(ctx, t, lsCmd, w.cfg.Timeouts.Ls, func(r io.Reader) error {
-			dec := restic.NewDecoder(r)
-			for {
-				msg, derr := dec.Next()
-				if derr != nil {
-					if errors.Is(derr, io.EOF) {
-						return nil
-					}
-					return derr
-				}
-				if n, isNode := msg.(restic.Node); isNode && !found && n.Path == full {
-					found, isDir, mtime = true, n.Type == "dir", n.Mtime
-				}
-			}
-		})
-		if err != nil {
-			return adminpath.DumpResult{}, err
-		}
-		elapsed += res.Elapsed
-		if err := readError(ctx, res); err != nil {
-			return adminpath.DumpResult{}, err
-		}
-		if !found {
-			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeNotFound, "")
-		}
+	if full == "/" {
+		return snapID, []*selection{{path: "/", root: true, typ: "dir"}}
 	}
-
-	// No --target: restic writes the archive to its stdout, so no file name
-	// ever reaches restic.
-	dumpCmd, err := restic.DumpStdout(req.SnapshotID, req.Path, w.common())
-	if err != nil {
-		return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
-	}
-	// A failed write to dst cancels the run: restic must not keep reading the
-	// repository for a reader that is gone.
-	streamCtx, stop := context.WithCancelCause(ctx)
-	defer stop(nil)
-	out := &cancelWriter{w: dst, cancel: func() { stop(errDestFailed) }}
-	if !isDir {
-		entry := path.Base(req.Path)
-		if entry == "." || entry == "/" || entry == "" {
-			entry = "file"
-		}
-		zw := zip.NewWriter(out)
-		hdr := &zip.FileHeader{Name: entry, Method: zip.Deflate}
-		if !mtime.IsZero() {
-			hdr.Modified = mtime
-		}
-		fw, err := zw.CreateHeader(hdr)
-		if err != nil {
-			return adminpath.DumpResult{}, w.streamErr(ctx)
-		}
-		res, err := w.dumpRun(streamCtx, t, dumpCmd, out, func(r io.Reader) error {
-			_, cerr := io.Copy(fw, r)
-			return cerr
-		})
-		elapsed += res.Elapsed
-		if err != nil {
-			return adminpath.DumpResult{}, err
-		}
-		if err := zw.Close(); err != nil {
-			return adminpath.DumpResult{}, w.streamErr(ctx)
-		}
-		return adminpath.DumpResult{ResultMeta: okMeta(elapsed)}, nil
-	}
-	res, err := w.dumpRun(streamCtx, t, dumpCmd, out, func(r io.Reader) error {
-		_, cerr := io.Copy(out, r)
-		return cerr
-	})
-	elapsed += res.Elapsed
-	if err != nil {
-		return adminpath.DumpResult{}, err
-	}
-	return adminpath.DumpResult{ResultMeta: okMeta(elapsed)}, nil
+	return snapID, []*selection{{path: full}}
 }
 
 // streamErr is the error of a dump whose destination failed: the caller's

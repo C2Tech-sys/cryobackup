@@ -171,7 +171,10 @@ func Find(o FindOptions) (Command, error) {
 // written as a zip archive to targetFile (architecture §6.3, DH27). There is no
 // --json. path is absolute with forward slashes; a snapshot of the form
 // "<id>:<subfolder>" with path "/" puts the subfolder's contents at the archive
-// root. The console never stages a restore (ADR 0008); it uses DumpStdout.
+// root. Nothing runs it: the console never stages a restore (ADR 0008) and
+// streams with DumpTarStdout and DumpFileStdout (ADR 0028); the admin-path
+// request validation still asks it whether a snapshot reference with a
+// ":subfolder" is well formed.
 func Dump(snapshotID, path, targetFile string, c Common) (Command, error) {
 	if err := dumpCheck(snapshotID, path, c); err != nil {
 		return Command{}, err
@@ -183,22 +186,10 @@ func Dump(snapshotID, path, targetFile string, c Common) (Command, error) {
 	return Command{Kind: KindDump, Args: c.tail(args)}, nil
 }
 
-// DumpStdout builds "dump -a zip SNAPSHOT PATH" without --target: restic
-// writes the archive to its stdout, which the caller streams (ADR 0008: a
-// technician restore never touches the console host's disk). The validation
-// is Dump's. restic 0.19.1 writes a zip only for a directory; for a single
-// file it writes the file's raw bytes (the maintenance worker wraps them).
-func DumpStdout(snapshotID, path string, c Common) (Command, error) {
-	if err := dumpCheck(snapshotID, path, c); err != nil {
-		return Command{}, err
-	}
-	args := []string{"dump", "-a", "zip", snapshotID, path}
-	return Command{Kind: KindDump, Args: c.tail(args)}, nil
-}
-
 // DumpTarStdout builds "dump -a tar SNAPSHOT PATH": a directory as a tar
-// stream on restic's stdout, for the several-paths zip that the maintenance
-// worker builds entry by entry (ADR 0028). Proven for restic 0.19.1 (P22
+// stream on restic's stdout, for the zip that the maintenance worker builds
+// entry by entry (ADR 0028; restic's own `-a zip` of a folder is not used,
+// because it writes a link's target as the content of a file). Proven for restic 0.19.1 (P22
 // spike, item 6): the tar streams into a pipe, long and non-ASCII names carry
 // PAX records, every entry is named by its full snapshot path without the
 // leading "/", and the dumped directory itself has no entry. The snapshot is a
@@ -230,7 +221,7 @@ func dumpStreamCheck(snapshotID, path string, c Common) error {
 	return dumpCheck(snapshotID, path, c)
 }
 
-// dumpCheck is the validation Dump and DumpStdout share.
+// dumpCheck is the validation of every dump builder.
 func dumpCheck(snapshotID, path string, c Common) error {
 	if err := c.validate(); err != nil {
 		return err

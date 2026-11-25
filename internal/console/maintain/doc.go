@@ -51,10 +51,10 @@
 //	ping        -                              version, uptime, master key loaded, last storage probe
 //	init        init --json, then cat config   idempotent (below)
 //	cat_config  cat config                     restic.Config
-//	ls          ls --json <snap> <dir>         one level; "/" lists the roots; capped, Truncated
+//	ls          ls --json <snap> <dir>         one level; "/" lists the roots; the Offset/Limit window, Total, Truncated
 //	find        find --json                    capped over all snapshots
 //	snapshots   snapshots --json               every snapshot of the device repository
-//	dump        ls, then dump -a zip (stdout)  a zip streamed over the socket; nothing on disk (ADR 0008)
+//	dump        ls, dump or dump -a tar        one zip streamed over the socket; nothing on disk (ADR 0008, 0028)
 //	stats       stats --json --mode <mode>     raw-data feeds usage_samples; debug is not offered
 //	unlock      unlock [--remove-all]          RemoveAll only with Quiesced; recorded as a run
 //	forget      -                              unavailable, names M5
@@ -78,21 +78,34 @@
 // Ls always passes a directory to restic ("/" for the snapshot roots; without one
 // restic 0.19.1 walks the whole snapshot, architecture §13.3) and drops the
 // directory's own node, which restic prints before the children, so Nodes are the
-// children of Dir. It keeps at most Limit nodes and discards the rest of the
-// stream.
+// children of Dir. restic has no paging, so the worker reads the whole stream and
+// keeps only the window Offset..Offset+Limit (Limit at most adminpath.MaxLsLimit),
+// counting every child into Total.
 //
-// Dump finds out what the path is (one `ls`), because restic 0.19.1 writes a zip
-// only for a directory: `dump -a zip` of a single file writes the file's raw
-// bytes (verified live; engine §1.13 and architecture DH27 assumed an archive).
-// restic writes to its stdout (no --target), and the worker copies the pipe to
-// the admin-path socket as it arrives (ADR 0008: restores stream, they are never
-// staged). A directory is restic's own zip stream; a file's raw bytes are wrapped
-// on the fly into a one-entry zip by archive/zip, so the result is a zip in both
-// cases and a file that is itself a zip (a .docx) is never mistaken for the
-// archive. A failed write (the console or the technician went away) cancels
-// restic at once. No file is created anywhere, not even briefly. A stream
-// holds its restic slot for as long as the browser takes, so streams have their
-// own budget below the worker's total (Config.MaxStreams,
+// Dump (dump.go, dump_multi.go; ADR 0028) streams one path or up to 50 as ONE
+// zip, and a single path is built exactly as a list of one. It first lists each
+// selection's parent (`ls`), because restic 0.19.1 writes an archive only for a
+// directory: `dump` of a single file writes the file's raw bytes whatever -a
+// says (verified live; engine §1.13 and architecture DH27 assumed an archive).
+// A file is `dump <snap> <file>`, its raw bytes wrapped on the fly into one zip
+// entry; a folder is `dump -a tar <snap> <folder>`, read with archive/tar and
+// written entry by entry into the same zip, named relative to the selected
+// item's parent. restic's own `-a zip` is not used: it writes a link's target
+// as the content of a file. Links, junctions and other special entries are left
+// out and counted (CRYOBACKUP-SKIPPED.txt and DumpResult.Skipped, never names),
+// and an entry name that could escape its folder, or that Windows would extract
+// under another name, refuses the whole download. The zip's central directory
+// is written only after every restic run exited 0, so a failed download never
+// ends in a readable zip. restic writes to its stdout (no --target), and the
+// worker re-encodes the pipe to the admin-path socket as it arrives (ADR 0008:
+// restores stream, they are never staged); a file that is itself a zip (a
+// .docx) is never mistaken for the archive. A failed write (the console or the
+// technician went away) cancels restic at once; a restic that sends no byte for
+// DumpIdleLimit is stopped, and a background `restic unlock` (stale locks only,
+// recorded as a run with trigger schedule) removes the lock it left; Drain
+// waits for that at shutdown. No file is created anywhere, not even briefly. A
+// stream holds its restic slot for as long as the browser takes, so streams
+// have their own budget below the worker's total (Config.MaxStreams,
 // CRYO_MAINTAIN_MAX_STREAMS, default 2 of 4): one over it is refused at once
 // with the admin-path code busy, never queued, so browse, snapshots, size
 // sampling, prune and check always keep slots. The console cuts a stream that
@@ -166,7 +179,8 @@
 //
 // The kinds that are runs (forget, prune, check, unlock) get a runs row with
 // origin console: Unlock does in v0 (trigger manual for the RPC, schedule for the
-// scheduler's step 2). Read-only calls and init are not runs. A run that was
+// scheduler's step 2 and for the stale-lock cleanup after a stalled dump, which
+// no operator asked for). Read-only calls and init are not runs. A run that was
 // opened is always closed, with outcome interrupted when the process never
 // finished.
 //

@@ -87,6 +87,11 @@ type File struct {
 	Path    string // absolute snapshot path, "/" separators, for example /C/Users/Public/Report.txt
 	Content []byte
 	Mtime   time.Time
+	// Skip, when set, makes the entry a link or special file of that kind
+	// (adminpath.SkipSymlink, ...): Ls lists it with that type and Dump
+	// leaves it out of the zip and counts it in DumpResult.Skipped, as the
+	// worker does (ADR 0028).
+	Skip string
 }
 
 // DefaultFiles is the fictional tree fixtures mode browses. The names are
@@ -247,9 +252,12 @@ func (b *Backend) Ls(ctx context.Context, req adminpath.LsRequest) (adminpath.Ls
 		}
 		name, tail, nested := strings.Cut(rest, "/")
 		full := path.Join(dir, name)
-		if nested && tail != "" {
+		switch {
+		case nested && tail != "":
 			seen[name] = restic.Node{Name: name, Type: "dir", Path: full, Mtime: f.Mtime}
-		} else {
+		case f.Skip != "":
+			seen[name] = restic.Node{Name: name, Type: skipNodeType(f.Skip), Path: full, Mtime: f.Mtime}
+		default:
 			seen[name] = restic.Node{Name: name, Type: "file", Path: full, Size: uint64(len(f.Content)), Mtime: f.Mtime}
 		}
 	}
@@ -315,28 +323,37 @@ func (b *Backend) Snapshots(ctx context.Context, req adminpath.DeviceRequest) ([
 // directory. With Paths (validated, nested selections collapsed), every
 // selection is named relative to its parent: a file by its base name, a folder
 // by its own entry ("name/") and its files below it; one selection that is not
-// in the fake tree is not_found before any byte.
+// in the fake tree is not_found before any byte. Either way a File with Skip
+// set is left out and counted in DumpResult.Skipped.
+//
+// The worker builds a single Path exactly like Paths: [Path] (its folder gets
+// a top-level "name/" entry); the fixture keeps the older single-path layout,
+// which the console's own fixture tests read.
 func (b *Backend) Dump(ctx context.Context, req adminpath.DumpRequest, w io.Writer) (adminpath.DumpResult, error) {
 	if err := b.record(Call{Method: adminpath.MethodDump, DeviceID: req.DeviceID, Path: req.Path, Paths: append([]string(nil), req.Paths...)}); err != nil {
 		return adminpath.DumpResult{}, err
 	}
-	var entries []fixtureEntry
+	var (
+		entries []fixtureEntry
+		skipped adminpath.DumpSkipped
+	)
 	if req.Paths != nil {
 		if err := req.Validate(); err != nil {
 			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
 		}
 		for _, sel := range adminpath.CollapsePaths(req.Paths) {
-			got := b.entriesOf(sel, path.Base(sel), true)
-			if len(got) == 0 {
+			got, found := b.entriesOf(sel, path.Base(sel), true, &skipped)
+			if !found {
 				return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeNotFound, "")
 			}
 			entries = append(entries, got...)
 		}
 	} else {
-		entries = b.entriesOf(clean(req.Path), "", false)
-	}
-	if len(entries) == 0 {
-		return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeNotFound, "")
+		got, found := b.entriesOf(clean(req.Path), "", false, &skipped)
+		if !found {
+			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeNotFound, "")
+		}
+		entries = got
 	}
 	out := io.Writer(w)
 	if b.FailDumpAfter > 0 {
@@ -361,7 +378,7 @@ func (b *Backend) Dump(ctx context.Context, req adminpath.DumpRequest, w io.Writ
 	if err := zw.Close(); err != nil {
 		return adminpath.DumpResult{}, b.dumpErr(out)
 	}
-	return adminpath.DumpResult{ResultMeta: adminpath.ResultMeta{RequestID: req.RequestID, Outcome: restic.OutcomeSuccess}}, nil
+	return adminpath.DumpResult{ResultMeta: adminpath.ResultMeta{RequestID: req.RequestID, Outcome: restic.OutcomeSuccess}, Skipped: skipped}, nil
 }
 
 // fixtureEntry is one zip entry of a fake dump; dir entries end in "/".
@@ -371,32 +388,55 @@ type fixtureEntry struct {
 	dir     bool
 }
 
-// entriesOf lists the zip entries of one selected path of the fake tree. For
-// a single-path dump (multi false) a file is its base name and a folder's files
-// are named relative to the folder. For a several-paths dump (multi true) every
-// name starts with top, the selection's base name, and a folder gets its own
-// entry first. Nothing matches: no entries.
-func (b *Backend) entriesOf(want, top string, multi bool) []fixtureEntry {
-	var out []fixtureEntry
+// entriesOf lists the zip entries of one selected path of the fake tree and
+// counts its skipped files into skipped. For a single-path dump (multi false)
+// a file is its base name and a folder's files are named relative to the
+// folder. For a several-paths dump (multi true) every name starts with top,
+// the selection's base name, and a folder gets its own entry first. found is
+// false when nothing in the tree is at or below want.
+func (b *Backend) entriesOf(want, top string, multi bool, skipped *adminpath.DumpSkipped) (out []fixtureEntry, found bool) {
 	for _, f := range b.files() {
 		fp := clean(f.Path)
+		var name string
 		switch {
 		case fp == want && multi:
-			out = append(out, fixtureEntry{name: top, content: f.Content})
+			name = top
 		case fp == want:
-			out = append(out, fixtureEntry{name: path.Base(fp), content: f.Content})
+			name = path.Base(fp)
 		case want == "/" || strings.HasPrefix(fp, want+"/"):
-			rel := strings.TrimPrefix(strings.TrimPrefix(fp, want), "/")
+			name = strings.TrimPrefix(strings.TrimPrefix(fp, want), "/")
 			if multi {
 				if len(out) == 0 || out[0].name != top+"/" {
 					out = append([]fixtureEntry{{name: top + "/", dir: true}}, out...)
 				}
-				rel = top + "/" + rel
+				name = top + "/" + name
 			}
-			out = append(out, fixtureEntry{name: rel, content: f.Content})
+		default:
+			continue
 		}
+		found = true
+		if f.Skip != "" {
+			skipped.Add(f.Skip)
+			continue
+		}
+		out = append(out, fixtureEntry{name: name, content: f.Content})
 	}
-	return out
+	return out, found
+}
+
+// skipNodeType is the restic node type Ls reports for a File with Skip set.
+func skipNodeType(kind string) string {
+	switch kind {
+	case adminpath.SkipSymlink:
+		return "symlink"
+	case adminpath.SkipDevice:
+		return "dev"
+	case adminpath.SkipPipe:
+		return "fifo"
+	case adminpath.SkipSocket:
+		return "socket"
+	}
+	return "irregular"
 }
 
 // dumpErr is the error of a Dump whose writer failed: the scripted mid-stream

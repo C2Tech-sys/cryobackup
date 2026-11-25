@@ -9,6 +9,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,10 +17,11 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/restic"
 )
 
-// The several-paths download (ADR 0028, completing ADR 0008). One request names
-// up to adminpath.MaxDumpPaths snapshot paths; the worker streams them as ONE
-// zip into the admin-path response, one restic run per path, one run at a time,
-// with nothing on disk and constant memory:
+// The download (ADR 0028, completing ADR 0008). One request names one snapshot
+// path or up to adminpath.MaxDumpPaths of them (a single path is built exactly
+// as a list of one, see dump.go); the worker streams them as ONE zip into the
+// admin-path response, one restic run per path, one run at a time, with
+// nothing on disk and constant memory:
 //
 //   - a file is `restic dump <snap> <file>`: its raw bytes become one entry;
 //   - a folder is `restic dump -a tar <snap> <folder>`, read with archive/tar
@@ -32,15 +34,15 @@ import (
 // So the worker renames every entry relative to the selected item's parent,
 // writes the folder's own entry itself (an empty folder would otherwise
 // vanish), leaves symlinks, junctions, hard links and devices out and counts
-// them in a final CRYOBACKUP-SKIPPED.txt that names no file, and refuses the
-// whole download if any entry name could escape the folder it is extracted to
-// (zip-slip).
+// them (a final CRYOBACKUP-SKIPPED.txt that names no file, and
+// DumpResult.Skipped for the download's record), and refuses the whole
+// download if any entry name could escape the folder it is extracted to
+// (zip-slip) or would extract on Windows under another name.
 //
 // The zip's central directory is written only after every restic run exited 0
 // and every tar ended cleanly. Anything else returns an error before it, so the
 // bytes already sent never form a readable archive, and the console aborts its
-// HTTP response (adminpath trailer; dump.go's rule for one path, extended to
-// the whole download).
+// HTTP response (adminpath trailer).
 
 // DumpIdleLimit is how long a dump's restic child may go without sending a byte
 // before the worker stops it (idle watchdog). With its storage gone, restic
@@ -81,70 +83,75 @@ var (
 	errDestFailed = errors.New("maintain: the stream destination failed")
 )
 
-// skipKinds are the kinds of entries left out of a several-paths zip, in the
-// order CRYOBACKUP-SKIPPED.txt lists them, with the words it uses.
-var skipKinds = []struct{ key, label string }{
-	{"symlink", "symbolic links and junctions"},
-	{"hardlink", "hard links"},
-	{"device", "devices"},
-	{"fifo", "named pipes"},
-	{"socket", "sockets"},
-	{"other", "other special entries"},
+// skippedLines are the lines of CRYOBACKUP-SKIPPED.txt, in order, with the
+// words it uses for each kind left out.
+func skippedLines(s adminpath.DumpSkipped) []skippedLine {
+	return []skippedLine{
+		{"symbolic links and junctions", s.Symlinks},
+		{"hard links", s.HardLinks},
+		{"devices", s.Devices},
+		{"named pipes", s.Pipes},
+		{"sockets", s.Sockets},
+		{"other special entries", s.Other},
+	}
 }
 
-// nodeSkipKind is the skip kind of a restic node type; "" for a file or a
-// folder, which are streamed.
+// skippedLine is one kind's line of CRYOBACKUP-SKIPPED.txt.
+type skippedLine struct {
+	label string
+	n     int
+}
+
+// nodeSkipKind is the skip kind (adminpath.Skip*) of a restic node type; ""
+// for a file or a folder, which are streamed.
 func nodeSkipKind(typ string) string {
 	switch typ {
 	case "file", "dir":
 		return ""
 	case "symlink":
-		return "symlink"
+		return adminpath.SkipSymlink
 	case "dev", "chardev":
-		return "device"
+		return adminpath.SkipDevice
 	case "fifo":
-		return "fifo"
+		return adminpath.SkipPipe
 	case "socket":
-		return "socket"
+		return adminpath.SkipSocket
 	}
-	return "other"
+	return adminpath.SkipOther
 }
 
-// tarSkipKind is the skip kind of a tar entry type that is not a regular file
-// or a directory.
+// tarSkipKind is the skip kind (adminpath.Skip*) of a tar entry type that is
+// not a regular file or a directory.
 func tarSkipKind(flag byte) string {
 	switch flag {
 	case tar.TypeSymlink:
-		return "symlink"
+		return adminpath.SkipSymlink
 	case tar.TypeLink:
-		return "hardlink"
+		return adminpath.SkipHardLink
 	case tar.TypeChar, tar.TypeBlock:
-		return "device"
+		return adminpath.SkipDevice
 	case tar.TypeFifo:
-		return "fifo"
+		return adminpath.SkipPipe
 	}
-	return "other"
+	return adminpath.SkipOther
 }
 
-// selection is one top-level item of a several-paths download.
+// selection is one top-level item of a download.
 //
 // PATH-BEARING: path and name are file names; never log them.
 type selection struct {
 	path  string // clean absolute snapshot path
-	name  string // its top-level entry name in the zip
+	name  string // its top-level entry name in the zip; "" for the snapshot root
 	typ   string // restic node type from the parent's listing; "" until found
+	root  bool   // the snapshot root ("/"): a folder with no name and no entry of its own
 	mtime time.Time
 }
 
-// dumpMulti streams req.Paths as one zip into dst (see the file comment). ctx
-// already carries the dump timeout and t the unlocked repository; the caller
-// holds the stream slot.
-func (w *Worker) dumpMulti(ctx context.Context, t *target, req adminpath.DumpRequest, dst io.Writer) (adminpath.DumpResult, error) {
-	var sels []*selection
-	for _, p := range adminpath.CollapsePaths(req.Paths) {
-		sels = append(sels, &selection{path: p})
-	}
-	snapID, elapsed, err := w.lookupSelections(ctx, t, req.SnapshotID, sels)
+// dumpMulti streams sels of snapshot snapID as one zip into dst (see the file
+// comment). ctx already carries the dump timeout and t the unlocked
+// repository; the caller holds the stream slot.
+func (w *Worker) dumpMulti(ctx context.Context, t *target, snapID string, sels []*selection, dst io.Writer) (adminpath.DumpResult, error) {
+	snapID, elapsed, err := w.lookupSelections(ctx, t, snapID, sels)
 	if err != nil {
 		return adminpath.DumpResult{}, err
 	}
@@ -155,10 +162,10 @@ func (w *Worker) dumpMulti(ctx context.Context, t *target, req adminpath.DumpReq
 	streamCtx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
 	out := &cancelWriter{w: dst, cancel: func() { stop(errDestFailed) }}
-	b := &zipBuilder{zw: zip.NewWriter(out), skipped: map[string]int{}}
+	b := &zipBuilder{zw: zip.NewWriter(out)}
 	for _, s := range sels {
 		if kind := nodeSkipKind(s.typ); kind != "" {
-			b.skipped[kind]++
+			b.skipped.Add(kind)
 			continue
 		}
 		var (
@@ -167,8 +174,10 @@ func (w *Worker) dumpMulti(ctx context.Context, t *target, req adminpath.DumpReq
 			consume func(io.Reader) error
 		)
 		if s.typ == "dir" {
-			if err := b.dir(s.name, s.mtime); err != nil {
-				return adminpath.DumpResult{}, w.streamErr(ctx)
+			if !s.root {
+				if err := b.dir(s.name, s.mtime); err != nil {
+					return adminpath.DumpResult{}, w.streamErr(ctx)
+				}
 			}
 			cmd, berr = restic.DumpTarStdout(snapID, s.path, w.common())
 			sel := s
@@ -195,7 +204,7 @@ func (w *Worker) dumpMulti(ctx context.Context, t *target, req adminpath.DumpReq
 	if err := b.finish(w.clock().UTC()); err != nil {
 		return adminpath.DumpResult{}, w.streamErr(ctx)
 	}
-	return adminpath.DumpResult{ResultMeta: okMeta(elapsed)}, nil
+	return adminpath.DumpResult{ResultMeta: okMeta(elapsed), Skipped: b.skipped}, nil
 }
 
 // lookupSelections fills each selection's node type and mtime from one `ls`
@@ -204,11 +213,16 @@ func (w *Worker) dumpMulti(ctx context.Context, t *target, req adminpath.DumpReq
 // path is. It returns the snapshot id every later run must use: the full id
 // restic reported, so a "latest" that moves during a long download (a backup
 // landing) cannot mix two snapshots into one zip. A selection that is not in
-// the snapshot is not_found, before any byte is streamed.
+// the snapshot is not_found, before any byte is streamed. The snapshot root is
+// a folder by definition and is not looked up (its one restic run then uses
+// snapID as given).
 func (w *Worker) lookupSelections(ctx context.Context, t *target, snapID string, sels []*selection) (string, time.Duration, error) {
 	var parents []string
 	byParent := map[string]map[string]*selection{}
 	for _, s := range sels {
+		if s.root {
+			continue
+		}
 		p := path.Dir(s.path)
 		if byParent[p] == nil {
 			byParent[p] = map[string]*selection{}
@@ -276,6 +290,9 @@ func (w *Worker) lookupSelections(ctx context.Context, t *target, snapID string,
 func nameSelections(sels []*selection) bool {
 	used := map[string]bool{strings.ToLower(skippedEntryName): true}
 	for _, s := range sels {
+		if s.root {
+			continue // no name: its entries keep their snapshot paths
+		}
 		base := path.Base(s.path)
 		if !safeEntryName(base) {
 			return false
@@ -304,14 +321,27 @@ func numbered(base string, n int, isFile bool) string {
 // already clean (no empty, "." or ".." component, no trailing "/"), and holds
 // no control character, backslash or colon, so no extractor on Windows or
 // Linux can read it as an absolute path, a drive ("C:"), an alternate data
-// stream or a step up out of the folder it extracts into. Windows file names
-// cannot hold a backslash or a colon, so nothing legitimate is refused.
+// stream or a step up out of the folder it extracts into.
+//
+// It also refuses a component that Windows would not extract under the same
+// name: one that ends in "." or " " (Win32 strips them, so "a." lands on "a"),
+// and a reserved device name (windowsReservedName: "NUL.txt" opens the null
+// device). No Windows file name holds any of these, so nothing a Windows
+// snapshot holds is refused, and a name that would extract as something else
+// refuses the whole download instead of landing somewhere unexpected (the
+// agent applies the same rule to restore paths, internal/api).
 func safeEntryName(name string) bool {
 	if name == "" || name[0] == '/' || path.Clean(name) != name {
 		return false
 	}
 	for _, c := range strings.Split(name, "/") {
 		if c == "" || c == "." || c == ".." {
+			return false
+		}
+		if last := c[len(c)-1]; last == '.' || last == ' ' {
+			return false
+		}
+		if windowsReservedName(c) {
 			return false
 		}
 	}
@@ -321,6 +351,51 @@ func safeEntryName(name string) bool {
 		}
 	}
 	return true
+}
+
+// windowsReservedName reports whether Win32 treats name as a device: CON, PRN,
+// AUX, NUL, CONIN$, CONOUT$, COM0 to COM9 and LPT0 to LPT9, the last two also
+// with the superscript digits ¹ ² ³, in any ASCII case, alone or with any
+// extension ("con.txt", "NUL.tar.gz"), and with spaces before the first dot
+// ("CON .txt"), which Win32 ignores. Only ASCII letters are folded, so a
+// non-ASCII look-alike is accepted and matched literally. It repeats the
+// agent's rule for restore paths (internal/api), which is not exported.
+func windowsReservedName(name string) bool {
+	base := name
+	if i := strings.IndexByte(base, '.'); i >= 0 {
+		base = base[:i]
+	}
+	base = asciiUpper(strings.TrimRight(base, " "))
+	switch base {
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
+		return true
+	}
+	if len(base) < 4 {
+		return false
+	}
+	switch base[:3] {
+	case "COM", "LPT":
+		switch digit := base[3:]; {
+		case len(digit) == 1 && digit[0] >= '0' && digit[0] <= '9':
+			return true
+		case digit == "¹", digit == "²", digit == "³":
+			return true
+		}
+	}
+	return false
+}
+
+// asciiUpper upper-cases the ASCII letters of s and leaves every other byte as
+// it is (strings.ToUpper would also fold non-ASCII letters, widening the
+// reserved list beyond the names Windows documents).
+func asciiUpper(s string) string {
+	b := []byte(s)
+	for i, ch := range b {
+		if ch >= 'a' && ch <= 'z' {
+			b[i] = ch - 'a' + 'A'
+		}
+	}
+	return string(b)
 }
 
 // unsafeNameErr logs the zip-slip refusal (a class, never the name) and returns
@@ -380,23 +455,31 @@ func (w *Worker) dumpRun(ctx context.Context, t *target, cmd restic.Command, out
 // (a class, never a path), then `restic unlock` through the admin path in the
 // background, because a killed restic leaves its lock object in the repository
 // (P22 spike, item 6) and the download's answer must not wait for the cleanup.
-// The unlock removes stale locks only, so it never touches a live run's lock;
-// it is recorded as a console run like every unlock (runs.go). The error names
-// the storage when restic's stderr did, else a timeout.
+// The unlock removes stale locks only, so it never touches a live run's lock.
+// It is recorded as a console run like every unlock (runs.go) with trigger
+// schedule, not manual: manual means an operator asked for it, and this is the
+// worker's own stale-lock cleanup, the same one the scheduler's unlock step
+// does (runs.trigger_kind has no value of its own for it). Drain waits for it
+// at shutdown. The error names the storage when restic's stderr did, else a
+// timeout.
 func (w *Worker) dumpIdleStopped(t *target, res execResult, limit time.Duration) error {
 	deviceID := t.dev.ID
 	class := res.errorClass()
 	w.log.Warn("dump stopped: restic sent no data within the idle limit; removing its stale lock",
 		attrDevice(deviceID), attrClass("dump_idle"), attrElapsed(limit))
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), w.cfg.Timeouts.Unlock+closeTimeout)
+	started := w.goBackground(func(bg context.Context) {
+		ctx, cancel := context.WithTimeout(bg, w.cfg.Timeouts.Unlock+closeTimeout)
 		defer cancel()
-		ur, err := w.unlock(ctx, deviceID, false, triggerManual)
+		ur, err := w.unlock(ctx, deviceID, false, triggerSchedule)
 		if err != nil || ur.Exit != 0 {
-			w.log.Warn("stale lock not removed after a stalled dump; the scheduler's unlock step retries it",
+			w.log.Warn("stale lock not removed after a stalled dump; the next scheduled unlock step retries it",
 				attrDevice(deviceID), attrClass("dump_idle_unlock"), attrExit(ur.Exit))
 		}
-	}()
+	})
+	if !started {
+		w.log.Warn("stale lock not removed after a stalled dump: the worker is shutting down; the next scheduled unlock step retries it",
+			attrDevice(deviceID), attrClass("dump_idle_unlock"))
+	}
 	if storageClass(class) {
 		return adminpath.NewError(adminpath.CodeStorageUnreachable, class)
 	}
@@ -428,10 +511,89 @@ func (i *idleReader) Read(p []byte) (int, error) {
 
 func (i *idleReader) stop() { i.t.Stop() }
 
-// zipBuilder writes the several-paths zip.
+// backgroundWork is a worker's work that outlives the request that started it
+// (the stale-lock unlock after a stalled dump). Drain waits for it at
+// shutdown; once Drain has begun, nothing new starts.
+type backgroundWork struct {
+	wg     sync.WaitGroup
+	ctx    context.Context // cancelled when Drain's wait runs out
+	cancel context.CancelFunc
+	closed bool // Drain has begun
+}
+
+// backgroundOf holds each worker's background work, created on first use.
+// It lives beside Worker rather than in it so that this file alone owns the
+// mechanism; a Worker is long-lived (one per process), so the map stays small.
+var (
+	backgroundMu sync.Mutex
+	backgroundOf = map[*Worker]*backgroundWork{}
+)
+
+// background returns w's background work, creating it. The caller holds
+// backgroundMu.
+func (w *Worker) background() *backgroundWork {
+	b := backgroundOf[w]
+	if b == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		b = &backgroundWork{ctx: ctx, cancel: cancel}
+		backgroundOf[w] = b
+	}
+	return b
+}
+
+// goBackground runs fn in a goroutine that Drain waits for, with a context
+// that Drain cancels when its wait runs out. It runs nothing and returns
+// false once Drain has begun.
+func (w *Worker) goBackground(fn func(ctx context.Context)) bool {
+	backgroundMu.Lock()
+	defer backgroundMu.Unlock()
+	b := w.background()
+	if b.closed {
+		return false
+	}
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		fn(b.ctx)
+	}()
+	return true
+}
+
+// Drain implements adminpath.Drainer: adminpath.Serve calls it once the
+// admin-path server has shut down. It refuses new background work, waits for
+// the running work until ctx ends, then cancels it and waits at most
+// closeTimeout more for it to record its run as interrupted, so the process
+// does not close the database under it. A stale lock left behind is removed
+// by the scheduler's unlock step after the next start.
+func (w *Worker) Drain(ctx context.Context) {
+	backgroundMu.Lock()
+	b := w.background()
+	b.closed = true
+	backgroundMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	b.cancel()
+	t := time.NewTimer(closeTimeout)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		w.log.Warn("background work still running at shutdown", attrClass("drain_timeout"))
+	}
+}
+
+// zipBuilder writes the download's zip.
 type zipBuilder struct {
 	zw      *zip.Writer
-	skipped map[string]int
+	skipped adminpath.DumpSkipped
 }
 
 // dir adds a folder entry ("name/").
@@ -458,9 +620,10 @@ func (b *zipBuilder) file(name string, mtime time.Time) (io.Writer, error) {
 // without the leading "/"); it is renamed to the selection's entry name plus
 // its path below the folder, and that name must pass safeEntryName. A failure
 // of either is errUnsafeName, which refuses the whole download. Regular files
-// and folders are written; everything else is counted.
+// and folders are written; everything else is counted. The snapshot root has
+// no name, so its entries keep their snapshot paths without the leading "/".
 func (b *zipBuilder) addTar(r io.Reader, s *selection) error {
-	prefix := strings.TrimPrefix(s.path, "/")
+	prefix := strings.TrimPrefix(s.path, "/") // "" for the snapshot root
 	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
@@ -479,11 +642,14 @@ func (b *zipBuilder) addTar(r io.Reader, s *selection) error {
 			}
 			return errUnsafeName
 		}
-		rest, ok := strings.CutPrefix(raw, prefix+"/")
-		if !ok {
-			return errUnsafeName
+		name := raw
+		if !s.root {
+			rest, ok := strings.CutPrefix(raw, prefix+"/")
+			if !ok {
+				return errUnsafeName
+			}
+			name = s.name + "/" + rest
 		}
-		name := s.name + "/" + rest
 		if !safeEntryName(name) {
 			return errUnsafeName
 		}
@@ -501,7 +667,7 @@ func (b *zipBuilder) addTar(r io.Reader, s *selection) error {
 				return err
 			}
 		default:
-			b.skipped[tarSkipKind(hdr.Typeflag)]++
+			b.skipped.Add(tarSkipKind(hdr.Typeflag))
 		}
 	}
 }
@@ -509,17 +675,13 @@ func (b *zipBuilder) addTar(r io.Reader, s *selection) error {
 // finish writes CRYOBACKUP-SKIPPED.txt when anything was left out, then the
 // central directory.
 func (b *zipBuilder) finish(now time.Time) error {
-	total := 0
-	for _, n := range b.skipped {
-		total += n
-	}
-	if total > 0 {
+	if total := b.skipped.Total(); total > 0 {
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "CryoBackup left %d item(s) out of this download because they are not regular files or folders.\r\n", total)
 		sb.WriteString("Their names are not listed here.\r\n\r\n")
-		for _, k := range skipKinds {
-			if n := b.skipped[k.key]; n > 0 {
-				fmt.Fprintf(&sb, "%s: %d\r\n", k.label, n)
+		for _, l := range skippedLines(b.skipped) {
+			if l.n > 0 {
+				fmt.Fprintf(&sb, "%s: %d\r\n", l.label, l.n)
 			}
 		}
 		fw, err := b.file(skippedEntryName, now)

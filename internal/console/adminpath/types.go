@@ -106,11 +106,13 @@ type Backend interface {
 	Snapshots(ctx context.Context, req DeviceRequest) ([]restic.Snapshot, error)
 	// Dump streams snapshot paths as one zip archive into w (ADR 0008, ADR
 	// 0028): restore bytes travel only over the socket, never to a disk on
-	// either side. With Path, a directory is restic's own `dump -a zip` and a
-	// single file is wrapped into a one-entry zip on the fly. With Paths, every
-	// selected file and folder becomes entries of one zip, named relative to
-	// the selected item's parent, and the zip's central directory is written
-	// only after every restic run exited 0. The implementation writes nothing
+	// either side. Path is one selection and Paths several; the archive is
+	// built the same way for both: every selected file and folder becomes
+	// entries of one zip, named relative to the selected item's parent (a
+	// file is one entry, a folder its own entry and everything below it),
+	// links and other special entries are left out and counted
+	// (DumpResult.Skipped), and the zip's central directory is written only
+	// after every restic run exited 0. The implementation writes nothing
 	// but the archive into w and stops (cancelling restic) as soon as a write
 	// to w fails. Bytes and SHA256 of the result may be left zero: Handler and
 	// Client count and hash what actually crossed the socket.
@@ -262,7 +264,11 @@ type DumpRequest struct {
 	// ":<subfolder>" with Path; with Paths it is a hex id or "latest" only.
 	SnapshotID string `json:"snapshot_id"`
 	// Path is an absolute snapshot path starting with "/": a file or a
-	// directory (architecture DH27). PATH-BEARING: never log it.
+	// directory (architecture DH27). The zip is the one Paths: [Path] would
+	// give (ADR 0028), with the subfolder of SnapshotID joined in front of
+	// Path. The snapshot root ("/" with no subfolder) has no name of its own,
+	// so its top-level entries are the snapshot's roots. PATH-BEARING: never
+	// log it.
 	Path string `json:"path,omitempty"`
 	// Paths are 1 to MaxDumpPaths absolute, clean snapshot paths, files or
 	// folders, never "/" (ADR 0028). A path inside another selected folder is
@@ -311,6 +317,56 @@ type DumpResult struct {
 	Bytes int64 `json:"bytes"`
 	// SHA256 is the lower-case hex SHA-256 of the archive as it crossed the socket.
 	SHA256 string `json:"sha256"`
+	// Skipped counts what the archive left out because it is not a regular
+	// file or folder (ADR 0028), for the download's record. All zero when
+	// nothing was left out, and from a worker that predates the count.
+	Skipped DumpSkipped `json:"skipped"`
+}
+
+// Kinds of snapshot entries a download leaves out (DumpSkipped.Add).
+const (
+	SkipSymlink  = "symlink"  // a symbolic link, or a junction (restic stores one as a symlink)
+	SkipHardLink = "hardlink" // a hard link entry of restic's tar
+	SkipDevice   = "device"   // a character or block device
+	SkipPipe     = "fifo"     // a named pipe
+	SkipSocket   = "socket"   // a Unix socket
+	SkipOther    = "other"    // any other entry that is not a regular file or a folder
+)
+
+// DumpSkipped counts the snapshot entries a download left out, by kind. It
+// holds counts only: the names of what was left out are never kept, sent or
+// logged anywhere.
+type DumpSkipped struct {
+	Symlinks  int `json:"symlinks"` // symbolic links and junctions
+	HardLinks int `json:"hard_links"`
+	Devices   int `json:"devices"`
+	Pipes     int `json:"named_pipes"`
+	Sockets   int `json:"sockets"`
+	Other     int `json:"other"`
+}
+
+// Add counts one entry of kind (a Skip* constant); an unknown kind counts as
+// SkipOther.
+func (s *DumpSkipped) Add(kind string) {
+	switch kind {
+	case SkipSymlink:
+		s.Symlinks++
+	case SkipHardLink:
+		s.HardLinks++
+	case SkipDevice:
+		s.Devices++
+	case SkipPipe:
+		s.Pipes++
+	case SkipSocket:
+		s.Sockets++
+	default:
+		s.Other++
+	}
+}
+
+// Total is the number of entries left out.
+func (s DumpSkipped) Total() int {
+	return s.Symlinks + s.HardLinks + s.Devices + s.Pipes + s.Sockets + s.Other
 }
 
 // StatsRequest runs restic stats.

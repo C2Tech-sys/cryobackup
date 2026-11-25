@@ -207,6 +207,9 @@ func TestDumpMultiOneZipOfFilesAndFolders(t *testing.T) {
 	if res.Outcome != restic.OutcomeSuccess {
 		t.Fatalf("result %+v", res)
 	}
+	if res.Skipped != (adminpath.DumpSkipped{Symlinks: 2, Pipes: 1}) {
+		t.Fatalf("Skipped = %+v, want 2 symlinks and 1 named pipe", res.Skipped)
+	}
 	names, bodies := zipEntries(t, out.Bytes())
 	want := []string{"docs/", "docs/a.txt", "docs/sub/", "docs/sub/" + longName, "report.docx", "empty/", skippedEntryName}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
@@ -280,6 +283,13 @@ func TestDumpMultiRefusesHostileEntryNames(t *testing.T) {
 		"dot component":     p + "x/./evil.txt",
 		"empty component":   p + "x//evil.txt",
 		"folder as a file":  strings.TrimPrefix(multiTree, "/") + "/docs",
+		"trailing dot":      p + "evil.",
+		"trailing space":    p + "evil ",
+		"dot folder":        p + "sub./evil.txt",
+		"device NUL":        p + "NUL.txt",
+		"device com1":       p + "x/com1",
+		"device CONIN$":     p + "conin$.log",
+		"device lpt9 space": p + "LPT9 .txt",
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := fakeTar(t, []tarEntry{
@@ -303,15 +313,17 @@ func TestDumpMultiRefusesHostileEntryNames(t *testing.T) {
 			}
 		})
 	}
-	t.Run("selected name", func(t *testing.T) {
-		e := newTenv(t, []fakeRule{{Cmd: "ls", Stdout: "inline:" + lsTreeJSON(lsNode(`a\..\b`, "file"))}}, nil)
-		var out bytes.Buffer
-		_, err := e.w.Dump(e.ctx, multiReq(e, "latest", multiTree+`/a\..\b`), &out)
-		wantCode(t, err, adminpath.CodeResticFailed, restic.ClassGuardRefused)
-		if out.Len() != 0 {
-			t.Fatal("bytes were sent for a refused selection")
-		}
-	})
+	for _, sel := range []string{`a\..\b`, "AUX", "report.txt.", "COM².dat"} {
+		t.Run("selected name "+sel, func(t *testing.T) {
+			e := newTenv(t, []fakeRule{{Cmd: "ls", Stdout: "inline:" + lsTreeJSON(lsNode(sel, "file"))}}, nil)
+			var out bytes.Buffer
+			_, err := e.w.Dump(e.ctx, multiReq(e, "latest", multiTree+"/"+sel), &out)
+			wantCode(t, err, adminpath.CodeResticFailed, restic.ClassGuardRefused)
+			if out.Len() != 0 {
+				t.Fatal("bytes were sent for a refused selection")
+			}
+		})
+	}
 }
 
 // TestDumpMultiSymlinkEntries: a folder of nothing but links (junctions come
@@ -330,8 +342,12 @@ func TestDumpMultiSymlinkEntries(t *testing.T) {
 		{Cmd: "dump", StdoutFile: src},
 	}, nil)
 	var out bytes.Buffer
-	if _, err := e.w.Dump(e.ctx, multiReq(e, "latest", multiTree+"/docs"), &out); err != nil {
+	res, err := e.w.Dump(e.ctx, multiReq(e, "latest", multiTree+"/docs"), &out)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if res.Skipped != (adminpath.DumpSkipped{Symlinks: 2, HardLinks: 1, Devices: 1}) {
+		t.Fatalf("Skipped = %+v", res.Skipped)
 	}
 	names, bodies := zipEntries(t, out.Bytes())
 	if strings.Join(names, "|") != "docs/|"+skippedEntryName {
@@ -476,6 +492,11 @@ func TestDumpMultiStalledChildTripsTheWatchdog(t *testing.T) {
 	if unlocks != 1 {
 		t.Fatalf("%d unlock calls, want 1", unlocks)
 	}
+	for _, r := range e.consoleRuns(e.esc) {
+		if r.Kind == "unlock" && r.Trigger != triggerSchedule {
+			t.Fatalf("the watchdog's unlock run has trigger %q, want %q (manual is an operator action)", r.Trigger, triggerSchedule)
+		}
+	}
 	logs := e.logs.String()
 	idleLines := 0
 	for _, line := range strings.Split(logs, "\n") {
@@ -488,6 +509,69 @@ func TestDumpMultiStalledChildTripsTheWatchdog(t *testing.T) {
 	}
 	if strings.Contains(logs, "big.bin") || strings.Contains(logs, multiTree) {
 		t.Fatal("the watchdog's log names a path")
+	}
+}
+
+// stalledDumpRules are a stalled `dump -a tar` of multiTree/docs and an unlock
+// that answers after unlockMS.
+func stalledDumpRules(t *testing.T, unlockMS int) []fakeRule {
+	p := strings.TrimPrefix(multiTree, "/") + "/docs/"
+	part := fakeTar(t, []tarEntry{{name: p + "big.bin", typ: tar.TypeReg, body: strings.Repeat("s", 50000)}}, 20000)
+	return []fakeRule{
+		{Cmd: "ls", Stdout: "inline:" + lsTreeJSON(lsNode("docs", "dir"))},
+		{Cmd: "dump", StdoutFile: part, SleepAfterMS: 60000},
+		{Cmd: "unlock", SleepMS: unlockMS},
+	}
+}
+
+// TestDrainWaitsForTheWatchdogUnlock: Drain (what adminpath.Serve calls at
+// shutdown) returns only after the background unlock finished and closed its
+// run; after Drain, a new stall starts no background work.
+func TestDrainWaitsForTheWatchdogUnlock(t *testing.T) {
+	shortIdle(t, 2*time.Second)
+	e := newTenv(t, stalledDumpRules(t, 1500), nil)
+	_, err := e.w.Dump(e.ctx, multiReq(e, "latest", multiTree+"/docs"), io.Discard)
+	wantCode(t, err, adminpath.CodeTimeout, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	e.w.Drain(ctx)
+	runs := e.consoleRuns(e.esc)
+	if len(runs) != 1 || runs[0].Kind != "unlock" || runs[0].FinishedAt == nil || runs[0].Outcome != string(restic.OutcomeSuccess) {
+		t.Fatalf("after Drain: runs = %+v, want one finished, successful unlock", runs)
+	}
+	if e.w.goBackground(func(context.Context) { t.Error("background work ran after Drain") }) {
+		t.Fatal("goBackground started work after Drain")
+	}
+	_, err = e.w.Dump(e.ctx, multiReq(e, "latest", multiTree+"/docs"), io.Discard)
+	wantCode(t, err, adminpath.CodeTimeout, "")
+	if !strings.Contains(e.logs.String(), "the worker is shutting down") {
+		t.Fatalf("a stall after Drain did not say why its lock stays:\n%s", e.logs.String())
+	}
+}
+
+// TestDrainIsBounded: an unlock that hangs is cancelled when Drain's context
+// ends; Drain returns soon after, and the run is closed as interrupted, not
+// left open.
+func TestDrainIsBounded(t *testing.T) {
+	shortIdle(t, 2*time.Second)
+	e := newTenv(t, stalledDumpRules(t, 60000), nil)
+	_, err := e.w.Dump(e.ctx, multiReq(e, "latest", multiTree+"/docs"), io.Discard)
+	wantCode(t, err, adminpath.CodeTimeout, "")
+	// Let the unlock start (its run row is opened before restic runs).
+	deadline := time.Now().Add(20 * time.Second)
+	for len(e.consoleRuns(e.esc)) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	t0 := time.Now()
+	e.w.Drain(ctx)
+	if d := time.Since(t0); d > 1*time.Second+closeTimeout {
+		t.Fatalf("Drain took %v, want at most its context plus closeTimeout", d)
+	}
+	runs := e.consoleRuns(e.esc)
+	if len(runs) != 1 || runs[0].FinishedAt == nil || runs[0].Outcome != string(restic.OutcomeInterrupted) {
+		t.Fatalf("after a bounded Drain: runs = %+v, want one unlock closed as interrupted", runs)
 	}
 }
 
@@ -666,12 +750,14 @@ func TestDumpMultiOverTheSocket(t *testing.T) {
 
 // TestSafeEntryName pins the zip-slip guard.
 func TestSafeEntryName(t *testing.T) {
-	for _, ok := range []string{"a", "a/b", "docs/sub/" + longName, "x.y.z", "a b/c", "...", "..a"} {
+	for _, ok := range []string{"a", "a/b", "docs/sub/" + longName, "x.y.z", "a b/c", "..a", " lead", "CONSOLE.txt", "nul-file", "COM10", "LPT", "a/con_", "COM⁴", "İcon", "conin"} {
 		if !safeEntryName(ok) {
 			t.Errorf("refused %q", ok)
 		}
 	}
-	for _, bad := range []string{"", "/a", "a/", "a//b", "./a", "a/.", "..", "../a", "a/../b", `a\b`, "C:", "a/C:b", "a\x00b", "a\nb", "a\x7fb"} {
+	for _, bad := range []string{"", "/a", "a/", "a//b", "./a", "a/.", "..", "../a", "a/../b", `a\b`, "C:", "a/C:b", "a\x00b", "a\nb", "a\x7fb",
+		"...", "a.", "a ", "a./b", "a /b", "x/end.",
+		"CON", "con", "Prn.txt", "aux.tar.gz", "x/NUL", "COM0", "com9.log", "LPT1", "lpt5.txt", "CONIN$", "conout$.x", "CON .txt", "COM¹", "lpt³.txt"} {
 		if safeEntryName(bad) {
 			t.Errorf("accepted %q", bad)
 		}

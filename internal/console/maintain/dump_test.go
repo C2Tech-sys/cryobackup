@@ -1,6 +1,7 @@
 package maintain
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"context"
@@ -31,32 +32,22 @@ const (
 	docxBody = "PK\x03\x04 this is a docx, which is itself a zip"
 )
 
-// realZip builds a zip of the given entries, like `restic dump -a zip` of a
-// directory, and writes it to a file outside every directory the tests watch.
-func realZip(t *testing.T, entries map[string]string) (string, []byte) {
+// treeTar is `restic dump -a tar` of dumpTree holding the given files (name
+// to body, in name order), written to a file outside every directory the
+// tests watch.
+func treeTar(t *testing.T, files map[string]string) string {
 	t.Helper()
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	names := make([]string, 0, len(entries))
-	for n := range entries {
+	names := make([]string, 0, len(files))
+	for n := range files {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	p := strings.TrimPrefix(dumpTree, "/") + "/"
+	var entries []tarEntry
 	for _, n := range names {
-		w, err := zw.Create(n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _ = w.Write([]byte(entries[n]))
+		entries = append(entries, tarEntry{name: p + n, typ: tar.TypeReg, body: files[n]})
 	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	p := filepath.Join(t.TempDir(), "restic-stdout.zip")
-	if err := os.WriteFile(p, buf.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return p, buf.Bytes()
+	return fakeTar(t, entries, 0)
 }
 
 // filesUnder lists every file under the given directories with its size. The fake
@@ -121,14 +112,14 @@ func dumpArgs(t *testing.T, e *tenv) []string {
 	return nil
 }
 
-// TestDumpStreamsADirectory: restic's zip is copied to the destination as it
-// arrives, restic writes to stdout (no --target), and no file is created
+// TestDumpStreamsADirectory: a single folder is built like a list of one (ADR
+// 0028): restic's tar becomes the folder's own entry and its files below it,
+// restic writes to stdout (no --target, never `-a zip`), and no file is created
 // anywhere the worker writes, during or after the dump.
 func TestDumpStreamsADirectory(t *testing.T) {
-	src, want := realZip(t, map[string]string{"report.txt": "quarterly report\n", "notes.md": "# notes\n"})
 	e := newTenv(t, []fakeRule{
 		{Cmd: "ls", Stdout: "inline:" + lsDirJSON},
-		{Cmd: "dump", StdoutFile: src},
+		{Cmd: "dump", StdoutFile: treeTar(t, map[string]string{"report.txt": "quarterly report\n", "notes.md": "# notes\n"})},
 	}, nil)
 	before := filesUnder(t, e.scratch, e.state)
 	var during map[string]int64
@@ -137,24 +128,79 @@ func TestDumpStreamsADirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(out.Bytes(), want) {
-		t.Fatalf("streamed %d bytes, want restic's %d", out.Len(), len(want))
+	names, bodies := zipEntries(t, out.Bytes())
+	if strings.Join(names, "|") != "tree/|tree/notes.md|tree/report.txt" || bodies["tree/report.txt"] != "quarterly report\n" {
+		t.Fatalf("entries = %q", names)
 	}
-	zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
-	if err != nil || len(zr.File) != 2 {
-		t.Fatalf("not the directory's zip: %v", err)
-	}
-	if res.Outcome != restic.OutcomeSuccess {
+	if res.Outcome != restic.OutcomeSuccess || res.Skipped.Total() != 0 {
 		t.Fatalf("result = %+v", res)
 	}
 	args := strings.Join(dumpArgs(t, e), " ")
-	if !strings.HasPrefix(args, "dump -a zip latest "+dumpTree) || strings.Contains(args, "--target") || !strings.Contains(args, "--no-cache") {
-		t.Fatalf("dump args = %q: want dump -a zip to stdout with --no-cache", args)
+	if !strings.HasPrefix(args, "dump -a tar "+dumpSnapID+" "+dumpTree+" ") || strings.Contains(args, "--target") || !strings.Contains(args, "--no-cache") {
+		t.Fatalf("dump args = %q: want dump -a tar of the pinned snapshot to stdout with --no-cache", args)
 	}
 	sameTree(t, "during the dump", before, during)
 	sameTree(t, "after the dump", before, filesUnder(t, e.scratch, e.state))
 	if n := len(e.consoleRuns(e.esc)); n != 0 {
 		t.Errorf("dump recorded %d console runs", n)
+	}
+}
+
+// TestDumpSingleFolderSkipsLinks (ADR 0028): a single selected folder that
+// holds a junction gives the folder's files, no link-target file (restic's own
+// `-a zip` writes the target as the content of a 47-byte file), the junction
+// counted in CRYOBACKUP-SKIPPED.txt and in DumpResult.Skipped, and no restic
+// call with `-a zip`.
+func TestDumpSingleFolderSkipsLinks(t *testing.T) {
+	p := strings.TrimPrefix(dumpTree, "/") + "/"
+	target := `\??\C:\Users\Someone\AppData\Local\Elsewhere\x`
+	e := newTenv(t, []fakeRule{
+		{Cmd: "ls", Stdout: "inline:" + lsDirJSON},
+		{Cmd: "dump", StdoutFile: fakeTar(t, []tarEntry{
+			{name: p + "a.txt", typ: tar.TypeReg, body: "alpha\n"},
+			{name: p + "jn", typ: tar.TypeSymlink, link: target},
+		}, 0)},
+	}, nil)
+	var out bytes.Buffer
+	res, err := e.w.Dump(e.ctx, adminpath.DumpRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest", Path: dumpTree}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, bodies := zipEntries(t, out.Bytes())
+	if strings.Join(names, "|") != "tree/|tree/a.txt|"+skippedEntryName {
+		t.Fatalf("entries = %q", names)
+	}
+	if !strings.Contains(bodies[skippedEntryName], "symbolic links and junctions: 1") {
+		t.Fatalf("%s = %q", skippedEntryName, bodies[skippedEntryName])
+	}
+	if res.Skipped != (adminpath.DumpSkipped{Symlinks: 1}) {
+		t.Fatalf("Skipped = %+v, want one symlink", res.Skipped)
+	}
+	if strings.Contains(out.String(), "Elsewhere") || strings.Contains(bodies[skippedEntryName], "jn") {
+		t.Fatal("the link target or the link name reached the zip")
+	}
+	for _, c := range e.repoCalls() {
+		if strings.Contains(strings.Join(c.Args, " "), "-a zip") {
+			t.Fatalf("restic ran with -a zip: %q", c.Args)
+		}
+	}
+}
+
+// TestDumpSinglePathWithSubfolderSnapshot: "<snapshot>:<subfolder>" with Path
+// is the cleaned path joined to the subfolder, looked up and dumped by its
+// full snapshot path.
+func TestDumpSinglePathWithSubfolderSnapshot(t *testing.T) {
+	e := newTenv(t, []fakeRule{
+		{Cmd: "ls", Contains: " " + dumpTree + " --", Stdout: "inline:" + lsFileJSON},
+		{Cmd: "dump", Contains: "dump " + dumpSnapID + " " + dumpTree + "/report.docx ", Stdout: "inline:" + docxBody},
+	}, nil)
+	var out bytes.Buffer
+	if _, err := e.w.Dump(e.ctx, adminpath.DumpRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest:/C/fixture", Path: "/tree/./report.docx"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	names, bodies := zipEntries(t, out.Bytes())
+	if strings.Join(names, "|") != "report.docx" || bodies["report.docx"] != docxBody {
+		t.Fatalf("entries = %q", names)
 	}
 }
 
@@ -191,14 +237,21 @@ func TestDumpWrapsASingleFileOnTheFly(t *testing.T) {
 	sameTree(t, "after the dump", before, filesUnder(t, e.scratch, e.state))
 }
 
+// TestDumpSnapshotRootSkipsTheLookup: the snapshot root is a folder by
+// definition (no ls) and has no name: its entries keep their snapshot paths.
 func TestDumpSnapshotRootSkipsTheLookup(t *testing.T) {
-	src, _ := realZip(t, map[string]string{"a": "b"})
+	src := fakeTar(t, []tarEntry{{name: "C/", typ: tar.TypeDir}, {name: "C/a.txt", typ: tar.TypeReg, body: "b"}}, 0)
 	e := newTenv(t, []fakeRule{{Cmd: "dump", StdoutFile: src}}, nil)
-	if _, err := e.w.Dump(e.ctx, adminpath.DumpRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest", Path: "/"}, io.Discard); err != nil {
+	var out bytes.Buffer
+	if _, err := e.w.Dump(e.ctx, adminpath.DumpRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest", Path: "/"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if calls := e.repoCalls(); len(calls) != 1 || calls[0].Args[0] != "dump" {
+	calls := e.repoCalls()
+	if len(calls) != 1 || !strings.HasPrefix(strings.Join(calls[0].Args, " "), "dump -a tar latest / ") {
 		t.Fatalf("calls = %+v", calls)
+	}
+	if names, _ := zipEntries(t, out.Bytes()); strings.Join(names, "|") != "C/|C/a.txt" {
+		t.Fatalf("entries = %q", names)
 	}
 }
 
@@ -238,7 +291,7 @@ func (brokenDest) Write([]byte) (int, error) { return 0, errors.New("browser wen
 // TestDumpDestinationFailureStopsRestic: when the destination fails, restic is
 // cancelled at once instead of reading the rest of the snapshot.
 func TestDumpDestinationFailureStopsRestic(t *testing.T) {
-	src, _ := realZip(t, map[string]string{"big": strings.Repeat("x", 1<<20)})
+	src := treeTar(t, map[string]string{"big": noise(1 << 20)})
 	e := newTenv(t, []fakeRule{
 		{Cmd: "ls", Stdout: "inline:" + lsDirJSON},
 		{Cmd: "dump", StdoutFile: src, SleepAfterMS: 20000},
@@ -322,13 +375,17 @@ func waitSocket(t *testing.T, sock string) {
 
 // TestDumpOverTheSocket runs the whole worker half of a technician download
 // through the admin-path socket with the fake restic: the console-side Client
-// receives restic's zip byte for byte, with the size and SHA-256 of what
-// crossed the socket, and no file appears on disk.
+// receives the zip with the size and SHA-256 of what crossed the socket and the
+// skipped counts (counts only), and no file appears on disk.
 func TestDumpOverTheSocket(t *testing.T) {
-	src, want := realZip(t, map[string]string{"report.txt": "quarterly report\n"})
+	p := strings.TrimPrefix(dumpTree, "/") + "/"
 	e := newTenv(t, []fakeRule{
 		{Cmd: "ls", Stdout: "inline:" + lsDirJSON},
-		{Cmd: "dump", StdoutFile: src},
+		{Cmd: "dump", StdoutFile: fakeTar(t, []tarEntry{
+			{name: p + "report.txt", typ: tar.TypeReg, body: "quarterly report\n"},
+			{name: p + "jn", typ: tar.TypeSymlink, link: `C:\x`},
+			{name: p + "pipe", typ: tar.TypeFifo},
+		}, 0)},
 	}, nil)
 	sock := filepath.Join(shortTempDir(t), "ap.sock")
 	ctx, stop := context.WithCancel(context.Background())
@@ -344,9 +401,15 @@ func TestDumpOverTheSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256(want)
-	if !bytes.Equal(out.Bytes(), want) || res.Bytes != int64(len(want)) || res.SHA256 != hex.EncodeToString(sum[:]) {
-		t.Fatalf("result %+v for %d bytes, want %d bytes sha256 %x", res, out.Len(), len(want), sum)
+	sum := sha256.Sum256(out.Bytes())
+	if res.Bytes != int64(out.Len()) || res.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("result %+v for %d bytes, sha256 %x", res, out.Len(), sum)
+	}
+	if res.Skipped != (adminpath.DumpSkipped{Symlinks: 1, Pipes: 1}) {
+		t.Fatalf("Skipped over the socket = %+v", res.Skipped)
+	}
+	if names, bodies := zipEntries(t, out.Bytes()); len(names) != 3 || bodies["tree/report.txt"] != "quarterly report\n" {
+		t.Fatalf("entries = %q", names)
 	}
 	sameTree(t, "after a dump over the socket", before, filesUnder(t, e.scratch, e.state))
 }

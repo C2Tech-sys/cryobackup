@@ -405,14 +405,6 @@ func TestReadOnlyCommandsGolden(t *testing.T) {
 			cat([]string{"dump", "-a", "zip", "--target", `C:\out\x.zip`, snapID + ":/C/Data", "/"}, tail),
 		},
 		// ADR 0008: the stdout form has no --target, so no file name reaches restic.
-		{
-			"dump to stdout", func() (Command, error) { return DumpStdout(snapID, "/C/Data/x", Common{}) }, KindDump,
-			[]string{"dump", "-a", "zip", snapID, "/C/Data/x"},
-		},
-		{
-			"dump to stdout subfolder", func() (Command, error) { return DumpStdout(snapID+":/C/Data", "/", common) }, KindDump,
-			cat([]string{"dump", "-a", "zip", snapID + ":/C/Data", "/"}, tail),
-		},
 		// ADR 0028: the several-paths zip reads a folder as a tar and a file as raw bytes.
 		{
 			"dump tar to stdout", func() (Command, error) { return DumpTarStdout(snapID, "/C/Data/x", Common{}) }, KindDump,
@@ -467,9 +459,6 @@ func TestReadOnlyCommandsErrors(t *testing.T) {
 		{"dump relative path", func() (Command, error) { return Dump(snapID, "x", "t", Common{}) }},
 		{"dump no target", func() (Command, error) { return Dump(snapID, "/x", "", Common{}) }},
 		{"dump bad snapshot", func() (Command, error) { return Dump("", "/x", "t", Common{}) }},
-		{"dump to stdout relative path", func() (Command, error) { return DumpStdout(snapID, "x", Common{}) }},
-		{"dump to stdout bad snapshot", func() (Command, error) { return DumpStdout("--target=/etc/x", "/x", Common{}) }},
-		{"dump to stdout bad common", func() (Command, error) { return DumpStdout(snapID, "/x", Common{RetryLock: -1}) }},
 		{"snapshots host with newline", func() (Command, error) { return Snapshots("a\nb", Common{}) }},
 		{"dump tar relative path", func() (Command, error) { return DumpTarStdout(snapID, "x", Common{}) }},
 		{"dump tar subfolder snapshot", func() (Command, error) { return DumpTarStdout(snapID+":/C/Data", "/", Common{}) }},
@@ -620,7 +609,6 @@ func TestExtraRejectsForbiddenFlags(t *testing.T) {
 		"ls":        func(c Common) (Command, error) { return Ls(snapID, "/", c) },
 		"find":      func(c Common) (Command, error) { return Find(FindOptions{Common: c, Pattern: "p"}) },
 		"dump":      func(c Common) (Command, error) { return Dump(snapID, "/p", "t", c) },
-		"dump out":  func(c Common) (Command, error) { return DumpStdout(snapID, "/p", c) },
 		"dump tar":  func(c Common) (Command, error) { return DumpTarStdout(snapID, "/p", c) },
 		"dump file": func(c Common) (Command, error) { return DumpFileStdout(snapID, "/p", c) },
 		"unlock":    func(c Common) (Command, error) { return Unlock(false, c) },

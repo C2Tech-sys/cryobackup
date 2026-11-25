@@ -26,6 +26,12 @@ const (
 	// context is done, before it closes their connections (which cancels the
 	// requests' contexts).
 	shutdownGrace = 10 * time.Second
+	// drainGrace is how long Serve waits, after the server shut down, for a
+	// Drainer backend's background work (the maintenance worker's stale-lock
+	// unlock after a stalled dump, one short restic run against storage that
+	// answers). Past it the backend stops that work itself; a lock left behind
+	// is removed by the scheduler's own unlock step later.
+	drainGrace = 5 * time.Second
 	// socketMode is the mode of the socket file (architecture DH1): owner and
 	// group may connect, nobody else.
 	socketMode os.FileMode = 0o660
@@ -296,10 +302,23 @@ func removeStale(socketPath string) error {
 	return nil
 }
 
+// Drainer is an optional interface of a Backend whose requests can start work
+// that outlives them (the maintenance worker's stale-lock unlock after a
+// stalled dump, which the download's answer does not wait for). When h is
+// Handler(b) and b is a Drainer, Serve calls Drain once after the server shut
+// down, with a context that ends after drainGrace, so the process does not go
+// on to exit (and close its database) under that work. Drain refuses new
+// background work, waits for what is running, stops it when ctx ends, and
+// returns within a bound of its own after that.
+type Drainer interface {
+	Drain(ctx context.Context)
+}
+
 // Serve listens on socketPath (see Listen) and serves h until ctx is done. It
 // then shuts the server down, giving in-flight requests a short grace period
-// before their connections are closed, removes the socket file and returns nil.
-// It returns an error if the socket cannot be created or the server fails.
+// before their connections are closed, lets a Drainer backend finish its
+// background work (bounded), removes the socket file and returns nil. It
+// returns an error if the socket cannot be created or the server fails.
 func Serve(ctx context.Context, socketPath string, h http.Handler) error {
 	ln, err := Listen(socketPath)
 	if err != nil {
@@ -332,6 +351,13 @@ func Serve(ctx context.Context, socketPath string, h http.Handler) error {
 	<-done
 	_ = srv.Close()
 	_ = ln.Close()
+	if hd, ok := h.(*handler); ok {
+		if d, ok := hd.backend.(Drainer); ok {
+			dctx, cancel := context.WithTimeout(context.Background(), drainGrace)
+			d.Drain(dctx)
+			cancel()
+		}
+	}
 	if rerr := os.Remove(socketPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) && err == nil {
 		err = fmt.Errorf("adminpath: remove socket: %w", rerr)
 	}

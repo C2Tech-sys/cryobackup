@@ -219,7 +219,48 @@ func TestLiveDumpSeveralPaths(t *testing.T) {
 		}
 		t.Logf("live: junction left out and counted: %q", strings.Split(strings.TrimSpace(skipped), "\r\n"))
 	}
+	wantSkipped := adminpath.DumpSkipped{}
+	if junction {
+		wantSkipped.Symlinks = 1
+	}
+	if res.Skipped != wantSkipped {
+		t.Errorf("DumpResult.Skipped = %+v, want %+v", res.Skipped, wantSkipped)
+	}
 	sameTree(t, "during the several-paths download", before, during)
+
+	// 1b. One folder by Path (the single-path request) goes the same tar route
+	// (ADR 0028): its own entry and its files, the junction left out and
+	// counted, and no link-target file (restic's own `-a zip` writes a 47-byte
+	// file holding the target).
+	var one bytes.Buffer
+	ores, err := client.Dump(ctx, adminpath.DumpRequest{DeviceRequest: rd, SnapshotID: snap1, Path: ts + "/folderA"}, &one)
+	if err != nil {
+		t.Fatalf("single-path Dump of a folder: %v", err)
+	}
+	ozr, err := zip.NewReader(bytes.NewReader(one.Bytes()), int64(one.Len()))
+	if err != nil {
+		t.Fatalf("the single-path download is not a readable zip: %v", err)
+	}
+	var oNames []string
+	for _, f := range ozr.File {
+		oNames = append(oNames, f.Name)
+		if f.Name == "folderA/jn" || (f.UncompressedSize64 == 47 && f.Name != skippedEntryName) {
+			t.Errorf("single-path zip holds %q (%d bytes): a link written as a file", f.Name, f.UncompressedSize64)
+		}
+	}
+	wantOne := []string{"folderA/", "folderA/a1.txt", "folderA/empty/", "folderA/sub/", "folderA/sub/" + long, "folderA/sub/s2.bin"}
+	if junction {
+		wantOne = append(wantOne, skippedEntryName)
+	}
+	sort.Strings(oNames)
+	sort.Strings(wantOne)
+	if strings.Join(oNames, "|") != strings.Join(wantOne, "|") {
+		t.Errorf("single-path folder entries\n got %q\nwant %q", oNames, wantOne)
+	}
+	if ores.Skipped != wantSkipped {
+		t.Errorf("single-path DumpResult.Skipped = %+v, want %+v", ores.Skipped, wantSkipped)
+	}
+	t.Logf("live: single-path folder -> %d entries, skipped %+v, no link-target file", len(oNames), ores.Skipped)
 
 	// 2. A 51st path is refused, by the client before sending and by the worker.
 	many := make([]string, adminpath.MaxDumpPaths+1)
