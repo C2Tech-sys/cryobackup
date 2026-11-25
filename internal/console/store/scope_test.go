@@ -367,7 +367,7 @@ func matrix() map[string]matrixCase {
 // globalMethods are exported methods that are deliberately not scoped, with the reason.
 // Adding an exported method to Store without classifying it here, in matrix() or by
 // the Agent prefix fails TestScopeMatrixCoversEveryExportedMethod.
-var globalMethods = map[string]string{
+var globalMethods = addSelfBackupP22Matrix(map[string]string{
 	"Close": "lifecycle", "Read": "transaction primitive", "Write": "transaction primitive", "Now": "clock", "Path": "file path of the database",
 	"SchemaVersion": "migration marker",
 	"GetSetting":    "global configuration", "ListSettings": "global configuration", "PutSetting": "global configuration",
@@ -395,6 +395,30 @@ var globalMethods = map[string]string{
 	"PutOperatorSetting":       "global configuration (M2-W3A: init stores the operator zone)",
 	"ActiveEscrowKeyIDs":       "health-prober (C12): key generation ids only", "SweepAbandonedRuns": "abandoned-run-sweeper job",
 	"AcquireJobLease": "job state", "ReleaseJobLease": "job state", "RecordJobRun": "job state", "GetJobState": "job state", "ListJobStates": "job state",
+})
+
+// addSelfBackupP22Matrix classifies the console self-backup's methods (ADR 0029,
+// ticket P22-C, selfbackup_p22.go). None takes a Scope: each reads or writes the
+// whole console's database or its global settings rows, for the maintenance
+// worker or the health loader, never for a user's request.
+func addSelfBackupP22Matrix(g map[string]string) map[string]string {
+	for name, why := range map[string]string{
+		"VacuumInto":             "console self-backup (ADR 0029): a copy of the whole database for the maintenance worker",
+		"SelfBackupState":        "console self-backup: global settings rows (repository marker, newest backup, newest verify)",
+		"PutSelfBackupRepo":      "console self-backup: global settings row",
+		"RecordSelfBackup":       "console self-backup: global settings row",
+		"RecordSelfBackupVerify": "console self-backup: global settings row",
+		"SelfBackupFacts":        "health (C11): the self-backup's times, verdict and last attempt class; no customer data",
+		// A device id without a Scope: called only by the maintenance worker's
+		// verify, on a restored copy of the whole database (store.OpenNoMigrate of
+		// the verify folder, never the live database), to pick one escrowed key to
+		// unwrap with the master key; the id is not returned to any caller outside
+		// the worker, logged or stored.
+		"AnyEscrowedDevice": "console self-backup verify: one escrowed device of a restored copy, to prove the master key opens it; the id never leaves the worker",
+	} {
+		g[name] = why
+	}
+	return g
 }
 
 var scopeType = reflect.TypeOf(Scope{})

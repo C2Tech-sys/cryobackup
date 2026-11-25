@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
@@ -49,7 +50,11 @@ type SelfBackupRepoMarker struct {
 // SelfBackupLast is the value of SettingSelfBackupLast: the newest self-backup
 // whose `restic backup` finished with a snapshot.
 type SelfBackupLast struct {
-	At            int64  `json:"at"` // Unix ms, UTC: when the snapshot was written
+	At int64 `json:"at"` // Unix ms, UTC: when the snapshot was written
+	// FirstAt is when the first self-backup was written (Unix ms, UTC):
+	// RecordSelfBackup carries it over from the row it replaces. The age of
+	// "never verified" is counted from it (SelfBackupFacts).
+	FirstAt       int64  `json:"first_at"`
 	SnapshotID    string `json:"snapshot_id"`
 	DBBytes       int64  `json:"db_bytes"`
 	DBSHA256      string `json:"db_sha256"`
@@ -129,10 +134,30 @@ func (s *Store) PutSelfBackupRepo(ctx context.Context, m SelfBackupRepoMarker) e
 	return s.putSelfBackup(ctx, SettingSelfBackupRepo, m)
 }
 
-// RecordSelfBackup writes SettingSelfBackupLast.
+// RecordSelfBackup writes SettingSelfBackupLast. FirstAt is taken from the
+// row it replaces (its FirstAt, else its At, for a row written before
+// FirstAt existed) or, for the first record, is At; a FirstAt passed in is
+// kept. Only the maintenance worker's lease holder writes the row, so the
+// read and the write need no common transaction.
 func (s *Store) RecordSelfBackup(ctx context.Context, l SelfBackupLast) error {
 	if l.At <= 0 || l.SnapshotID == "" {
 		return invalidf("a self-backup record needs its time and snapshot id")
+	}
+	if l.FirstAt <= 0 {
+		prev, err := s.SelfBackupState(ctx)
+		if err != nil {
+			return err
+		}
+		switch {
+		case prev.Last == nil:
+			l.FirstAt = l.At
+		case prev.Last.FirstAt > 0:
+			l.FirstAt = prev.Last.FirstAt
+		case prev.Last.At > 0:
+			l.FirstAt = prev.Last.At
+		default:
+			l.FirstAt = l.At
+		}
 	}
 	return s.putSelfBackup(ctx, SettingSelfBackupLast, l)
 }
@@ -145,23 +170,65 @@ func (s *Store) RecordSelfBackupVerify(ctx context.Context, v SelfBackupVerify) 
 	return s.putSelfBackup(ctx, SettingSelfBackupVerify, v)
 }
 
-// SelfBackupFacts is state.SelfBackupFacts from the settings rows, for the
-// health loader (internal/console/health) once it stops marking the
-// self-backup NotInBuild: LastAt is SettingSelfBackupLast.at (zero: never
-// written), VerifyFailed is a verdict in SettingSelfBackupVerify with ok false
-// (no verdict yet, or only attempts without one, is not a failure). NotInBuild
-// is always false: this build writes the rows.
-func (s *Store) SelfBackupFacts(ctx context.Context) (state.SelfBackupFacts, error) {
+// SelfBackupVerifyStale is how long the self-backup may go without a verify
+// verdict before C11 must say so: the weekly verify plus one day (ticket
+// P22-C fix C1). The health loader applies it (SelfBackupFacts).
+const SelfBackupVerifyStale = 8 * 24 * time.Hour
+
+// SelfBackupFacts is what the settings rows say about the self-backup, for
+// the health loader (internal/console/health) once it stops marking the
+// self-backup NotInBuild. The embedded state.SelfBackupFacts is what C11
+// judges today: LastAt is SettingSelfBackupLast.at (zero: never written),
+// VerifyFailed is a verdict in SettingSelfBackupVerify with ok false (no
+// verdict yet, or only attempts without one, is not a failure), NotInBuild is
+// always false (this build writes the rows). The other fields are the
+// verdict's age and the newest attempt, so a verify that never reaches a
+// verdict cannot stay green.
+//
+// The alarm rule for the loader (critical, C11), with now in UTC:
+//
+//	LastAt != 0 and now - ref > SelfBackupVerifyStale, where ref is VerifyAt,
+//	or FirstBackupAt when there is no verdict yet (VerifyAt == 0);
+//
+// its text names the age in days and, when VerifyAttemptAt is later than
+// VerifyAt, VerifyAttemptClass (the last attempt ended without a verdict:
+// network, storage, disk, busy, no_slot, timeout, ...). VerifyFailed stays
+// critical at once, as before.
+type SelfBackupFacts struct {
+	state.SelfBackupFacts
+	// FirstBackupAt is SettingSelfBackupLast.first_at: when the first
+	// self-backup was written; zero means never.
+	FirstBackupAt state.Millis
+	// VerifyAt is SettingSelfBackupVerify.at: when the newest verdict was
+	// reached; zero means no verdict yet.
+	VerifyAt state.Millis
+	// VerifyAttemptAt and VerifyAttemptClass are SettingSelfBackupVerify's
+	// attempt_at and attempt_class: when the newest attempt ended, and the
+	// path-free class it ended with when it reached no verdict ("" when it
+	// did). Zero: never attempted.
+	VerifyAttemptAt    state.Millis
+	VerifyAttemptClass string
+}
+
+// SelfBackupFacts reads the self-backup's facts (SelfBackupFacts, the type).
+func (s *Store) SelfBackupFacts(ctx context.Context) (SelfBackupFacts, error) {
 	st, err := s.SelfBackupState(ctx)
 	if err != nil {
-		return state.SelfBackupFacts{}, err
+		return SelfBackupFacts{}, err
 	}
-	var f state.SelfBackupFacts
+	var f SelfBackupFacts
 	if st.Last != nil {
 		f.LastAt = state.Millis(st.Last.At)
+		f.FirstBackupAt = state.Millis(st.Last.FirstAt)
+		if f.FirstBackupAt == 0 {
+			f.FirstBackupAt = f.LastAt // a row written before first_at existed
+		}
 	}
-	if st.Verify != nil && st.Verify.At > 0 && !st.Verify.OK {
-		f.VerifyFailed = true
+	if v := st.Verify; v != nil {
+		f.VerifyFailed = v.At > 0 && !v.OK
+		f.VerifyAt = state.Millis(v.At)
+		f.VerifyAttemptAt = state.Millis(v.AttemptAt)
+		f.VerifyAttemptClass = v.AttemptClass
 	}
 	return f, nil
 }
@@ -288,7 +355,10 @@ func InspectDatabaseFile(ctx context.Context, path string) (DatabaseFileFacts, e
 // AnyEscrowedDevice returns the device id of the newest active escrowed key
 // (repo_key_escrow, custody escrowed, not retired, with a wrapped key), or
 // ErrNotFound when there is none. The self-backup verification unwraps that
-// row from a restored copy to prove the loaded master key opens it.
+// row from a restored copy to prove the loaded master key opens it. It takes
+// no Scope on purpose (scope_test.go, addSelfBackupP22Matrix): its only
+// caller is the maintenance worker, on a restored copy of the whole database,
+// and the id never reaches a user.
 func (s *Store) AnyEscrowedDevice(ctx context.Context) (string, error) {
 	var id string
 	err := s.Read(ctx, func(tx *Tx) error {

@@ -115,7 +115,9 @@ func (w *Worker) Loop(ctx context.Context) error {
 	// it: a backup or a weekly check --read-data can take longer than the 30
 	// minutes after which C07 calls the scheduler stopped. It is started every
 	// tick when none is running in this process and decides itself whether
-	// anything is due.
+	// anything is due. It runs restic only under selfSlotRoom, so beside
+	// MaxStreams downloads it never holds the slot this pass's device
+	// maintenance needs.
 	selfBackup := func() {
 		if w.selfRunning.Load() {
 			return

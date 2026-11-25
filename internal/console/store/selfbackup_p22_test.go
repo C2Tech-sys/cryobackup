@@ -8,24 +8,6 @@ import (
 	"testing"
 )
 
-// The self-backup methods are console-wide, not customer-scoped: they belong in
-// scope_test.go's globalMethods. That file is outside ticket P22-C's write set,
-// so they are classified here, each with its reason; the guard
-// (TestScopeMatrixCoversEveryExportedMethod) reads the same map.
-func init() {
-	for name, why := range map[string]string{
-		"VacuumInto":             "console self-backup (ADR 0029): a copy of the whole database for the maintenance worker",
-		"SelfBackupState":        "console self-backup: global settings rows (repository marker, newest backup, newest verify)",
-		"PutSelfBackupRepo":      "console self-backup: global settings row",
-		"RecordSelfBackup":       "console self-backup: global settings row",
-		"RecordSelfBackupVerify": "console self-backup: global settings row",
-		"SelfBackupFacts":        "health (C11): the self-backup's time and verdict, no customer data",
-		"AnyEscrowedDevice":      "console self-backup verify: one device id of a restored copy to prove the master key against; no customer data returned",
-	} {
-		globalMethods[name] = why
-	}
-}
-
 // TestVacuumIntoIsAnInspectableCopy: VACUUM INTO writes a copy whose integrity,
 // schema version and row counts equal the live database's, and leaves no -wal
 // or -shm file beside it when inspected.
@@ -150,6 +132,47 @@ func TestSelfBackupSettingsRoundTrip(t *testing.T) {
 	ok(t, s.PutSetting(ctx, SettingSelfBackupRepo, []byte(`"not an object"`), ""))
 	if _, err := s.SelfBackupState(ctx); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("damaged row = %v, want ErrInvalid", err)
+	}
+}
+
+// TestSelfBackupFactsVerdictAgeAndAttempt (fix C1): the facts carry the
+// verdict's time, the newest attempt's time and class, and the first backup's
+// time, which RecordSelfBackup keeps across later records (and takes from At
+// for a row written before first_at existed).
+func TestSelfBackupFactsVerdictAgeAndAttempt(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := context.Background()
+	ok(t, s.RecordSelfBackup(ctx, SelfBackupLast{At: 5000, SnapshotID: "a"}))
+	ok(t, s.RecordSelfBackup(ctx, SelfBackupLast{At: 9000, SnapshotID: "b"}))
+	st, err := s.SelfBackupState(ctx)
+	ok(t, err)
+	if st.Last == nil || st.Last.FirstAt != 5000 || st.Last.At != 9000 {
+		t.Fatalf("last = %+v, want first_at kept at 5000", st.Last)
+	}
+	f, err := s.SelfBackupFacts(ctx)
+	ok(t, err)
+	if f.FirstBackupAt != 5000 || f.LastAt != 9000 || f.VerifyAt != 0 || f.VerifyAttemptAt != 0 || f.VerifyAttemptClass != "" {
+		t.Fatalf("facts with backups and no verify = %+v", f)
+	}
+
+	// A verdict, then an attempt without one: the verdict's time stays, the
+	// attempt is beside it.
+	ok(t, s.RecordSelfBackupVerify(ctx, SelfBackupVerify{At: 10000, OK: true, AttemptAt: 10000}))
+	ok(t, s.RecordSelfBackupVerify(ctx, SelfBackupVerify{At: 10000, OK: true, AttemptAt: 20000, AttemptClass: "storage"}))
+	f, err = s.SelfBackupFacts(ctx)
+	ok(t, err)
+	if f.VerifyAt != 10000 || f.VerifyAttemptAt != 20000 || f.VerifyAttemptClass != "storage" || f.VerifyFailed {
+		t.Fatalf("facts after an inconclusive attempt = %+v", f)
+	}
+
+	// A row from before first_at: the facts and the next record use its At.
+	ok(t, s.PutSetting(ctx, SettingSelfBackupLast, []byte(`{"at":3000,"snapshot_id":"old"}`), ""))
+	if f, _ := s.SelfBackupFacts(ctx); f.FirstBackupAt != 3000 {
+		t.Fatalf("legacy row: first backup at %d, want 3000", f.FirstBackupAt)
+	}
+	ok(t, s.RecordSelfBackup(ctx, SelfBackupLast{At: 4000, SnapshotID: "new"}))
+	if f, _ := s.SelfBackupFacts(ctx); f.FirstBackupAt != 3000 || f.LastAt != 4000 {
+		t.Fatalf("after a legacy row: %+v", f)
 	}
 }
 

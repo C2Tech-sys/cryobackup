@@ -31,9 +31,14 @@
 // # KeyUnwrapper
 //
 // KeyUnwrapper is the seam to the master key. The real implementation is
-// internal/console/escrow (ticket P1-T5); it cannot be imported here without a
-// cycle, so the console binary assigns DefaultKeyUnwrapper before it calls Main.
-// Tests use a fake. Until that wiring exists Main refuses to start (ExitUsage).
+// internal/console/escrow (escrow.Keys, ticket P1-T5); the console's cli
+// package wires it (cli.MaintainKeys, the KeyUnwrapperFactory it passes to
+// Run), and Main without a factory (DefaultKeyUnwrapper nil) refuses to start
+// (ExitUsage). Tests use a fake. This package also imports escrow itself, for
+// the self-backup only (selfbackup_keys.go, ADR 0029): escrow.LoadMasterKey
+// when the KeyUnwrapper does not derive the self-backup password, and
+// escrow.Keys to unwrap one key from a restored copy of the database. escrow
+// imports store and never maintain, so there is no cycle.
 //
 // # The admin-path methods
 //
@@ -95,7 +100,10 @@
 // own budget below the worker's total (Config.MaxStreams,
 // CRYO_MAINTAIN_MAX_STREAMS, default 2 of 4): one over it is refused at once
 // with the admin-path code busy, never queued, so browse, snapshots, size
-// sampling, prune and check always keep slots. The console cuts a stream that
+// sampling, prune and check always keep slots. The self-backup, the other long
+// holder, never takes a stream token and runs only while the slots leave one
+// for it and one for the device maintenance (selfbackup.go, selfSlotRoom;
+// job row no_slot otherwise). The console cuts a stream that
 // is too slow (restores.Service.MinRateBytes / MinRateWindow) or whose first
 // byte does not come (restores.Service.FirstByteTimeout); either cancels the
 // request, which cancels the restic run and frees its slot.

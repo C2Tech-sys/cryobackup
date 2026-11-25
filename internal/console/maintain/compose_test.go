@@ -586,6 +586,14 @@ func TestComposeVariablesAreInEnvExample(t *testing.T) {
 			t.Errorf(".env.example defines %s, which docker-compose.yml never references", v)
 		}
 	}
+	// The self-backup prefix (ADR 0029) comes from .env, empty by default: a
+	// placeholder, never a real value, and an unset variable is no self-backup.
+	if !strings.Contains(src, "CRYO_MAINTAIN_SELF_PREFIX: ${CRYO_MAINTAIN_SELF_PREFIX:-}\n") {
+		t.Error("the maintenance service does not take CRYO_MAINTAIN_SELF_PREFIX from .env with an empty default")
+	}
+	if !regexp.MustCompile(`(?m)^# .+\nCRYO_MAINTAIN_SELF_PREFIX=$`).MatchString(envSrc) {
+		t.Error(".env.example lacks CRYO_MAINTAIN_SELF_PREFIX= (empty) under a one-line comment")
+	}
 	for _, name := range []string{"RESTIC_SHA256", "RCLONE_SHA256"} {
 		m := regexp.MustCompile(`(?m)^` + name + `=([0-9a-f]{64})$`).FindStringSubmatch(envSrc)
 		if m == nil {

@@ -113,8 +113,11 @@ type Config struct {
 	// start of every run and deleted at its end. It must be absolute.
 	StateDir string
 	// ConfigFile is the console config.json the self-backup copies beside the
-	// database (it holds paths and settings, never a secret). Empty: none is
-	// copied, and the manifest says so.
+	// database. It holds paths and settings, and it can hold one credential: the
+	// heartbeat monitor URL (healthcheck_ping.url) often carries its token in the
+	// URL. It is copied on purpose: the snapshot is encrypted by restic, and a
+	// bare-host restore needs the whole file back. Empty: none is copied, and the
+	// manifest says so.
 	ConfigFile string
 	// StorageHost is the host of the storage endpoint (CRYO_MAINTAIN_STORAGE_HOST,
 	// else the endpoint of the Remote section of the rclone.conf the worker runs
@@ -153,7 +156,11 @@ type Config struct {
 	// keep slots while downloads run (a download holds its slot for as long as
 	// the browser takes). A stream over the budget is refused at once with
 	// adminpath.CodeBusy, never queued. Zero takes the default, lowered to
-	// MaxConcurrent-1 when MaxConcurrent is below 3.
+	// MaxConcurrent-1 when MaxConcurrent is below 3. The self-backup, the other
+	// long holder of a slot, keeps the same promise: it runs only while
+	// MaxConcurrent-MaxStreams leaves a slot for it and one more for the device
+	// maintenance (selfSlotRoom); with MaxStreams at MaxConcurrent-1 it does not
+	// run and its job row says no_slot.
 	MaxStreams int
 	// UsageInterval is how often step 8 (usage refresh) samples a device
 	// (default 6h). usage_samples keeps one row per hour bucket.

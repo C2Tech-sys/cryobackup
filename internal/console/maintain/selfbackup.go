@@ -44,13 +44,29 @@ import (
 //
 //   - job_state SelfBackupJob: ok, or error with a path-free class; error
 //     "not_configured" every SelfBackupEvery while CRYO_MAINTAIN_SELF_PREFIX is
-//     unset.
+//     unset, and "no_slot" while CRYO_MAINTAIN_MAX_STREAMS leaves it no restic
+//     slot (below). A row written for either is due again at the next step once
+//     the configuration no longer says so (a restart with the prefix set backs
+//     up at once, not SelfBackupEvery after the last warning).
 //   - job_state SelfBackupVerifyJob: ok, or error with a class.
 //   - store.SettingSelfBackupLast: the newest snapshot written (C11's LastAt).
 //   - store.SettingSelfBackupVerify: the newest verdict (C11's VerifyFailed)
 //     and the newest attempt. An attempt that could not reach a verdict (the
 //     storage was unreachable, the disk too small, a timeout) leaves the
-//     verdict as it was. store.Store.SelfBackupFacts reads both rows.
+//     verdict as it was. store.Store.SelfBackupFacts reads both rows, with the
+//     verdict's age, so a verify that never reaches a verdict cannot stay
+//     green (store.SelfBackupFacts has the alarm rule).
+//
+// Restic slots (Config.MaxConcurrent, the promise of Config.MaxStreams). The
+// self-backup runs beside the device pass, not inside it (a backup or a weekly
+// check --read-data outlasts the 30 minutes after which C07 calls the
+// scheduler stopped), and it holds its slot for hours, as a download does. It
+// never takes a stream token (a technician's download is never refused for
+// it), so it may run only while the slots downloads can never hold
+// (MaxConcurrent-MaxStreams) leave one for it and one more for the device
+// maintenance: selfSlotRoom. It runs one restic command at a time, so it holds
+// at most one slot, and downloads at most MaxStreams: at least one slot is
+// never held by either. Without that room it runs nothing and records no_slot.
 
 // Job names, host and schedule (ruling C4).
 const (
@@ -102,6 +118,7 @@ const (
 // wrong_password, ...) are used as they come.
 const (
 	SelfClassNotConfigured = "not_configured" // CRYO_MAINTAIN_SELF_PREFIX unset
+	SelfClassNoSlot        = "no_slot"        // CRYO_MAINTAIN_MAX_STREAMS leaves no restic slot beside the device maintenance's
 	SelfClassNoKey         = "no_key"         // the master key (or the derived password) is not available
 	SelfClassBusy          = "busy"           // no restic slot came free in selfSlotWait
 	SelfClassDisk          = string(restic.ClassDisk)
@@ -150,6 +167,10 @@ type SelfBackupReport struct {
 	NothingDue bool
 	// NotConfigured: CRYO_MAINTAIN_SELF_PREFIX is unset; the job row says so.
 	NotConfigured bool
+	// NoSlot: the restic slots leave no room for the self-backup beside the
+	// downloads and the device maintenance (selfSlotRoom); the job row says
+	// no_slot and nothing ran.
+	NoSlot bool
 	// LeaseLost: the lease was taken over mid-step; the step stopped and wrote
 	// nothing more.
 	LeaseLost bool
@@ -254,6 +275,24 @@ func (w *Worker) SelfBackupStep(ctx context.Context) (SelfBackupReport, error) {
 		return rep, w.storeErr(ctx, err)
 	}
 
+	if !w.selfSlotRoom() {
+		// Not a run that failed: a configuration that leaves no slot. Loud on
+		// every due step (the job row; the verify attempt keeps C11's text
+		// honest), and nothing touches the repository.
+		rep.NoSlot = true
+		w.log.Warn("self backup cannot run: the download streams leave no restic slot for it beside the one kept for device maintenance; lower the setting named in the setting field",
+			attrClass(SelfClassNoSlot), logx.Str("setting", "CRYO_MAINTAIN_MAX_STREAMS"), attrCount(w.cfg.MaxStreams))
+		if backupDue {
+			rep.BackupClass = SelfClassNoSlot
+			w.recordSelfJob(ctx, SelfBackupJob, "error", SelfClassNoSlot, now, SelfBackupEvery)
+		}
+		if verifyDue && state.Last != nil {
+			rep.VerifyClass = SelfClassNoSlot
+			w.recordSelfVerify(ctx, state.Verify, inconclusive(SelfClassNoSlot), now)
+		}
+		return rep, nil
+	}
+
 	if backupDue {
 		start := w.clock()
 		rep.BackupRan = true
@@ -292,8 +331,9 @@ func (w *Worker) SelfBackupStep(ctx context.Context) (SelfBackupReport, error) {
 	return rep, nil
 }
 
-// selfJobDue reports whether job name is due: no row, no next_due_at, or
-// next_due_at reached.
+// selfJobDue reports whether job name is due: no row, no next_due_at,
+// next_due_at reached, or a row that records a configuration refusal
+// (not_configured, no_slot) the current configuration no longer has.
 func (w *Worker) selfJobDue(ctx context.Context, name string, now time.Time) (bool, error) {
 	js, err := w.st.GetJobState(ctx, name)
 	switch {
@@ -302,7 +342,33 @@ func (w *Worker) selfJobDue(ctx context.Context, name string, now time.Time) (bo
 	case err != nil:
 		return false, err
 	}
+	switch js.LastErrorClass {
+	case SelfClassNotConfigured, SelfClassNoSlot:
+		if js.LastStatus == "error" && js.LastErrorClass != w.selfConfigClass() {
+			return true, nil
+		}
+	}
 	return js.NextDueAt == nil || !now.Before(*js.NextDueAt), nil
+}
+
+// selfConfigClass is the configuration refusal of the self-backup, "" when
+// the configuration lets it run.
+func (w *Worker) selfConfigClass() string {
+	switch {
+	case w.cfg.SelfPrefix == "":
+		return SelfClassNotConfigured
+	case !w.selfSlotRoom():
+		return SelfClassNoSlot
+	}
+	return ""
+}
+
+// selfSlotRoom reports whether the restic slots leave room for the
+// self-backup: of the MaxConcurrent slots, downloads can hold MaxStreams; the
+// self-backup may take one of the rest only while another stays for the
+// device maintenance (see the top of this file and Config.MaxStreams).
+func (w *Worker) selfSlotRoom() bool {
+	return w.cfg.MaxConcurrent-w.cfg.MaxStreams >= 2
 }
 
 // recordSelfJob writes job_state name for a run that started at start; the

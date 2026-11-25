@@ -62,7 +62,8 @@ var DefaultKeyUnwrapper KeyUnwrapperFactory
 //	CRYO_MAINTAIN_SCRATCH_DIR                            in-memory temp space, a tmpfs (default /tmp/cryo-maintain, ADR 0008);
 //	                                                     refused when it is a filesystem root, a top-level directory, not owned by the worker's user,
 //	                                                     or has a symlink in its path (/var/run/...: use /run/...)
-//	CRYO_MAINTAIN_MAX_STREAMS                            concurrent restore download streams, fleet wide (default 2, below the 4 restic slots)
+//	CRYO_MAINTAIN_MAX_STREAMS                            concurrent restore download streams, fleet wide (default 2, below the 4 restic slots;
+//	                                                     at 3 the self-backup has no slot and records no_slot)
 //	CRYO_MAINTAIN_SELF_PREFIX                            the console self-backup's prefix in the same bucket (ADR 0029); unset: no
 //	                                                     self-backup, job row db-self-backup says not_configured. Refused when it
 //	                                                     equals, lies inside or begins with CRYO_MAINTAIN_PREFIX (the gateway's
@@ -214,7 +215,7 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 			rep.Considered, rep.Sampled, rep.Preflight, rep.Deferred, rep.Unlocked, rep.Failed, rep.M5Due, rep.Skipped)
 		sb, serr := w.SelfBackupStep(ctx)
 		fmt.Fprintf(stdout, "maintain: self-backup %s\n", selfBackupLine(sb))
-		selfFailed := serr != nil || sb.BackupRan && !sb.BackupOK || sb.VerifyRan && !(sb.VerifyVerdict && sb.VerifyOK)
+		selfFailed := serr != nil || sb.NoSlot || sb.BackupRan && !sb.BackupOK || sb.VerifyRan && !(sb.VerifyVerdict && sb.VerifyOK)
 		if err != nil || rep.Failed > 0 || selfFailed {
 			return ExitFailed
 		}
@@ -275,6 +276,8 @@ func selfBackupLine(r SelfBackupReport) string {
 		return "nothing_due"
 	case r.NotConfigured:
 		return "not_configured"
+	case r.NoSlot:
+		return "no_slot"
 	}
 	out := "backup="
 	switch {
