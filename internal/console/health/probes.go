@@ -17,8 +17,12 @@ import (
 // wired console can read all clear (internal/state doc.go "Not in this build").
 // The mail checks (C03, C14) come from the prober's delivery-log reads: a digest
 // check it could not supply stays nil, which the engine reports as not checked.
+// The self-backup (C11) comes from the maintenance worker's settings rows and
+// its db-self-backup job row (selfBackupFacts).
 
 // Check names of the NotInBuild markers (the facts type each one sits on).
+// CheckSelfBackup is no longer marked (P22-F); the name stays so a guard can
+// still look for a stray marker.
 const (
 	CheckQuota      = "quota"       // state.QuotaFacts
 	CheckSelfBackup = "self-backup" // state.SelfBackupFacts
@@ -30,11 +34,50 @@ const (
 // cli's TestNotInBuildMarksOnlyUnbuiltJobs fails if any of these jobs is
 // registered while its check is still marked.
 var NotInBuild = map[string]string{
-	CheckQuota:      "usage-sampler",  // M5, the provider-side listing
-	CheckSelfBackup: "db-self-backup", // M5
-	CheckRelease:    "release-check",  // M11
+	CheckQuota:   "usage-sampler", // M5, the provider-side listing
+	CheckRelease: "release-check", // M11
 	// The digest (M4) has its daily-digest job since P20-W2B: its facts come from the prober
-	// (store.MailFacts) and carry no marker.
+	// (store.MailFacts) and carry no marker. The self-backup (db-self-backup, written by the
+	// maintenance worker, ADR 0029) has been read from its settings rows since P22-F
+	// (selfBackupFacts) and carries no marker either.
+}
+
+// SelfBackupJob is the maintenance worker's db-self-backup job row: its class
+// when the newest run failed reaches C11's text (not_configured, no_slot, ...).
+const SelfBackupJob = maintain.SelfBackupJob
+
+// selfBackupReadTimeout bounds the one settings read of selfBackupFacts (this
+// path takes no request context).
+const selfBackupReadTimeout = 5 * time.Second
+
+// selfBackupFacts is C11's self-backup picture: the worker's settings rows
+// (store.SelfBackupFacts: the newest backup, the first, the newest verify
+// verdict and the newest attempt) as plain values, and the class of the
+// db-self-backup job row when its newest run ended in error. A settings read
+// that fails is nil, which C11 reports as "self-backup not supplied", never as
+// healthy; a job_state read that failed (jerr) only leaves the class out.
+func (e *Evaluator) selfBackupFacts(jobs []store.JobState, jerr error) *state.SelfBackupFacts {
+	if e.Store == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), selfBackupReadTimeout)
+	defer cancel()
+	f, err := e.Store.SelfBackupFacts(ctx)
+	if err != nil {
+		return nil
+	}
+	out := f.SelfBackupFacts // LastAt, VerifyFailed; NotInBuild is false
+	out.NotInBuild = false
+	out.FirstBackupAt, out.VerifyAt = f.FirstBackupAt, f.VerifyAt
+	out.VerifyAttemptAt, out.VerifyAttemptClass = f.VerifyAttemptAt, f.VerifyAttemptClass
+	if jerr == nil {
+		for _, j := range jobs {
+			if j.Name == SelfBackupJob && j.LastStatus == "error" {
+				out.JobClass = j.LastErrorClass
+			}
+		}
+	}
+	return &out
 }
 
 // SchedulerJob is the job_state row of the maintenance scheduler (written by
@@ -97,7 +140,7 @@ func (e *Evaluator) ProbeFacts(jobs []store.JobState, jerr error, page bool) sta
 	}
 	if p.Database != nil && p.Database.SelfBackup == nil {
 		d := *p.Database
-		d.SelfBackup = &state.SelfBackupFacts{NotInBuild: true}
+		d.SelfBackup = e.selfBackupFacts(jobs, jerr) // nil when unreadable: a C11 cause
 		p.Database = &d
 	}
 	if p.Quota == nil {
@@ -145,7 +188,10 @@ func FixtureProbes(clock func() time.Time) func() state.ProbeFacts {
 			Evaluator: &state.JobFacts{LastFinishedAt: at(30 * time.Second), Period: EvaluatorPeriod},
 			Maintain:  &state.MaintainFacts{RPC: ok(), Scheduler: &state.JobFacts{LastFinishedAt: at(time.Minute), Period: maintain.DefaultTickEvery}},
 			Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second),
-				FreeBytes: 80 << 30, TotalBytes: 100 << 30, WALBytes: 4 << 20},
+				FreeBytes: 80 << 30, TotalBytes: 100 << 30, WALBytes: 4 << 20,
+				// The self-backup wrote two hours ago and was verified two days ago (ADR 0029).
+				SelfBackup: &state.SelfBackupFacts{LastAt: at(2 * time.Hour), FirstBackupAt: at(90 * 24 * time.Hour),
+					VerifyAt: at(48 * time.Hour), VerifyAttemptAt: at(48 * time.Hour)}},
 			MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "fixtures"},
 			LoginFile: &state.LoginFileFacts{MeasuredAt: at(20 * time.Second)},
 		}

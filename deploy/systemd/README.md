@@ -125,6 +125,52 @@ systemctl enable --now cryo-console cryo-maintain rclone-gateway
 systemctl status cryo-console cryo-maintain rclone-gateway
 ```
 
+## Console self-backup (ADR 0029)
+
+`cryo-maintain` backs up the console database every 6 hours into a restic repository of its own,
+`<bucket>/<self-backup prefix>`, written through the `[admin]` remote. It verifies the newest copy
+weekly. Set the prefix in `maintain.env`:
+
+```sh
+CRYO_MAINTAIN_SELF_PREFIX=<self-backup prefix>
+```
+
+* **Unset or empty** means no self-backup. The `db-self-backup` job row says `not_configured` and
+  C11 raises "no self-backup has been written". That is intended: it is loud on purpose.
+* **The prefix must not begin with `CRYO_MAINTAIN_PREFIX`.** It may not be equal to it, inside it,
+  or the device prefix with more characters appended. With device prefix `cb`, the worker refuses
+  `cb`, `cb/x`, `cb-console` and `cbx`. A gateway policy resource written `<prefix>*` also matches
+  `<prefix>-console/...`, so such a name could fall inside the gateway credential's reach. An empty
+  `CRYO_MAINTAIN_PREFIX` (device repositories at the bucket root) is refused for the same reason.
+* **Keep `CRYO_MAINTAIN_MAX_STREAMS` at 2** (the default). At 3 the self-backup has no restic slot,
+  its job row says `no_slot`, and C11 alarms.
+
+**Storage rights.** The admin key needs list, get, put and delete on `<bucket>/<self-backup prefix>/*`.
+An admin key with bucket-wide rights (the usual case: it creates device repositories) already has
+them. An admin key scoped by prefix needs a statement like this one (S3 policy syntax; placeholders
+only, use your provider's form):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::<bucket>"],
+      "Condition": { "StringLike": { "s3:prefix": ["<self-backup prefix>/*"] } } },
+    { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::<bucket>/<self-backup prefix>/*"] }
+  ]
+}
+```
+
+The **gateway** key must have no right there. End every resource in its policy with a slash
+(`<bucket>/<prefix>/*`, never `<bucket>/<prefix>*`). Then check from the storage side that a gateway
+login cannot read `<bucket>/<self-backup prefix>/config`. ADR 0029 lists the four checks to run on
+the real account before relying on the self-backup.
+
+Check it with `cryo-console self-backup list|run|verify`. To rebuild a console from the
+self-backup with only the offline kit, use `cryo-console self-backup restore`. Both are covered in
+[`docs/runbooks/console-disaster-recovery.md`](../../docs/runbooks/console-disaster-recovery.md).
+
 ## Display time zone and refresh interval: the console's saved value wins (ADR 0012)
 
 `display_timezone` and `refresh_interval_s` in `config.json` are only the starting values.

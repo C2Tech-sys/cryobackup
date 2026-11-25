@@ -209,10 +209,15 @@ func TestTheRealFixturesAppShowsEveryM3State(t *testing.T) {
 			t.Errorf("fixtures mode reads %s OK with no evidence", id)
 		}
 	}
-	for _, id := range []string{"release_manifest", "storage_quota", "self_backup"} {
+	for _, id := range []string{"release_manifest", "storage_quota"} {
 		if got := row(sys, id); got != "NOT IN THIS BUILD" {
 			t.Errorf("fixtures mode reads %s %q, want NOT IN THIS BUILD", id, got)
 		}
+	}
+	// P22-F: the self-backup is in this build; health.FixtureProbes supplies one
+	// written two hours ago and verified two days ago.
+	if got := row(sys, "self_backup"); got != "OK" {
+		t.Errorf("fixtures mode reads self_backup %q, want OK", got)
 	}
 	// The daily digest is in this build (ADR 0020), and the fixtures' probe source
 	// (health.FixtureProbes) has the day's digest sent an hour ago: the row is OK on

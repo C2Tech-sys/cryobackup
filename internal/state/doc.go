@@ -177,6 +177,11 @@
 //	     figure (negative, or free above total), and anything not measured are warnings: integrity never run or older than IntegrityMaxAge (8 d: startup plus weekly), disk and
 //	     WAL never measured or older than DBMeasureMaxAge (15 min: the prober measures every run). A stale
 //	     disk figure is not judged, only reported as stale. WAL size zero is a real value.
+//	     The self-backup (ADR 0029): with a backup written, no verify verdict for more than
+//	     DBSelfBackupVerifyMaxAge (8 d: weekly plus a day), counted from the newest verdict or, while there
+//	     is none, from the first backup, is critical; its text gives the age in days and the class of a
+//	     later attempt that reached no verdict. A never-written or stale self-backup names the class of the
+//	     db-self-backup job's failed newest run (not_configured, no_slot, network, ...).
 //	C12  key not loaded (the zero value) or an active escrow wrapped under another key id: critical.
 //	     MasterKeyFacts.EnrollmentAllowed is false without a loaded key (the 503 of C12 / C18).
 //	C14  no digest on the local date of the newest digest_local_time + 30 min that has passed: critical.
@@ -201,8 +206,11 @@
 // that no marker is set while a job of that name is registered:
 //
 //	QuotaFacts.NotInBuild       usage-sampler (provider-side listing)  M5
-//	SelfBackupFacts.NotInBuild  db-self-backup                         M5
 //	ReleaseFacts.NotInBuild     release-check                          M11
+//
+// SelfBackupFacts.NotInBuild (db-self-backup) is no longer set by the console's
+// loader since P22-F: the maintenance worker writes the self-backup's rows
+// (ADR 0029) and the loader reads them. The field stays for facts built by hand.
 //
 // The quota usage source is the provider-side listing of usage-sampler, which is
 // daily, so QuotaMeasureMaxAge is 50 h (two listings plus slack); the hourly

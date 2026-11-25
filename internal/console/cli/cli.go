@@ -30,6 +30,7 @@ commands:
   user      manage admin accounts (add, passwd, list, disable)
   maintain  server-side maintenance worker and admin-path socket
   probe-repo reset  clear the storage probe repository marker (dry run unless --confirm; ADR 0017)
+  self-backup  the console's own backup: run, verify, list, restore on a bare host (ADR 0029)
   doctor    check configuration, database, master key and listener binds
   version   print the build stamp
 `
@@ -73,6 +74,8 @@ func Main(args []string, io IO) int {
 		return runMaintain(rest, io)
 	case "probe-repo":
 		return runProbeRepo(rest, io)
+	case "self-backup":
+		return runSelfBackup(rest, io)
 	case "help", "-h", "--help":
 		Usage(io.Stdout)
 		return ExitOK
