@@ -324,15 +324,32 @@ type ViewFacts struct {
 	StreamDisconnected bool
 }
 
-// SelfBackupFacts is the console database's own backup (db-self-backup, M5).
+// SelfBackupFacts is the console database's own backup (db-self-backup, ADR 0029). The console's
+// loader (internal/console/health) fills it from the maintenance worker's settings rows and the
+// db-self-backup job row; the fields are values, never the store's types.
 type SelfBackupFacts struct {
-	// NotInBuild marks a build that does not run db-self-backup (M5): the self-backup causes of C11
-	// are then not judged. The loader sets it only while no job of that name exists (doc.go).
+	// NotInBuild marks a build that does not run db-self-backup: the self-backup causes of C11 are
+	// then not judged. Since P22-F the console's loader never sets it (doc.go "Not in this build");
+	// it stays for facts built by hand.
 	NotInBuild bool
 	// LastAt is when the newest self-backup was written; zero means never.
 	LastAt Millis
-	// VerifyFailed is true when the newest weekly tested restore failed.
+	// VerifyFailed is true when the newest weekly tested restore reached a verdict and it failed.
 	VerifyFailed bool
+	// FirstBackupAt is when the first self-backup was written; zero means unknown, and LastAt
+	// stands in for it. The age of "never verified" counts from it.
+	FirstBackupAt Millis
+	// VerifyAt is when the newest tested restore reached a verdict (passed or failed); zero means
+	// no verdict yet.
+	VerifyAt Millis
+	// VerifyAttemptAt is when the newest verify attempt ended, and VerifyAttemptClass the path-free
+	// class it ended with when it reached no verdict (network, storage, disk, busy, no_slot,
+	// timeout, ...; "" when it reached one). Zero: never attempted.
+	VerifyAttemptAt    Millis
+	VerifyAttemptClass string
+	// JobClass is the path-free class of the db-self-backup job's newest run when that run ended in
+	// error (not_configured, no_slot, network, disk, ...); "" when it succeeded or never ran.
+	JobClass string
 }
 
 // DatabaseFacts is the console database's health (C11).

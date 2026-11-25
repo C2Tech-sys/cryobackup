@@ -55,6 +55,10 @@ const (
 	DBFreeDiskPct      = 10
 	DBWALLimit         = 1 << 30
 	DBSelfBackupMaxAge = 26 * time.Hour
+	// DBSelfBackupVerifyMaxAge: the self-backup is verified weekly; a backup present with no verify
+	// verdict for longer than a week and a day (counted from the first backup while there is none
+	// yet) is C11 critical. The console's store names the same value store.SelfBackupVerifyStale.
+	DBSelfBackupVerifyMaxAge = 8 * 24 * time.Hour
 
 	// DigestGrace raises C14 when no digest was sent by digest_local_time plus this.
 	DigestGrace = 30 * time.Minute
@@ -539,14 +543,19 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 		last, ok := recorded(sb.LastAt, c.now)
 		switch {
 		case sb.LastAt == 0:
-			add(SeverityAlarm, "no self-backup has been written")
+			add(SeverityAlarm, "no self-backup has been written"+selfBackupJobWhy(sb.JobClass))
 		case !ok:
 			add(SeverityAlarm, "self-backup"+garbledWhy)
 		case c.now.Sub(last) > DBSelfBackupMaxAge:
-			add(SeverityAlarm, "self-backup older than 26 h")
+			add(SeverityAlarm, "self-backup older than 26 h"+selfBackupJobWhy(sb.JobClass))
 		}
-		if sb.VerifyFailed {
+		switch {
+		case sb.VerifyFailed:
 			add(SeverityCritical, "self-backup verify failed")
+		case sb.LastAt != 0 && ok:
+			if s, cause := selfBackupVerifyAge(sb, c.now); cause != "" {
+				add(s, cause)
+			}
 		}
 	}
 	since, sinceOK := recorded(d.WorkerStoreFailingSince, c.now)
@@ -567,6 +576,72 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 	}
 	return []Banner{{ID: "C11", Severity: sev, Count: len(causes), At: at,
 		Text: "Console database needs attention: " + strings.Join(causes, "; ") + "."}}
+}
+
+// selfBackupJobWhy is the C11 suffix naming why the db-self-backup job's newest run failed: the
+// two configuration refusals say which variable to change, any other class is named as it is.
+func selfBackupJobWhy(class string) string {
+	switch {
+	case class == "":
+		return ""
+	case class == "not_configured":
+		return " (not_configured: CRYO_MAINTAIN_SELF_PREFIX is not set)"
+	case class == "no_slot":
+		return " (no_slot: CRYO_MAINTAIN_MAX_STREAMS leaves the self-backup no restic slot; keep it at 2)"
+	case !classToken(class):
+		return " (its latest run failed)"
+	}
+	return " (latest run: " + class + ")"
+}
+
+// selfBackupVerifyAge is the C11 cause of a self-backup that has gone without a verify verdict
+// for more than DBSelfBackupVerifyMaxAge: critical, with the age in days and, when a later
+// attempt reached no verdict, that attempt's class. The age counts from the newest verdict, or
+// from the first backup while there is none (LastAt when the first backup's time is unknown). A
+// garbled reference time is an alarm, never quiet. "" when the verdict is fresh.
+func selfBackupVerifyAge(sb *SelfBackupFacts, now time.Time) (Severity, string) {
+	ref, never := sb.VerifyAt, sb.VerifyAt == 0
+	if never {
+		ref = sb.FirstBackupAt
+		if ref == 0 {
+			ref = sb.LastAt
+		}
+	}
+	at, ok := recorded(ref, now)
+	if !ok {
+		return SeverityAlarm, "self-backup verify" + garbledWhy
+	}
+	age := now.Sub(at)
+	if age <= DBSelfBackupVerifyMaxAge {
+		return SeverityNone, ""
+	}
+	days := strconv.Itoa(int(age / (24 * time.Hour)))
+	cause := "self-backup not verified for " + days + " days"
+	if never {
+		cause = "self-backup never verified in the " + days + " days since the first backup"
+	}
+	if sb.VerifyAttemptAt > sb.VerifyAt && sb.VerifyAttemptClass != "" {
+		if classToken(sb.VerifyAttemptClass) {
+			cause += " (latest attempt: " + sb.VerifyAttemptClass + ")"
+		} else {
+			cause += " (the latest attempt reached no verdict)"
+		}
+	}
+	return SeverityCritical, cause
+}
+
+// classToken reports whether s is a path-free class as the worker writes them: 1 to 40 of
+// [a-z0-9_]. Anything else is never put into a banner.
+func classToken(s string) bool {
+	if s == "" || len(s) > 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // masterKeyBanners is C12: the key is not loaded, or active escrows were

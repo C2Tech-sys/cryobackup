@@ -116,8 +116,9 @@ func (w *Worker) Loop(ctx context.Context) error {
 	// minutes after which C07 calls the scheduler stopped. It is started every
 	// tick when none is running in this process and decides itself whether
 	// anything is due. It runs restic only under selfSlotRoom, so beside
-	// MaxStreams downloads it never holds the slot this pass's device
-	// maintenance needs.
+	// MaxStreams downloads it never holds the last free slot. That slot is not
+	// this pass's alone: the device maintenance shares it, first come, with
+	// browse, snapshots, the storage probe, escrow verify and purge.
 	selfBackup := func() {
 		if w.selfRunning.Load() {
 			return

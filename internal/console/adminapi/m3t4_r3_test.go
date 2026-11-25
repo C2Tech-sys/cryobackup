@@ -54,7 +54,9 @@ func r3Healthy(now time.Time) state.ProbeFacts {
 	gw.CertNotAfter = state.Millis(now.Add(90 * 24 * time.Hour).UnixMilli())
 	return state.ProbeFacts{Wired: true, StartedAt: at(time.Hour), ProberInterval: state.DefaultProberInterval, Gateway: &gw, Storage: &st,
 		SMTP: &state.SMTPFacts{Probe: ok()}, Maintain: &state.MaintainFacts{RPC: ok()},
-		Database:  &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second), FreeBytes: 80 << 30, TotalBytes: 100 << 30},
+		Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second), FreeBytes: 80 << 30, TotalBytes: 100 << 30,
+			// P22-F: the self-backup is judged; a healthy worker wrote an hour ago and verified two days ago.
+			SelfBackup: &state.SelfBackupFacts{LastAt: at(time.Hour), FirstBackupAt: at(30 * 24 * time.Hour), VerifyAt: at(48 * time.Hour), VerifyAttemptAt: at(48 * time.Hour)}},
 		MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "k"}}
 }
 
@@ -137,11 +139,14 @@ func TestR3NotInBuildChecksSayTheirNameOnTheirRow(t *testing.T) { // M3-T4 r3 M1
 	for _, c := range e.health().Components {
 		rows[c.ID] = c
 	}
-	for _, id := range []string{"release_manifest", "storage_quota", "self_backup"} { // P20-W2B: the digest is in this build now
+	for _, id := range []string{"release_manifest", "storage_quota"} { // P20-W2B: the digest is in this build now; P22-F: so is the self-backup
 		c, ok := rows[id]
 		if !ok || c.Status != "not_in_build" || !strings.Contains(c.Detail, "build") {
 			t.Errorf("%s = %+v (present %v), want not_in_build saying so", id, c, ok)
 		}
+	}
+	if c := rows["self_backup"]; c.Status != "ok" {
+		t.Errorf("self_backup = %+v, want ok on the healthy worker's self-backup (P22-F)", c)
 	}
 }
 

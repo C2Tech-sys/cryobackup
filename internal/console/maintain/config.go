@@ -158,9 +158,12 @@ type Config struct {
 	// adminpath.CodeBusy, never queued. Zero takes the default, lowered to
 	// MaxConcurrent-1 when MaxConcurrent is below 3. The self-backup, the other
 	// long holder of a slot, keeps the same promise: it runs only while
-	// MaxConcurrent-MaxStreams leaves a slot for it and one more for the device
-	// maintenance (selfSlotRoom); with MaxStreams at MaxConcurrent-1 it does not
-	// run and its job row says no_slot.
+	// MaxConcurrent-MaxStreams leaves a slot for it and at least one more
+	// (selfSlotRoom); with MaxStreams at MaxConcurrent-1 it does not run and its
+	// job row says no_slot. That one more is not reserved for anything: the
+	// device maintenance shares it, first come, with browse, snapshots, the
+	// storage probe, escrow verify and purge. The rule promises only that
+	// downloads and the self-backup together never hold every slot.
 	MaxStreams int
 	// UsageInterval is how often step 8 (usage refresh) samples a device
 	// (default 6h). usage_samples keeps one row per hour bucket.

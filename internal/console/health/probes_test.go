@@ -134,15 +134,16 @@ func TestC17WorkerStoreStreakSurvivesTheFactsAssembly(t *testing.T) {
 	}
 }
 
-// The later-milestone checks carry their NotInBuild marker, never nil.
+// The later-milestone checks carry their NotInBuild marker, never nil. The
+// self-backup is no longer one of them (P22-F): it is read, never marked.
 func TestNotInBuildMarkersApplied(t *testing.T) {
 	e, c := newEval(t)
 	e.Probes = FixtureProbes(c.now)
 	p := e.ProbeFacts(nil, nil, false)
-	if !p.Quota.NotInBuild || !p.Release.NotInBuild || !p.Database.SelfBackup.NotInBuild {
+	if !p.Quota.NotInBuild || !p.Release.NotInBuild || p.Database.SelfBackup == nil || p.Database.SelfBackup.NotInBuild {
 		t.Fatalf("markers: quota %+v release %+v self-backup %+v", p.Quota, p.Release, p.Database.SelfBackup)
 	}
-	if len(NotInBuild) != 3 {
+	if _, marked := NotInBuild[CheckSelfBackup]; marked || len(NotInBuild) != 2 {
 		t.Fatalf("NotInBuild table %v", NotInBuild)
 	}
 }

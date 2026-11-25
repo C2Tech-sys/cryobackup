@@ -122,6 +122,7 @@ func (r *r5Rig) tick(start time.Time, d time.Duration) adminapi.SystemHealthResp
 	at := start.Add(d)
 	r.clock.Store(&at)
 	ctx := context.Background()
+	healthySelfBackup(r.t, r.app.Store, at) // P22-F: a healthy worker keeps its self-backup current (C11)
 	if err := r.app.Prober.Run(ctx); err != nil {
 		r.t.Fatal(err)
 	}

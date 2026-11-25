@@ -115,8 +115,10 @@
 // with the admin-path code busy, never queued, so browse, snapshots, size
 // sampling, prune and check always keep slots. The self-backup, the other long
 // holder, never takes a stream token and runs only while the slots leave one
-// for it and one for the device maintenance (selfbackup.go, selfSlotRoom;
-// job row no_slot otherwise). The console cuts a stream that
+// for it and at least one more (selfbackup.go, selfSlotRoom; job row no_slot
+// otherwise). That remaining slot is shared, first come, by the device
+// maintenance, browse, snapshots, the storage probe, escrow verify and purge:
+// nothing reserves it for any one of them. The console cuts a stream that
 // is too slow (restores.Service.MinRateBytes / MinRateWindow) or whose first
 // byte does not come (restores.Service.FirstByteTimeout); either cancels the
 // request, which cancels the restic run and frees its slot.

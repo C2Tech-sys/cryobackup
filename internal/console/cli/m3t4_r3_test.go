@@ -328,6 +328,7 @@ func r3MaintainPass(t *testing.T, st *store.Store) {
 	if err := st.ReleaseJobLease(ctx, maintain.SchedulerJob, "r3-maintain"); err != nil {
 		t.Fatal(err)
 	}
+	healthySelfBackup(t, st, end) // P22-F: the worker's self-backup rows, read by C11
 }
 
 func r3Token(t *testing.T, app *App) string {
@@ -409,7 +410,7 @@ func r3HealthyConsoleReadsOverallOK(t *testing.T, digestAt string) {
 	if !ok {
 		t.Fatalf("a healthy console never read overall ok: %s%s", h.Overall, r3Rows(h))
 	}
-	want := map[string]string{"release_manifest": "not_in_build", "storage_quota": "not_in_build", "self_backup": "not_in_build", "clock": "not_applicable", "fleet_data": "not_applicable"}
+	want := map[string]string{"release_manifest": "not_in_build", "storage_quota": "not_in_build", "clock": "not_applicable", "fleet_data": "not_applicable"}
 	for _, c := range h.Components {
 		w, special := want[c.ID]
 		if !special {
@@ -434,7 +435,7 @@ func r3HealthyConsoleReadsOverallOK(t *testing.T, digestAt string) {
 	if !regexp.MustCompile(`id="sys-h" class="sys-title">Overall</h2><span class="st ok"><i aria-hidden="true"></i>OK<`).MatchString(page) {
 		t.Errorf("S36 does not read overall OK: %.400s", page)
 	}
-	for _, s := range []string{"NOT IN THIS BUILD", "NOT APPLICABLE", "Needs at least 5 devices", "5 cannot be checked here" /* P20-W2B: the digest is checked now */, "No devices enrolled yet: nothing is being backed up"} {
+	for _, s := range []string{"NOT IN THIS BUILD", "NOT APPLICABLE", "Needs at least 5 devices", "4 cannot be checked here" /* P20-W2B: the digest is checked now; P22-F: so is the self-backup */, "No devices enrolled yet: nothing is being backed up"} {
 		if !strings.Contains(page, s) {
 			t.Errorf("S36 lacks %q", s)
 		}

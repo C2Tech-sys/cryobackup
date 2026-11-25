@@ -102,7 +102,8 @@ func TestR6ThePingsFirstSkipDoesNotCountAgainstTheRow(t *testing.T) { // r6 L1
 // L4: a row with no attempt has nothing that was checked at any time, and one outside the build neither.
 func TestR6ARowWithNoAttemptHasNoCheckedAt(t *testing.T) { // r6 L4
 	e := newR3Env(t)
-	for _, id := range []string{"release_manifest", "storage_quota", "digest", "self_backup"} {
+	// P22-F: self_backup is judged now, and newR3Env's worker has written one (r3Healthy).
+	for _, id := range []string{"release_manifest", "storage_quota", "digest"} {
 		if c := e.row(id); c.CheckedAt != nil {
 			t.Errorf("%s (not in this build) has a checked_at: %+v", id, c)
 		}
