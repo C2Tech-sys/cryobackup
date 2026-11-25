@@ -193,6 +193,10 @@ func correct(t time.Time, offsetMS, receivedMS int64) int64 {
 // never reported), clamped to receivedAt; the offset used is kept in
 // runs.clock_offset_ms. A closing update never finishes before the stored start.
 //
+// Restore (ADR 0027): a created or updated run of kind restore closes the
+// device restore whose id is the run id (closeDeviceRestore), in the same
+// transaction; a failure there (its audit row included) aborts the batch.
+//
 // Start lease (ADR 0005): every closed record of this device that is not
 // rejected (created, updated or duplicate) releases the run's start lease, in
 // the same transaction; an open record leaves it held.
@@ -225,6 +229,14 @@ func (s *Store) AgentIngestRuns(ctx context.Context, deviceID string, runs []Run
 				return err
 			}
 			results[i] = res
+			// A restore run closes (or starts) the device restore whose id it
+			// carries, in this transaction (ADR 0027, restores_p22.go). A
+			// duplicate changed nothing, so it closes nothing either.
+			if runs[i].Kind == "restore" && (res.Status == IngestCreated || res.Status == IngestUpdated) {
+				if err := closeDeviceRestore(tx, deviceID, runs[i]); err != nil {
+					return err
+				}
+			}
 			// The closed record releases the run's start lease (ADR 0005); the
 			// open record sent at start does not.
 			if runs[i].FinishedAt != nil && res.Status != IngestRejected {

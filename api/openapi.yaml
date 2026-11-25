@@ -227,6 +227,38 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '413': {$ref: '#/components/responses/PayloadTooLarge'}
         '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/agent/restores/{id}:
+    get:
+      operationId: agentRestoreFetch
+      tags: [agent]
+      summary: Fetch a restore selection
+      description: |
+        The selection of a restore to this device (ADR 0027): the only response of the agent API
+        that carries paths. The restore command carries only the request id; the agent fetches
+        the selection here with its device token, writes it to a SYSTEM-only temporary file and
+        deletes it after the restore. The console unwraps it from the master key, validates it
+        with the wire's own rules, marks the request running and writes the audit row
+        `restore.fetch` (no path) before it answers; a fetch whose audit row cannot be written
+        hands out nothing. A restore that is not this device's answers exactly like one that
+        does not exist (404 `not_found`), as do a download, a finished restore and a malformed
+        id. Never cached (`Cache-Control: no-store`), never logged.
+      x-min-role: DEVICE
+      security:
+        - deviceToken: []
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200':
+          description: The selection.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RestoreSelection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/RestoreRefused'}
+        '410': {$ref: '#/components/responses/RestoreExpired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /api/v1/agent/start-lease:
     post:
       operationId: agentStartLease
@@ -1250,7 +1282,19 @@ paths:
       operationId: createRestore
       tags: [restores]
       summary: Create a restore
-      description: Only `download_zip` exists in M2. The zip is produced while a download streams it; nothing is written to disk on the console host (ADR 0008).
+      description: |
+        Every restore mode (ADR 0027, ADR 0028, ADR 0030). `download_zip` is ready at once: the
+        zip of one path (`path`) or up to 50 (`paths`, nested selections collapsed) is produced
+        while a download streams it; nothing is written to disk on the console host (ADR 0008).
+        It is allowed for a retired device that is not being purged. `device_original` and
+        `device_side` queue a restore to the device with its `restore` command in one
+        transaction (audit row `restore.create`, no path), wait 24 hours for the device and need
+        an agent of 0.4.0 or newer; `overwrite` `if_changed` (replace existing files, original
+        location only) needs `confirm_host_name`, the device's host name typed exactly. One
+        device restore per device may be active. Every mode needs a signed-in session whose last
+        TOTP check is at most five minutes old: an API token, or a stale session, gets 403
+        `mfa_step_up_required` (call `POST /api/v1/auth/step-up`, then repeat). Paths are never
+        logged, audited or echoed.
       x-min-role: OP
       parameters:
         - {$ref: '#/components/parameters/Id'}
@@ -1270,9 +1314,10 @@ paths:
               schema: {$ref: '#/components/schemas/Restore'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
+        '403': {$ref: '#/components/responses/StepUpOrForbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
-        '409': {$ref: '#/components/responses/Conflict'}
+        '409': {$ref: '#/components/responses/RestoreRefused'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
         '503': {$ref: '#/components/responses/Unavailable'}
   /api/v1/restores/{id}:
     get:
@@ -2493,6 +2538,21 @@ components:
       content:
         application/problem+json:
           schema: {$ref: '#/components/schemas/Problem'}
+    RestoreRefused:
+      description: |
+        A restore refused by a rule of its own (ADR 0027, ADR 0030): `custody_customer_held` (the
+        customer holds the key: no restore of any kind), `device_purging` (the device is being
+        purged), `device_retired_download_only` (a retired device: download only),
+        `agent_too_old` (the device's agent predates 0.4.0), `device_restore_active` (one active
+        device restore per device).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    RestoreExpired:
+      description: The restore request waited past its expiry (24 hours) and will not run (`restore_expired`).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
     StepUpOrForbidden:
       description: The credential does not permit this request, the role is too low, the CSRF check failed, or an API token was used (`forbidden`); or the session's last MFA check is older than five minutes (`mfa_step_up_required`, ADR 0019).
       content:
@@ -2546,7 +2606,7 @@ components:
         status: {type: integer}
         code:
           type: string
-          enum: [invalid_request, unauthorized, forbidden, not_found, conflict, custody_customer_held, rate_limited, payload_too_large, not_modified, master_key_unavailable, unavailable, internal, mfa_step_up_required]
+          enum: [invalid_request, unauthorized, forbidden, not_found, conflict, custody_customer_held, rate_limited, payload_too_large, not_modified, master_key_unavailable, unavailable, internal, mfa_step_up_required, agent_too_old, device_retired_download_only, device_purging, device_restore_active, restore_expired]
         retry_after_s: {type: integer}
         request_id: {type: string}
     FieldError:
@@ -2973,31 +3033,67 @@ components:
           items: {$ref: '#/components/schemas/Run'}
     Restore:
       type: object
-      description: A restore request. The download token never appears here; `download_ready` says whether the caller may mint one.
-      required: [id, device_id, snapshot_id, mode, status, download_count, created_at, expires_at, download_ready, computed_at]
+      description: |
+        A restore request. The download token never appears here; `download_ready` says whether the
+        caller may mint one. No field carries a path. A device restore (`device_original`,
+        `device_side`) carries, once it ended, the counts and errors by class its agent reported;
+        `outcome` is the fixed sentence the operator reads (for example "RESTORED WITH ERRORS: ..."
+        or "FAILED: not enough free space on the device (see the device's log for the numbers).").
+      required: [id, device_id, snapshot_id, mode, status, outcome, selection_count, download_count, created_at, expires_at, download_ready, computed_at]
       properties:
         id: {type: string}
         device_id: {type: string}
         snapshot_id: {type: string}
-        mode: {type: string}
-        status: {type: string}
-        error_class: {type: string}
-        bytes: {type: integer, description: Size of the last completed download; absent before one.}
+        mode: {type: string, enum: [download_zip, device_original, device_side]}
+        overwrite: {type: string, enum: [never, if_changed], description: Device restores only.}
+        status: {type: string, enum: [queued, running, ready, delivered, failed, cancelled, expired, purged]}
+        error_class: {type: string, description: 'A fixed word: `partial` on a delivered device restore means restored with errors; on a failed one the restore class (`disk`, `auth`, `guard_refused`, `nothing_matched`, `interrupted`, ...); on a download the class of the last failed download.'}
+        outcome: {type: string}
+        selection_count: {type: integer, description: Number of selected paths after nested ones were collapsed.}
+        bytes: {type: integer, description: Size of the last completed download, or the bytes a device restore restored; absent before either.}
         sha256: {type: string}
+        skipped: {$ref: '#/components/schemas/DumpSkipped'}
+        files_restored: {type: integer, minimum: 0, maximum: 9007199254740991}
+        files_skipped: {type: integer, minimum: 0, maximum: 9007199254740991}
+        bytes_restored: {type: integer, minimum: 0, maximum: 9007199254740991}
+        errors:
+          type: array
+          items: {$ref: '#/components/schemas/RestoreClassCount'}
         download_count: {type: integer}
         created_at: {$ref: '#/components/schemas/Timestamp'}
+        started_at: {$ref: '#/components/schemas/Timestamp'}
+        finished_at: {$ref: '#/components/schemas/Timestamp'}
         expires_at: {$ref: '#/components/schemas/Timestamp'}
         purge_after: {$ref: '#/components/schemas/Timestamp'}
         download_ready: {type: boolean}
         computed_at: {$ref: '#/components/schemas/Timestamp'}
+    DumpSkipped:
+      type: object
+      description: What a completed download left out because it is not a regular file or folder, by kind. Counts only, never names.
+      properties:
+        symlinks: {type: integer, minimum: 0}
+        hard_links: {type: integer, minimum: 0}
+        devices: {type: integer, minimum: 0}
+        named_pipes: {type: integer, minimum: 0}
+        sockets: {type: integer, minimum: 0}
+        other: {type: integer, minimum: 0}
     CreateRestoreRequest:
       type: object
-      required: [snapshot_id, mode, path]
+      description: 'A download takes `path` or `paths`; a device restore takes `paths`, and `overwrite` and `confirm_host_name` for replace mode. Paths are snapshot-absolute ("/C/Users/x"), checked and never logged.'
+      required: [snapshot_id, mode]
       additionalProperties: false
       properties:
-        snapshot_id: {type: string}
-        mode: {type: string, enum: [download_zip]}
-        path: {type: string, description: The file or folder to restore. It is checked and never logged.}
+        snapshot_id: {type: string, pattern: '^[0-9a-f]{64}$'}
+        mode: {type: string, enum: [download_zip, device_original, device_side]}
+        path: {type: string, description: One file or folder (download_zip only).}
+        paths:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: Files and folders; at most 50 for a download, 100 for a device restore, 64 KiB together.
+          items: {type: string, maxLength: 4096}
+        overwrite: {type: string, enum: [never, if_changed], description: 'Device restores: never (default, keep what exists) or if_changed (replace; device_original only).'}
+        confirm_host_name: {type: string, description: The device's host name typed exactly; required with if_changed and not allowed otherwise.}
     DownloadResponse:
       type: object
       required: [download_url, expires_at, computed_at]
@@ -3613,6 +3709,49 @@ components:
           items: {type: string, pattern: '^[A-Z]$'}
         long_run: {type: boolean}
         lease: {type: string, enum: [granted, bypassed, not_required]}
+        files_restored: {type: integer, minimum: 0, maximum: 9007199254740991, description: 'Restore runs only (ADR 0027): files placed or kept in the side folder.'}
+        files_skipped: {type: integer, minimum: 0, maximum: 9007199254740991, description: Restore runs only. Existing files kept and links removed.}
+        bytes_restored: {type: integer, minimum: 0, maximum: 9007199254740991, description: Restore runs only.}
+        bytes_skipped: {type: integer, minimum: 0, maximum: 9007199254740991, description: Restore runs only.}
+        restore_result: {$ref: '#/components/schemas/RestoreResultClass'}
+        restore_errors:
+          type: array
+          maxItems: 11
+          description: Restore runs only. Countable classes only (nothing_matched, target_locked, access_denied, guard_refused, other), each at most once.
+          items: {$ref: '#/components/schemas/RestoreClassCount'}
+    RestoreResultClass:
+      type: string
+      description: |
+        How a restore run ended, or (when countable) what a failed item hit (ADR 0027). A fixed word,
+        never a path. Pairing with the run outcome: nothing_matched and every class but partial,
+        cancelled and interrupted are outcome failed; partial is outcome partial; cancelled is
+        cancelled; interrupted is interrupted; a successful restore carries no class.
+      enum: [nothing_matched, target_locked, access_denied, partial, interrupted, guard_refused, auth, repo_unreachable, cancelled, disk, other]
+    RestoreClassCount:
+      type: object
+      required: [class, count]
+      properties:
+        class: {$ref: '#/components/schemas/RestoreResultClass'}
+        count: {type: integer, minimum: 1, maximum: 9007199254740991}
+    RestoreSelection:
+      type: object
+      description: |
+        What the agent restores (ADR 0027). Paths are snapshot-absolute, in restic's form for a
+        Windows volume ("/C/Users/x/a.docx": a slash, the drive letter, then at least one name),
+        byte-exact, never logged. There is no target: the original location is the path itself and
+        the side folder is computed by the agent from the id.
+      required: [id, snapshot_id, mode, overwrite, paths, expires_at]
+      properties:
+        id: {type: string, description: The restore request id (26-character ULID); the agent's run id.}
+        snapshot_id: {type: string, pattern: '^[0-9a-f]{64}$'}
+        mode: {type: string, enum: [device_original, device_side]}
+        overwrite: {type: string, enum: [never, if_changed], description: device_side takes never only.}
+        paths:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {type: string, maxLength: 4096}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
     ErrorProjection:
       type: object
       description: Error counts by class and file extension. Never a path.

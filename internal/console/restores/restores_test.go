@@ -198,7 +198,9 @@ func TestDownloadStreamsAFileAndRecordsTheDelivery(t *testing.T) {
 	}
 }
 
-// TestDownloadStreamsADirectory: a directory restore is one zip of its files.
+// TestDownloadStreamsADirectory: a directory restore is one zip of its files,
+// under a top-level entry named after the folder (the worker builds one path
+// exactly like a list of one, ADR 0028).
 func TestDownloadStreamsADirectory(t *testing.T) {
 	e := newEnv(t)
 	r := e.create(t, goodDir)
@@ -207,8 +209,9 @@ func TestDownloadStreamsADirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readZip(t, out.Bytes())
-	if len(got) != 2 || sha256.Sum256(got["Quarterly-Report.txt"]) != sha256.Sum256(fixtures.DefaultFiles()[0].Content) ||
-		sha256.Sum256(got["Budget-2026.csv"]) != sha256.Sum256(fixtures.DefaultFiles()[1].Content) {
+	if _, dir := got["Documents/"]; len(got) != 3 || !dir ||
+		sha256.Sum256(got["Documents/Quarterly-Report.txt"]) != sha256.Sum256(fixtures.DefaultFiles()[0].Content) ||
+		sha256.Sum256(got["Documents/Budget-2026.csv"]) != sha256.Sum256(fixtures.DefaultFiles()[1].Content) {
 		t.Fatalf("directory zip entries: %d", len(got))
 	}
 	if len(files(e.dir)) != 0 {

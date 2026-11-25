@@ -51,7 +51,9 @@ func TestFixtureDumpCountsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := names(one.Bytes()); got != "a.txt" || res.Skipped != (adminpath.DumpSkipped{Symlinks: 1, Pipes: 1}) {
+	// One path is built like a list of one (P22-E): the folder's own entry,
+	// then its files, then the skipped-entries file.
+	if got := names(one.Bytes()); got != "Data/|Data/a.txt|"+SkippedEntryName || res.Skipped != (adminpath.DumpSkipped{Symlinks: 1, Pipes: 1}) {
 		t.Fatalf("one path: entries %q, skipped %+v", got, res.Skipped)
 	}
 
@@ -60,7 +62,7 @@ func TestFixtureDumpCountsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := names(many.Bytes()); got != "Data/|Data/a.txt" || res.Skipped != (adminpath.DumpSkipped{Symlinks: 2, Pipes: 1}) {
+	if got := names(many.Bytes()); got != "Data/|Data/a.txt|"+SkippedEntryName || res.Skipped != (adminpath.DumpSkipped{Symlinks: 2, Pipes: 1}) {
 		t.Fatalf("several paths: entries %q, skipped %+v", got, res.Skipped)
 	}
 }

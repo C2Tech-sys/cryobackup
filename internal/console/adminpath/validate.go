@@ -79,10 +79,13 @@ func (r FindRequest) Validate() error {
 }
 
 // Validate checks the device and exactly one of Path and Paths. With Path: the
-// snapshot id (optionally with ":<subfolder>") and Path (absolute, starting
-// with "/"). With Paths: the snapshot id (no subfolder), 1 to MaxDumpPaths
-// paths, each absolute, clean (path.Clean leaves it unchanged, so no ".", ".."
-// or empty component and no trailing "/") and not "/".
+// snapshot id (optionally with ":<subfolder>") and Path, absolute and clean
+// exactly like an entry of Paths (path.Clean leaves it unchanged, so no ".."
+// can climb out of the subfolder the worker joins it to); unlike Paths it may be
+// "/", the snapshot root or the whole subfolder. With Paths: the snapshot id (no
+// subfolder), 1 to MaxDumpPaths paths, each absolute, clean (path.Clean leaves
+// it unchanged, so no ".", ".." or empty component and no trailing "/") and not
+// "/".
 func (r DumpRequest) Validate() error {
 	if err := r.DeviceRequest.Validate(); err != nil {
 		return err
@@ -91,7 +94,7 @@ func (r DumpRequest) Validate() error {
 		if !validSnapshot(r.SnapshotID, true) {
 			return invalidField("snapshot_id")
 		}
-		if !validSnapPath(r.Path) {
+		if !validSnapPath(r.Path) || path.Clean(r.Path) != r.Path {
 			return invalidField("path")
 		}
 		return nil
