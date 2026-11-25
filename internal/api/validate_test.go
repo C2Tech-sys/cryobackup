@@ -254,7 +254,7 @@ func TestValidateRunRecord(t *testing.T) {
 	open := func(r *RunRecord) {
 		r.Outcome, r.FinishedAt, r.ExitCode, r.SnapshotID, r.DeferredReason, r.ErrorClass = "", nil, nil, "", "", ""
 	}
-	runValidate(t, okRun, []vcase[RunRecord]{
+	runValidate(t, okBackupRun, []vcase[RunRecord]{
 		{"valid (deferred backup)", nil, nil},
 		{"closed success", func(r *RunRecord) { *r = closedRun() }, nil},
 		{"open run", open, nil},
@@ -346,7 +346,7 @@ func TestValidateRunsRequest(t *testing.T) {
 		}
 		return out
 	}
-	runValidate(t, okRunsRequest, []vcase[RunsRequest]{
+	runValidate(t, validRunsRequest, []vcase[RunsRequest]{
 		{"valid", nil, nil},
 		{"one run", func(r *RunsRequest) { r.Runs = r.Runs[:1] }, nil},
 		{"200 runs", func(r *RunsRequest) { r.Runs = many(200) }, nil},

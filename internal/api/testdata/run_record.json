@@ -27,6 +27,8 @@
   "snapshot_id": "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12",
   "started_at": "2026-10-22T14:03:09.512Z",
   "stats": {
+    "bytes_restored": 15,
+    "bytes_skipped": 16,
     "data_added": 8,
     "data_added_packed": 9,
     "dirs_changed": 5,
@@ -35,9 +37,22 @@
     "failed_files": 12,
     "files_changed": 2,
     "files_new": 1,
+    "files_restored": 13,
+    "files_skipped": 14,
     "files_unmodified": 3,
     "lease": "granted",
     "long_run": true,
+    "restore_errors": [
+      {
+        "class": "target_locked",
+        "count": 2
+      },
+      {
+        "class": "access_denied",
+        "count": 1
+      }
+    ],
+    "restore_result": "partial",
     "total_bytes_processed": 10,
     "total_duration_s": 11.5,
     "total_files_processed": 7,

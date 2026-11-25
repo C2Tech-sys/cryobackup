@@ -80,7 +80,8 @@ func okHeartbeatResponse() HeartbeatResponse {
 	}
 }
 
-// okRun sets every field of RunRecord; it is a fixture, not a realistic run.
+// okRun sets every field of RunRecord; it is a fixture, not a realistic run,
+// and it does not validate (see okBackupRun).
 func okRun() RunRecord {
 	return RunRecord{
 		ID: ulidA, Kind: restic.KindBackup, Trigger: TriggerCatchup,
@@ -91,6 +92,10 @@ func okRun() RunRecord {
 			TotalFilesProcessed: 7, DataAdded: 8, DataAddedPacked: 9, TotalBytesProcessed: 10,
 			TotalDurationS: 11.5, FailedFiles: 12, VSSFallbackVolumes: []string{"C", "D"}, LongRun: true,
 			Lease: LeaseGranted,
+			// the restore block (P22): set so the round trip and the golden file pin its keys
+			FilesRestored: 13, FilesSkipped: 14, BytesRestored: 15, BytesSkipped: 16,
+			RestoreResult: RestoreResultPartial,
+			RestoreErrors: []RestoreClassCount{{Class: RestoreResultTargetLocked, Count: 2}, {Class: RestoreResultAccessDenied, Count: 1}},
 		},
 		ErrorCounts: []restic.ErrorProjection{
 			{During: "archival", Class: restic.ClassPermission, Ext: "docx", Count: 3},
@@ -101,9 +106,33 @@ func okRun() RunRecord {
 	}
 }
 
+// okRun sets the restore block on a backup record, which RunRecord.Validate
+// refuses (restoreCouplings row "kind"): it is the round-trip and golden
+// fixture only. okBackupRun is the same record without the restore block, the
+// base of the validation tests.
+func okBackupRun() RunRecord {
+	r := okRun()
+	r.Stats.FilesRestored, r.Stats.FilesSkipped, r.Stats.BytesRestored, r.Stats.BytesSkipped = 0, 0, 0, 0
+	r.Stats.RestoreResult, r.Stats.RestoreErrors = "", nil
+	return r
+}
+
+// okRestoreRun is a valid closed restore that ended restored with errors.
+func okRestoreRun() RunRecord {
+	r := okBackupRun()
+	r.Kind, r.Trigger, r.SnapshotID, r.DeferredReason, r.ErrorClass, r.Initial = restic.KindRestore, TriggerManual, "", "", "", false
+	r.Outcome, r.ExitCode = restic.OutcomePartial, ptr(1)
+	r.Stats = RunStats{
+		FilesRestored: 13, FilesSkipped: 14, BytesRestored: 15, BytesSkipped: 16,
+		RestoreResult: RestoreResultPartial,
+		RestoreErrors: []RestoreClassCount{{Class: RestoreResultTargetLocked, Count: 2}, {Class: RestoreResultNothingMatched, Count: 1}},
+	}
+	return r
+}
+
 // closedRun is a realistic closed backup.
 func closedRun() RunRecord {
-	r := okRun()
+	r := okBackupRun()
 	r.Outcome = restic.OutcomeSuccess
 	r.DeferredReason = ""
 	r.ErrorClass = ""
@@ -111,10 +140,18 @@ func closedRun() RunRecord {
 	return r
 }
 
+// okRunsRequest is the round-trip fixture (its records are okRun).
 func okRunsRequest() RunsRequest {
 	second := okRun()
 	second.ID = ulidB
 	return RunsRequest{Runs: []RunRecord{okRun(), second}}
+}
+
+// validRunsRequest is okRunsRequest with records that validate.
+func validRunsRequest() RunsRequest {
+	second := okBackupRun()
+	second.ID = ulidB
+	return RunsRequest{Runs: []RunRecord{okBackupRun(), second}}
 }
 
 func okRunsResponse() RunsResponse {
@@ -192,9 +229,9 @@ func okTokenRotate() TokenRotateResponse {
 
 func okRestoreSelection() RestoreSelection {
 	return RestoreSelection{
-		ID: ulidA, SnapshotID: hex6, Mode: RestoreDeviceRelay, Target: `C:\Restore\Out`,
-		Includes: []string{`C:\Users\x\Documents`, `/home/x/y`}, IncludeFile: true, Overwrite: OverwriteIfNewer,
-		Verify: true, Simulate: true, ArtifactURL: RouteRestoreArtifact(ulidA), ArtifactSHA256: hex7, ExpiresAt: at(240),
+		ID: ulidA, SnapshotID: hex6, Mode: DeviceRestoreOriginal, Overwrite: DeviceOverwriteIfChanged,
+		Paths:     []string{"/C/Users/x/Documents", "/D/Data/[a] $b/Report.docx"},
+		ExpiresAt: at(240),
 	}
 }
 

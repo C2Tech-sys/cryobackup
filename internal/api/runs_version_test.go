@@ -14,7 +14,7 @@ func TestAVersionLabelNeverFailsTheRun(t *testing.T) {
 		if !VersionShape(ok) {
 			t.Errorf("%q is not version-shaped", ok)
 		}
-		r := okRun()
+		r := okBackupRun()
 		r.AgentVersion = ok
 		if err := r.Validate(); err != nil {
 			t.Errorf("a run with agent_version %q is refused: %v", ok, err)
@@ -25,7 +25,7 @@ func TestAVersionLabelNeverFailsTheRun(t *testing.T) {
 		if VersionShape(bad) {
 			t.Errorf("%.30q passes as a version", bad)
 		}
-		r := okRun()
+		r := okBackupRun()
 		r.AgentVersion = bad
 		if err := r.Validate(); err != nil {
 			t.Errorf("a run with agent_version %.30q is refused, and the agent would lose it: %v", bad, err)

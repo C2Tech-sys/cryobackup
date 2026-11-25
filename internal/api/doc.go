@@ -35,7 +35,7 @@
 //	           POST /commands/{id}/result       CommandResultRequest -> 204            per command, idempotent
 //	token      POST /token/rotate               -> TokenRotateResponse                 on token rotation (F09, F21)
 //	restores   GET  /restores/{id}              -> RestoreSelection                    after a restore command; the only path-bearing body
-//	           GET  /restores/{id}/artifact     Range -> archive stream                relay restore to a replacement device (DH28)
+//	           GET  /restores/{id}/artifact     Range -> archive stream                relay restore to a replacement device (DH28); not in the pilot
 //	progress   POST /progress                   Progress -> 204                        during a run, at most one per 5 s
 //	release    GET  /release                    -> ReleaseResponse | 204               self-update check
 //	           GET  /release/artifact/{v}/{n}   Range -> bytes                         self-update download
@@ -156,12 +156,17 @@
 // protocol"), each documented in one place so it can be removed in one place.
 //
 // The first is RestoreSelection: a restore cannot be described without the
-// target and the files to restore, so GET /restores/{id} carries them. It
-// travels only on that device-authenticated response, never in the command
-// queue; the console stores it encrypted with a purge date; the agent keeps it
-// in a SYSTEM-only temp file and deletes it after the restore; nobody logs it.
-// The type implements the unexported pathBearing marker and AssertPathFree does
-// not look inside it. No other type may implement the marker.
+// files to restore, so GET /restores/{id} carries their snapshot-absolute paths
+// (and no target: the console never sends one, the agent computes the side
+// folder itself; ADR 0027). It travels only on that device-authenticated
+// response, never in the command queue (a restore command carries the request
+// id and nothing else, RestoreParams); the console stores it encrypted with a
+// purge date; the agent keeps it in a SYSTEM-only temp file and deletes it
+// after the restore; nobody logs it. The type implements the unexported
+// pathBearing marker and AssertPathFree does not look inside it. No other type
+// may implement the marker. Everything a restore reports back, RunStats and its
+// RestoreResultClass counts included, is path-free and checked like any other
+// body.
 //
 // The second is a field skip for restic.Snapshot.Paths in a SnapshotsRequest,
 // the configured backup roots as the policy defined them (§5.1 "roots only";

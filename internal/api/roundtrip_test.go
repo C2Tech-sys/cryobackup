@@ -52,7 +52,7 @@ func TestRoundTripSparse(t *testing.T) {
 		LobbyResponse{Status: LobbyPending, PollURL: RouteEnrollLobbyPoll(hexN)},
 		CommandResultRequest{Status: CommandAcked},
 		Command{ID: ulidA, Type: CommandBackupNow, CreatedAt: t0, ExpiresAt: at(1)},
-		RestoreSelection{ID: ulidA, SnapshotID: hex6, Mode: RestoreDeviceOriginal, Overwrite: OverwriteNever, ExpiresAt: t0},
+		RestoreSelection{ID: ulidA, SnapshotID: hex6, Mode: DeviceRestoreSide, Overwrite: DeviceOverwriteNever, Paths: []string{"/C/x"}, ExpiresAt: t0},
 		StartLeaseResponse{Granted: false, RetryAfterS: 60, ServerTime: t0},
 		StartLeaseResponse{Granted: true, ServerTime: t0},
 	}
@@ -92,6 +92,7 @@ var goldenCases = []struct {
 	{"commands_response.json", func() any { return okCommandsResponse() }, nil},
 	{"start_lease_request.json", func() any { return okStartLeaseRequest() }, nil},
 	{"start_lease_response.json", func() any { return okStartLeaseGranted() }, nil},
+	{"restore_selection.json", func() any { return okRestoreSelection() }, nil},
 }
 
 func TestGoldenJSON(t *testing.T) {

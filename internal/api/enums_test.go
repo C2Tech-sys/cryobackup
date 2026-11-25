@@ -96,7 +96,8 @@ var enumBindings = []enumBinding{
 
 // protocolOnly are enums with no database column: they exist on the wire only.
 // EnumLeaseOutcome lives in runs.stats (JSON), not in a column of its own.
-var protocolOnly = map[string]bool{EnumRunResultStatus: true, EnumReleaseChannel: true, EnumErrorCode: true, EnumLeaseOutcome: true}
+var protocolOnly = map[string]bool{EnumRunResultStatus: true, EnumReleaseChannel: true, EnumErrorCode: true, EnumLeaseOutcome: true,
+	EnumDeviceRestoreMode: true, EnumDeviceRestoreOverwrite: true, EnumRestoreResultClass: true}
 
 func TestEnumsAgreeWithSchema(t *testing.T) {
 	schema := readSchema(t)
@@ -180,14 +181,14 @@ func TestValidatorsUseTheEnumLists(t *testing.T) {
 		}
 	}
 	for _, v := range Enums()[EnumRunTrigger] {
-		r := okRun()
+		r := okBackupRun()
 		r.Trigger = Trigger(v)
 		if r.Validate() != nil {
 			t.Errorf("trigger %q rejected", v)
 		}
 	}
 	for _, v := range Enums()[EnumRunOutcome] {
-		r := okRun()
+		r := okBackupRun()
 		r.Outcome, r.DeferredReason = restic.Outcome(v), ""
 		if v == string(restic.OutcomeDeferred) {
 			r.DeferredReason = restic.DeferredLock

@@ -95,18 +95,23 @@ const (
 	CommandFailed    CommandStatus = "failed"
 )
 
-// RestoreMode is where a restore lands (restore_requests.mode). The two
-// download modes are admin-side only and never reach an agent.
+// RestoreMode is where a restore lands (restore_requests.mode), as the database
+// stores it. The two download modes are admin-side only and never reach an
+// agent. What the agent is told is DeviceRestoreMode (device_original or
+// device_side), a separate wire vocabulary: the console maps the stored mode to
+// it when it answers GET /restores/{id}.
 type RestoreMode string
 
-// Restore modes an agent sees.
+// Restore modes as stored (the schema's list).
 const (
 	RestoreDeviceOriginal RestoreMode = "device_original"
 	RestoreDevicePath     RestoreMode = "device_path"
 	RestoreDeviceRelay    RestoreMode = "device_relay"
 )
 
-// Overwrite is restic's --overwrite behaviour (restore_requests.overwrite).
+// Overwrite is restic's --overwrite behaviour as the database stores it
+// (restore_requests.overwrite, hyphenated like restic's flag). The wire form the
+// agent receives is DeviceRestoreOverwrite (never or if_changed).
 type Overwrite string
 
 // Overwrite values.
@@ -177,6 +182,12 @@ const (
 	EnumLobbyStatus         = "lobby_status"
 	EnumErrorCode           = "error_code"
 	EnumLeaseOutcome        = "lease_outcome"
+	// The three device-restore vocabularies live on the wire only (RestoreSelection,
+	// RunStats.RestoreResult); the database stores the admin-side RestoreMode and
+	// Overwrite instead.
+	EnumDeviceRestoreMode      = "device_restore_mode"
+	EnumDeviceRestoreOverwrite = "device_restore_overwrite"
+	EnumRestoreResultClass     = "restore_result_class"
 )
 
 var (
@@ -256,5 +267,9 @@ func Enums() map[string][]string {
 		EnumLobbyStatus:         strs(lobbyStatuses),
 		EnumErrorCode:           ErrorCodes(),
 		EnumLeaseOutcome:        strs(leaseOutcomes),
+
+		EnumDeviceRestoreMode:      strs(deviceRestoreModes),
+		EnumDeviceRestoreOverwrite: strs(deviceRestoreOverwrites),
+		EnumRestoreResultClass:     strs(restoreResultClasses),
 	}
 }

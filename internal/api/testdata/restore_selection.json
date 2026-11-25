@@ -1,0 +1,11 @@
+{
+  "expires_at": "2026-10-22T18:03:09.512Z",
+  "id": "01JAZK3Q8W5N6X7Y8Z9A0B1C2D",
+  "mode": "device_original",
+  "overwrite": "if_changed",
+  "paths": [
+    "/C/Users/x/Documents",
+    "/D/Data/[a] $b/Report.docx"
+  ],
+  "snapshot_id": "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12"
+}
