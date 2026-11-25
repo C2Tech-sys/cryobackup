@@ -773,6 +773,12 @@ func (f healthFacts) databaseAttempts() []attempt {
 	return append(out, integrity, f.withRow(disk, jobs.ProbeRowDatabase))
 }
 
+// selfBackupAttempts is the "Database self-backup" row. It reads the same facts and the same rules
+// as C11 (state.SelfBackupVerifyCause, state.SelfBackupJobWhy, state.DBSelfBackupMaxAge), so the row
+// is never ok while C11 is critical for the self-backup: a failed tested restore, or no verdict for
+// more than state.DBSelfBackupVerifyMaxAge, is failed, and says so with the age and the class of the
+// latest attempt. A backup never written is not_checked and names the db-self-backup job's class
+// (not_configured, no_slot, ...). ok says when the newest backup and the newest verdict were.
 func (f healthFacts) selfBackupAttempts() []attempt {
 	a := attempt{What: "the database self-backup", MaxAge: state.DBSelfBackupMaxAge, Why: "the console does not supply the database self-backup's state"}
 	var sb *state.SelfBackupFacts
@@ -786,11 +792,25 @@ func (f healthFacts) selfBackupAttempts() []attempt {
 	case sb.VerifyFailed:
 		a.Result, a.Severe, a.At, a.Why = failed, true, millisTime(sb.LastAt), "the newest tested restore of the self-backup failed"
 	case sb.LastAt == 0:
-		a.Why = "no self-backup has been written"
+		a.Why = "no self-backup has been written" + state.SelfBackupJobWhy(sb.JobClass)
 	default:
-		a.Result, a.At = passed, millisTime(sb.LastAt)
+		a.At = millisTime(sb.LastAt)
+		if sev, cause := state.SelfBackupVerifyCause(sb, f.Now); cause != "" {
+			a.Result, a.Severe, a.Why = failed, sev >= state.SeverityCritical, cause
+			break
+		}
+		a.Result = passed
+		a.Note = "last backup " + f.selfBackupAge(sb.LastAt) + "; no restore test has finished yet"
+		if sb.VerifyAt != 0 {
+			a.Note = "last backup " + f.selfBackupAge(sb.LastAt) + "; last restore test " + f.selfBackupAge(sb.VerifyAt)
+		}
 	}
 	return []attempt{a}
+}
+
+// selfBackupAge words how long before this request a recorded time was.
+func (f healthFacts) selfBackupAge(m state.Millis) string {
+	return ageWords(f.Now.Sub(millisTime(m))) + " ago"
 }
 
 func (f healthFacts) masterKeyAttempts() []attempt {

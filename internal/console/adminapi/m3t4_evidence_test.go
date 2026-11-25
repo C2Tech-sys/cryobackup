@@ -20,8 +20,11 @@ func ms(t time.Time) state.Millis { return state.Millis(t.UnixMilli()) }
 // fullEvidence is a console with every piece of evidence and no banner: every
 // probe ran 20 s ago and passed, both listeners' certificates were read, the worker
 // answered and its scheduler passed, the evaluator's newest evaluation passed and a
-// job ran. It holds only what this build can produce: the four checks whose producer
-// is a later milestone carry their NotInBuild marker, as health.ProbeFacts supplies them.
+// job ran. The checks whose producer is a later milestone (release manifest, storage quota,
+// digest) carry their NotInBuild marker, as health.ProbeFacts supplies them. The self-backup
+// carries it too, but only for these hand-built facts: since P22-F the console's loader never
+// sets it, and the row's real judgement is tested with facts of its own
+// (m3_selfbackup_row_p22f2_test.go, m3t4_r3_test.go).
 func fullEvidence(now time.Time, ran, next *time.Time) healthFacts {
 	ok := func() state.ProbeRun {
 		return state.ProbeRun{LastRunAt: ms(now.Add(-20 * time.Second)), LastOKAt: ms(now.Add(-20 * time.Second))}
