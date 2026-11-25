@@ -306,6 +306,7 @@ func TestLiveM0SliceWithMaintain(t *testing.T) {
 		userCache = filepath.Join(d, "restic")
 	}
 	diskBefore, cacheBefore := diskFiles(t, base, remoteDir), diskFiles(t, userCache)
+	admin.stepUp(app, "owner") // every restore needs a fresh MFA check (ADR 0027 ruling C5); slice_test.go
 	code, b, _ := admin.do("POST", "/api/v1/devices/"+er.DeviceID+"/restores", adminapi.CreateRestoreRequest{SnapshotID: snap.ID, Mode: "download_zip", Path: path})
 	if code != 202 {
 		t.Fatalf("restore: %d %s\nlogs:\n%s", code, b, logs.String())
