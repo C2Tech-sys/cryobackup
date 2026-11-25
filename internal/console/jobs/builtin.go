@@ -366,17 +366,28 @@ func (j *HeartbeatRingTrim) Run(ctx context.Context) error {
 
 // RestorePurge expires spent technician restores (clearing their encrypted
 // selection) every five minutes and scrubs restore archives an earlier version
-// staged on disk (restores.Service.Purge, ADR 0008).
+// staged on disk (restores.Service.Purge, ADR 0008). The same run closes the
+// device restores the device never picked up: EXPIRED after the 24-hour wait,
+// CANCELLED when the operator cancelled the queued command
+// (restores.Service.ExpireDeviceRestores, ADR 0027 ruling C6). Both halves run
+// every time; the first error is the run's.
 type RestorePurge struct {
 	Svc *restores.Service
 }
 
 // Job returns the schedule for the runner.
 func (j *RestorePurge) Job() Job {
-	return Job{Name: NameRestorePurge, Every: 5 * time.Minute, Run: func(ctx context.Context) error {
-		_, err := j.Svc.Purge(ctx)
-		return err
-	}}
+	return Job{Name: NameRestorePurge, Every: 5 * time.Minute, Run: j.Run}
+}
+
+// Run is one pass of both halves.
+func (j *RestorePurge) Run(ctx context.Context) error {
+	_, perr := j.Svc.Purge(ctx)
+	_, xerr := j.Svc.ExpireDeviceRestores(ctx)
+	if perr != nil {
+		return perr
+	}
+	return xerr
 }
 
 // SessionExpire deletes expired and revoked sessions every hour.

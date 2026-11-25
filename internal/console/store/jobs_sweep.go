@@ -32,6 +32,140 @@ const (
 type SweepResult struct {
 	// Examined is the number of open agent runs looked at; Abandoned how many were closed.
 	Examined, Abandoned int
+	// RestoresClosed is how many running device restores the sweep closed as
+	// FAILED interrupted (sweepStuckDeviceRestores), and RestoresClosedBy the same
+	// count by reason (no_run_record, agent_restarted); nil when none closed.
+	RestoresClosed   int
+	RestoresClosedBy map[string]int
+}
+
+// Running device restores that stop reporting (ADR 0027; ticket P22-E, fix E3).
+//
+// A device restore becomes running when the agent fetches its selection, and
+// only the agent's run record (run id = restore id) closes it. An agent that
+// never sends one would leave the row running and, through the one active device
+// restore rule, block every later device restore of that device for good: the
+// quiet failure this product exists to prevent. So the abandoned-run-sweeper
+// also closes such a row, as FAILED with class interrupted ("the restore was cut
+// short; run it again"), audited restore.finish, in two cases:
+//
+//   - DeviceRestoreRunningBound after the fetch, unless the device reports it
+//     active right now (its start lease is live, or its newest heartbeat, no
+//     older than SweepOptions.ActiveWithin, carries progress for that run id).
+//   - The agent restarted after the fetch (its newest heartbeat's uptime puts
+//     the boot after the fetch) and, deviceRestoreRestartGrace after that boot,
+//     no run record of the restore has arrived at all. A restore never resumes
+//     after a restart (ADR 0027), and the agent reports an interrupted run from
+//     the journal it wrote before restic started; a restart with no record at
+//     all means the agent never got that far.
+//
+// A run record that arrives later is still ingested; the row stays as the sweep
+// closed it (closeDeviceRestore leaves a closed row alone).
+const (
+	// DeviceRestoreRunningBound is how long a running device restore may go
+	// without its run record. It is far longer than any plausible pilot restore:
+	// the agent stops restic itself when no status line arrives within its
+	// watchdog bound (ADR 0027, "A restore that stops moving is stopped"), and a
+	// selection of at most 100 paths that has not finished in two days on a
+	// working link is not finishing; the operator then sees FAILED, not RUNNING.
+	DeviceRestoreRunningBound = 48 * time.Hour
+	// deviceRestoreRestartGrace gives a restarted agent time to post the run
+	// record it journaled before restic started (its outbox sends within
+	// minutes of start-up) before the sweep calls the restore lost.
+	deviceRestoreRestartGrace = 30 * time.Minute
+)
+
+// stuckRestore is one running device restore as the sweep reads it.
+type stuckRestore struct {
+	id, deviceID, cust string
+	started            int64
+	runExists          bool
+	progress           sql.NullString
+	presenceAt, uptime sql.NullInt64
+	leaseUntil         sql.NullInt64
+}
+
+// stuckReason says why a running device restore must be closed now, or "".
+func (r stuckRestore) stuckReason(now int64, activeWithin time.Duration) string {
+	progressFor, _ := progressRun(r.progress)
+	active := (r.leaseUntil.Valid && r.leaseUntil.Int64 > now) ||
+		(progressFor == r.id && r.presenceAt.Valid && now-r.presenceAt.Int64 <= activeWithin.Milliseconds())
+	if now-r.started >= DeviceRestoreRunningBound.Milliseconds() && !active {
+		return "no_run_record"
+	}
+	if !r.runExists && r.presenceAt.Valid && r.uptime.Valid {
+		boot := r.presenceAt.Int64 - r.uptime.Int64*1000
+		if boot > r.started && now-boot >= deviceRestoreRestartGrace.Milliseconds() {
+			return "agent_restarted"
+		}
+	}
+	return ""
+}
+
+// sweepStuckDeviceRestores closes the running device restores stuckReason names,
+// one transaction per row with its audit row; a failed audit write leaves that
+// row running for the next sweep and is returned.
+func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.Duration) (int, map[string]int, error) {
+	var rows []stuckRestore
+	err := s.Read(ctx, func(tx *Tx) error {
+		var err error
+		rows, err = collect(tx, `SELECT r.id, r.device_id, d.customer_id, COALESCE(r.started_at, r.updated_at),
+				EXISTS (SELECT 1 FROM runs x WHERE x.id = r.id AND x.device_id = r.device_id),
+				p.progress, p.received_at, p.uptime_s, l.lease_until
+			FROM restore_requests r JOIN devices d ON d.id = r.device_id
+			LEFT JOIN device_presence p ON p.device_id = r.device_id
+			LEFT JOIN start_leases l ON l.run_id = r.id
+			WHERE r.mode IN ('device_original','device_path') AND r.status = 'running'
+			ORDER BY r.created_at, r.id`, nil, func(sc scanner) (stuckRestore, error) {
+			var r stuckRestore
+			return r, sc.Scan(&r.id, &r.deviceID, &r.cust, &r.started, &r.runExists, &r.progress, &r.presenceAt, &r.uptime, &r.leaseUntil)
+		})
+		return err
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	closed := 0
+	var by map[string]int
+	var firstErr error
+	for _, r := range rows {
+		reason := r.stuckReason(msOf(s.Now()), activeWithin)
+		if reason == "" {
+			continue
+		}
+		did := false
+		err := s.Write(ctx, func(tx *Tx) error {
+			did = false
+			now := tx.nowMS()
+			prog, _ := json.Marshal(DeviceRestoreProgress{Outcome: "interrupted"})
+			res, err := tx.Exec(`UPDATE restore_requests SET status = 'failed', error_class = 'interrupted', progress = ?, selection_wrapped = NULL,
+				finished_at = ?, updated_at = ? WHERE id = ? AND status = 'running'`, string(prog), now, now, r.id)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				return nil // its run record closed it meanwhile
+			}
+			details, _ := json.Marshal(map[string]any{"status": "failed", "error_class": "interrupted", "reason": reason})
+			if err := audited(tx, AuditEvent{ActorType: "system", Method: "system", Action: "restore.finish", ObjectType: "restore",
+				ObjectID: r.id, CustomerID: r.cust, Result: "error", Severity: "warning", Details: details}); err != nil {
+				return err
+			}
+			did = true
+			return nil
+		})
+		switch {
+		case err != nil && firstErr == nil:
+			firstErr = err
+		case err == nil && did:
+			closed++
+			if by == nil {
+				by = map[string]int{}
+			}
+			by[reason]++
+		}
+	}
+	return closed, by, firstErr
 }
 
 // openRun is one open agent run as the sweeper reads it.
@@ -57,6 +191,11 @@ type openRun struct {
 // the run with a real outcome overwrites "abandoned" (AgentIngestRuns). Console
 // runs (origin console, the maintenance worker's) are not the agent's to
 // report and are left alone.
+//
+// After the runs it closes the running device restores whose agent stopped
+// reporting them (sweepStuckDeviceRestores, ADR 0027), counted in
+// SweepResult.RestoresClosed; an error there is returned after the run sweep
+// committed.
 func (s *Store) SweepAbandonedRuns(ctx context.Context, o SweepOptions) (SweepResult, error) {
 	if o.Slack <= 0 {
 		o.Slack = DefaultSweepSlack
@@ -122,6 +261,10 @@ func (s *Store) SweepAbandonedRuns(ctx context.Context, o SweepOptions) (SweepRe
 		}
 		return nil
 	})
+	if err != nil {
+		return res, err
+	}
+	res.RestoresClosed, res.RestoresClosedBy, err = s.sweepStuckDeviceRestores(ctx, o.ActiveWithin)
 	return res, err
 }
 

@@ -76,7 +76,7 @@ const (
 
 func (e *env) create(t *testing.T, p string) store.RestoreRequest {
 	t.Helper()
-	r, err := e.svc.Create(context.Background(), Actor{AdminID: "", Username: "tech"}, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, p)
+	r, err := e.svc.Create(context.Background(), Actor{AdminID: "", Username: "tech", FreshMFA: true}, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,9 @@ func TestDownloadStreamsAFileAndRecordsTheDelivery(t *testing.T) {
 	}
 }
 
-// TestDownloadStreamsADirectory: a directory restore is one zip of its files.
+// TestDownloadStreamsADirectory: a directory restore is one zip of its files,
+// under a top-level entry named after the folder (the worker builds one path
+// exactly like a list of one, ADR 0028).
 func TestDownloadStreamsADirectory(t *testing.T) {
 	e := newEnv(t)
 	r := e.create(t, goodDir)
@@ -207,8 +209,9 @@ func TestDownloadStreamsADirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readZip(t, out.Bytes())
-	if len(got) != 2 || sha256.Sum256(got["Quarterly-Report.txt"]) != sha256.Sum256(fixtures.DefaultFiles()[0].Content) ||
-		sha256.Sum256(got["Budget-2026.csv"]) != sha256.Sum256(fixtures.DefaultFiles()[1].Content) {
+	if _, dir := got["Documents/"]; len(got) != 3 || !dir ||
+		sha256.Sum256(got["Documents/Quarterly-Report.txt"]) != sha256.Sum256(fixtures.DefaultFiles()[0].Content) ||
+		sha256.Sum256(got["Documents/Budget-2026.csv"]) != sha256.Sum256(fixtures.DefaultFiles()[1].Content) {
 		t.Fatalf("directory zip entries: %d", len(got))
 	}
 	if len(files(e.dir)) != 0 {
@@ -249,16 +252,16 @@ func TestRefusals(t *testing.T) {
 		{"unknown device", "01J9ZZ0000000000000000ZZZZ", fixtures.FixtureSnapshotID, goodPath, store.ErrNotFound},
 	}
 	for _, c := range cases {
-		if _, err := e.svc.Create(ctx, Actor{}, store.ScopeAll(), c.dev, c.snap, c.path); !errors.Is(err, c.want) {
+		if _, err := e.svc.Create(ctx, Actor{FreshMFA: true}, store.ScopeAll(), c.dev, c.snap, c.path); !errors.Is(err, c.want) {
 			t.Errorf("%s: want %v, got %v", c.name, c.want, err)
 		}
 	}
 	// A scope that does not include the device sees it as not found.
-	if _, err := e.svc.Create(ctx, Actor{}, store.ScopeOf("other"), e.device.ID, fixtures.FixtureSnapshotID, goodPath); !errors.Is(err, store.ErrNotFound) {
+	if _, err := e.svc.Create(ctx, Actor{FreshMFA: true}, store.ScopeOf("other"), e.device.ID, fixtures.FixtureSnapshotID, goodPath); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("out of scope: %v", err)
 	}
 	noKey := &Service{Store: e.st, Backend: e.be, Clock: e.svc.Clock}
-	if _, err := noKey.Create(ctx, Actor{}, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, goodPath); !errors.Is(err, ErrMasterKey) {
+	if _, err := noKey.Create(ctx, Actor{FreshMFA: true}, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID, goodPath); !errors.Is(err, ErrMasterKey) {
 		t.Errorf("no master key: %v", err)
 	}
 	r := e.create(t, goodPath)

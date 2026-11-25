@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
+	"github.com/c2tech-sys/cryobackup/internal/logx"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
@@ -84,12 +85,24 @@ type AbandonedRunSweeper struct {
 	Store *store.Store
 	// Options tune the sweep; the zero value takes the store defaults.
 	Options store.SweepOptions
+	// Log receives the line about device restores the sweep closed; nil is logx.Default().
+	Log *logx.Logger
 }
 
 // Job returns the schedule for the runner.
 func (j *AbandonedRunSweeper) Job() Job {
 	return Job{Name: NameAbandonedRunSweeper, Every: AbandonedRunSweeperEvery, Run: func(ctx context.Context) error {
-		_, err := j.Store.SweepAbandonedRuns(ctx, j.Options)
+		res, err := j.Store.SweepAbandonedRuns(ctx, j.Options)
+		// A running device restore the sweep closed as FAILED interrupted (ADR 0027,
+		// P22-E) is said once per run: the count and the count per reason, no id.
+		if res.RestoresClosed > 0 {
+			log := j.Log
+			if log == nil {
+				log = logx.Default()
+			}
+			log.Warn("abandoned-run-sweeper: closed running device restores that had no run record", logx.Int("count", res.RestoresClosed),
+				logx.Int("no_run_record", res.RestoresClosedBy["no_run_record"]), logx.Int("agent_restarted", res.RestoresClosedBy["agent_restarted"]))
+		}
 		return err
 	}}
 }

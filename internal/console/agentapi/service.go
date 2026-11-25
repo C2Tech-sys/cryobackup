@@ -66,6 +66,7 @@ type Service struct {
 	snapshots         *ratelimit.Bucket
 	policy            *ratelimit.Bucket
 	leases            *ratelimit.Bucket
+	restoreFetch      *ratelimit.Bucket // GET /restores/{id} (P22-E, restore_p22.go)
 	pollFlight        *ratelimit.Flight
 	touchMu           sync.Mutex
 	touched           map[string]time.Time
@@ -104,16 +105,17 @@ func (s *Service) init() {
 		// Not an operator setting: the agent asks once per start and waits at
 		// least api.StartLeaseRetryMin after a refusal.
 		s.leases = ratelimit.NewBucket(api.StartLeasePerMinute, time.Minute, api.StartLeasePerMinute, now)
+		s.restoreFetch = ratelimit.NewBucket(restoreFetchPerMinute, time.Minute, restoreFetchPerMinute, now)
 		s.pollFlight = ratelimit.NewFlight()
 		s.touched = map[string]time.Time{}
 	})
 }
 
 // Register adds the agent routes to r: the api.Pattern* constants for enroll,
-// policy, heartbeat, runs, snapshots, commands and command result (M0) and
-// start-lease (M1, ADR 0005). The other api patterns arrive with their
-// milestones (token rotate M5, restores M6, progress M9, release M11, lobby M9)
-// and answer 404 until then.
+// policy, heartbeat, runs, snapshots, commands and command result (M0),
+// start-lease (M1, ADR 0005) and the restore selection fetch (P22, ADR 0027).
+// The other api patterns arrive with their milestones (token rotate M5, the
+// relay artifact, progress M9, release M11, lobby M9) and answer 404 until then.
 func (s *Service) Register(r httpx.Registrar) {
 	s.init()
 	r.Handle(api.PatternEnroll, http.HandlerFunc(s.handleEnroll))
@@ -124,6 +126,7 @@ func (s *Service) Register(r httpx.Registrar) {
 	r.Handle(api.PatternCommands, s.deviceAuth(s.handleCommands))
 	r.Handle(api.PatternCommandResult, s.deviceAuth(s.handleCommandResult))
 	r.Handle(api.PatternStartLease, s.deviceAuth(s.handleStartLease))
+	r.Handle(api.PatternRestore, s.deviceAuth(s.handleRestoreFetch))
 }
 
 // ---- authentication ----

@@ -532,6 +532,12 @@ func (l *factLoader) rootDrives(p policy.Policy) driveSet {
 // a partial index only when the query's WHERE visibly implies the index's, and
 // a bound parameter does not. A test runs EXPLAIN QUERY PLAN over these exact
 // strings and fails if the intended index is not chosen.
+//
+// Every backup query names kind = 'backup' (here and in the attempt and failure
+// streak queries of deviceFacts): a restore run (ADR 0027) is a run of the same
+// device and must never move backup freshness, the open run, the newest attempt
+// or the failure streak. TestRestoreRunNeverMovesBackupFreshness
+// (restores_p22_test.go) pins it.
 const (
 	lastSuccessSQL  = `SELECT MIN(finished_at, received_at) FROM runs INDEXED BY idx_runs_last_success WHERE device_id = ? AND kind = 'backup' AND outcome = 'success' ORDER BY finished_at DESC LIMIT 1`
 	doneBackupWhere = `kind = 'backup' AND outcome IS NOT NULL` // idx_runs_last_backup_done

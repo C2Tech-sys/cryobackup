@@ -351,23 +351,24 @@ func matrix() map[string]matrixCase {
 			return nil, err
 		}},
 	}
-	addM2Matrix(m)       // the M2 customer, device and run methods (scope_m2_test.go)
-	addEnrollM2Matrix(m) // M2-W2B: token management (enroll_m2_test.go)
-	addW2CMatrix(m)      // M2-W2C: commands and identity conflicts (scope_w2c_test.go)
-	addAuditM2Matrix(m)  // M2-W3A: audit viewer reads and console-wide settings (audit_m2_test.go)
-	addM3T3Matrix(m)     // M3-T3: saved views, pause/resume, run search, heartbeat ring (m3t3_test.go)
-	addM3T6Matrix(m)     // M3-T6: device retire and token delete (m3t6_test.go)
-	addADR19Matrix(m)    // ADR 0019: device purge and customer delete (purge_adr19_test.go)
-	addM4Matrix(m)       // ADR 0020: alarm episodes, recipients, delivery log, acknowledgements (scope_m4_test.go)
-	addW2AMatrix(m)      // P20-W2A: batch reads, snooze re-arm, suppress (notify_w2a_m4_test.go)
-	addW2BMatrix(m)      // P20-W2B: closed episodes left out of a retried alert (notify_w2b_m4_test.go)
+	addM2Matrix(m)         // the M2 customer, device and run methods (scope_m2_test.go)
+	addEnrollM2Matrix(m)   // M2-W2B: token management (enroll_m2_test.go)
+	addW2CMatrix(m)        // M2-W2C: commands and identity conflicts (scope_w2c_test.go)
+	addAuditM2Matrix(m)    // M2-W3A: audit viewer reads and console-wide settings (audit_m2_test.go)
+	addM3T3Matrix(m)       // M3-T3: saved views, pause/resume, run search, heartbeat ring (m3t3_test.go)
+	addM3T6Matrix(m)       // M3-T6: device retire and token delete (m3t6_test.go)
+	addADR19Matrix(m)      // ADR 0019: device purge and customer delete (purge_adr19_test.go)
+	addM4Matrix(m)         // ADR 0020: alarm episodes, recipients, delivery log, acknowledgements (scope_m4_test.go)
+	addW2AMatrix(m)        // P20-W2A: batch reads, snooze re-arm, suppress (notify_w2a_m4_test.go)
+	addW2BMatrix(m)        // P20-W2B: closed episodes left out of a retried alert (notify_w2b_m4_test.go)
+	addRestoreP22Matrix(m) // P22-E: device restore create (restores_p22_test.go)
 	return m
 }
 
 // globalMethods are exported methods that are deliberately not scoped, with the reason.
 // Adding an exported method to Store without classifying it here, in matrix() or by
 // the Agent prefix fails TestScopeMatrixCoversEveryExportedMethod.
-var globalMethods = addSelfBackupP22Matrix(map[string]string{
+var globalMethods = addRestoreP22Global(addSelfBackupP22Matrix(map[string]string{
 	"Close": "lifecycle", "Read": "transaction primitive", "Write": "transaction primitive", "Now": "clock", "Path": "file path of the database",
 	"SchemaVersion": "migration marker",
 	"GetSetting":    "global configuration", "ListSettings": "global configuration", "PutSetting": "global configuration",
@@ -395,7 +396,7 @@ var globalMethods = addSelfBackupP22Matrix(map[string]string{
 	"PutOperatorSetting":       "global configuration (M2-W3A: init stores the operator zone)",
 	"ActiveEscrowKeyIDs":       "health-prober (C12): key generation ids only", "SweepAbandonedRuns": "abandoned-run-sweeper job",
 	"AcquireJobLease": "job state", "ReleaseJobLease": "job state", "RecordJobRun": "job state", "GetJobState": "job state", "ListJobStates": "job state",
-})
+}))
 
 // addSelfBackupP22Matrix classifies the console self-backup's methods (ADR 0029,
 // ticket P22-C, selfbackup_p22.go). None takes a Scope: each reads or writes the

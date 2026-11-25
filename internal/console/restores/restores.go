@@ -33,6 +33,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -108,6 +109,10 @@ type Actor struct {
 	// Method is how the request came in: "web" (the console pages) or "api"
 	// (the admin JSON API). It is recorded in the audit row; empty means "web".
 	Method string
+	// FreshMFA says the caller's session passed a TOTP check within the
+	// fresh-MFA window (auth.Manager.FreshMFA, ADR 0019). CreateRestore refuses
+	// every mode without it (ruling C5, ErrStepUp); the caller computes it.
+	FreshMFA bool
 }
 
 // Service creates restore requests and streams their downloads.
@@ -189,10 +194,12 @@ func (s *Service) log() *logx.Logger {
 
 var snapshotIDRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// ValidPath accepts an absolute snapshot path: it starts with "/", has no
-// control characters and is at most 4096 bytes. adminpath validates it again.
+// ValidPath accepts an absolute snapshot path: it starts with "/", is clean
+// (path.Clean leaves it unchanged: no "." or ".." segment, no empty segment, no
+// trailing "/"), has no control characters and is at most 4096 bytes. adminpath
+// validates it again (DumpRequest.Validate applies the same clean rule).
 func ValidPath(p string) bool {
-	if p == "" || p[0] != '/' || len(p) > 4096 {
+	if p == "" || p[0] != '/' || len(p) > 4096 || path.Clean(p) != p {
 		return false
 	}
 	for i := 0; i < len(p); i++ {
@@ -205,8 +212,14 @@ func ValidPath(p string) bool {
 
 // Create validates and records a download_zip restore of one snapshot path (a
 // file or a directory). There is nothing to build: the returned row is ready,
-// and the archive is produced only while a download streams it.
+// and the archive is produced only while a download streams it. A retired
+// device may be downloaded from (ADR 0030); a device being purged may not
+// (ErrDevicePurging). Like CreateRestore it fails closed without a fresh MFA
+// check (Actor.FreshMFA, ruling C5): ErrStepUp, before anything is read.
 func (s *Service) Create(ctx context.Context, who Actor, scope store.Scope, deviceID, snapshotID, filePath string) (store.RestoreRequest, error) {
+	if !who.FreshMFA {
+		return store.RestoreRequest{}, ErrStepUp
+	}
 	if !snapshotIDRE.MatchString(snapshotID) || !ValidPath(filePath) {
 		return store.RestoreRequest{}, ErrInvalid
 	}
@@ -214,8 +227,8 @@ func (s *Service) Create(ctx context.Context, who Actor, scope store.Scope, devi
 	if err != nil {
 		return store.RestoreRequest{}, err
 	}
-	if dev.RetiredAt != nil {
-		return store.RestoreRequest{}, ErrInvalid
+	if dev.Purging() {
+		return store.RestoreRequest{}, ErrDevicePurging
 	}
 	esc, err := s.Store.ActiveEscrow(ctx, scope, deviceID)
 	if err != nil {
@@ -488,9 +501,22 @@ func (s *Service) Download(ctx context.Context, who Actor, r store.RestoreReques
 	}
 	defer s.end(r.ID)
 	started := s.now()
-	sel, err := s.Master.Unwrap(escrow.ContextRestoreSelection, r.DeviceID+"/"+r.SnapshotID, 1, r.SelectionWrapped)
+	paths, legacy, err := unwrapSelection(s.Master, r)
 	if err != nil {
 		return Result{}, s.failed(ctx, who, r, started, "selection_unreadable", "")
+	}
+	// A selection written before P22 is one raw path and streams as Path; a
+	// newer one is a list and streams as Paths, a single path included (the
+	// worker builds both the same way, ADR 0028).
+	req := adminpath.DumpRequest{DeviceRequest: adminpath.DeviceRequest{DeviceID: r.DeviceID, RequestID: r.ID}, SnapshotID: r.SnapshotID}
+	if legacy {
+		req.Path = paths[0]
+	} else {
+		req.Paths = paths
+	}
+	collapsed := paths
+	if !legacy {
+		collapsed = adminpath.CollapsePaths(paths)
 	}
 	all := store.ScopeAll()
 	// The guard cancels the stream (the worker's restic run with it) when no
@@ -506,8 +532,7 @@ func (s *Service) Download(ctx context.Context, who Actor, r store.RestoreReques
 	})
 	defer guard.close()
 	hw := &hashWriter{w: guard, h: sha256.New()}
-	_, derr := s.Backend.Dump(gctx, adminpath.DumpRequest{DeviceRequest: adminpath.DeviceRequest{DeviceID: r.DeviceID, RequestID: r.ID},
-		SnapshotID: r.SnapshotID, Path: string(sel)}, hw)
+	dres, derr := s.Backend.Dump(gctx, req, hw)
 	guard.close()
 	switch reason := guard.tripped(); {
 	case reason == tripTooSlow:
@@ -525,16 +550,22 @@ func (s *Service) Download(ctx context.Context, who Actor, r store.RestoreReques
 	res := Result{Bytes: hw.n, SHA256: hex.EncodeToString(hw.h.Sum(nil))}
 	finished := s.now()
 	delivered, none := "delivered", ""
+	// The download's record (ADR 0028): size and hash of the archive, what it
+	// left out by kind (never by name), and the count and hash of the collapsed
+	// selection it streamed.
 	progress, _ := json.Marshal(struct {
-		Bytes  int64  `json:"bytes"`
-		SHA256 string `json:"sha256"`
-	}{res.Bytes, res.SHA256})
+		Bytes          int64                 `json:"bytes"`
+		SHA256         string                `json:"sha256"`
+		Skipped        adminpath.DumpSkipped `json:"skipped"`
+		SelectionCount int                   `json:"selection_count"`
+		SelectionHash  string                `json:"selection_hash"`
+	}{res.Bytes, res.SHA256, dres.Skipped, len(collapsed), selectionHash(collapsed)})
 	bg := context.WithoutCancel(ctx)
 	if _, err := s.Store.UpdateRestoreRequest(bg, all, r.ID, store.RestoreUpdate{Status: &delivered, Bytes: &res.Bytes, Progress: progress,
 		ErrorClass: &none, StartedAt: &started, FinishedAt: &finished, CountDownload: true}); err != nil {
 		s.log().Error("restore: cannot record the delivery", logx.ID("restore_id", r.ID), logx.Err(err))
 	}
-	s.log().Info("restore: delivered", logx.ID("restore_id", r.ID), logx.Int("bytes", int(res.Bytes)))
+	s.log().Info("restore: delivered", logx.ID("restore_id", r.ID), logx.Int("bytes", int(res.Bytes)), logx.Int("skipped", dres.Skipped.Total()))
 	return res, nil
 }
 

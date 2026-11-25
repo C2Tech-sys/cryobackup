@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -155,7 +154,9 @@ func (s *Service) Register(r httpx.Registrar) {
 	r.Handle(PatternLogout, ro(s.logout))
 	r.Handle(PatternDevices, ro(s.listDevices))
 	r.Handle(PatternDevice, ro(s.getDevice))
-	r.Handle(PatternRestoreCreate, op(s.createRestore))
+	// Every restore, whatever its mode, needs a fresh MFA check (ADR 0027 ruling C5;
+	// restore_p22.go): an API token is never fresh, so only a signed-in session creates one.
+	r.Handle(PatternRestoreCreate, s.Auth.Require(auth.RoleOperator, auth.ModeAPI, s.Auth.RequireFreshMFA(http.HandlerFunc(s.createRestore))))
 	r.Handle(PatternRestore, ro(s.getRestore))
 	r.Handle(PatternRestoreDownload, op(s.download))
 	r.Handle(PatternRestoreMint, op(s.mintDownload))
@@ -288,21 +289,37 @@ type DeviceDetailJSON struct {
 // appears in a status body. A restore is ready as soon as it is created: the
 // zip is produced only while a download streams it (ADR 0008), so Bytes and
 // SHA256 describe the last completed download and are absent before one.
+//
+// P22 (restore_p22.go): Mode is the admin API's word (download_zip,
+// device_original, device_side); a device restore also carries Overwrite, its
+// counts and its errors by class from the agent's run; Outcome is the fixed
+// sentence the operator reads (restores.DescribeOutcome); Skipped is what a
+// completed download left out, by kind. None of it is a path.
 type RestoreJSON struct {
-	ID            string     `json:"id"`
-	DeviceID      string     `json:"device_id"`
-	SnapshotID    string     `json:"snapshot_id"`
-	Mode          string     `json:"mode"`
-	Status        string     `json:"status"`
-	ErrorClass    string     `json:"error_class,omitempty"`
-	Bytes         *int64     `json:"bytes,omitempty"`
-	SHA256        string     `json:"sha256,omitempty"`
-	DownloadCount int        `json:"download_count"`
-	CreatedAt     time.Time  `json:"created_at"`
-	ExpiresAt     time.Time  `json:"expires_at"`
-	PurgeAfter    *time.Time `json:"purge_after,omitempty"`
-	DownloadReady bool       `json:"download_ready"`
-	ComputedAt    time.Time  `json:"computed_at"`
+	ID             string                      `json:"id"`
+	DeviceID       string                      `json:"device_id"`
+	SnapshotID     string                      `json:"snapshot_id"`
+	Mode           string                      `json:"mode"`
+	Overwrite      string                      `json:"overwrite,omitempty"`
+	Status         string                      `json:"status"`
+	ErrorClass     string                      `json:"error_class,omitempty"`
+	Outcome        string                      `json:"outcome"`
+	SelectionCount int                         `json:"selection_count"`
+	Bytes          *int64                      `json:"bytes,omitempty"`
+	SHA256         string                      `json:"sha256,omitempty"`
+	Skipped        *adminpath.DumpSkipped      `json:"skipped,omitempty"`
+	FilesRestored  *int64                      `json:"files_restored,omitempty"`
+	FilesSkipped   *int64                      `json:"files_skipped,omitempty"`
+	BytesRestored  *uint64                     `json:"bytes_restored,omitempty"`
+	Errors         []store.RestoreClassCounted `json:"errors,omitempty"`
+	DownloadCount  int                         `json:"download_count"`
+	CreatedAt      time.Time                   `json:"created_at"`
+	StartedAt      *time.Time                  `json:"started_at,omitempty"`
+	FinishedAt     *time.Time                  `json:"finished_at,omitempty"`
+	ExpiresAt      time.Time                   `json:"expires_at"`
+	PurgeAfter     *time.Time                  `json:"purge_after,omitempty"`
+	DownloadReady  bool                        `json:"download_ready"`
+	ComputedAt     time.Time                   `json:"computed_at"`
 }
 
 // DownloadResponse is the answer of POST /api/v1/restores/{id}/download: a
@@ -314,11 +331,19 @@ type DownloadResponse struct {
 	ComputedAt  time.Time `json:"computed_at"`
 }
 
-// CreateRestoreRequest is the body of POST /api/v1/devices/{id}/restores.
+// CreateRestoreRequest is the body of POST /api/v1/devices/{id}/restores (P22:
+// every mode, restore_p22.go). Mode is download_zip, device_original or
+// device_side. A download takes Path (one) or Paths (up to 50); a device
+// restore takes Paths (up to 100), Overwrite (never, the default, or if_changed
+// for device_original only) and, for if_changed, ConfirmHostName: the device's
+// host name typed exactly. Paths are never logged or echoed.
 type CreateRestoreRequest struct {
-	SnapshotID string `json:"snapshot_id"`
-	Mode       string `json:"mode"`
-	Path       string `json:"path"`
+	SnapshotID      string   `json:"snapshot_id"`
+	Mode            string   `json:"mode"`
+	Path            string   `json:"path,omitempty"`
+	Paths           []string `json:"paths,omitempty"`
+	Overwrite       string   `json:"overwrite,omitempty"`
+	ConfirmHostName string   `json:"confirm_host_name,omitempty"`
 }
 
 // VersionResponse is GET /api/v1/version.
@@ -632,46 +657,7 @@ func zeroIfNil(t *time.Time) time.Time {
 
 // ---- restores ----
 
-func (s *Service) restoreJSON(p *auth.Principal, rr store.RestoreRequest) RestoreJSON {
-	out := RestoreJSON{ID: rr.ID, DeviceID: rr.DeviceID, SnapshotID: rr.SnapshotID, Mode: rr.Mode, Status: rr.Status, ErrorClass: rr.ErrorClass, Bytes: rr.Bytes,
-		DownloadCount: rr.DownloadCount, CreatedAt: rr.CreatedAt, ExpiresAt: rr.ExpiresAt, PurgeAfter: rr.PurgeAfter, ComputedAt: s.now()}
-	var pr struct {
-		SHA256 string `json:"sha256"`
-	}
-	if len(rr.Progress) > 0 && json.Unmarshal(rr.Progress, &pr) == nil {
-		out.SHA256 = pr.SHA256
-	}
-	out.DownloadReady = s.Restores.Downloadable(rr) && p.Role >= auth.RoleOperator
-	return out
-}
-
-func (s *Service) createRestore(w http.ResponseWriter, r *http.Request) {
-	p, _ := auth.FromContext(r.Context())
-	var req CreateRestoreRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		httpx.Problem(w, r, api.CodeInvalidRequest, 0)
-		return
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		httpx.Problem(w, r, api.CodeInvalidRequest, 0)
-		return
-	}
-	if req.Mode != "download_zip" {
-		httpx.Problem(w, r, api.CodeInvalidRequest, 0)
-		return
-	}
-	rr, err := s.Restores.Create(r.Context(), restores.Actor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: "api"},
-		p.Scope, r.PathValue("id"), req.SnapshotID, req.Path)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	w.Header().Set("Location", "/api/v1/restores/"+rr.ID)
-	httpx.WriteJSON(w, http.StatusAccepted, s.restoreJSON(p, rr))
-}
+// restoreJSON and createRestore are in restore_p22.go (P22: every restore mode).
 
 func (s *Service) getRestore(w http.ResponseWriter, r *http.Request) {
 	p, _ := auth.FromContext(r.Context())

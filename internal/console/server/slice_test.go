@@ -113,6 +113,33 @@ func (a *adminCall) login(user, pw string) {
 	a.finishMFA(lr) // M2-W1A: the password step is not a login
 }
 
+// stepUp renews the session's fresh-MFA mark with a TOTP code (POST
+// /api/v1/auth/step-up, ADR 0019), which every restore needs (ADR 0027 ruling
+// C5). A login after the first one completes with a recovery code, which is
+// never fresh by design, so the gate is met the way an operator meets it, with
+// a current authenticator code. The test cannot scan the enrollment QR again, so
+// it reads the account's TOTP secret from the console's own database with the
+// console's master key, and uses the first step after the last one the account
+// used (the replay guard refuses a step at or before it).
+func (a *adminCall) stepUp(app *cli.App, user string) {
+	a.t.Helper()
+	adm, err := app.Store.GetAdminByUsername(context.Background(), user)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	secret, err := app.Master.Unwrap(auth.ContextTOTP, adm.ID, 1, adm.TOTPSecretWrapped)
+	if err != nil {
+		a.t.Fatalf("totp secret: %v", err)
+	}
+	step := auth.TOTPStep(time.Now())
+	if adm.TOTPLastStep != nil && *adm.TOTPLastStep >= step {
+		step = *adm.TOTPLastStep + 1
+	}
+	if code, b, _ := a.do("POST", "/api/v1/auth/step-up", adminapi.StepUpRequest{Code: auth.TOTPCodeAt(secret, step)}); code != 204 {
+		a.t.Fatalf("step-up: %d %s", code, b)
+	}
+}
+
 func (a *adminCall) do(method, path string, body any) (int, []byte, http.Header) {
 	a.t.Helper()
 	var rd io.Reader
@@ -363,6 +390,12 @@ func TestM0SliceInProcess(t *testing.T) {
 	// and nothing restored lands on the console's disk (ADR 0008).
 	diskBefore := diskFiles(t, dir)
 	path := "/C/Users/Public/Documents/Quarterly-Report.txt"
+	// Without a fresh MFA check the restore is refused (ADR 0027 ruling C5); the
+	// step-up meets the gate, it is never relaxed for the test.
+	if code, b, _ := admin.do("POST", "/api/v1/devices/"+er.DeviceID+"/restores", adminapi.CreateRestoreRequest{SnapshotID: fixtures.FixtureSnapshotID, Mode: "download_zip", Path: path}); code != 403 || !strings.Contains(string(b), "mfa_step_up_required") {
+		t.Fatalf("restore without a fresh MFA check: %d %s", code, b)
+	}
+	admin.stepUp(app, "owner")
 	code, b, _ := admin.do("POST", "/api/v1/devices/"+er.DeviceID+"/restores", adminapi.CreateRestoreRequest{SnapshotID: fixtures.FixtureSnapshotID, Mode: "download_zip", Path: path})
 	if code != 202 {
 		t.Fatalf("restore: %d %s", code, b)

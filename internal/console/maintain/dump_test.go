@@ -187,20 +187,28 @@ func TestDumpSingleFolderSkipsLinks(t *testing.T) {
 }
 
 // TestDumpSinglePathWithSubfolderSnapshot: "<snapshot>:<subfolder>" with Path
-// is the cleaned path joined to the subfolder, looked up and dumped by its
-// full snapshot path.
+// is the path joined to the subfolder, looked up and dumped by its full
+// snapshot path. Path must be clean (P22-E): an unclean form, which could climb
+// out of the subfolder, is refused with invalid_request before restic runs.
 func TestDumpSinglePathWithSubfolderSnapshot(t *testing.T) {
 	e := newTenv(t, []fakeRule{
 		{Cmd: "ls", Contains: " " + dumpTree + " --", Stdout: "inline:" + lsFileJSON},
 		{Cmd: "dump", Contains: "dump " + dumpSnapID + " " + dumpTree + "/report.docx ", Stdout: "inline:" + docxBody},
 	}, nil)
 	var out bytes.Buffer
-	if _, err := e.w.Dump(e.ctx, adminpath.DumpRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest:/C/fixture", Path: "/tree/./report.docx"}, &out); err != nil {
+	if _, err := e.w.Dump(e.ctx, adminpath.DumpRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest:/C/fixture", Path: "/tree/report.docx"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	names, bodies := zipEntries(t, out.Bytes())
 	if strings.Join(names, "|") != "report.docx" || bodies["report.docx"] != docxBody {
 		t.Fatalf("entries = %q", names)
+	}
+	for _, unclean := range []string{"/tree/./report.docx", "/../report.docx", "/tree/../../x"} {
+		var cut bytes.Buffer
+		_, err := e.w.Dump(e.ctx, adminpath.DumpRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest:/C/fixture", Path: unclean}, &cut)
+		if ae, ok := err.(*adminpath.Error); !ok || ae.Code != adminpath.CodeInvalidRequest || cut.Len() != 0 {
+			t.Fatalf("unclean path %q: %v (%d bytes)", unclean, err, cut.Len())
+		}
 	}
 }
 

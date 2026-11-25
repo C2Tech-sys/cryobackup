@@ -317,43 +317,45 @@ func (b *Backend) Snapshots(ctx context.Context, req adminpath.DeviceRequest) ([
 }
 
 // Dump implements adminpath.Backend like the maintain worker does (ADR 0008,
-// ADR 0028): it streams a real zip into w and writes nothing to disk. With
-// Path, a file is a one-entry archive named after its base name and a
-// directory holds every fake file below it, by its path relative to the
-// directory. With Paths (validated, nested selections collapsed), every
-// selection is named relative to its parent: a file by its base name, a folder
-// by its own entry ("name/") and its files below it; one selection that is not
-// in the fake tree is not_found before any byte. Either way a File with Skip
-// set is left out and counted in DumpResult.Skipped.
-//
-// The worker builds a single Path exactly like Paths: [Path] (its folder gets
-// a top-level "name/" entry); the fixture keeps the older single-path layout,
-// which the console's own fixture tests read.
+// ADR 0028): it streams a real zip into w and writes nothing to disk. The
+// request is validated as the worker validates it. Every selection is named
+// relative to its parent: a file by its base name, a folder by its own entry
+// ("name/") and its files below it; one selection that is not in the fake tree
+// is not_found before any byte. A single Path is built exactly like Paths:
+// [Path], as the worker builds it, except the snapshot root ("/"), whose files
+// keep their snapshot paths. Nested Paths are collapsed. A File with Skip set
+// is left out and counted in DumpResult.Skipped, and when anything was left
+// out the zip ends with the worker's CRYOBACKUP-SKIPPED.txt (counts only).
 func (b *Backend) Dump(ctx context.Context, req adminpath.DumpRequest, w io.Writer) (adminpath.DumpResult, error) {
 	if err := b.record(Call{Method: adminpath.MethodDump, DeviceID: req.DeviceID, Path: req.Path, Paths: append([]string(nil), req.Paths...)}); err != nil {
 		return adminpath.DumpResult{}, err
+	}
+	if err := req.Validate(); err != nil {
+		return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
 	}
 	var (
 		entries []fixtureEntry
 		skipped adminpath.DumpSkipped
 	)
-	if req.Paths != nil {
-		if err := req.Validate(); err != nil {
-			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
+	sels := adminpath.CollapsePaths(req.Paths)
+	if req.Paths == nil {
+		sels = []string{req.Path}
+	}
+	for _, sel := range sels {
+		var got []fixtureEntry
+		var found bool
+		if sel == "/" {
+			got, found = b.entriesOf("/", "", false, &skipped)
+		} else {
+			got, found = b.entriesOf(sel, path.Base(sel), true, &skipped)
 		}
-		for _, sel := range adminpath.CollapsePaths(req.Paths) {
-			got, found := b.entriesOf(sel, path.Base(sel), true, &skipped)
-			if !found {
-				return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeNotFound, "")
-			}
-			entries = append(entries, got...)
-		}
-	} else {
-		got, found := b.entriesOf(clean(req.Path), "", false, &skipped)
 		if !found {
 			return adminpath.DumpResult{}, adminpath.NewError(adminpath.CodeNotFound, "")
 		}
-		entries = got
+		entries = append(entries, got...)
+	}
+	if n := skipped.Total(); n > 0 {
+		entries = append(entries, fixtureEntry{name: SkippedEntryName, content: skippedText(skipped)})
 	}
 	out := io.Writer(w)
 	if b.FailDumpAfter > 0 {
@@ -381,6 +383,30 @@ func (b *Backend) Dump(ctx context.Context, req adminpath.DumpRequest, w io.Writ
 	return adminpath.DumpResult{ResultMeta: adminpath.ResultMeta{RequestID: req.RequestID, Outcome: restic.OutcomeSuccess}, Skipped: skipped}, nil
 }
 
+// SkippedEntryName is the last entry of a download that left something out,
+// as the worker names it (maintain's skippedEntryName).
+const SkippedEntryName = "CRYOBACKUP-SKIPPED.txt"
+
+// skippedText is the worker's CRYOBACKUP-SKIPPED.txt for s: counts by kind,
+// never a name.
+func skippedText(s adminpath.DumpSkipped) []byte {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "CryoBackup left %d item(s) out of this download because they are not regular files or folders.\r\n", s.Total())
+	sb.WriteString("Their names are not listed here.\r\n\r\n")
+	for _, l := range []struct {
+		label string
+		n     int
+	}{
+		{"symbolic links and junctions", s.Symlinks}, {"hard links", s.HardLinks}, {"devices", s.Devices},
+		{"named pipes", s.Pipes}, {"sockets", s.Sockets}, {"other special entries", s.Other},
+	} {
+		if l.n > 0 {
+			fmt.Fprintf(&sb, "%s: %d\r\n", l.label, l.n)
+		}
+	}
+	return []byte(sb.String())
+}
+
 // fixtureEntry is one zip entry of a fake dump; dir entries end in "/".
 type fixtureEntry struct {
 	name    string
@@ -389,11 +415,11 @@ type fixtureEntry struct {
 }
 
 // entriesOf lists the zip entries of one selected path of the fake tree and
-// counts its skipped files into skipped. For a single-path dump (multi false)
-// a file is its base name and a folder's files are named relative to the
-// folder. For a several-paths dump (multi true) every name starts with top,
-// the selection's base name, and a folder gets its own entry first. found is
-// false when nothing in the tree is at or below want.
+// counts its skipped files into skipped. With multi (every selection but the
+// snapshot root) every name starts with top, the selection's base name, and a
+// folder gets its own entry first. Without it (the snapshot root, want "/") a
+// file is named by its path relative to want. found is false when nothing in
+// the tree is at or below want.
 func (b *Backend) entriesOf(want, top string, multi bool, skipped *adminpath.DumpSkipped) (out []fixtureEntry, found bool) {
 	for _, f := range b.files() {
 		fp := clean(f.Path)
