@@ -71,6 +71,26 @@ type Worker struct {
 	mu         sync.Mutex
 	retryAfter map[string]time.Time // step 1 reschedule, per device
 	lastM5Log  time.Time
+
+	// The self-backup (selfbackup.go, ADR 0029).
+	// selfKeys supplies the repository password, the master key id and the
+	// escrow proof: the KeyUnwrapper when it implements SelfBackupKeyer, else
+	// what Run loads from the master key file. Nil: a configured self-backup
+	// fails with class no_key.
+	selfKeys SelfBackupKeyer
+	// selfRunning is set while a self-backup step runs in this process (one at
+	// a time; the db-self-backup lease covers other processes).
+	selfRunning atomic.Bool
+	// freeDisk measures the free bytes of a directory's filesystem; known false
+	// when the platform cannot tell (tests replace it).
+	freeDisk func(dir string) (free uint64, known bool, err error)
+	// selfBeforeBackup and selfAfterRestore are test seams: called with the
+	// staging directory just before `restic backup`, and with the verify
+	// directory just after `restic restore` exited 0. Nil in production.
+	selfBeforeBackup func(staging string)
+	selfAfterRestore func(target string)
+	// selfLeaseRenew overrides selfLeaseRenewEvery (tests).
+	selfLeaseRenew time.Duration
 }
 
 var _ adminpath.Backend = (*Worker)(nil)
@@ -123,6 +143,13 @@ func New(cfg Config, st *store.Store, keys KeyUnwrapper, clock func() time.Time)
 		streams:    make(chan struct{}, cfg.MaxStreams),
 		started:    clock(),
 		retryAfter: make(map[string]time.Time),
+		freeDisk:   freeDiskBytes,
+	}
+	if sk, ok := keys.(SelfBackupKeyer); ok {
+		w.selfKeys = sk
+	}
+	if w.cfg.StateDir == "" {
+		w.cfg.StateDir = filepath.Dir(st.Path())
 	}
 	var id [4]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -429,6 +456,15 @@ func (w *Worker) exec(ctx context.Context, t *target, cmd restic.Command, timeou
 // it (ADR 0017), so a worker whose slots are all taken answers "busy" (not
 // checked) and never makes the probe time out as if storage were down.
 func (w *Worker) execSlot(ctx context.Context, t *target, cmd restic.Command, timeout, slotWait time.Duration, onStdout func(io.Reader) error) (execResult, error) {
+	return w.execEv(ctx, t, cmd, timeout, slotWait, onStdout, nil)
+}
+
+// execEv is execSlot with evidence from stdout for restic.Map: ev, when
+// non-nil, is filled by onStdout (a backup's summary, a check's error count)
+// and read after the child has exited, so a backup that exited 0 without a
+// summary maps to a parse failure and a check that counted damage to a
+// failure, as the exit-code table says (the self-backup uses it).
+func (w *Worker) execEv(ctx context.Context, t *target, cmd restic.Command, timeout, slotWait time.Duration, onStdout func(io.Reader) error, ev *restic.Evidence) (execResult, error) {
 	var busy <-chan time.Time
 	if slotWait > 0 {
 		tm := time.NewTimer(slotWait)
@@ -453,7 +489,11 @@ func (w *Worker) execSlot(ctx context.Context, t *target, cmd restic.Command, ti
 		return execResult{}, w.ctxOr(ctx, adminpath.NewError(adminpath.CodeInternal, ""))
 	}
 	res := execResult{procResult: pr, Elapsed: w.clock().Sub(t0)}
-	res.Result = restic.Map(cmd.Kind, pr.Exit, restic.Evidence{Stderr: pr.Stderr})
+	evidence := restic.Evidence{Stderr: pr.Stderr}
+	if ev != nil {
+		evidence.SummarySeen, evidence.CheckErrors = ev.SummarySeen, ev.CheckErrors
+	}
+	res.Result = restic.Map(cmd.Kind, pr.Exit, evidence)
 	if pr.Canceled {
 		res.Result = restic.Result{Outcome: restic.OutcomeInterrupted}
 	}

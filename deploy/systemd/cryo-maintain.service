@@ -14,9 +14,16 @@ Wants=network-online.target
 Type=simple
 User=cryobackup
 Group=cryobackup
-# /etc/cryobackup/maintain.env holds CRYO_MAINTAIN_BUCKET, CRYO_MAINTAIN_PREFIX and, optionally,
-# CRYO_MAINTAIN_RESTIC_SHA256 (see maintain.env.example in the README). It carries no secret.
+# /etc/cryobackup/maintain.env holds CRYO_MAINTAIN_BUCKET, CRYO_MAINTAIN_PREFIX,
+# CRYO_MAINTAIN_SELF_PREFIX and, optionally, CRYO_MAINTAIN_RESTIC_SHA256 (see maintain.env.example
+# in the README). It carries no secret.
 EnvironmentFile=/etc/cryobackup/maintain.env
+# Console self-backup (ADR 0029): a prefix in the same bucket that does NOT begin with
+# CRYO_MAINTAIN_PREFIX (the gateway credential's IAM reach); it stages its copy under
+# /var/lib/cryobackup. Placeholder only: empty means no self-backup, and the db-self-backup job
+# row says not_configured (C11 alarms). Set the real value in maintain.env, which overrides
+# this line.
+Environment=CRYO_MAINTAIN_SELF_PREFIX=
 Environment=RCLONE_CONFIG=/etc/cryobackup/rclone-admin.conf
 Environment=CRYO_MAINTAIN_RESTIC=/usr/local/bin/restic
 Environment=CRYO_MAINTAIN_RCLONE=/usr/local/bin/rclone

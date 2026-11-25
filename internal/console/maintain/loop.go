@@ -111,7 +111,25 @@ func (w *Worker) Loop(ctx context.Context) error {
 
 	tick := time.NewTicker(w.cfg.TickEvery)
 	defer tick.Stop()
+	// The self-backup step (ADR 0029) runs beside the device pass, never inside
+	// it: a backup or a weekly check --read-data can take longer than the 30
+	// minutes after which C07 calls the scheduler stopped. It is started every
+	// tick when none is running in this process and decides itself whether
+	// anything is due.
+	selfBackup := func() {
+		if w.selfRunning.Load() {
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := w.SelfBackupStep(ctx); err != nil && ctx.Err() == nil {
+				w.log.Error("self backup step failed")
+			}
+		}()
+	}
 	w.cycle(ctx) // one pass straight away: a restart must not wait a minute
+	selfBackup()
 loop:
 	for {
 		select {
@@ -119,6 +137,7 @@ loop:
 			break loop
 		case <-tick.C:
 			w.cycle(ctx)
+			selfBackup()
 		}
 	}
 	cancel()
@@ -234,6 +253,13 @@ func (w *Worker) renewLease(ctx context.Context, stop context.CancelFunc, lost *
 	if every <= 0 {
 		every = w.leaseTTL() / 3
 	}
+	w.renewJobLease(ctx, SchedulerJob, w.leaseTTL(), every, stop, lost)
+}
+
+// renewJobLease renews the lease on job name for ttl every period until ctx
+// ends; when the store says another holder has it, it stops the work (stop)
+// and sets lost. A store error is retried at the next tick.
+func (w *Worker) renewJobLease(ctx context.Context, name string, ttl, every time.Duration, stop context.CancelFunc, lost *atomic.Bool) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -242,7 +268,7 @@ func (w *Worker) renewLease(ctx context.Context, stop context.CancelFunc, lost *
 			return
 		case <-t.C:
 		}
-		got, err := w.st.AcquireJobLease(ctx, SchedulerJob, w.holder, w.leaseTTL())
+		got, err := w.st.AcquireJobLease(ctx, name, w.holder, ttl)
 		if err == nil && !got {
 			lost.Store(true)
 			stop()
