@@ -543,17 +543,17 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 		last, ok := recorded(sb.LastAt, c.now)
 		switch {
 		case sb.LastAt == 0:
-			add(SeverityAlarm, "no self-backup has been written"+selfBackupJobWhy(sb.JobClass))
+			add(SeverityAlarm, "no self-backup has been written"+SelfBackupJobWhy(sb.JobClass))
 		case !ok:
 			add(SeverityAlarm, "self-backup"+garbledWhy)
 		case c.now.Sub(last) > DBSelfBackupMaxAge:
-			add(SeverityAlarm, "self-backup older than 26 h"+selfBackupJobWhy(sb.JobClass))
+			add(SeverityAlarm, "self-backup older than 26 h"+SelfBackupJobWhy(sb.JobClass))
 		}
 		switch {
 		case sb.VerifyFailed:
 			add(SeverityCritical, "self-backup verify failed")
-		case sb.LastAt != 0 && ok:
-			if s, cause := selfBackupVerifyAge(sb, c.now); cause != "" {
+		default:
+			if s, cause := SelfBackupVerifyCause(sb, c.now); cause != "" {
 				add(s, cause)
 			}
 		}
@@ -578,9 +578,9 @@ func databaseBanners(d *DatabaseFacts, c bannerCtx) []Banner {
 		Text: "Console database needs attention: " + strings.Join(causes, "; ") + "."}}
 }
 
-// selfBackupJobWhy is the C11 suffix naming why the db-self-backup job's newest run failed: the
+// SelfBackupJobWhy is the C11 suffix naming why the db-self-backup job's newest run failed: the
 // two configuration refusals say which variable to change, any other class is named as it is.
-func selfBackupJobWhy(class string) string {
+func SelfBackupJobWhy(class string) string {
 	switch {
 	case class == "":
 		return ""
@@ -592,6 +592,22 @@ func selfBackupJobWhy(class string) string {
 		return " (its latest run failed)"
 	}
 	return " (latest run: " + class + ")"
+}
+
+// SelfBackupVerifyCause is the C11 verify-age cause of sb, the one rule both the C11 banner and the
+// System page's "Database self-backup" row read, so the row can never say ok while C11 is critical
+// for it. It judges only a self-backup that was written, with a backup time that is usable: with
+// none written there is nothing to verify, and a garbled backup time is the backup cause's to
+// name (C11 says it). VerifyFailed is the caller's: it is critical at once, whatever the age.
+// Severity none and "" when the verdict is fresh or there is nothing to judge.
+func SelfBackupVerifyCause(sb *SelfBackupFacts, now time.Time) (Severity, string) {
+	if sb.LastAt == 0 {
+		return SeverityNone, ""
+	}
+	if _, ok := recorded(sb.LastAt, now); !ok {
+		return SeverityNone, ""
+	}
+	return selfBackupVerifyAge(sb, now)
 }
 
 // selfBackupVerifyAge is the C11 cause of a self-backup that has gone without a verify verdict

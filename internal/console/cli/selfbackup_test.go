@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -134,6 +136,58 @@ func TestSelfBackupRestoreRefusesNonEmptyOut(t *testing.T) {
 		"--master-key", cfg.MasterKeyPath, "--restic", filepath.Join(dir, "no-restic"), "--out", filepath.Join(dir, "fresh"))
 	if code != ExitUsage || !strings.Contains(errb, "class restic_binary") {
 		t.Fatalf("missing restic: %d %q", code, errb)
+	}
+}
+
+// redirectTo makes link a directory that redirects to target: a symlink, or on Windows, where creating
+// one needs a privilege that a developer machine often lacks, a junction (Go reports both as
+// ModeSymlink). It skips the test, saying why, when neither can be made.
+func redirectTo(t *testing.T, target, link string) {
+	t.Helper()
+	err := os.Symlink(target, link)
+	if err == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		if out, jerr := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); jerr == nil {
+			return
+		} else {
+			t.Skipf("cannot make a symlink (%v) or a junction (%v: %s)", err, jerr, strings.TrimSpace(string(out)))
+		}
+	}
+	t.Skipf("cannot make a symlink: %v", err)
+}
+
+// --out that is a symlink (or a junction) to an empty folder is refused, exit 2 with class out_dir,
+// before restic runs: a restore never follows a link out of the folder the operator named, and the
+// folder behind the link stays empty.
+func TestSelfBackupRestoreRefusesLinkedOut(t *testing.T) {
+	clearSelfEnv(t)
+	dir := t.TempDir()
+	if code, out, errb := run(t, "", initArgs(dir, "--master-key-copy-confirmed")...); code != 0 {
+		t.Fatalf("init: %d\n%s\n%s", code, out, errb)
+	}
+	cfg, err := config.Read(filepath.Join(dir, "config.json"), func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(dir, "rclone.conf")
+	if err := os.WriteFile(conf, []byte("[admin]\ntype = alias\nremote = /nowhere\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	behind := filepath.Join(dir, "behind")
+	if err := os.Mkdir(behind, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	redirectTo(t, behind, link)
+	code, _, errb := run(t, "", "self-backup", "restore", "--rclone-config", conf, "--bucket", "b", "--prefix", "console-self",
+		"--master-key", cfg.MasterKeyPath, "--restic", filepath.Join(dir, "no-restic"), "--out", link)
+	if code != ExitUsage || !strings.Contains(errb, "class out_dir") {
+		t.Fatalf("--out through a link: %d %q", code, errb)
+	}
+	if entries, err := os.ReadDir(behind); err != nil || len(entries) != 0 {
+		t.Fatalf("the folder behind the link: %v %v", entries, err)
 	}
 }
 

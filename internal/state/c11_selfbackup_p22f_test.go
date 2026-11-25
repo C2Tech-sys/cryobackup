@@ -49,7 +49,15 @@ func TestC11SelfBackupRules(t *testing.T) {
 			want: []string{"(its latest run failed)"}, not: []string{"Users"}},
 		// A never-written self-backup is not also "never verified": nothing to verify yet.
 		{name: "never_written_not_stale_verify", sb: SelfBackupFacts{VerifyAttemptAt: ago(20 * day), VerifyAttemptClass: "no_slot"}, sev: SeverityAlarm,
-			not: []string{"verified"}},
+			not: []string{"verified", "verify", "garbled"}},
+		// ... nor "verify time is garbled", whatever stray verdict or first-backup time sits beside it: the
+		// LastAt guard comes before the verify-age rule (without it the empty reference time reads as garbled).
+		{name: "never_written_stray_old_verdict", sb: SelfBackupFacts{VerifyAt: ago(20 * day), VerifyAttemptAt: ago(time.Hour), VerifyAttemptClass: "network"}, sev: SeverityAlarm,
+			want: []string{"no self-backup has been written"}, not: []string{"verified", "verify", "garbled", "latest attempt"}},
+		{name: "never_written_stray_future_verdict", sb: SelfBackupFacts{VerifyAt: ms(now.Add(time.Hour))}, sev: SeverityAlarm,
+			want: []string{"no self-backup has been written"}, not: []string{"verified", "verify", "garbled"}},
+		{name: "never_written_stray_first_backup", sb: SelfBackupFacts{FirstBackupAt: ago(30 * day)}, sev: SeverityAlarm,
+			want: []string{"no self-backup has been written"}, not: []string{"verified", "verify", "garbled"}},
 		// Rule 2: a failed verdict is critical at once, however fresh.
 		{name: "verify_failed", sb: SelfBackupFacts{LastAt: ago(time.Hour), FirstBackupAt: ago(2 * day), VerifyAt: ago(time.Hour), VerifyAttemptAt: ago(time.Hour), VerifyFailed: true},
 			sev: SeverityCritical, want: []string{"self-backup verify failed"}, not: []string{"not verified"}},
@@ -104,6 +112,30 @@ func TestC11SelfBackupRules(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// SelfBackupVerifyCause is the one verify-age rule the C11 banner and the System page row share. It says
+// nothing for a backup never written, and nothing for a garbled backup time (C11 names that itself).
+func TestSelfBackupVerifyCauseGuards(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) Millis { return ms(now.Add(-d)) }
+	const day = 24 * time.Hour
+	for name, sb := range map[string]SelfBackupFacts{
+		"never_written":          {VerifyAt: ago(20 * day), FirstBackupAt: ago(30 * day), VerifyAttemptAt: ago(time.Hour), VerifyAttemptClass: "network"},
+		"never_written_nothing":  {},
+		"backup_time_garbled":    {LastAt: 5, FirstBackupAt: ago(30 * day), VerifyAt: ago(20 * day)},
+		"backup_time_in_future":  {LastAt: ms(now.Add(time.Hour)), FirstBackupAt: ago(30 * day), VerifyAt: ago(20 * day)},
+		"verdict_fresh":          {LastAt: ago(time.Hour), VerifyAt: ago(day)},
+		"verdict_exactly_8_days": {LastAt: ago(time.Hour), VerifyAt: ago(8 * day)},
+	} {
+		if sev, cause := SelfBackupVerifyCause(&sb, now); sev != SeverityNone || cause != "" {
+			t.Errorf("%s: %v %q, want nothing", name, sev, cause)
+		}
+	}
+	sb := SelfBackupFacts{LastAt: ago(time.Hour), VerifyAt: ago(20 * day), VerifyAttemptAt: ago(time.Hour), VerifyAttemptClass: "network"}
+	if sev, cause := SelfBackupVerifyCause(&sb, now); sev != SeverityCritical || cause != "self-backup not verified for 20 days (latest attempt: network)" {
+		t.Errorf("stale verdict: %v %q", sev, cause)
 	}
 }
 

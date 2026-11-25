@@ -37,12 +37,14 @@ mail password. The master key never changes in place.
 
 ## 2. Is the self-backup working?
 
-- **System page, "Database self-backup", and the C11 banner.** C11 is raised (alarm) when no self-backup
-  has been written or the newest is older than 26 h. It names the class of the failing run, for example
+- **System page, "Database self-backup", and the C11 banner.** C11 is raised (alarm) at once when no
+  self-backup has been written, and when the newest is older than 26 h. It names the class of the failing run, for example
   `not_configured` (set `CRYO_MAINTAIN_SELF_PREFIX`) or `no_slot` (see section 6). C11 is critical when
   the newest tested restore failed, or when no verify verdict has been reached for more than 8 days
   (counted from the first backup while there is none yet). The text then names the class of the last
-  attempt, for example `network`.
+  attempt, for example `network`. The System page row follows the same rules and is never "ok" while
+  C11 is critical for the self-backup: it reads failed, with the same text. With no backup written it
+  reads not checked and names the class (`not_configured`, `no_slot`).
 - **On the host**, as the worker's user and with the worker's environment:
 
 ```sh
@@ -72,9 +74,21 @@ version is in the restored manifest. The console migrates forward and never back
    "Install": `cryo-console`, `restic` 0.19.1 and `rclone` 1.75.1 in `/usr/local/bin`, each checked
    against its published sha256. Create the `cryobackup` user and `/etc/cryobackup` (0750), and copy
    the three unit files.
-2. **Put the offline kit in place**: `master.key` (0400), `rclone-admin.conf`, `rclone-gateway.conf`,
-   `maintain.env`, `gateway.env` and the mail password file, all owned `root:cryobackup` and at most
-   0640.
+2. **Put the offline kit in place.** The console and the worker run as `cryobackup`, so the files
+   they read must be readable by that user, and two of them are refused when group or others can open
+   them: `cryo-console doctor` warns about a `master.key` open to group or others, and the mail sender
+   refuses a password file that is. Those two are therefore owned by `cryobackup` itself. The rest is
+   `root:cryobackup` 0640, as in [`deploy/systemd/README.md`](../../deploy/systemd/README.md). From the
+   folder that holds the kit:
+
+```sh
+install -o cryobackup -g cryobackup -m 0400 master.key /etc/cryobackup/master.key
+install -o cryobackup -g cryobackup -m 0600 smtp-password /etc/cryobackup/smtp-password   # the file smtp.password_file names
+install -o root -g cryobackup -m 0640 rclone-admin.conf rclone-gateway.conf maintain.env gateway.env /etc/cryobackup/
+```
+
+   Check it before you go on: `sudo -u cryobackup cat /etc/cryobackup/master.key >/dev/null` must
+   print nothing. Section 2's commands depend on it.
 3. **Restore.** This needs no database and no running console:
 
 ```sh
@@ -96,8 +110,10 @@ cryo-console self-backup restore \
    `config.json` if they differ.
    - `console.db` goes to `/var/lib/cryobackup/console.db`, owned by `cryobackup`, mode 0640. Delete
      any `console.db-wal` and `console.db-shm` beside it first.
-   - `config.json` goes to `/etc/cryobackup/config.json`, `root:cryobackup`, 0640. Check its host
-     names, listen addresses and TLS paths for the new host.
+     `install -d -o cryobackup -g cryobackup -m 0750 /var/lib/cryobackup && install -o cryobackup -g cryobackup -m 0640 /root/console-restore/console.db /var/lib/cryobackup/console.db`
+   - `config.json` goes to `/etc/cryobackup/config.json`, `root:cryobackup`, 0640
+     (`install -o root -g cryobackup -m 0640 /root/console-restore/config.json /etc/cryobackup/config.json`).
+     Check its host names, listen addresses and TLS paths for the new host.
    - `manifest.json` is for your records. The console does not read it.
 5. **Issue TLS certificates** for the agent listener and the gateway (`/etc/cryobackup/tls/`), for
    the same host names as before ([`deploy/rclone/tls.md`](../../deploy/rclone/tls.md)), and point
@@ -162,10 +178,12 @@ shared, first come, by device maintenance, browse, snapshots, the storage probe,
 purge.
 
 - At **2** (the default), the self-backup runs.
-- At **3**, the self-backup never runs. Each due run records `no_slot` on the `db-self-backup` job row,
-  `self-backup run` exits 2 with class `no_slot`, and after 26 h C11 raises "no self-backup has been
-  written (no_slot: ...)" or "self-backup older than 26 h (no_slot: ...)". The verify then goes
-  without a verdict and turns C11 critical after 8 days.
+- At **3**, the self-backup never runs. Each due run records `no_slot` on the `db-self-backup` job row
+  and `self-backup run` exits 2 with class `no_slot`. On a console that has never written one, C11
+  raises "no self-backup has been written (no_slot: ...)" at once: that alarm does not wait. Only the
+  other one waits: on a console that already has backups, the newest keeps ageing, and after 26 h
+  C11 raises "self-backup older than 26 h (no_slot: ...)". The verify goes without a verdict as well,
+  and C11 turns critical once no verdict has been reached for 8 days.
 - At **1**, downloads queue sooner and nothing else changes.
 
 Keep it at 2 unless technicians regularly need three downloads at once. If they do, raise it only for
