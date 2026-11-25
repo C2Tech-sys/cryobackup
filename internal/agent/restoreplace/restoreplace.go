@@ -78,6 +78,11 @@ type Counts struct {
 	BytesRestored uint64
 	BytesSkipped  uint64
 	Errors        map[Class]int64
+	// Alarms counts placed files whose final path, read through their handle
+	// after the move, was not the intended one (ADR 0027's fallback check):
+	// each is also counted under guard_refused, and the caller raises the
+	// alarm (fix batch 3, T4).
+	Alarms int64
 }
 
 // Add counts n items under class c.
@@ -97,6 +102,7 @@ func (c *Counts) Merge(o Counts) {
 	c.Skipped += o.Skipped
 	c.BytesRestored += o.BytesRestored
 	c.BytesSkipped += o.BytesSkipped
+	c.Alarms += o.Alarms
 	for k, v := range o.Errors {
 		c.Add(k, v)
 	}

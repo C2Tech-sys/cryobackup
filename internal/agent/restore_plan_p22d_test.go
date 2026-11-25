@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,5 +275,25 @@ func TestSideRemovalRule(t *testing.T) {
 		if sweepSide(o) != want {
 			t.Errorf("sweepSide(%q) = %v", o, !want)
 		}
+	}
+}
+
+// T4: the agent's alarm for a post-move mismatch: an ERROR line and Event Log
+// 1021, path-free; nothing for zero.
+func TestPlacementAlarm(t *testing.T) {
+	var buf bytes.Buffer
+	var events []string
+	a := &Agent{log: slog.New(slog.NewJSONHandler(&buf, nil))}
+	a.o.eventHook = func(level string, id uint32, msg string) { events = append(events, level+" "+msg) }
+	a.placementAlarm("01JB0000000000000000000R01", "C", 0)
+	if buf.Len() != 0 || len(events) != 0 {
+		t.Fatal("an alarm for zero files")
+	}
+	a.placementAlarm("01JB0000000000000000000R01", "C", 2)
+	if !strings.Contains(buf.String(), `"level":"ERROR"`) || !strings.Contains(buf.String(), `"files":2`) {
+		t.Fatalf("log = %s", buf.String())
+	}
+	if len(events) != 1 || !strings.HasPrefix(events[0], "error ALARM") {
+		t.Fatalf("events = %v", events)
 	}
 }

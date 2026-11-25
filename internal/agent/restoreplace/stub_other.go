@@ -26,9 +26,6 @@ func (r *Root) MakeChild(...string) (string, error) { return "", ErrUnsupported 
 // RemoveChild refuses: device restore is Windows only.
 func (r *Root) RemoveChild(string) (int, error) { return 0, ErrUnsupported }
 
-// RemoveTree refuses: device restore is Windows only.
-func RemoveTree(string) (int, error) { return 0, ErrUnsupported }
-
 // RemoveReparsePoints refuses: device restore is Windows only.
 func RemoveReparsePoints(string) (int, error) { return 0, ErrUnsupported }
 
@@ -37,9 +34,6 @@ func Place(string, string, []Rel, Mode) (Counts, error) { return Counts{}, ErrUn
 
 // ResetInherit refuses: device restore is Windows only.
 func ResetInherit(string, Options) (string, int, error) { return "", 0, ErrUnsupported }
-
-// CheckInherited refuses: device restore is Windows only.
-func CheckInherited(string, Options) error { return ErrUnsupported }
 
 // CountSide refuses: device restore is Windows only.
 func CountSide(string, []Rel) (Counts, error) { return Counts{}, ErrUnsupported }

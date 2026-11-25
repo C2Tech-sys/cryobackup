@@ -47,39 +47,6 @@ func openForDeleteAt(parent windows.Handle, name string) (windows.Handle, error)
 	return windows.InvalidHandle, first
 }
 
-// openForDelete opens a top folder by its path for the walk (the only open by
-// path: the top is the agent's own folder under a held root).
-func openForDelete(path string) (windows.Handle, error) {
-	var first error
-	for _, access := range deleteAccesses {
-		h, err := openNoFollow(path, access, shareRW)
-		if err == nil {
-			return h, nil
-		}
-		if first == nil || notFound(err) {
-			first = err
-		}
-	}
-	return windows.InvalidHandle, first
-}
-
-// RemoveTree removes path and everything below it with the clean-up walk and
-// returns how many reparse points it deleted (each as itself, unfollowed).
-// path itself may be a reparse point: it is then deleted as a link. A missing
-// path is not an error.
-func RemoveTree(path string) (links int, err error) {
-	h, err := openForDelete(path)
-	if notFound(err) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	defer windows.CloseHandle(h)
-	err = removeHeld(h, &links)
-	return links, err
-}
-
 // removeAt removes the entry name of the folder held as parent.
 func removeAt(parent windows.Handle, name string, links *int) error {
 	h, err := openForDeleteAt(parent, name)

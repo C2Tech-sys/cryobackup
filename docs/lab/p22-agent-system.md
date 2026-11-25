@@ -36,7 +36,7 @@ changed; the scratch folder is removed at the end.
 $Scratch   = 'C:\p22-lab'                         # removed at the end
 $TaskName  = 'CryoBackup-P22-Lab-OneShot'
 $UserSid   = (New-Object System.Security.Principal.NTAccount('labuser')).Translate([System.Security.Principal.SecurityIdentifier]).Value
-$WaitMax   = 300                                  # seconds
+$WaitMax   = 1800                                 # seconds (the attack tests take minutes)
 
 # --- discovery ----------------------------------------------------------------
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -56,7 +56,13 @@ Start-ScheduledTask -TaskName $TaskName
 $t = 0
 # 267011 = the task has not run yet, 267009 = it is running: wait through both.
 do { Start-Sleep -Seconds 2; $t += 2; $info = Get-ScheduledTaskInfo -TaskName $TaskName } while (($info.LastTaskResult -eq 267009 -or $info.LastTaskResult -eq 267011) -and $t -lt $WaitMax)
-if ($t -ge $WaitMax) { Write-Output "the task did not finish within $WaitMax s"; Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
+if ($t -ge $WaitMax) {
+    Write-Output "the task did not finish within $WaitMax s: stopping it and the test binary"
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Get-Process -Name 'restoreplace.test' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    $w = 0
+    while ((Get-Process -Name 'restoreplace.test' -ErrorAction SilentlyContinue) -and $w -lt 30) { Start-Sleep -Seconds 1; $w++ }
+}
 
 # --- scrub --------------------------------------------------------------------
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -69,8 +75,8 @@ if ($ok) { exit 0 } else { exit 1 }
 ```
 
 The binary runs every test of the package as SYSTEM: the ordinary ones (they pass the lab trustee, which is then
-SYSTEM's own SID) and the four `TestLabSystem*` tests, which use the production options (no lab trustee) and the
-agent's backup and restore privileges. The flip regression tests (`TestFlipAttack*`, `TestResetRemovesHardLinks`)
+SYSTEM's own SID) and the five `TestLabSystem*` tests, which use the production options (no lab trustee) and the
+agent's backup and restore privileges. The verifier's attack regression tests (`TestV2*`, attack_windows_test.go)
 run as SYSTEM too; for check 10 also run `TestLabSystemFlipProtected` (below), which flips against a target that only
 Administrators may write. Their `LAB n` log lines are the evidence for checks 5, 6, 7 and 11.
 

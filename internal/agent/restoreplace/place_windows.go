@@ -16,6 +16,10 @@ var errNotRealDir = errors.New("restoreplace: not a real folder")
 // the window a race would use.
 var testHookBeforeMove func(dest string)
 
+// testHookPostMove, when a test sets it, replaces the placed file's final path
+// read after the move (to drive the alarm branch).
+var testHookPostMove func(got string) string
+
 // Place moves the files restic restored into staging to their original
 // location under driveRoot (ADR 0027, "Original location: restore into
 // staging, then place", step 4). staging is the restore's fresh staging folder
@@ -220,12 +224,6 @@ func pathSep(p string) string {
 	return `\`
 }
 
-// checkName compares the real long name read through h with want, exactly.
-func checkName(h windows.Handle, want string) bool {
-	got, err := finalName(h)
-	return err == nil && got == want
-}
-
 // stagedAccess is how a staged file is opened, once: DELETE to rename it,
 // READ_CONTROL and WRITE_DAC for its descriptor.
 const stagedAccess = windows.DELETE | windows.SYNCHRONIZE | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL | windows.WRITE_DAC
@@ -322,8 +320,13 @@ func (p *placer) placeFile(sh windows.Handle, name string, dh windows.Handle, dP
 	// final path. A difference means the move did not land where intended;
 	// it is counted as a refusal and its descriptor is left as staging gave
 	// it (Administrators and SYSTEM only), so nothing is opened up.
-	if got, err := finalPath(fh); err != nil || got != want {
+	got, err := finalPath(fh)
+	if testHookPostMove != nil {
+		got = testHookPostMove(got)
+	}
+	if err != nil || got != want {
 		p.c.Add(ClassGuardRefused, 1)
+		p.c.Alarms++
 		return
 	}
 	p.c.Restored++

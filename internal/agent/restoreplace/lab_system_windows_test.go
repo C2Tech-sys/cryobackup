@@ -189,8 +189,10 @@ func TestLabSystemSideOwner(t *testing.T) {
 	}
 	sd, _ := windows.GetNamedSecurityInfo(f, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	t.Logf("LAB 6 side file after the reset: %s", sd.String())
-	if err := CheckInherited(check, Options{}); err != nil || !strings.HasPrefix(sd.String(), "O:BA") {
-		t.Errorf("side owner after the reset: %v %s", err, sd.String())
+	// ResetInherit checked one file itself with the production rule (owner
+	// Administrators); err above is nil only if that check passed.
+	if check == "" || !strings.HasPrefix(sd.String(), "O:BA") {
+		t.Errorf("side owner after the reset: check=%q %s", check, sd.String())
 	}
 }
 

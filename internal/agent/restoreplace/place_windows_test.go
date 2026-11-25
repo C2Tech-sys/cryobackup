@@ -511,9 +511,8 @@ func TestResetInheritNeverFollows(t *testing.T) {
 	if check == "" {
 		t.Fatal("no check file")
 	}
-	if err := CheckInherited(check, o); err != nil {
-		t.Fatalf("check: %v (%s)", err, sddlOf(t, check))
-	}
+	// ResetInherit checked one file itself (relative to its held parent); err
+	// above is nil only if it passed.
 	// D1: every entry got the side owner (here the lab trustee, as a
 	// non-elevated test cannot name Administrators) ...
 	for _, p := range []string{filepath.Join(vol, "Users"), filepath.Join(vol, "Users", "bob"), filepath.Join(vol, "Users", "bob", "doc.txt"), narrow} {
@@ -527,7 +526,13 @@ func TestResetInheritNeverFollows(t *testing.T) {
 	}
 	// ... and the check refuses a file whose owner is not the production side
 	// owner (Administrators): this user owns it.
-	if err := CheckInherited(check, Options{}); !errors.Is(err, ErrSideCheck) {
+	ba, _ := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	ph, err := openNoFollow(filepath.Dir(check), holdAccess, shareRW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(ph)
+	if err := checkInheritedAt(ph, filepath.Base(check), ba, nil); !errors.Is(err, ErrSideCheck) {
 		t.Fatalf("check with the production owner rule = %v, want ErrSideCheck", err)
 	}
 	doc := sddlOf(t, filepath.Join(vol, "Users", "bob", "doc.txt"))
@@ -608,5 +613,30 @@ func TestRootRule(t *testing.T) {
 	// Without the lab trustee (production), a root owned by this user is refused.
 	if _, err := VerifyRoot(good, Options{}); !errors.As(err, &re) || re.Check != CheckOwner {
 		t.Fatalf("user-owned root without the lab trustee = %v", err)
+	}
+}
+
+// T3: a too-deep reparse chain (ERROR_CANT_RESOLVE_FILENAME) is a guard
+// refusal, like any other name-surrogate failure.
+func TestClassifyCantResolveIsGuardRefused(t *testing.T) {
+	if got := classify(errCantResolveFilename); got != ClassGuardRefused {
+		t.Fatalf("classify(1921) = %s", got)
+	}
+}
+
+// T4: a placed file whose final path after the move is not the intended one
+// is counted under guard_refused and raises an alarm count; its descriptor is
+// not opened up.
+func TestPlacePostMoveMismatchAlarms(t *testing.T) {
+	r := newRig(t)
+	write(t, filepath.Join(r.stage, "d", "f.txt"), "restored")
+	testHookPostMove = func(string) string { return `\somewhere\else\f.txt` }
+	defer func() { testHookPostMove = nil }()
+	c, err := Place(r.stage, r.dest, sel(`d\f.txt`), Keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Alarms != 1 || c.Errors[ClassGuardRefused] != 1 || c.Restored != 0 {
+		t.Fatalf("counts = %+v", c)
 	}
 }

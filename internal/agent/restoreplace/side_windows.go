@@ -39,9 +39,12 @@ var ErrSideCheck = errors.New("restoreplace: the side folder's check file is not
 // outside the side folder, so the side folder's link is removed through its
 // handle (the other names keep the file untouched) and counted with links.
 //
-// It returns the path of one file it reset (for CheckInherited), "" when the
-// tree holds no file; links counts the reparse points and extra hard links it
-// removed (skipped items).
+// It then checks one file (ADR 0027: "It then checks one file"; fix batch 3,
+// T2): the first file it reset is opened once more relative to its held parent
+// and checked by checkInheritedHandle; a failure is ErrSideCheck. It returns
+// that file's path (for the caller's tests and logs only; nothing is reopened
+// by it), "" when the tree holds no file; links counts the reparse points and
+// extra hard links it removed (skipped items).
 func ResetInherit(top string, o Options) (checkFile string, links int, err error) {
 	owner, err := sideOwner(o)
 	if err != nil {
@@ -59,13 +62,18 @@ func ResetInherit(top string, o Options) (checkFile string, links int, err error
 	if err != nil {
 		return "", 0, err
 	}
-	r := &resetter{owner: owner}
+	lab, err := labSID(o)
+	if err != nil {
+		return "", 0, err
+	}
+	r := &resetter{owner: owner, lab: lab}
 	err = r.dir(h, top, parent)
 	return r.check, r.links, err
 }
 
 type resetter struct {
 	owner *windows.SID
+	lab   *windows.SID
 	check string
 	links int
 }
@@ -180,6 +188,9 @@ func (r *resetter) entry(parent windows.Handle, name string, h windows.Handle, p
 	if !ti.dir() {
 		if r.check == "" {
 			r.check = path
+			if err := checkInheritedAt(parent, name, r.owner, r.lab); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -336,25 +347,22 @@ func inheritedFrom(parent *windows.ACL, dir bool) *windows.ACL {
 	return buildACL(aces)
 }
 
-// CheckInherited is the check after the reset (ADR 0027: "It then checks one
-// file"): the file is owned by Administrators (the lab trustee in a test,
-// ruling D1), its DACL holds no explicit entry, and every entry that grants is
-// for Administrators, SYSTEM or the lab trustee.
-func CheckInherited(path string, o Options) error {
-	lab, err := labSID(o)
-	if err != nil {
-		return err
-	}
-	h, err := openNoFollow(path, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, shareAll)
+// checkInheritedAt is the check after the reset (ADR 0027: "It then checks
+// one file"): the entry name of the folder held as parent, opened relative to
+// it, is owned by want (Administrators, or the lab trustee in a test; ruling
+// D1), its DACL holds no explicit entry, and every entry that grants is for
+// Administrators, SYSTEM or the lab trustee. A failure is ErrSideCheck.
+func checkInheritedAt(parent windows.Handle, name string, want, lab *windows.SID) error {
+	h, err := openAt(parent, name, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES, shareAll)
 	if err != nil {
 		return err
 	}
 	defer windows.CloseHandle(h)
+	return checkInheritedHandle(h, want, lab)
+}
+
+func checkInheritedHandle(h windows.Handle, want, lab *windows.SID) error {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		return err
-	}
-	want, err := sideOwner(o)
 	if err != nil {
 		return err
 	}

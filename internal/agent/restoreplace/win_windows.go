@@ -240,6 +240,10 @@ const fileRenameInformationEx = 65
 // classify maps a Windows error of a move to its countable class.
 func classify(err error) Class {
 	switch {
+	case errors.Is(err, errCantResolveFilename):
+		// Too many reparse levels on the way: a name surrogate the agent did
+		// not make (fix batch 3, T3).
+		return ClassGuardRefused
 	case errors.Is(err, windows.ERROR_SHARING_VIOLATION), errors.Is(err, windows.ERROR_LOCK_VIOLATION),
 		errors.Is(err, windows.ERROR_USER_MAPPED_FILE):
 		return ClassTargetLocked
@@ -248,6 +252,9 @@ func classify(err error) Class {
 	}
 	return ClassOther
 }
+
+// errCantResolveFilename is ERROR_CANT_RESOLVE_FILENAME (1921).
+const errCantResolveFilename = windows.Errno(1921)
 
 // existsErr reports the errors a no-replace rename gives when a file appeared
 // at the target name.
