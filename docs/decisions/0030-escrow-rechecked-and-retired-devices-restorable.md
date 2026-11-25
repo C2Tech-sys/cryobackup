@@ -55,7 +55,7 @@ can now be restored from the console, by download only.
   it could not read the repository anyway.
 - The retired device's page gets the Restore action and the snapshot refresh (the worker's snapshot list, ADR 0027),
   since the agent that used to fill the snapshot cache no longer reports
-  (`internal/console/store/runs.go:669`).
+  (`internal/console/store/runs.go:670`).
 - A retired device with a customer-held key stays refused, as every customer-held device is.
 
 ## Consequences
@@ -90,4 +90,4 @@ multi-path zip as any other device's.
 ## Open points for the build (P22-H)
 
 - The fleet banner for retired devices whose verification fails has no code yet; the build ticket assigns one.
-- Whether `escrow_recheck_days` gets a minimum of 7 (see Consequences) is left to the build ticket.
+- Whether `escrow_recheck_days` gets a minimum of 7 (see Consequences) is left to the build ticket (foreman ruling).

@@ -31,8 +31,8 @@ not be equal to the device prefix, must not lie inside it, and must not be the d
 appended. An access policy whose resource is written `<prefix>*` (no slash) also matches `<prefix>-console/...`
 (`docs/lab/p22-spike.md:290`), so a name of that shape could fall inside the gateway credential's rights. The example
 `<prefix>-console` given while this was planned is withdrawn. The worker refuses to start the self-backup when the
-configured self-backup prefix breaks this rule, and says why. An unset prefix means the self-backup is not
-configured: nothing runs, and C11 raises "no self-backup has been written".
+configured self-backup prefix breaks this rule, and says why (foreman ruling: fail loudly). An unset prefix means the
+self-backup is not configured: nothing runs, and C11 raises "no self-backup has been written" (foreman ruling).
 
 **Password.** HKDF-SHA256 of the master key with info `cryobackup/self-backup/v1`, never stored, as for the probe
 repository (ADR 0017). The repository is created once, guarded by a settings row; a repository missing after that row
@@ -79,7 +79,7 @@ kept: they are issued again.
 **Drill mode (ruling C8).** A console restored for a drill runs with `"drill": true` in `config.json`. It starts no agent
 listener and none of these jobs: notify, digest, health ping, htpasswd sync, device purge. The worker answers only its
 read methods (`ls`, `dump`, `cat_config`, `snapshots`), runs no scheduler pass and refuses `purge_repo`. Every page
-shows a "DRILL COPY" banner. The drill is done on a throwaway machine in a lab: restore with the offline kit, start in
+shows a "DRILL COPY" banner. The drill is done on a throwaway Linux virtual machine in the lab, since the console runs on Linux: restore with the offline kit, start in
 drill mode, log in, browse a real snapshot, download one file, confirm no mail arrived, destroy the machine.
 
 **What a real restore loses.** Everything after the last self-backup: runs and audit rows since, and every device

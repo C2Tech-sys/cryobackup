@@ -46,14 +46,15 @@ to a pipe-backed archive or one dump per path into one zip stream); restore-to-t
 - **Entry names.** Each tar entry is renamed from its full snapshot path to a path relative to the selected item's
   parent: a selected folder `.../<parent>/<name>` gives `<name>/...`. The selected folder's own directory entry is
   written first, so an empty folder survives.
-- **Zip-slip guard.** After renaming, every entry name must be relative, with no drive letter, no leading `/` and no
+- **Zip-slip guard** (foreman ruling). After renaming, every entry name must be relative, with no drive letter, no leading `/` and no
   `..` segment. An entry that breaks this aborts the download.
-- **Symlinks and junctions are skipped and counted, never named.** The zip carries no link and no link target as file
+- **Symlinks and junctions are skipped and counted, never named** (foreman ruling). The zip carries no link and no link target as file
   content. The count goes into the download's record; the names do not.
 - **The central directory comes last.** It is written only after every restic run has exited 0 and every tar stream
   has been read to its end without error. A restic exit other than 0, or a tar read error, aborts the response, and
   the browser keeps no complete zip.
-- **An idle watchdog on restic's output.** If restic writes no byte for a bound the build sets, the worker stops
+- **An idle watchdog on restic's output** (foreman ruling; the agent has its own for device restores, ADR 0027).
+  If restic writes no byte for a bound the build sets, the worker stops
   restic and aborts the response. Then it runs `restic unlock` on that repository through the admin path, because a
   stopped restic leaves its lock object behind.
 - **Limits.** At most 50 paths. A path inside another selected folder is dropped, because the folder already holds it.

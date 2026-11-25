@@ -55,7 +55,8 @@ samples every 6 h, `internal/console/maintain/config.go:26`), the retention jobs
 - Without forget and prune, a device repository only grows: nothing is removed from storage during the pilot.
 - Without check, the evidence that the device repositories are intact is the restore drills: a file restored to the device
   and a zip of two folders and a file, each compared by sha256 with the original.
-- The exception has a time box: **45 days** from the pilot client's first backup. Forget, prune and check are the
+- The exception has a time box: **45 days** from the pilot client's first backup (foreman ruling on when the
+  count starts). Forget, prune and check are the
   first tickets built after the pilot. If day 45 comes and they are not in production, the exception has ended, and
   continuing needs a new decision, recorded as a new ADR.
 - Rejected: adding check before the pilot. It is about a week of work, and the restore drills give direct evidence
@@ -113,8 +114,9 @@ The spike ran restic 0.19.1 and rclone 1.75.1 on one Windows workstation as a no
 and a maintain path on local disk (`docs/lab/p22-spike.md`, lines 1-52). Its results are recorded where they decide
 something:
 
-- restore and reads through the append-only gateway with the device login work (item 1); the drive-root form of an
-  original-location restore is rejected and replaced by a restore per anchor folder (item 2); include files, counts,
+- restore and reads through the append-only gateway with the device login work (item 1); restic restoring straight
+  into the original location is rejected (item 2, and the blind check of ADR 0027): restic restores into a fresh
+  staging folder and the agent places the files; include files, counts,
   locked files, ACLs and alternate data streams set the agent's rules (items 3-5). All in ADR 0027.
 - the tar route for folders in a multi-path zip holds, so no single-path cut line is needed (item 6). ADR 0028.
 - the self-backup through the worker's rclone backend, its prune, its full read check and a bare-host restore with
@@ -129,4 +131,4 @@ something:
 2. **The object-storage checks of ADR 0029** (spike item 8): the admin credential's rights on the self-backup
    prefix, the gateway credential's policy, and the cost of prune under the bucket's versioning.
 3. **The restore checks that need the agent's account** (ADR 0027): everything the spike could not run as SYSTEM.
-4. **The console drill** of ADR 0029 on a throwaway machine.
+4. **The console drill** of ADR 0029 on a throwaway Linux virtual machine.
