@@ -29,6 +29,9 @@
   </fieldset>
   {{end}}
   {{end}}
+  {{if .NeedCode}}{{if and .KeepPath (not .Entries)}}<input type="hidden" name="path" value="{{.KeepPath}}">{{end}}<div class="field"><label for="restore-code">Authenticator code</label>
+    <input class="input mono" id="restore-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required spellcheck="false" aria-describedby="restore-code-help">
+    <span class="help" id="restore-code-help">This session's last authenticator check is older than {{.MFAWindow}} minutes. Enter the current code from your authenticator app. A recovery code is not accepted here, and a sign-in with one does not count as a check.</span></div>{{end}}
 </div>
 <div class="foot"><a class="btn ghost" href="/devices/{{.DeviceID}}">Cancel</a>{{if .CanSubmit}}<button class="btn primary" type="submit" name="action" value="submit">Continue</button>{{end}}</div>
 </form>{{end}}
