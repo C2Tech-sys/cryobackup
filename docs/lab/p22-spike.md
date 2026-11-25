@@ -8,7 +8,7 @@ for a volume such as `C:`). Passwords were random, made at run time, passed in t
 and never printed; the scratch directory was deleted at the end.
 
 **Timing caveat.** The workstation ran other build and test work during the whole spike (CPU at
-100 % on 8 logical processors, a Dropbox client and several editors busy). Every millisecond
+100 % on 8 logical processors, a file-sync client and several editors busy). Every millisecond
 figure below is inflated by that load and is useful only for comparisons inside one table.
 Object-storage latency is NOT measured anywhere in this document: the rig stores on local disk.
 
@@ -16,8 +16,8 @@ Object-storage latency is NOT measured anywhere in this document: the rig stores
 
 | component | version | where |
 | --- | --- | --- |
-| restic | 0.19.1 (`restic version`: `restic 0.19.1 compiled with go1.26.4 on windows/amd64`) | winget package `restic.restic`, file `restic_0.19.1_windows_amd64.exe` |
-| rclone | v1.75.1 (`rclone version`) | winget package `Rclone.Rclone`, `rclone-v1.75.1-windows-amd64\rclone.exe` |
+| restic | 0.19.1 (`restic version`: `restic 0.19.1 compiled with go1.26.4 on windows/amd64`) | Windows package manager install, file `restic_0.19.1_windows_amd64.exe` |
+| rclone | v1.75.1 (`rclone version`) | Windows package manager install, `rclone-v1.75.1-windows-amd64\rclone.exe` |
 | OS | Windows 11 Enterprise 26H2, build 10.0.26300 | workstation, NTFS, `LongPathsEnabled` = 0 |
 | Go (htpasswd helper only) | 1.27.0 toolchain, module `go 1.26.10`, `GOPROXY=off` | `go run ./test/lab/p22/htpasswd.go` |
 | tar / python (archive readers) | GNU tar 1.35 (Git for Windows), Python 3.12 `tarfile`/`zipfile` | item 6 |
@@ -48,8 +48,10 @@ Both binaries equal the pins (`deploy/windows/restic.pin`, `docs/lab/m0-run.md:1
 | 5 ACL, owner, long path, ADS (non-elevated; SYSTEM not tested) | **PARTIAL** | DACL + own-SID owner identical; 378-char path and empty folder restored; ADS lost; under a new folder the snapshot DACL stays explicit | side-folder ACL does not cover restored files: reset the subtree after restore, or reword C2; document ADS loss |
 | 6 `dump -a tar` / `-a zip` | **PARTIAL** | streams into a pipe, PAX for long / non-ASCII names, names = full snapshot path without `/`, no entry for the dumped folder, one path per call, file ignores `-a`, junction = symlink; gateway killed: restic retried 20+ min without exiting; rclone child killed: exit 1 in 2 s; partial tar detectably truncated | Mode A tar route holds (no cut line); rename entries, add the folder's own entry, skip symlinks, idle watchdog on stdout, abort on exit != 0 or tar error |
 | 7 browse latency, `ls --no-cache`, 5 and 30 snapshots | **PARTIAL** | 10-60 s per click on this loaded PC through both paths; load noise exceeds the 5 -> 31 index-file effect; 2 000 entries come back in one call; object storage NOT measured | one folder per call, console pages the stream; operator measures on the bucket (item 8.4); tmpfs cache stays the lever |
-| 8 real object storage | **not tested here** | ticket: operator only | checklist in "Item 8" below; note the IAM prefix-wildcard trap for `<prefix>-console` |
+| 8 real object storage | **not tested here** | ticket: operator only | checklist in "Item 8" below; note the storage-policy prefix-wildcard trap for `<prefix>-console` |
 | 9 self-backup via rclone:, forget --prune, check --read-data, bare-host restore | **YES** | all exit 0 with the maintain options; prune removed 2 snapshots / 4 packs; bare restore sha256-equal with only the rclone file and the password | P22-C / P22-F as planned; restore with `latest:<staging path>` to avoid the nested absolute path |
+
+The blind check of 2026-11-24 changed two of the fallbacks below (per-anchor restore in place, `icacls /reset` of the side folder): see the [addendum](#addendum-findings-of-the-blind-check-2026-11-24) at the end.
 
 ## Item 1 - restore and reads through the append-only gateway with the device login
 
@@ -283,12 +285,12 @@ are dominated by this PC's load and nothing here measures object-storage latency
 
 ## Item 8 - real object storage: NOT tested here (operator)
 
-Nothing in this rig touches Wasabi or any S3 endpoint. The operator must check, on the production
+Nothing in this rig touches the production object storage or any other remote endpoint. The operator must check, on the production
 account, before P22-C ships:
 
 1. **Admin key on the self-backup prefix.** With the `[admin]` remote, `restic -o rclone.program=... -o "rclone.args=serve restic --stdio" --no-cache -r rclone:admin:<bucket>/<self_prefix> init`, then `backup`, `forget --prune --keep-last 1`, `check --read-data` (item 9 commands): all exit 0. This needs list, get, put and delete on `<bucket>/<self_prefix>/*`.
-2. **The gateway key cannot reach the self-backup prefix.** As a device login through the gateway, `GET /<self_prefix>/config` must fail; and in the IAM policy the gateway key's resources must end in a slash (`arn:aws:s3:::<bucket>/<prefix>/*`). A resource written `<bucket>/<prefix>*` also matches `<bucket>/<prefix>-console/...`: the plan's example name `<prefix>-console` is only safe with the trailing slash, or choose a self-backup prefix that does not start with the gateway prefix.
-3. **Cost of `forget --prune` every 6 h under versioning and the 90-day minimum.** Item 9's prune of 2 snapshots deleted 4 packs and rewrote the index (3 old index files deleted). Under bucket versioning each deleted object stays as a non-current version and Wasabi bills deleted objects for 90 days from upload. Read the bucket's versioning state, the lifecycle rule for non-current versions on `<self_prefix>/`, and estimate (database size x copies kept for 90 days). Lock objects (186 bytes) are created and deleted on every call: check Wasabi's minimum-object-size billing for them.
+2. **The gateway key cannot reach the self-backup prefix.** As a device login through the gateway, `GET /<self_prefix>/config` must fail; and in the storage policy the gateway key's resources must name the prefix followed by a slash and then `*`. A policy resource written as the prefix followed directly by `*`, without a slash, also matches `<prefix>-console/...`: the plan's example name `<prefix>-console` is only safe with the trailing slash, or choose a self-backup prefix that does not start with the gateway prefix.
+3. **Cost of `forget --prune` every 6 h under versioning and the 90-day minimum.** Item 9's prune of 2 snapshots deleted 4 packs and rewrote the index (3 old index files deleted). Under bucket versioning each deleted object stays as a non-current version, and the production object storage bills deleted objects for 90 days from upload. Read the bucket's versioning state, the lifecycle rule for non-current versions on `<self_prefix>/`, and estimate (database size x copies kept for 90 days). Lock objects (186 bytes) are created and deleted on every call: check the production object storage's minimum-object-size billing for them.
 4. **Browse latency against the bucket** (item 7 measured local disk only): `restic --no-cache ls --json <snap> <folder>` through the admin path on a real device repository, three calls, cold.
 5. **Production gateway policy is prefix-scoped** (plan F.8): read the policy attached to the gateway key; it is not visible from the repository.
 
@@ -368,7 +370,7 @@ otherwise vanish); read PAX records (Go `archive/tar` does); skip symlink entrie
 count, rather than writing a link target as file content as `dump -a zip` does. Abort without the
 central directory on restic exit != 0 OR a tar read error (both observed on a cut stream). Add an
 idle watchdog on restic's stdout (no byte for N seconds -> kill restic -> abort the response): with
-the gateway gone restic retried for 20+ minutes without exiting, and an S3 outage behind a live
+the gateway gone restic retried for 20+ minutes without exiting, and an object-storage outage behind a live
 rclone was not tested. The same watchdog is needed in the agent's Mode B restore through the gateway
 (no new `status` line for N minutes -> stop restic, FAILED with a storage class), followed by
 `restic unlock` because a killed restic leaves its lock.
@@ -388,7 +390,7 @@ forget/prune tickets come first.
 | --- | --- | --- |
 | everything as SYSTEM (the agent's account): ACL and owner restore with SeRestorePrivilege, what the backup records as SYSTEM (inherited ACEs flattened or not), writes to `C:\Users`-level parents | no elevation on this PC (ticket) | P22-D worker on the lab VM, then lab script steps 6-8 by the operator |
 | side-folder creation with an Administrators + SYSTEM DACL, and whether a user can open a restored file in it by full path | needs SYSTEM / a second account | P22-D on the lab VM |
-| object storage latency, versioning cost, IAM (item 8) | no remote storage (ticket) | operator |
+| object storage latency, versioning cost, storage policy (item 8) | no remote storage (ticket) | operator |
 | reboot mid-restore, VM offline queueing | no VM (ticket) | operator, lab script steps 9-10 |
 | file symlinks in the snapshot | `mklink` needs SeCreateSymbolicLinkPrivilege or Developer Mode, absent here | lab VM |
 | names with leading spaces in `--include-file` | not in the sample set | P22-D unit test against the real binary |
@@ -402,3 +404,55 @@ forget/prune tickets come first.
 `P22_RIG_ROOT` sets the scratch directory (default `%TEMP%\cryo-p22-rig`), `CRYO_RESTIC` and
 `CRYO_RCLONE` the binaries. Each script appends to `<rig>\log\calls.md`. Scripts 02, 02b and 05
 modify the sample data; run `99-teardown.ps1` and `00-setup.ps1` again for a clean second run.
+
+## Addendum: findings of the blind check (2026-11-24)
+
+An independent verifier re-ran the rig (same binaries, same non-elevated user, its own `subst` drive
+`X:` and scratch folder) and reproduced the following. Evidence is quoted from its logs
+`verify-d0s1-b2-safety.log` and `verify-d0s1-side-reset.log` (kept outside the repository), with
+scratch paths and SIDs shortened.
+
+**H1 - the per-anchor form with `--overwrite never` still rewrites EXISTING folders below the anchor.**
+
+```text
+> restic restore --json -vv a9639c50:/X/tF/p1 --target X:\tF\p1 --include /p2 --overwrite never
+exit=0
+{"message_type":"verbose_status","action":"unchanged","item":"\p2\g.txt","size":1}
+{"message_type":"verbose_status","action":"unchanged","item":"\p2\sub\h.txt","size":1}
+{"message_type":"verbose_status","action":"restored","item":"\p2\f.txt","size":4}
+{"message_type":"verbose_status","action":"restored","item":"\p2\sub","size":0}
+{"message_type":"verbose_status","action":"restored","item":"\p2","size":0}
+```
+
+Before/after on disk: the anchor `X:\tF\p1` is unchanged; the existing folders `p2` and `p2\sub` changed
+mtime (2001-02-03 -> the restore time) and DACL (`p2` went from inherited-only `D:(A;ID;...)` to explicit
+copies plus inherited; the Guests ACE added to `sub` after the backup is gone). The existing, unchanged
+file `p2\sub\h.txt` lost its inherited Guests ACE as a consequence; `p2\g.txt` and the sibling `sib.txt`
+are unchanged. restic reports both folders as `restored` although nothing in them was written but
+`f.txt`. So restoring in place into folders that already exist is unsafe in either form (drive-root
+or per-anchor); the anchor form only protects the anchor itself.
+
+**H2 - `icacls <dir> /reset /T /C` follows a junction inside the tree.** A junction
+`<side>\rid1\X\folder\junc` pointing at a folder OUTSIDE the side folder; `icacls <side>\rid1 /reset /T /C`
+reported `processed file: <side>\rid1\X\folder\junc\victim.txt` and the file outside the tree lost its
+explicit ACE (owner-SID `FA` entry before; afterwards only inherited entries,
+`D:AI(A;ID;FR;;;BG)(A;ID;0x1301bf;;;AU)(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;0x1200a9;;;BU)`). The item 5
+fallback "reset the subtree with icacls" therefore changes DACLs outside the restore when the restored
+data contains a junction (item 6: restic restores junctions as links).
+
+**L1 - the anchor's own mtime changes when restic creates something in it.** Restore of
+`/gone/inner/f.txt` with anchor `X:\tG` (the deepest existing folder; `gone` was deleted):
+`X:\tG` kept its DACL, but its mtime moved from 2001-02-03 to the restore time, because restic created
+`gone` in it. `keep.txt` beside it was unchanged.
+
+Design consequences (one line each):
+
+- H1: restore into a fresh staging folder on the destination volume (everything in it is created by
+  restic) and place the files with the agent's own move step, which never touches folders that already
+  exist.
+- H2: never follow reparse points (junctions, symlinks) in any walk the agent or console does over
+  restored data.
+- H2 / item 5: reset ACLs of a side or staging folder with the agent's own walk that does not follow
+  reparse points, not with `icacls /reset /T`.
+- L1: with a staging folder restic never writes into the destination; a destination folder's mtime
+  then changes only through the move step, as any file creation in it does.
