@@ -8,7 +8,8 @@
 ;   1003 agent stopped            1010 backup finished
 ;   1004 state directory refused  1011 backup failed
 ;   1005 lab flag in use          1012 backup deferred
-;   1006 state directory tampered
+;   1006 state directory tampered 1020 restore finished
+;                                1021 restore failed
 ;
 ; deploy/windows/eventlog/build-messages.ps1 compiles this file (MinGW windmc
 ; and windres) into cmd/cryo-agent/messages_windows_amd64.syso, which go build
@@ -93,6 +94,18 @@ Language=English
 
 MessageId=1012
 SymbolicName=CRYO_EVENT_1012
+Language=English
+%1%0
+.
+
+MessageId=1020
+SymbolicName=CRYO_EVENT_1020
+Language=English
+%1%0
+.
+
+MessageId=1021
+SymbolicName=CRYO_EVENT_1021
 Language=English
 %1%0
 .

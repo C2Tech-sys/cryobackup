@@ -562,3 +562,41 @@ func validCommandID(id string) bool {
 	t := time.Unix(1, 0)
 	return api.Command{ID: id, Type: api.CommandCheckIn, CreatedAt: t, ExpiresAt: t.Add(time.Second)}.Validate() == nil
 }
+
+// GetRestore performs GET /restores/{id} with the device token (architecture
+// §5.1, ADR 0027): the selection of a restore to this device. The answer is
+// the one path-bearing type of the protocol (api.RestoreSelection); the caller
+// validates it and must never log it. A refusal comes back as an *Error with
+// the console's code (agent_too_old, device_retired_download_only,
+// device_purging, device_restore_active: 409; restore_expired: 410;
+// not_found: 404), which RestoreRefusal reads.
+func (c *Client) GetRestore(ctx context.Context, id string) (api.RestoreSelection, error) {
+	var out api.RestoreSelection
+	tok, err := c.deviceToken()
+	if err != nil {
+		return out, err
+	}
+	_, err = c.do(ctx, call{op: "restore", method: http.MethodGet, route: api.RouteRestore(id), bearer: tok, out: &out})
+	return out, err
+}
+
+// RestoreRefusal reports whether err is the console's final answer to a
+// restore fetch, which no retry can change, and returns its code: one of the
+// restore refusal codes, or not_found, under their documented statuses. Any
+// other 4xx except 401, 403, 408 and 429 is final too (code "" when the console
+// sent none the agent knows). Network errors, 5xx, 401, 403, 408 and 429 are
+// not final: the console may answer later.
+func RestoreRefusal(err error) (code string, final bool) {
+	var ue *Error
+	if !errors.As(err, &ue) || ue.Network || ue.TLS {
+		return "", false
+	}
+	switch ue.Status {
+	case http.StatusConflict, http.StatusGone, http.StatusNotFound:
+		return ue.Code, true
+	}
+	if ue.Code == "malformed_response" {
+		return ue.Code, true
+	}
+	return ue.Code, Refused(err)
+}

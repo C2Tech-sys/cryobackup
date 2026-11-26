@@ -261,6 +261,11 @@ func (a *Agent) buildHeartbeat(ctx context.Context) api.HeartbeatRequest {
 		req.UptimeS = 0
 	}
 	req.LastErrorClass = a.lastErrorClass(f)
+	if run.isRestore() {
+		// A restore holds the restic slot: the device is busy (running), but
+		// it has no start lease to renew and no backup progress to show.
+		run = nil
+	}
 	if run != nil && state == api.ServiceRunning {
 		req.ActiveRunID = run.id // renews the run's start lease (ADR 0005); never on a heartbeat that says idle
 	}
@@ -628,10 +633,19 @@ func (a *Agent) cmdBackupNow(ctx context.Context) (bool, error) {
 // running, as before. A runID that is not the active run's - a stale or
 // finished run - stops nothing and answers run_mismatch, so a late cancel
 // cannot kill a newer run.
+//
+// A restore is cancelled by its run id (the restore request id) at any point
+// from acceptance to its end, also while it waits for a backup or fetches its
+// selection (ADR 0027: a cancel names it). A cancel without a run id stops the
+// run in the restic slot, or else the accepted restore.
 func (a *Agent) cmdCancel(ctx context.Context, runID string) (bool, string) {
 	a.mu.Lock()
-	run := a.running
+	run, rs := a.running, a.restoring
 	a.mu.Unlock()
+	if rs != nil && (runID == rs.id || runID == "" && run == nil) {
+		rs.cancel(supervisor.ErrCancelled)
+		return true, ""
+	}
 	switch {
 	case runID != "" && (run == nil || run.id != runID):
 		return false, commands.ReasonRunMismatch

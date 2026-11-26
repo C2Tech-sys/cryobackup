@@ -62,6 +62,8 @@ The version comes from git:
 
 Windows Installer compares only `X.Y.Z`. Two builds that differ only in N therefore replace each other in place (`AllowSameVersionUpgrades`), in either direction when run by hand with `msiexec`. The RMM wrapper compares all four fields (see the wrapper under **Install, upgrade, uninstall**). A release needs a new tag.
 
+**Agent 0.4.0 (the pilot slice, ADR 0026).** The first agent that runs a restore to the original device (ADR 0027) is 0.4.0, and the console refuses a device restore to an older agent (`agent_too_old`). Build that release with `CRYO_MSI_VERSION=0.4.0` (or from a `v0.4.0` tag), so the agent reports exactly `0.4.0`. A dev build after the `v0.3.0` tag reports its `git describe` string (`v0.3.0-N-g<hash>`), which is not 0.4.0.
+
 Exit codes of `build.ps1`:
 
 | Code | Meaning |
@@ -172,6 +174,8 @@ Wrapper exit codes:
 | 1010 | information | a backup finished (success or partial) |
 | 1011 | error | a backup failed, with its error class |
 | 1012 | warning | a backup was deferred, with the reason |
+| 1020 | information | a restore to this device finished (restored, or restored with errors; ADR 0027) |
+| 1021 | error | a restore to this device failed, was cancelled or interrupted, with its class (or a restore record or side folder that could not be secured) |
 
 To add an id: add it to `eventlog/messages.mc` and to `EventIDs` in `internal/agent/service`, run `eventlog\build-messages.ps1`, and commit the regenerated `cmd\cryo-agent\messages_windows_amd64.syso` with them (`go test ./cmd/cryo-agent ./internal/agent/service` checks that the three agree).
 

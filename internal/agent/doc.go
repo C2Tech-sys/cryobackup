@@ -289,6 +289,33 @@
 // graceful path against the real gateway, and what a service sees, is for
 // P1-T8's VM. See package supervisor.
 //
+// # Restore to the device (agent 0.4.0, ADR 0027)
+//
+// A restore command carries only the restore request id. The executor's
+// Restore handler (restore.go) writes the open run (kind restore, trigger
+// manual, run id = request id) and answers at once; the restore then runs on
+// its own goroutine: GET /restores/{id} with the device token (a refusal by
+// code is final), api validation, a wait for a running backup (one restic
+// child at a time: the restore takes the same slot), one restic run per
+// volume through the gateway with the device's own login and DPAPI repository
+// password, an include file per volume in the state directory's tmp folder
+// (deleted on every exit), a free-space check from a dry run of the same
+// restore before anything is written, the staging and side roots under the
+// root rule, and the placement or side-folder reset of package restoreplace.
+// The record's restore block follows the coupling table of api.RunRecord
+// (restore_plan.go, restoreVerdict). A restore never resumes: a run left open
+// is closed as interrupted at start (journal.OpenRunsOnStart) and its staging
+// folder removed by the clean-up walk (sweepRestoreStaging). A side restore
+// that does not succeed (any outcome but success, or partial before every
+// reset completed) removes its side folder before its run is closed, and the
+// start-up sweep removes the side folder of any restore closed without
+// success or partial, so no file keeps the snapshot's owner and DACL there
+// (foreman rulings, 2026-11-25). Cancel by run id
+// works from acceptance to the end; restic stopped by a cancel or by the
+// no-progress watchdog is followed by "restic unlock". No path, file name or
+// selection is ever logged: device log lines carry ids, drive letters, classes
+// and counts; restic's own stream stays in logs\runs\<id>.jsonl.
+//
 // This package imports the standard library, the internal packages, and
 // golang.org/x/sys/windows (service, event log, DPAPI, job object); the
 // journal is modernc.org/sqlite. The shared path-free internal/logx boundary is
