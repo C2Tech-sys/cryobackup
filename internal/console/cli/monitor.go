@@ -109,7 +109,9 @@ func (a *App) addMonitorJobs(cfg config.Config, fleet *health.Evaluator) {
 		Loc: a.Display.Loc, ConsoleURL: link, Log: a.log,
 		Rerender: map[string]notify.RerenderFunc{store.DeliveryDigest: a.Digest.Rerender}}
 	a.Runner.Add((&jobs.NotificationRetry{Retrier: a.Retrier}).Job())
-	a.Runner.Add((&jobs.AbandonedRunSweeper{Store: a.Store}).Job())
+	// ConsoleStartedAt: this start of the console, captured once here; every restart then holds the
+	// device-restore reconnect grace (ADR 0032), whatever the first sweeps meet.
+	a.Runner.Add((&jobs.AbandonedRunSweeper{Store: a.Store, Options: store.SweepOptions{ConsoleStartedAt: a.clock().UTC()}}).Job())
 	// The outbound heartbeat ping (ADR 0020 decision 12): registered only with a URL; its facts feed
 	// banner C19 through the prober either way (no URL: not configured, nothing raised).
 	hp := cfg.HealthcheckPing

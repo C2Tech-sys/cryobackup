@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -19,6 +21,11 @@ type SweepOptions struct {
 	ActiveWithin time.Duration
 	// Limit bounds the open runs examined in one pass.
 	Limit int
+	// ConsoleStartedAt is when this console process started (serve sets it
+	// once at start-up); no device restore is closed before ConsoleStartedAt
+	// plus DeviceRestoreReconnectGrace. Zero: the sweep works it out itself
+	// (restoreSweepListeningSince).
+	ConsoleStartedAt time.Time
 }
 
 // Defaults of SweepOptions (architecture §5.7 abandoned-run-sweeper).
@@ -34,46 +41,181 @@ type SweepResult struct {
 	Examined, Abandoned int
 	// RestoresClosed is how many running device restores the sweep closed as
 	// FAILED interrupted (sweepStuckDeviceRestores), and RestoresClosedBy the same
-	// count by reason (no_run_record, agent_restarted); nil when none closed.
+	// count by reason (agent_silent, agent_restarted, no_run_record); nil when
+	// none closed.
 	RestoresClosed   int
 	RestoresClosedBy map[string]int
+	// RestoresHeldBack is how many running device restores the sweep would
+	// have closed but did not, because the console is inside its reconnect
+	// grace (ADR 0032); GraceUntil is when that grace ends (zero outside it).
+	RestoresHeldBack int
+	GraceUntil       time.Time
 }
 
-// Running device restores that stop reporting (ADR 0027; ticket P22-E, fix E3).
+// Running device restores that stop reporting (ADR 0027; ticket P22-E, fix E3;
+// ADR 0032).
 //
 // A device restore becomes running when the agent fetches its selection, and
 // only the agent's run record (run id = restore id) closes it. An agent that
 // never sends one would leave the row running and, through the one active device
 // restore rule, block every later device restore of that device for good: the
 // quiet failure this product exists to prevent. So the abandoned-run-sweeper
-// also closes such a row, as FAILED with class interrupted ("the restore was cut
-// short; run it again"), audited restore.finish, in two cases:
+// also closes such a row, as FAILED with class interrupted, audited
+// restore.finish with the reason, and keeps the reason in the row's progress
+// document (DeviceRestoreProgress.ClosedBy), in three cases:
 //
-//   - DeviceRestoreRunningBound after the fetch, unless the device reports it
-//     active right now (its start lease is live, or its newest heartbeat, no
-//     older than SweepOptions.ActiveWithin, carries progress for that run id).
-//   - The agent restarted after the fetch (its newest heartbeat's uptime puts
-//     the boot after the fetch) and, deviceRestoreRestartGrace after that boot,
-//     no run record of the restore has arrived at all. A restore never resumes
-//     after a restart (ADR 0027), and the agent reports an interrupted run from
-//     the journal it wrote before restic started; a restart with no record at
-//     all means the agent never got that far.
+//   - agent_silent: nothing from the device (no heartbeat) for
+//     DeviceRestoreSilenceLimit, counted from the later of the fetch and its
+//     newest heartbeat.
+//   - agent_restarted: the agent restarted after the fetch (its newest
+//     heartbeat's uptime puts the boot after the fetch) and,
+//     deviceRestoreRestartGrace after that boot, no run record of the restore
+//     has arrived at all. A restore never resumes after a restart (ADR 0027),
+//     and the agent reports an interrupted run from the journal it wrote before
+//     restic started; a restart with no record at all means the agent never got
+//     that far.
+//   - no_run_record: DeviceRestoreRunningBound after the fetch, unless the
+//     device reports it active right now (its start lease is live, or its
+//     newest heartbeat, no older than SweepOptions.ActiveWithin, carries
+//     progress for that run id). The agent sends neither for a restore (its
+//     heartbeat leaves the run id and progress out while a restore holds the
+//     restic slot), so for a restore this is a ceiling counted from the fetch.
 //
-// A run record that arrives later is still ingested; the row stays as the sweep
-// closed it (closeDeviceRestore leaves a closed row alone).
+// A console that was down heard nothing from anyone, so silence it measures
+// across its own outage is not the device's. After every start of the console
+// process (and, for a caller that does not say when it started, after an outage
+// the sweep sees in its own record) no device restore is closed, for any
+// reason, until the console has been listening for DeviceRestoreReconnectGrace
+// (restoreSweepListeningSince): every live agent has heartbeated by then, and
+// the one that has not is silent while the console listens. A heartbeat inside
+// the grace makes the device heard, as always.
+//
+// A run record that arrives later is still ingested. The row stays as the sweep
+// closed it, and the agent's report is kept beside it (recordLateRestoreReport,
+// audited restore.late_report): FAILED never turns quietly into RESTORED.
 const (
+	// DeviceRestoreSilenceLimit is how long a running device restore may go
+	// with nothing at all from its device before the console calls it
+	// interrupted (ADR 0032). The agent's own bounds (internal/agent): a
+	// heartbeat every 60 s (+-10 s); while the console does not answer, a retry
+	// backoff clamped at 5 min (uplink.BackoffMax, jitter never above it), or
+	// the console's own Retry-After, honoured exactly up to 1 h; with a refused
+	// device token one probe an hour (+-20 %), at most 72 min. The restore
+	// itself is stopped by the agent after 15 min without movement (restoreIdleBound), a selection
+	// fetch is retried for at most 30 min (restoreFetchFor), and a restore that
+	// waits for a running backup (up to sla.max_run_hours, 12 h by default)
+	// keeps heartbeating meanwhile. So no restore still running on a device
+	// that can reach the console goes silent for more than 72 min; 24 h is that
+	// bound twenty times over, and the same day a queued restore waits for its
+	// device (ruling C6).
+	DeviceRestoreSilenceLimit = 24 * time.Hour
 	// DeviceRestoreRunningBound is how long a running device restore may go
-	// without its run record. It is far longer than any plausible pilot restore:
-	// the agent stops restic itself when no status line arrives within its
-	// watchdog bound (ADR 0027, "A restore that stops moving is stopped"), and a
-	// selection of at most 100 paths that has not finished in two days on a
-	// working link is not finishing; the operator then sees FAILED, not RUNNING.
+	// without its run record, heartbeats or not. It is far longer than any
+	// plausible pilot restore: the agent stops restic itself when no status
+	// line arrives within its watchdog bound (ADR 0027, "A restore that stops
+	// moving is stopped"), and a selection of at most 100 paths that has not
+	// finished in two days on a working link is not finishing; the operator
+	// then sees FAILED, not RUNNING, and a late record is kept beside it.
 	DeviceRestoreRunningBound = 48 * time.Hour
 	// deviceRestoreRestartGrace gives a restarted agent time to post the run
 	// record it journaled before restic started (its outbox sends within
 	// minutes of start-up) before the sweep calls the restore lost.
 	deviceRestoreRestartGrace = 30 * time.Minute
+	// DeviceRestoreReconnectGrace is how long the console listens after an
+	// outage before it closes any device restore (ADR 0032). An agent's longest
+	// wait before it tries the console again is the Retry-After the console
+	// sent, honoured up to 1 h (uplink.Backoff.Delay); its own backoff is
+	// clamped at 5 min; the heartbeat that follows takes at most 70 s. Two
+	// hours is that 1 h 6 min with the margin of nearly twice over.
+	DeviceRestoreReconnectGrace = 2 * time.Hour
+	// sweepOutageAfter: without SweepOptions.ConsoleStartedAt, a first sweep
+	// that finds the previous sweep finished longer ago than this (the sweeper
+	// runs every 5 min) knows the console, or its job runner, was not
+	// listening, and starts the reconnect grace.
+	sweepOutageAfter = 15 * time.Minute
+	// abandonedRunSweeperJob is jobs.NameAbandonedRunSweeper, the job_state
+	// row of the sweeper (restated: the store does not import jobs).
+	abandonedRunSweeperJob = "abandoned-run-sweeper"
 )
+
+// sweepListen is Store.listen: when the sweeps of this process started
+// listening (ms; 0 when there is no grace to hold), once set.
+type sweepListen struct {
+	mu  sync.Mutex
+	set bool
+	ms  int64
+}
+
+// restoreSweepListeningSince settles, once per Store and before the sweep does
+// anything that can fail, when the console started listening: o.ConsoleStartedAt
+// when the caller says (serve sets it at start-up, so every restart holds the
+// grace); else the time of this first sweep when the previous sweep (job_state
+// of the sweeper, written by the job runner after every run) finished more than
+// sweepOutageAfter before it, or when that record cannot be read (failing safe:
+// a grace too many delays a close by two hours, a grace too few closes healthy
+// restores); else 0, no grace (a quick restart: the fleet's heartbeats are
+// fresh). A later sweep that fails, and the error run the job runner records
+// for it, cannot take the grace back.
+func (s *Store) restoreSweepListeningSince(ctx context.Context, o SweepOptions) int64 {
+	s.listen.mu.Lock()
+	defer s.listen.mu.Unlock()
+	if s.listen.set {
+		return s.listen.ms
+	}
+	now := msOf(s.Now())
+	since := int64(0)
+	if !o.ConsoleStartedAt.IsZero() {
+		since = msOf(o.ConsoleStartedAt)
+	} else {
+		js, err := s.GetJobState(ctx, abandonedRunSweeperJob)
+		switch {
+		case err == nil && js.LastFinishedAt != nil && now-msOf(*js.LastFinishedAt) > sweepOutageAfter.Milliseconds():
+			since = now
+		case err != nil && !errors.Is(err, ErrNotFound):
+			since = now
+		}
+	}
+	s.listen.set, s.listen.ms = true, since
+	return since
+}
+
+// restoreGraceUntil is the end of the reconnect grace, or 0 when none holds.
+// Before the first sweep of this process it assumes the grace starts now.
+func (s *Store) restoreGraceUntil() int64 {
+	s.listen.mu.Lock()
+	set, ms := s.listen.set, s.listen.ms
+	s.listen.mu.Unlock()
+	if !set {
+		ms = msOf(s.Now())
+	}
+	if ms == 0 {
+		return 0
+	}
+	return ms + DeviceRestoreReconnectGrace.Milliseconds()
+}
+
+// DeviceRestoreCloseAt is about when the sweep closes a running device restore
+// fetched at started whose device was last heard from at lastHeard (zero:
+// never) if nothing more arrives (ADR 0032): DeviceRestoreSilenceLimit after
+// the later of the two, or DeviceRestoreRunningBound after the fetch if that
+// is sooner, and never before the reconnect grace of this process ends. The
+// status page shows it; the sweep runs every five minutes, so "about". A
+// function, not a method: it reads no customer data, and the scope matrix
+// (scope_test.go) classifies every Store method.
+func DeviceRestoreCloseAt(s *Store, started, lastHeard time.Time) time.Time {
+	heard := started
+	if lastHeard.After(heard) {
+		heard = lastHeard
+	}
+	at := heard.Add(DeviceRestoreSilenceLimit)
+	if c := started.Add(DeviceRestoreRunningBound); c.Before(at) {
+		at = c
+	}
+	if g := s.restoreGraceUntil(); g > 0 && time.UnixMilli(g).After(at) {
+		at = time.UnixMilli(g).UTC()
+	}
+	return at.UTC()
+}
 
 // stuckRestore is one running device restore as the sweep reads it.
 type stuckRestore struct {
@@ -87,25 +229,38 @@ type stuckRestore struct {
 
 // stuckReason says why a running device restore must be closed now, or "".
 func (r stuckRestore) stuckReason(now int64, activeWithin time.Duration) string {
-	progressFor, _ := progressRun(r.progress)
-	active := (r.leaseUntil.Valid && r.leaseUntil.Int64 > now) ||
-		(progressFor == r.id && r.presenceAt.Valid && now-r.presenceAt.Int64 <= activeWithin.Milliseconds())
-	if now-r.started >= DeviceRestoreRunningBound.Milliseconds() && !active {
-		return "no_run_record"
+	heard := r.started
+	if r.presenceAt.Valid && r.presenceAt.Int64 > heard {
+		heard = r.presenceAt.Int64
+	}
+	if now-heard >= DeviceRestoreSilenceLimit.Milliseconds() {
+		return RestoreClosedAgentSilent
 	}
 	if !r.runExists && r.presenceAt.Valid && r.uptime.Valid {
 		boot := r.presenceAt.Int64 - r.uptime.Int64*1000
 		if boot > r.started && now-boot >= deviceRestoreRestartGrace.Milliseconds() {
-			return "agent_restarted"
+			return RestoreClosedAgentRestarted
 		}
+	}
+	progressFor, _ := progressRun(r.progress)
+	active := (r.leaseUntil.Valid && r.leaseUntil.Int64 > now) ||
+		(progressFor == r.id && r.presenceAt.Valid && now-r.presenceAt.Int64 <= activeWithin.Milliseconds())
+	if now-r.started >= DeviceRestoreRunningBound.Milliseconds() && !active {
+		return RestoreClosedNoRunRecord
 	}
 	return ""
 }
 
 // sweepStuckDeviceRestores closes the running device restores stuckReason names,
 // one transaction per row with its audit row; a failed audit write leaves that
-// row running for the next sweep and is returned.
-func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.Duration) (int, map[string]int, error) {
+// row running for the next sweep and is returned. Inside the reconnect grace
+// (listening, restoreSweepListeningSince) it closes none and counts them in
+// res.RestoresHeldBack instead.
+func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.Duration, listening int64, res *SweepResult) error {
+	var grace int64
+	if listening > 0 && msOf(s.Now()) < listening+DeviceRestoreReconnectGrace.Milliseconds() {
+		grace = listening + DeviceRestoreReconnectGrace.Milliseconds() // the agents may still be reconnecting
+	}
 	var rows []stuckRestore
 	err := s.Read(ctx, func(tx *Tx) error {
 		var err error
@@ -123,7 +278,7 @@ func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.
 		return err
 	})
 	if err != nil {
-		return 0, nil, err
+		return err
 	}
 	closed := 0
 	var by map[string]int
@@ -133,11 +288,16 @@ func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.
 		if reason == "" {
 			continue
 		}
+		if grace > 0 {
+			res.RestoresHeldBack++
+			res.GraceUntil = time.UnixMilli(grace).UTC()
+			continue
+		}
 		did := false
 		err := s.Write(ctx, func(tx *Tx) error {
 			did = false
 			now := tx.nowMS()
-			prog, _ := json.Marshal(DeviceRestoreProgress{Outcome: "interrupted"})
+			prog, _ := json.Marshal(DeviceRestoreProgress{Outcome: "interrupted", ClosedBy: reason})
 			res, err := tx.Exec(`UPDATE restore_requests SET status = 'failed', error_class = 'interrupted', progress = ?, selection_wrapped = NULL,
 				finished_at = ?, updated_at = ? WHERE id = ? AND status = 'running'`, string(prog), now, now, r.id)
 			if err != nil {
@@ -165,7 +325,8 @@ func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.
 			by[reason]++
 		}
 	}
-	return closed, by, firstErr
+	res.RestoresClosed, res.RestoresClosedBy = closed, by
+	return firstErr
 }
 
 // openRun is one open agent run as the sweeper reads it.
@@ -207,6 +368,8 @@ func (s *Store) SweepAbandonedRuns(ctx context.Context, o SweepOptions) (SweepRe
 		o.Limit = DefaultSweepLimit
 	}
 	var res SweepResult
+	// First, before anything here can fail: when this process started listening.
+	listening := s.restoreSweepListeningSince(ctx, o)
 	err := s.Write(ctx, func(tx *Tx) error {
 		now := tx.nowMS()
 		runs, err := collect(tx, `SELECT r.id, r.device_id, COALESCE(c.policy_id, ''), r.started_at, p.progress, p.received_at, l.lease_until
@@ -264,7 +427,7 @@ func (s *Store) SweepAbandonedRuns(ctx context.Context, o SweepOptions) (SweepRe
 	if err != nil {
 		return res, err
 	}
-	res.RestoresClosed, res.RestoresClosedBy, err = s.sweepStuckDeviceRestores(ctx, o.ActiveWithin)
+	err = s.sweepStuckDeviceRestores(ctx, o.ActiveWithin, listening, &res)
 	return res, err
 }
 

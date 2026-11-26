@@ -64,6 +64,11 @@ type Store struct {
 	// this process (state.World.PreviousDeviceCount; absent means -1).
 	prevMu sync.Mutex
 	prev   map[string]int
+
+	// listen is when this process's abandoned-run-sweeper started listening
+	// for device restores (jobs_sweep.go, restoreSweepListeningSince): set by
+	// the first sweep, kept for the life of the Store.
+	listen sweepListen
 }
 
 const (

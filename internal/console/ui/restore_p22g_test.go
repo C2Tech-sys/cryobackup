@@ -352,7 +352,7 @@ func TestP22G_EachRefusalHasItsPage(t *testing.T) {
 	e.seedP22(t)
 	docs := "/C/Users/Public/Documents"
 	forged := func(host, mode string) (*http.Response, string) {
-		return e.post("/ui/devices/"+e.dev[host]+"/restore", vv("snapshot", fixtures.FixtureSnapshotID, "step", "review", "mode", mode, "action", "submit",
+		return e.post("/ui/devices/"+e.dev[host]+"/restore", vv("snapshot", e.listedSnapshot(e.dev[host]), "step", "review", "mode", mode, "action", "submit",
 			"path", docs+"/Quarterly-Report.txt"), false)
 	}
 	destOf := func(host string) string {

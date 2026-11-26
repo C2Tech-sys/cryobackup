@@ -112,10 +112,12 @@ wording of 0027). The lab script that proves all of this before a pilot is
 | **QUEUED**, device online | The device picks it up at its next check-in, normally within a minute. | Wait. |
 | **QUEUED**, device offline | "Last seen ...  Starts when online, until <expiry>." | Wait for the device, or use **Download as zip** for the files now (the page links back to the wizard). |
 | **RUNNING** | Files are being restored. Counts arrive when it finishes. | Wait. |
+| **RUNNING**, device silent | "<host> has not been heard from since <time>. The outcome is unknown until it reports." with the Last seen line. The console closes it as interrupted after 24 hours of silence (ADR 0032). | Find out why the machine is off the network. If it stays silent, the restore ends FAILED and the device is free for another. |
 | **WAITING** | "Waiting for the running backup." The device runs one repository task at a time. | Wait; it starts when the backup ends. |
 | **RESTORED** | Done. "N restored, M skipped because they already exist." | Check the files. In keep mode the skipped ones were left as they are. |
 | **RESTORED WITH ERRORS** | Some files could not be written. The counts by class are shown. | See the class table below, fix the cause, run it again for the rest; what is in place is kept. |
 | **FAILED**, `interrupted` | "Cut short." The agent or the machine restarted. | Run the restore again. Files already placed stay. |
+| **FAILED**, `interrupted`, closed by the console | "The device stopped reporting this restore, so the console closed it as interrupted. What it restored is unknown." (no word for 24 hours, a restart with no record, or no result 48 hours after the start; ADR 0032). A report that arrives later is shown beside it; the restore stays FAILED. | Check the files on the device, then run the restore again for anything missing. |
 | **FAILED**, `auth` | The gateway refused the device's login. | Check the device's gateway login on the device page, then run it again. |
 | **FAILED**, `disk` | Not enough free space; nothing was written. | Free space on the device (the log line gives the numbers) or restore fewer items. |
 | **FAILED**, `guard_refused` | The safety check refused the folder the restore writes into (section 4). Nothing was written. | The log names the failed check. Remove the folder it names and run the restore again. |

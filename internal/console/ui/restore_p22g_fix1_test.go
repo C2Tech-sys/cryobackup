@@ -77,6 +77,7 @@ func TestP22G_G1_EveryRefusalIsABoxForHTMXAndKeepsItsStatusForABrowserPost(t *te
 		e.do("GET", "/devices/"+id+"/restore", nil) // an empty snapshot cache is filled from the repository
 		path := "/ui/devices/" + id + "/restore"
 		before := e.restoreCount(id)
+		c.form.Set("snapshot", e.listedSnapshot(id)) // P22-R2a A2: a create names a snapshot the device lists
 		res, body := e.post(path, cloneValues(c.form), false)
 		if res.StatusCode != c.status || !strings.Contains(body, c.text) || !strings.Contains(body, "</html>") {
 			t.Errorf("%s, browser post: %d, banner %v, full page %v (want %d)", c.name, res.StatusCode, strings.Contains(body, c.text), strings.Contains(body, "</html>"), c.status)

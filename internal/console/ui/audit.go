@@ -201,7 +201,7 @@ var auditActionLabels = map[string]string{
 	"command.queue": "Command queued", "command.cancel": "Command cancelled", "settings.update": "Setting changed", "restore.request": "Restore requested",
 	"restore.download": "Restore downloaded", "restore.failed": "Restore failed", "agent.enroll": "Agent enrolled", "agent.enroll.denied": "Agent enrollment denied",
 	"agent.auth.blocked": "Agent sign-in blocked", "admin.password_reset": "Password reset", "console.init": "Console initialised",
-	"gateway.htpasswd.drift": "Gateway login file drifted",
+	"gateway.htpasswd.drift": "Gateway login file drifted", "restore.late_report": "Restore reported late", // ADR 0032
 }
 
 // fullClock is "Sat 4 Jul 2026, 3:04:05 PM CDT": the display zone on a 12-hour clock, with seconds.
