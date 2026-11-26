@@ -68,12 +68,27 @@ install -d -o root -g cryobackup -m 0750 /etc/cryobackup /etc/cryobackup/tls
 cp cryo-console.service cryo-maintain.service rclone-gateway.service /etc/systemd/system/
 ```
 
-Files in `/etc/cryobackup` (all mode 0640 or 0400, group `cryobackup`; none is committed):
+Files in `/etc/cryobackup` (none is committed). **Owners and modes matter**: the console and the worker run as
+`cryobackup`, so every file they read must be readable by that user, and two files are refused when group or others can
+open them. Those two are therefore owned by `cryobackup` itself, not by root:
+
+| file | owner:group | mode | why |
+| --- | --- | --- | --- |
+| `master.key` | `cryobackup:cryobackup` | `0400` | the service user must read it; `cryo-console doctor` warns about a key open to group or others |
+| the SMTP password file (`smtp.password_file`) | `cryobackup:cryobackup` | `0600` | the mail sender refuses a password file that group or others can open |
+| `config.json`, `rclone-gateway.conf`, `rclone-admin.conf`, `gateway.env`, `maintain.env` | `root:cryobackup` | `0640` | read by the service user, written by root |
+| `tls/*.key`, `tls/*.crt` | `root:cryobackup` | `0440` | what `cryobackup-certsync` installs |
+
+A `master.key` owned by root at 0400 (for example because root ran `cryo-console init`) cannot be read by the service user.
+Fix it with
+`chown cryobackup:cryobackup /etc/cryobackup/master.key && chmod 0400 /etc/cryobackup/master.key`, then check it:
+`sudo -u cryobackup cat /etc/cryobackup/master.key >/dev/null` must print nothing. The same modes are used by the rebuild in
+[`docs/runbooks/console-disaster-recovery.md`](../../docs/runbooks/console-disaster-recovery.md), section 3, step 2.
 
 | file | content |
 | --- | --- |
 | `config.json` | the console config (schema owned by the console config package); see the path table below |
-| `master.key` | from `cryo-console init`; mode 0400; back it up offline |
+| `master.key` | from `cryo-console init`; `cryobackup:cryobackup` 0400 (see above); back it up offline |
 | `rclone-gateway.conf`, `rclone-admin.conf` | the two rclone files; **both remotes need `no_check_bucket`**, see "The two rclone files" below |
 | `tls/agent.crt`, `tls/agent.key`, `tls/gateway.crt`, `tls/gateway.key` | see [`../rclone/tls.md`](../rclone/tls.md) |
 | `gateway.env` | `GATEWAY_PORT=9443`, `BUCKET=<bucket>`, `PREFIX=<prefix>` |
