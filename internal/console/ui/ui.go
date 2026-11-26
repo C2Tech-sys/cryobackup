@@ -57,7 +57,12 @@ type Service struct {
 	Display *store.DisplayPrefs
 	// Fixtures enables /design and the fixtures notice on the login page.
 	Fixtures bool
-	Log      *logx.Logger
+	// Drill marks this console as a drill copy (ADR 0029, ruling C8): one restored from its
+	// self-backup and started with "drill": true. cli.Build sets it, from the config, on the Service it
+	// builds, so it belongs to that console and to no other in the process. page() and the three bare
+	// pages carry it into their data and base.html / bare.html render the DRILL COPY strip while it is set.
+	Drill bool
+	Log   *logx.Logger
 	// MasterLoaded reports banner C12's input for the sidebar.
 	MasterLoaded func() bool
 	// Maintain reports the worker probe for the sidebar and C07.
@@ -250,6 +255,7 @@ func (s *Service) Register(reg httpx.Registrar) {
 	r.Handle("GET /devices/{id}/restore", op(s.restorePage))
 	// The wizard post carries the selection: its 64 KiB cap is enforced before the gate parses the form (fix G2).
 	r.Handle("POST /ui/devices/{id}/restore", auth.LimitBody(restoreBodyMax, op(s.restorePost)))
+	r.Handle("POST /ui/devices/{id}/escrow/verify", ad(s.escrowVerifyPost)) // P22-I: Verify now (devicepanel_escrow.go)
 	r.Handle("GET /restores/{id}", op(s.restoreStatus))
 	r.Handle("POST /ui/restores/{id}/download", op(s.restoreDownload))
 	r.Handle("GET /ui/events", ro(s.events))
@@ -266,7 +272,7 @@ func (s *Service) Register(reg httpx.Registrar) {
 // Patterns lists the UI patterns Register adds (fixtures mode adds /design).
 func Patterns(fixtures bool) []string {
 	p := []string{"GET /login", "POST /login", "POST /logout", "GET /{$}", "GET /devices/{id}", "GET /devices/{id}/restore",
-		"POST /ui/devices/{id}/restore", "GET /restores/{id}", "POST /ui/restores/{id}/download", "GET /ui/events", "GET /ui/partials/board",
+		"POST /ui/devices/{id}/restore", "POST /ui/devices/{id}/escrow/verify", "GET /restores/{id}", "POST /ui/restores/{id}/download", "GET /ui/events", "GET /ui/partials/board",
 		"GET /ui/partials/run-progress/{run_id}", "GET /ui/partials/restore/{id}", "GET /static/{path...}"}
 	p = append(p, m2Patterns()...)
 	p = append(p, m3t5Patterns()...)      // M3-T5
@@ -377,7 +383,7 @@ func userView(p *auth.Principal) *UserView {
 func (s *Service) page(ctx context.Context, p *auth.Principal, f health.Fleet, title, nav, events string) Page {
 	d := s.displayOf(ctx)
 	return Page{Title: title, Nav: nav, User: userView(p), CSRF: p.CSRF,
-		Banners: buildBannersIn(f, false, d.Loc).forRole(p.Role), Stamp: s.stamp(ctx, f), Refresh: d.RefreshS, Events: events, Fixtures: s.Fixtures, Sys: s.sysItems(f), Zone: d.Zone}
+		Banners: buildBannersIn(f, false, d.Loc).forRole(p.Role), Stamp: s.stamp(ctx, f), Refresh: d.RefreshS, Events: events, Fixtures: s.Fixtures, Sys: s.sysItems(f), Zone: d.Zone, Drill: s.Drill}
 }
 
 func (s *Service) errorPage(w http.ResponseWriter, r *http.Request, p *auth.Principal, status int, title, body string) {
@@ -411,12 +417,14 @@ type loginData struct {
 	Ended    bool   // the page came here because its session ended (auth.SessionEndedPath)
 	Idle     string // the configured idle limit as the page says it ("12 hours"): session.idle_h, through auth.Manager.Idle
 	Absolute string // the configured total session lifetime as the page says it ("7 days"): session.absolute_h, through auth.Manager.Absolute
+	Drill    bool   // Service.Drill: the DRILL COPY strip
 }
 
 // renderLogin issues a fresh login nonce (cookie plus hidden field) and renders
 // the sign-in page; every login page the browser sees carries its own nonce.
 func (s *Service) renderLogin(w http.ResponseWriter, r *http.Request, status int, d loginData) {
 	d.Nonce = s.Auth.IssueLoginNonce(w, r)
+	d.Drill = s.Drill
 	d.Idle, d.Absolute = sessionSpanText(s.Auth.Idle), sessionSpanText(s.Auth.Absolute)
 	s.render(w, r, status, "login", "bare", d)
 }
@@ -628,7 +636,7 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 func (s *Service) fallbackPage(ctx context.Context, p *auth.Principal) Page {
 	d := s.displayOf(ctx)
 	return Page{Title: "Fleet unavailable", Nav: "fleet", User: userView(p), CSRF: p.CSRF,
-		Stamp: Stamp{State: "unreachable", At: "--:--:--", Zone: d.Zone}, Refresh: d.RefreshS, Events: "/ui/events", Fixtures: s.Fixtures, Sys: s.sysItems(health.Fleet{}), Zone: d.Zone}
+		Stamp: Stamp{State: "unreachable", At: "--:--:--", Zone: d.Zone}, Refresh: d.RefreshS, Events: "/ui/events", Fixtures: s.Fixtures, Sys: s.sysItems(health.Fleet{}), Zone: d.Zone, Drill: s.Drill}
 }
 
 func errorData(pg Page, status int, title, body string) any {

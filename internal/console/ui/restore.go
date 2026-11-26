@@ -293,7 +293,17 @@ func snapLabel(sn store.Snapshot, c fmtCtx) string {
 // refreshSnapshots reads the device's snapshots from the repository through the maintenance
 // worker (adminpath Snapshots) and makes the console's cache equal to them, as the agent's own
 // upload does. It returns the banner that says how it went.
+//
+// It reads the repository only for a device the wizard is not blocked on (restoreBase: being
+// purged, a customer-held key, an unreadable key record, no master key): for a blocked one it asks
+// the worker nothing and answers with the blocked sentence, whichever caller asks (P22-I).
 func (s *Service) refreshSnapshots(ctx context.Context, d *RestoreData) *Banner {
+	if d.Blocked != nil {
+		return &Banner{ClassWarn, d.Blocked.Title, d.Blocked.Text}
+	}
+	if d.dev.Purging() {
+		return &Banner{ClassWarn, "This device is being purged", "Its backups are being removed, so nothing can be restored from it."}
+	}
 	if s.Backend == nil {
 		return &Banner{ClassCrit, "Refresh unavailable", "The console has no maintenance worker to read the repository with (banner C07)."}
 	}
@@ -827,7 +837,7 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 
 	// The point in time. A refresh first reads the repository; then the posted snapshot must be
 	// one the cache holds, else the newest one is used.
-	if in.action == "refresh" {
+	if in.action == "refresh" && d.Blocked == nil { // a blocked device is not asked: its sentence is already on the page
 		d.Notice = s.refreshSnapshots(r.Context(), &d)
 		if d.Notice.Class == ClassCrit {
 			d.Error, d.Notice = d.Notice, nil

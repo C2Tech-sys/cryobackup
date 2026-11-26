@@ -183,10 +183,11 @@ type mfaData struct {
 	Codes    []string
 	CodesTxt string // the codes as a text file body, for the download link
 	MasterOK bool
+	Drill    bool // Service.Drill: the DRILL COPY strip
 }
 
 func (s *Service) mfaBase(p *auth.Principal) mfaData {
-	return mfaData{Title: "Verify it is you", Fixtures: s.Fixtures, Username: p.Admin.Username, CSRF: p.CSRF, MasterOK: s.Auth.Master.Loaded()}
+	return mfaData{Title: "Verify it is you", Fixtures: s.Fixtures, Username: p.Admin.Username, CSRF: p.CSRF, MasterOK: s.Auth.Master.Loaded(), Drill: s.Drill}
 }
 
 // enrollView begins (or shows again) the session's TOTP enrollment.
@@ -319,10 +320,11 @@ type resetData struct {
 	Error    *Note
 	Done     bool
 	Invalid  bool
+	Drill    bool // Service.Drill: the DRILL COPY strip
 }
 
 func (s *Service) renderReset(w http.ResponseWriter, r *http.Request, status int, d resetData) {
-	d.Title, d.Fixtures = "Set your password", s.Fixtures
+	d.Title, d.Fixtures, d.Drill = "Set your password", s.Fixtures, s.Drill
 	if !d.Done && !d.Invalid {
 		d.Nonce = s.Auth.IssueLoginNonce(w, r)
 	}

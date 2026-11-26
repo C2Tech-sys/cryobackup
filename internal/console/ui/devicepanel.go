@@ -43,6 +43,7 @@ type DevPanelPage struct {
 	Actions  *ActionBar   // M2-W2C: the action menu in the header (commands.go)
 	Commands *CmdListView // M2-W2C: the Commands tab (commands.go)
 	Alarms   *AlarmsView  // P20-W3B: the open alarms and their acknowledgements, Summary tab (m4_acks.go)
+	Escrow   *EscrowPanel // P22-I: the repository-key panel and Verify now, Summary tab (devicepanel_escrow.go)
 }
 
 // ---- history ----
@@ -450,8 +451,14 @@ func (s *Service) panelTabs(id, cur string, p *auth.Principal, canRestore bool) 
 }
 
 func (s *Service) devicePanel(w http.ResponseWriter, r *http.Request) {
+	s.devicePanelAt(w, r, r.PathValue("tab"), http.StatusOK, nil)
+}
+
+// devicePanelAt renders the device panel at tab with the given status. escrowResult, when set, is
+// the answer of a Verify now that is shown in the repository-key panel (a refusal comes with its
+// real status); a page loaded after a verdict carries the same banner in a signed ?escrow= flash.
+func (s *Service) devicePanelAt(w http.ResponseWriter, r *http.Request, tab string, status int, escrowResult *CauseView) {
 	p := principal(r)
-	tab := r.PathValue("tab")
 	switch tab {
 	case "", "summary", "history", "commands", "settings", "audit":
 	default:
@@ -492,7 +499,13 @@ func (s *Service) devicePanel(w http.ResponseWriter, r *http.Request) {
 	}
 	c := s.fcAt(r.Context(), fleet.Computed)
 	pg := DevPanelPage{Page: s.page(r.Context(), p, fleet, "Device detail", "devices", events), Dev: v, Tab: cur, Tabs: s.panelTabs(id, cur, p, v.CanRestore), Saved: savedText(r.URL.Query().Get("saved"))}
-	status := http.StatusOK
+	if cur == "summary" { // P22-I: the repository key, and the verdict of a Verify now
+		pg.Escrow = s.escrowPanel(r.Context(), p, id, c)
+		pg.Escrow.Result = escrowResult
+		if escrowResult == nil {
+			pg.Escrow.Result = s.escrowFlash(p, r.URL.Query().Get("escrow"))
+		}
+	}
 	if ds, ok := deviceState(fleet, id); ok { // M2-W2C: the action menu on every tab
 		bar := s.actionBar(r, p, fleet, dev, ds)
 		pg.Actions = &bar
