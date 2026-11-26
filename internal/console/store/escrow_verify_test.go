@@ -261,3 +261,67 @@ func addEscrowP22Matrix(m map[string]matrixCase) {
 			return nil, err
 		}}
 }
+
+// P22-H fix batch 1 (H1): banner C22 is raised by the running console, so the real loader fills
+// World.EscrowVerify. A retired device whose escrowed key fails with wrong_password raises C22 with
+// its count; a read of the keys that fails is NotRead (C22b), never an empty list read as healthy.
+func TestP22HLoadWorldFeedsBannerC22(t *testing.T) {
+	s, clk, byHost := fixtureEscrowStore(t)
+	ctx := t.Context()
+	banner := func(w state.World, id string) (state.Banner, bool) {
+		for _, b := range state.Evaluate(w, clk.Now()).Banners {
+			if b.ID == id {
+				return b, true
+			}
+		}
+		return state.Banner{}, false
+	}
+	retired := byHost("OLD-RECEPTION-PC")
+	w := must[state.World](t)(s.LoadWorld(ctx, ScopeAll(), LoadOptions{}))
+	if w.EscrowVerify == nil || w.EscrowVerify.NotRead != "" || len(w.EscrowVerify.Keys) == 0 {
+		t.Fatalf("LoadWorld did not fill the escrow verifier's keys: %+v", w.EscrowVerify)
+	}
+	found := false
+	for _, k := range w.EscrowVerify.Keys {
+		found = found || (k.DeviceID == retired.ID && k.Retired)
+	}
+	if !found {
+		t.Fatal("the retired device's key is not among the loaded keys")
+	}
+	if _, ok := banner(w, "C22"); ok {
+		t.Fatal("C22 raised before any failure")
+	}
+	ok(t, s.Write(ctx, func(tx *Tx) error {
+		_, err := tx.Exec(`UPDATE repo_key_escrow SET last_verify_error_class = 'wrong_password' WHERE device_id = ? AND retired_at IS NULL`, retired.ID)
+		return err
+	}))
+	w = must[state.World](t)(s.LoadWorld(ctx, ScopeAll(), LoadOptions{}))
+	b, raised := banner(w, "C22")
+	if !raised || b.Count != 1 || !strings.Contains(b.Text, "1 retired device") {
+		t.Fatalf("C22 for one retired wrong_password: raised=%v %+v", raised, b)
+	}
+	// A scope that cannot see the retired device's customer does not count it.
+	if wo, err := s.LoadWorld(ctx, ScopeOf("no-such-customer"), LoadOptions{}); err == nil {
+		if _, raised := banner(wo, "C22"); raised {
+			t.Fatal("C22 counts a device outside the scope")
+		}
+	}
+	// The keys cannot be read: NotRead and C22b, never an empty (green) fact and never a C22 count.
+	ok(t, s.Write(ctx, func(tx *Tx) error {
+		_, err := tx.Exec(`ALTER TABLE repo_key_escrow RENAME COLUMN last_verify_attempt_at TO last_verify_attempt_gone`)
+		return err
+	}))
+	wr, _ := s.LoadWorld(ctx, ScopeAll(), LoadOptions{})
+	if wr.EscrowVerify == nil || wr.EscrowVerify.NotRead == "" || len(wr.EscrowVerify.Keys) != 0 {
+		t.Fatalf("a failed read must be NotRead: %+v", wr.EscrowVerify)
+	}
+	if strings.Contains(wr.EscrowVerify.NotRead, "last_verify") || strings.Contains(wr.EscrowVerify.NotRead, "SQL") {
+		t.Errorf("NotRead leaks the error text: %q", wr.EscrowVerify.NotRead)
+	}
+	if _, raised := banner(wr, "C22b"); !raised {
+		t.Error("an unreadable escrow set does not raise C22b")
+	}
+	if _, raised := banner(wr, "C22"); raised {
+		t.Error("C22 counted on facts that were not read")
+	}
+}
