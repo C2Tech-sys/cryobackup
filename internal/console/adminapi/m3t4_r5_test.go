@@ -248,6 +248,22 @@ func r5Feeds() map[string]r5Feed {
 			r5Stale:       set(func(f *healthFacts) { f.Probes.MasterKey = nil }), // the prober reports nil when its comparison is no longer current
 			r5PassedFresh: set(func(*healthFacts) {}),
 		},
+		"escrow": { // P22-H (ADR 0030)
+			r5None: set(func(f *healthFacts) {
+				f.Escrow = &state.EscrowVerifyFacts{NotRead: "the escrowed keys could not be read (escrow_query)"}
+			}),
+			r5FailedNewest: set(
+				func(f *healthFacts) { // a retired device's key fails (banner C22's count)
+					f.Escrow = &state.EscrowVerifyFacts{Keys: []state.EscrowKeyFacts{{DeviceID: "r", Retired: true, Escrow: state.EscrowFacts{Custody: "escrowed", CreatedAt: r5Ago(90 * 24 * time.Hour), VerifiedAt: r5Ago(24 * time.Hour), LastVerifyErrorClass: "repo_missing"}}}}
+				},
+				func(f *healthFacts) { // an active device's key fails its latest verification
+					f.Escrow = &state.EscrowVerifyFacts{Keys: []state.EscrowKeyFacts{{DeviceID: "a", Escrow: state.EscrowFacts{Custody: "escrowed", CreatedAt: r5Ago(90 * 24 * time.Hour), VerifiedAt: r5Ago(24 * time.Hour), LastVerifyErrorClass: "wrong_password"}}}}
+				},
+				func(f *healthFacts) { // the verifier stopped: a proof older than a week and a day
+					f.Escrow = &state.EscrowVerifyFacts{Keys: []state.EscrowKeyFacts{{DeviceID: "a", Escrow: state.EscrowFacts{Custody: "escrowed", CreatedAt: r5Ago(90 * 24 * time.Hour), VerifiedAt: r5Ago(state.EscrowVerifyMaxAge + time.Hour)}}}}
+				}),
+			r5PassedFresh: set(func(*healthFacts) {}),
+		},
 		"jobs": {
 			r5None: set(func(f *healthFacts) { f.Jobs = nil }, func(f *healthFacts) { f.FirstRunning = []string{"slow"} },
 				func(f *healthFacts) {
@@ -299,6 +315,7 @@ var r5NoFact = map[string]map[r5Kind]string{
 	"digest":             {r5FailedThenSkipped: noSkips, r5FailedNewest: "DigestFacts records sends, not attempts: C14 names a missed send", r5SkippedFresh: "same", r5SkippedStale: "same"},
 	"agent_api":          {r5FailedThenSkipped: noSkips, r5SkippedFresh: "a self-probe run cut short is not recorded, and it has no other non-result", r5SkippedStale: "same"},
 	"self_backup":        {r5FailedThenSkipped: noSkips, r5SkippedFresh: "SelfBackupFacts records backups, not attempts", r5SkippedStale: "same"},
+	"escrow":             {r5FailedThenSkipped: noSkips, r5SkippedFresh: "EscrowVerifyFacts records proofs, not attempts", r5SkippedStale: "same", r5Stale: "the keys are this request's own read; a proof that ages past EscrowVerifyMaxAge is a failed attempt (overdue): TestP22HSystemEscrowRow"},
 	"master_key":         {r5FailedThenSkipped: noSkips, r5SkippedFresh: "the comparison either happened or the prober reports nil", r5SkippedStale: "same"},
 	"jobs":               {r5SkippedFresh: "job_state holds one status per job, so a skipped run has no earlier pass on record: it reads not_checked", r5Stale: "a job past its schedule is known late, so it is a failed attempt: TestR6AnOverdueJobWarnsAndTheRowNamesEveryFlaggedJob", r5FailedThenSkipped: oneStatus},
 	"maintenance_worker": {r5FailedThenSkipped: oneStatus},

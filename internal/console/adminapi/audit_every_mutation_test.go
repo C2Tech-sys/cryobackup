@@ -773,6 +773,13 @@ func auditMutationCases() map[string]mutation {
 				}
 			},
 		},
+		// ---- P22-H: escrow verification on demand (ADR 0030) ----
+		PatternDeviceEscrowVerify: {
+			// device.escrow.verify commits with the record of the check (verified_at)
+			build: func(e *env, s *session) func() call {
+				return func() call { return call{method: "POST", path: "/api/v1/devices/" + e.dev.ID + "/escrow/verify"} }
+			},
+		},
 		// ---- restores ----
 		PatternRestoreCreate: {
 			status: 202,

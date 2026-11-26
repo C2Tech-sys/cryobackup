@@ -197,6 +197,7 @@ var healthRowBanners = map[string][]string{
 	"database":           {"C11"},
 	"evaluator":          {"C06", "C06b"},
 	"master_key":         {"C12", "C12b"},
+	"escrow":             {"C22", "C22b"}, // P22-H: retired devices whose escrow verification fails (ADR 0030)
 	"fleet_data":         {"C08", "C09", "C10"},
 	"clock":              {"C13"},
 	"release_manifest":   {"C16", "C16b"},
@@ -216,7 +217,7 @@ var healthRowOrder = []struct{ id, label string }{
 	{"gateway", "Gateway"}, {"storage", "Storage"}, {"storage_quota", "Storage quota"}, {"smtp", "Alert e-mail"}, {"admin_url", "Console link in e-mails"}, {"digest", "Daily digest"},
 	{"certificates", "Certificates"}, {"agent_api", "Agent API"}, {"maintenance_worker", "Maintenance worker"},
 	{"database", "Console database"}, {"self_backup", "Database self-backup"}, {"evaluator", "Alarm evaluator"}, {"master_key", "Master key"},
-	{"jobs", "Background jobs"}, {"fleet_data", "Fleet data"}, {"clock", "Server clock"}, {"release_manifest", "Release manifest"},
+	{"escrow", "Escrow verification"}, {"jobs", "Background jobs"}, {"fleet_data", "Fleet data"}, {"clock", "Server clock"}, {"release_manifest", "Release manifest"},
 }
 
 // jobsFirstRunGrace is how long after this console started a registered job may
@@ -276,6 +277,10 @@ type healthFacts struct {
 	// MailLink is what the console knows of the link in its e-mails (MailService). Nil: this console
 	// was wired without an e-mail service, and the admin_url row is not shown.
 	MailLink *mailLinkFacts
+	// Escrow is the escrow verifier's candidate keys in this request's scope (store.EscrowVerifyFactsOf,
+	// ADR 0030), for the "Escrow verification" row. Nil: not gathered (the POST probe), and the row is
+	// not shown, and neither is it with no escrowed key to verify; a read that failed is NotRead, and the row says not_checked.
+	Escrow *state.EscrowVerifyFacts
 }
 
 // mailLinkFacts are the configuration facts of the "Console link in e-mails" row. Nothing here is
@@ -449,6 +454,7 @@ var rowAttempts = map[string]func(healthFacts) []attempt{
 	"self_backup":        healthFacts.selfBackupAttempts,
 	"evaluator":          healthFacts.evaluatorAttempts,
 	"master_key":         healthFacts.masterKeyAttempts,
+	"escrow":             healthFacts.escrowAttempts,
 	"jobs":               healthFacts.jobsAttempts,
 	"fleet_data":         healthFacts.fleetDataAttempts,
 	"clock":              healthFacts.clockAttempts,
@@ -832,6 +838,57 @@ func (f healthFacts) masterKeyAttempts() []attempt {
 	return []attempt{a}
 }
 
+// escrowAttempts is the "Escrow verification" row (ADR 0030). It reads the verifier's candidate keys
+// in this request's scope and judges them with the engine's own rules (state.SummarizeEscrowVerification:
+// state.EscrowKeyFailing for the retired devices banner C22 counts, state.EscrowVerifyMaxAge for a
+// verifier that is not keeping up), so the row is never ok while C22 is raised for this scope. Every
+// attempt is this request's own read. Failures are warnings: an active device's failing key is also
+// its own ESCROW_UNVERIFIED alarm. A verifier that cannot run (no worker, no master key, storage down)
+// shows as keys not proven for more than state.EscrowVerifyMaxAge, never as a stale ok.
+func (f healthFacts) escrowAttempts() []attempt {
+	e := f.Escrow
+	a := attempt{What: "the escrow verification", At: f.Now}
+	switch {
+	case e == nil:
+		a.At, a.Why = time.Time{}, "the console does not supply the escrow verification's state"
+		return []attempt{a}
+	case e.NotRead != "":
+		a.At, a.Why = time.Time{}, "not checked: "+e.NotRead
+		return []attempt{a}
+	}
+	sum := state.SummarizeEscrowVerification(e, f.Now)
+	keys := func(n int) string {
+		if n == 1 {
+			return "1 escrowed key"
+		}
+		return strconv.Itoa(n) + " escrowed keys"
+	}
+	var out []attempt
+	bad := func(why string) { out = append(out, attempt{What: a.What, At: f.Now, Result: failed, Why: why}) }
+	if sum.RetiredFailing > 0 {
+		what := strconv.Itoa(sum.RetiredFailing) + " retired devices"
+		if sum.RetiredFailing == 1 {
+			what = "1 retired device"
+		}
+		bad("escrow verification failing for " + what)
+	}
+	if n := sum.Failing; n > 0 {
+		bad(keys(n) + " failed their latest verification (wrong_password or repo_missing)")
+	}
+	if n := sum.Overdue; n > 0 {
+		bad(keys(n) + " not proven for more than " + strconv.Itoa(int(state.EscrowVerifyMaxAge/(24*time.Hour))) +
+			" days: the weekly verification is not keeping up or cannot run (maintenance worker, master key, storage)")
+	}
+	if len(out) > 0 {
+		return out
+	}
+	a.Result, a.Note = passed, keys(sum.Keys)+", every one proven within "+strconv.Itoa(int(state.EscrowVerifyMaxAge/(24*time.Hour)))+" days"
+	if sum.Retired > 0 {
+		a.Note += " (" + strconv.Itoa(sum.Retired) + " of them retired devices')"
+	}
+	return []attempt{a}
+}
+
 // jobsAttempts is one attempt per job registered in this process. A job past its schedule is a
 // failed attempt: it ran, then stopped, so it is known late rather than unknown. A job with no
 // finished run has no attempt while its first run is in progress or inside jobsFirstRunGrace of this
@@ -1058,6 +1115,9 @@ func buildComponents(f healthFacts) []SystemComponentJSON {
 		if row.id == "admin_url" && (f.MailLink == nil || f.MailLink.Fixtures) {
 			continue // no e-mail service, or fixtures mode (no configuration to be missing a key): a row here would say nothing true
 		}
+		if row.id == "escrow" && (f.Escrow == nil || (f.Escrow.NotRead == "" && len(f.Escrow.Keys) == 0)) {
+			continue // not gathered by this caller, or no escrowed key to verify yet: a row here would say nothing true
+		}
 		c := SystemComponentJSON{ID: row.id, Label: row.label, Banners: []string{}}
 		raised, worst := worstOf(f.Banners, healthRowBanners[row.id])
 		if raised != nil {
@@ -1110,6 +1170,10 @@ func (s *Service) systemHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	facts := s.healthFactsOf(p, f, s.Fleet.ProbeFacts(f.Jobs, nil, true))
+	if facts.Escrow, err = s.Store.EscrowVerifyFactsOf(ctx, p.Scope); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	var worker *Worker
 	if s.Backend != nil {
 		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -1150,6 +1214,7 @@ func labFacts(now time.Time) healthFacts {
 		EvaluatorLast: store.JobState{LastStatus: "ok"}, SchedulerLast: store.JobState{LastStatus: "ok"}, MasterKeyWired: true, MasterKeyLoaded: true, ReportingDevices: 3,
 		Jobs:     []store.JobState{{Name: "lab", LastStatus: "ok", LastFinishedAt: &ran}},
 		MailLink: &mailLinkFacts{Configured: true, Link: "https://console.example.net/"},
+		Escrow:   &state.EscrowVerifyFacts{Keys: []state.EscrowKeyFacts{{DeviceID: "lab", Escrow: state.EscrowFacts{Custody: "escrowed", CreatedAt: at(30 * 24 * time.Hour), VerifiedAt: at(24 * time.Hour)}}}},
 		Probes: state.ProbeFacts{Wired: true, Gateway: &gw, Storage: &st, SMTP: &state.SMTPFacts{Probe: ok()}, Evaluator: good,
 			Maintain: &state.MaintainFacts{RPC: ok(), Scheduler: good}, MasterKey: &state.MasterKeyFacts{Loaded: true, KeyID: "lab"},
 			Database: &state.DatabaseFacts{IntegrityCheckedAt: at(time.Hour), IntegrityOK: true, MeasuredAt: at(20 * time.Second), SelfBackup: &state.SelfBackupFacts{NotInBuild: true}},

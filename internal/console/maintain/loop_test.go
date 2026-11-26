@@ -69,6 +69,7 @@ func TestRunOnceSamplesUsage(t *testing.T) {
 func TestRunOnceSkipsCustomerHeldAndDisabled(t *testing.T) {
 	e := newTenv(t, []fakeRule{{Cmd: "stats", Stdout: "stats_raw_data.json"}}, nil)
 	e.onlyDevice(e.held) // enabled, but the customer holds the key
+	e.provenNowExcept()  // P22-H: no escrowed key due, so the escrow verifier (its own candidates) runs nothing
 	rep, err := e.w.RunOnce(e.ctx)
 	if err != nil || rep.Considered != 0 || rep.Sampled != 0 {
 		t.Fatalf("report = %+v, %v", rep, err)
@@ -81,6 +82,7 @@ func TestRunOnceSkipsCustomerHeldAndDisabled(t *testing.T) {
 func TestRunOncePreflight(t *testing.T) {
 	e := newTenv(t, []fakeRule{{Cmd: "stats", Stdout: "stats_raw_data.json"}}, nil)
 	e.onlyDevice(e.esc)
+	e.provenNowExcept() // P22-H: no escrowed key due, so the escrow verifier (its own candidates) runs nothing
 	now := e.clk.Now().UnixMilli()
 	err := e.st.Write(e.ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT OR REPLACE INTO device_presence (device_id, received_at, service_state, created_at, updated_at)

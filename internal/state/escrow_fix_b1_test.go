@@ -2,14 +2,18 @@ package state
 
 import "testing"
 
-// M2-FIX-B1 (lab finding F7, ADR 0014): until the periodic escrow verification
-// job exists (M5), a verification that is only older than escrow_recheck_days
-// does not raise ESCROW_UNVERIFIED. When that job lands, set
-// EscrowRecheckEnforced to true and flip the first assertion and the B37 case
-// in classify_test.go; the rule itself is tested below with the switch on.
-func TestEscrowRecheckIsNotEnforcedUntilTheVerifyJobExists(t *testing.T) {
-	if EscrowRecheckEnforced {
-		t.Fatal("EscrowRecheckEnforced is on: only the change that adds the periodic escrow verification job (M5) may turn it on, and it updates this test and B37")
+// M2-FIX-B1 (lab finding F7, ADR 0014) kept the recheck off until a periodic
+// escrow verification existed. ADR 0030 adds it (the maintenance scheduler
+// re-proves every escrowed key weekly) and turns the rule on: a verification
+// that is only older than escrow_recheck_days raises ESCROW_UNVERIFIED, reason
+// escrow_recheck_overdue. The rule is still tested both ways through
+// escrowIssueRecheck.
+func TestEscrowRecheckIsEnforcedOnceTheVerifyJobExists(t *testing.T) {
+	if !EscrowRecheckEnforced {
+		t.Fatal("EscrowRecheckEnforced is off: ADR 0030 turned it on with the weekly verifier; turning it off again needs a new ADR")
+	}
+	if EscrowVerifyEvery >= DefaultThresholds().EscrowRecheck {
+		t.Fatalf("the verifier's cadence %v must be shorter than the default recheck %v, or a healthy key alarms between checks", EscrowVerifyEvery, DefaultThresholds().EscrowRecheck)
 	}
 	th := DefaultThresholds()
 	enrolled := t0.Add(-90 * day)
@@ -19,28 +23,34 @@ func TestEscrowRecheckIsNotEnforcedUntilTheVerifyJobExists(t *testing.T) {
 		return f
 	}
 
-	// Off (today): a 40-day-old verification against a 30-day recheck is fine.
+	// On (the default now): a 40-day-old verification against a 30-day recheck is overdue,
+	// from the verification plus the recheck interval.
 	f := overdue()
-	if r, _, bad := escrowIssue(&f, th, t0, enrolled, true); bad {
-		t.Fatalf("recheck overdue raised while the rule is off: %s", r)
-	}
-	if got := Classify(f, t0); got.Primary != StateOK {
-		t.Fatalf("Classify = %s, want OK", got.Primary)
-	}
-
-	// On (M5): the same facts raise escrow_recheck_overdue, from the verification plus the recheck interval.
-	f = overdue()
-	r, since, bad := escrowIssueRecheck(&f, th, t0, enrolled, true, true)
+	r, since, bad := escrowIssue(&f, th, t0, enrolled, true)
 	if !bad || r != ReasonEscrowRecheckOverdue || !since.Equal(t0.Add(-40*day).Add(th.EscrowRecheck)) {
 		t.Fatalf("with the rule on: %s %v %v", r, since, bad)
 	}
-	// Inside the recheck interval it stays quiet with the rule on too.
+	if got := Classify(f, t0); got.Primary != StateEscrowUnverified || got.Reason != ReasonEscrowRecheckOverdue {
+		t.Fatalf("Classify = %s %s, want ESCROW_UNVERIFIED escrow_recheck_overdue", got.Primary, got.Reason)
+	}
+	// Inside the recheck interval it stays quiet.
 	f.Escrow.VerifiedAt = ago(29 * day)
-	if r, _, bad := escrowIssueRecheck(&f, th, t0, enrolled, true, true); bad {
-		t.Fatalf("29-day-old verification with the rule on: %s", r)
+	if r, _, bad := escrowIssue(&f, th, t0, enrolled, true); bad {
+		t.Fatalf("29-day-old verification: %s", r)
+	}
+	// A key the weekly verifier keeps proving never comes near the recheck.
+	f.Escrow.VerifiedAt = ago(EscrowVerifyMaxAge)
+	if r, _, bad := escrowIssue(&f, th, t0, enrolled, true); bad {
+		t.Fatalf("a key proven one cadence and a day ago: %s", r)
 	}
 
-	// The other three causes are raised with the rule off.
+	// Off (the explicit switch, as ADR 0014 had it): the same facts are fine.
+	f = overdue()
+	if r, _, bad := escrowIssueRecheck(&f, th, t0, enrolled, true, false); bad {
+		t.Fatalf("recheck overdue raised with the rule off: %s", r)
+	}
+
+	// The other three causes are raised either way.
 	cases := []struct {
 		name string
 		mod  func(*DeviceFacts)
@@ -51,12 +61,16 @@ func TestEscrowRecheckIsNotEnforcedUntilTheVerifyJobExists(t *testing.T) {
 		{"never_verified_after_grace", func(f *DeviceFacts) { f.Escrow.VerifiedAt = 0 }, ReasonEscrowNeverVerified},
 	}
 	for _, c := range cases {
+		for _, on := range []bool{true, false} {
+			f := overdue()
+			c.mod(&f)
+			r, _, bad := escrowIssueRecheck(&f, th, t0, enrolled, true, on)
+			if !bad || r != c.want {
+				t.Errorf("%s (recheck %v): %s %v, want %s", c.name, on, r, bad, c.want)
+			}
+		}
 		f := overdue()
 		c.mod(&f)
-		r, _, bad := escrowIssue(&f, th, t0, enrolled, true)
-		if !bad || r != c.want {
-			t.Errorf("%s: %s %v, want %s", c.name, r, bad, c.want)
-		}
 		if got := Classify(f, t0); got.Primary != StateEscrowUnverified || got.Reason != c.want {
 			t.Errorf("%s: Classify = %s %s", c.name, got.Primary, got.Reason)
 		}

@@ -133,6 +133,8 @@ func Evaluate(w World, now time.Time) FleetView {
 		banners = append(banners, partialBanner(w, incomplete, emptyPoll))
 	}
 	banners = append(banners, probeBanners(w, now)...)
+	// C22: retired devices whose escrow verification fails (ADR 0030); their own rows stay quiet.
+	banners = append(banners, escrowVerifyBanners(w.EscrowVerify, now)...)
 	if b, ok := clockSuspectBanner(ReportingDevices(w, now)); ok {
 		banners = append(banners, b)
 	}

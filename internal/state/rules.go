@@ -72,19 +72,31 @@ func custodyOf(f *DeviceFacts) string {
 
 // EscrowRecheckEnforced says whether ESCROW_UNVERIFIED is raised for a
 // verification that is merely older than the recheck interval
-// (escrow_recheck_days, reason escrow_recheck_overdue). It is false until the
-// periodic escrow verification job exists (scheduled for M5): nothing re-runs
-// the verification before then, so every verified device would turn
-// ESCROW_UNVERIFIED on day 31 with no way to clear it (M2 lab finding F7,
-// ADR 0014). Set it to true in the change that adds that job;
-// TestEscrowRecheckIsNotEnforcedUntilTheVerifyJobExists documents the switch.
-// Missing escrow, a recorded verify failure and "never verified after the
-// grace" are raised either way.
-const EscrowRecheckEnforced = false
+// (escrow_recheck_days, reason escrow_recheck_overdue). ADR 0014 kept it off
+// until a periodic verification existed, because a key verified once would have
+// turned ESCROW_UNVERIFIED on day 31 with no way to clear it (M2 lab finding F7).
+// ADR 0030 adds that job: the maintenance scheduler re-proves every escrowed key
+// at least every EscrowVerifyEvery (internal/console/maintain/escrowverify.go),
+// so the rule is on and architecture §4.2 row 12 reads as written. A verifier
+// that stops running is then loud: its keys age past the recheck interval.
+// TestEscrowRecheckIsEnforcedOnceTheVerifyJobExists and case B37 pin it.
+const EscrowRecheckEnforced = true
+
+// EscrowVerifyEvery is how often the maintenance scheduler re-proves an escrowed
+// key (ADR 0030: weekly, retired devices included). A key is due once its last
+// verification is this old, a little earlier per device (a stable stagger), so
+// with the default 30-day escrow_recheck_days a healthy key stays clear of
+// ESCROW_UNVERIFIED with room for three missed weeks.
+const EscrowVerifyEvery = 7 * 24 * time.Hour
+
+// EscrowVerifyMaxAge is how old a key's newest proof may get before the System
+// page says the verifier is not keeping up: one cadence and a day of slack, the
+// same shape as the self-backup's DBSelfBackupVerifyMaxAge.
+const EscrowVerifyMaxAge = EscrowVerifyEvery + 24*time.Hour
 
 // escrowIssue evaluates §4.2 row 12. For an escrowed key it reports a problem
 // when there is no active escrow row, the last verification failed, the key was
-// never verified and the grace is gone, or (only when EscrowRecheckEnforced) the
+// never verified and the grace is gone, or (EscrowRecheckEnforced) the
 // verification is older than the recheck interval. Customer-held keys never
 // raise it (B36).
 func escrowIssue(f *DeviceFacts, th Thresholds, now, enrolled time.Time, enrolledOK bool) (reason Reason, since time.Time, bad bool) {

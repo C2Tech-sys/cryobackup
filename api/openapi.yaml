@@ -1277,6 +1277,44 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/devices/{id}/escrow/verify:
+    post:
+      operationId: verifyDeviceEscrow
+      tags: [devices]
+      summary: Verify the escrowed key now
+      description: |
+        Runs one escrow verification now (ADR 0030), the same check the maintenance scheduler
+        runs weekly for every escrowed key, retired devices included: the maintenance worker
+        unwraps the device's escrowed repository key and runs `restic cat config` through the
+        admin path. A verified key opens the repository's config; this does not prove that the
+        backup data is intact. The outcome is recorded on the key: `verified` sets its proof
+        time, `failed` (`wrong_password`, `repo_missing`) records the failure, which raises
+        ESCROW_UNVERIFIED (banner C22 for a retired device), and `not_verified` (storage
+        unreachable, a timeout, a busy worker) records only the attempt, so the earlier proof
+        stands and keeps ageing. Admin role; no fresh-MFA step-up (nothing is revealed or
+        changed but the key's verification record), so an admin API token may call it. Refused
+        with 409 `custody_customer_held` for a customer-held key, 409 `device_purging` for a
+        device being purged, and 409 `conflict` for a device with no active escrowed key or an
+        unconfirmed enrollment; nothing is asked of the worker then. 503 when the worker cannot
+        be reached (`unavailable`) or has no master key (`master_key_unavailable`); nothing is
+        recorded. One audit row `device.escrow.verify` (the verdict and a fixed class, never a
+        path) for every request that asks the worker; when the check ran, the row and the record
+        commit together.
+      x-min-role: AD
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+      responses:
+        '200':
+          description: The check ran; its verdict.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EscrowVerifyResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /api/v1/devices/{id}/restores:
     post:
       operationId: createRestore
@@ -4256,6 +4294,18 @@ components:
         reason: {type: string, maxLength: 500, description: 'Required unless the device is already retired: one line, no file paths. Kept on the device and in the audit row.'}
         final_backup: {type: boolean, description: Queue a last backup and do not retire yet.}
         replaced_by: {type: string, description: 'The device that takes over: active, and of the same customer.'}
+    EscrowVerifyResponse:
+      type: object
+      required: [computed_at, device_id, verdict, retired, proves]
+      properties:
+        computed_at: {$ref: '#/components/schemas/Timestamp'}
+        device_id: {type: string}
+        verdict: {type: string, enum: [verified, failed, not_verified]}
+        error_class: {type: string, description: The fixed class of a failed (wrong_password, repo_missing) or not_verified check. Absent when verified.}
+        retired: {type: boolean, description: The device is retired; retired devices are verified too.}
+        verified_at: {$ref: '#/components/schemas/Timestamp'}
+        last_attempt_at: {$ref: '#/components/schemas/Timestamp'}
+        proves: {type: string, description: The fixed sentence of what a verdict means.}
     DeviceRetireResponse:
       type: object
       required: [computed_at, id, customer_id, hostname, retired, changed, tokens_revoked, logins_revoked, commands_cancelled]

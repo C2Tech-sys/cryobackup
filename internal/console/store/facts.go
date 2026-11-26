@@ -167,6 +167,14 @@ func (s *Store) LoadWorld(ctx context.Context, scope Scope, opts LoadOptions) (s
 			return err
 		}
 		w.FleetEverEnrolled = strings.TrimSpace(ever) == "true" || len(devices) > 0
+		// ADR 0030 / P22-H: the escrow verifier's keys, read in the same snapshot, for banner C22
+		// (retired devices whose escrowed key fails). A read that fails is NotRead (banner C22b),
+		// never an empty list that would read healthy.
+		if keys, kerr := escrowVerifyKeysTx(tx, scope); kerr != nil {
+			w.EscrowVerify = &state.EscrowVerifyFacts{NotRead: "the escrowed keys could not be read (" + loadClass("escrow", kerr) + ")"}
+		} else {
+			w.EscrowVerify = &state.EscrowVerifyFacts{Keys: keys}
+		}
 		return nil
 	})
 	if err != nil {

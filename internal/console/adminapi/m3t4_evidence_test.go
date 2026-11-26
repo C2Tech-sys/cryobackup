@@ -42,6 +42,8 @@ func fullEvidence(now time.Time, ran, next *time.Time) healthFacts {
 			Digest:    &state.DigestFacts{NotInBuild: true}, Quota: &state.QuotaFacts{NotInBuild: true}, Release: &state.ReleaseFacts{NotInBuild: true}},
 		Endpoint: probe.Status{Runs: true, Known: true, Interval: time.Minute, Last: probe.Result{At: now.Add(-20 * time.Second), OK: true, NotAfter: now.Add(60 * 24 * time.Hour)}},
 		MailLink: &mailLinkFacts{Configured: true, Link: "https://console.example.net/"}, // P21-T6 U2: mail is set up and admin_url is set
+		// P22-H: one escrowed key, proven a day ago (the "Escrow verification" row, ADR 0030).
+		Escrow: &state.EscrowVerifyFacts{Keys: []state.EscrowKeyFacts{{DeviceID: "d", Escrow: state.EscrowFacts{Custody: "escrowed", CreatedAt: ms(now.Add(-30 * 24 * time.Hour)), VerifiedAt: ms(now.Add(-24 * time.Hour))}}}},
 	}
 }
 
