@@ -83,9 +83,9 @@ The pilot client is not enrolled until each has passed.
 | | |
 | --- | --- |
 | Do | Give the admin storage key its rights on `<bucket>/<self-backup prefix>/*` (upgrade notes, "Turn the self-backup on"). In `/etc/cryobackup/maintain.env` add `CRYO_MAINTAIN_SELF_PREFIX=<self-backup prefix>` (not beginning with the device prefix). `sudo systemctl restart cryo-maintain`. Leave `CRYO_MAINTAIN_MAX_STREAMS` at its default of 2. |
-| Expect | The worker starts. A prefix that breaks the rule (equal to, inside, or beginning with the device prefix) is refused with the reason, on the job row and in C11. |
-| Look | `journalctl -u cryo-maintain`; the System page's "Database self-backup" row. |
-| Fail if | The worker accepts a prefix that begins with the device prefix; the worker does not start; the row stays "not configured". |
+| Expect | With a valid prefix the worker starts and the "Database self-backup" row stops saying `not_configured`. A prefix that breaks the rule is a configuration error: **`cryo-maintain` does not start**, prints the reason on stderr (exit 2), and systemd keeps restarting it, so the journal shows the same refusal again and again. The rule refuses a prefix equal to the device prefix, inside it, beginning with it or containing it; any prefix while `CRYO_MAINTAIN_PREFIX` is empty; and a segment with characters other than letters, digits, `.`, `_` and `-`. A refused prefix does not reach the job row or C11: there is no worker running to write them. |
+| Look | `journalctl -u cryo-maintain` (the refusal line, or a clean start); `systemctl status cryo-maintain`; the System page's "Database self-backup" row. |
+| Fail if | The worker accepts a prefix that begins with the device prefix; a refused prefix lets the worker start; a valid prefix leaves the worker failing; the row stays "no self-backup has been written (not_configured: ...)" after a pass with a valid prefix. |
 | Evidence | |
 
 ## Step 3. Wait for a pass (operator or anyone)
@@ -169,7 +169,15 @@ Write-Output "ACL of the custom-ACL file (keep this output as evidence):"
 exit 0
 ```
 
+Save the script as a `.ps1` file and run it with `powershell -NoProfile -ExecutionPolicy Bypass -File <file>.ps1`. Both
+helpers end with `exit`, so pasting them into an open console window would close it.
+
 Keep the printed `icacls` output of `C:\LabRestore\acl\protected.txt`: the Guests entry is what steps 6 and 7 look for.
+
+**Pin the snapshot.** Write down the id and time of the snapshot this backup made (device page). Steps 6, 7, 9 and 10 delete
+or change files and then restore: **choose that snapshot in the wizard, not the newest.** A scheduled backup that runs after
+you delete a file makes a newer snapshot without it, and restoring from that one proves nothing. (Or pause the lab policy's
+schedule from here until step 11.)
 
 The compare script, used in steps 6 to 8, 10, 11 and 13. Set `$Where` (and `$From` and `$Only` for a zip) at the top; it prints
 `EQUAL`, `DIFFERS` or `MISSING` for every file in the manifest and exits 1 when any file is not equal:
@@ -223,7 +231,7 @@ affected.
 
 | | |
 | --- | --- |
-| Do | On the lab VM: record `icacls C:\LabRestore\docs` and `icacls C:\LabRestore\acl`. Delete `C:\LabRestore\docs\report.docx` and `C:\LabRestore\acl\protected.txt`. In the console: device, **Restore files**, the newest snapshot, select the folders `docs` and `acl`, destination **Original location, keep existing files**, review, enter the authenticator code if asked, **Start the restore**. Wait for **RESTORED**. Then set `$Where = 'C:\LabRestore'` in the compare script and run it; run `icacls C:\LabRestore\acl\protected.txt` and `icacls` on both folders again. |
+| Do | On the lab VM: record `icacls C:\LabRestore\docs` and `icacls C:\LabRestore\acl`. Delete `C:\LabRestore\docs\report.docx` and `C:\LabRestore\acl\protected.txt`. In the console: device, **Restore files**, the snapshot of step 5 (by its id or time), select the folders `docs` and `acl`, destination **Original location, keep existing files**, review, enter the authenticator code if asked, **Start the restore**. Wait for **RESTORED**. Then set `$Where = 'C:\LabRestore'` in the compare script and run it; run `icacls C:\LabRestore\acl\protected.txt` and `icacls` on both folders again. |
 | Expect | Status RESTORED with counts "N restored, M skipped because they already exist": `report.docx` and `protected.txt` restored, `notes.txt` skipped (record the numbers). The compare script prints `EQUAL` for every file. `protected.txt` has the Guests read entry back, and its owner is what it was. The two folders' permissions and attributes are identical to the record from before (their last-write time may have changed: a file was added). |
 | Look | The restore status page; `agent.log` (no path in it); Event Log source `CryoBackup`, event 1020. |
 | Fail if | A file differs; the custom ACL is lost; a folder's permissions changed; a path appears in the log or the console. |
@@ -233,7 +241,7 @@ affected.
 
 | | |
 | --- | --- |
-| Do | Append a line to `C:\LabRestore\docs\notes.txt`. In the wizard select `docs`, destination **Original location, replace changed files**; on review **type the device's host name** (first type it wrong and see the refusal); start. Wait for the result. Then append another line to `notes.txt`, hold it open (`$f = [IO.File]::Open('C:\LabRestore\docs\notes.txt','Open','Read','Read')` in PowerShell on the VM), restore `docs` again with replace, and only afterwards run `$f.Close()`. |
+| Do | Append a line to `C:\LabRestore\docs\notes.txt`. In the wizard choose the snapshot of step 5, select `docs`, destination **Original location, replace changed files**; on review **type the device's host name** (first type it wrong and see the refusal); start. Wait for the result. Then append another line to `notes.txt`, hold it open (`$f = [IO.File]::Open('C:\LabRestore\docs\notes.txt','Open','Read','Read')` in PowerShell on the VM), restore `docs` again with replace, and only afterwards run `$f.Close()`. |
 | Expect | First run: `notes.txt` is back to the manifest hash (`EQUAL`), the unchanged `report.docx` is counted skipped. A wrong host name is refused and nothing is queued. Second run with the file held open: **RESTORED WITH ERRORS**, class `target_locked` count 1, the rest placed; after `$f.Close()` a third restore replaces it. |
 | Look | The class table on the status page; the log says only counts. |
 | Fail if | The file is replaced before the host name matches; the held file is overwritten or the restore hangs. |
@@ -243,7 +251,7 @@ affected.
 
 | | |
 | --- | --- |
-| Do | Select `acl` and `data`, destination **A new folder on the device**, start. Note the restore id on the status page. On the VM, from an elevated prompt, run the commands under this table with that id. Compare with `$Where = 'C:\CryoBackup-Restore\<restore id>\C\LabRestore'` and `$Only = 'acl'`, then `'data'`. As `labuser` (no administrator rights) try `Get-Content` on a file in it. |
+| Do | Select `acl` and `data`, destination **A new folder on <host>** (the wizard puts the lab VM's host name there), start. Note the restore id on the status page. On the VM, from an elevated prompt, run the commands under this table with that id. Compare with `$Where = 'C:\CryoBackup-Restore\<restore id>\C\LabRestore'` and `$Only = 'acl'`, then `'data'`. As `labuser` (no administrator rights) try `Get-Content` on a file in it. |
 | Expect | The layout is `C:\CryoBackup-Restore\<restore id>\C\LabRestore\acl\...` and `...\data\...`. The folder is open only to Administrators and SYSTEM. The owner list is exactly `BUILTIN\Administrators`. Files are `EQUAL`; the name with `[` and `$` is intact. `labuser` is refused (Access is denied). |
 | Look | The status page text: "The files are in the CryoBackup-Restore folder ... named after this restore". |
 | Fail if | Another owner, another trustee in the permissions, or `labuser` can read. |
@@ -256,15 +264,17 @@ Get-ChildItem C:\CryoBackup-Restore\<restore id> -Recurse -Force |
   ForEach-Object { (Get-Acl -LiteralPath $_.FullName).Owner } | Sort-Object -Unique
 ```
 
-Cancel-and-clean check (optional but worth doing): start a side restore of a few GB, then queue the `cancel` command for it
-(device page, commands) and confirm that `C:\CryoBackup-Restore\<restore id>` is gone afterwards (a side restore that does
+Cancel-and-clean check (optional but worth doing): start a side restore of a few GB, then cancel it. There is no cancel button on
+the restore pages; the restore id is its run id, so use the API (operator role; an API token works, no second factor is asked
+here): `curl -sS -X POST -H "Authorization: Bearer $CRYO_TOKEN" https://<admin address>/api/v1/runs/<restore id>/cancel`.
+Confirm that `C:\CryoBackup-Restore\<restore id>` is gone afterwards (a side restore that does
 not succeed removes its folder, ADR 0031) and the run ends cancelled.
 
 ## Step 9. Reboot in the middle of a restore (operator [OP], lab VM)
 
 | | |
 | --- | --- |
-| Do | Put a few GB of incompressible data in `C:\LabRestore\big\` (the seed script's `New-LabFile` with a large size, or any large random files), back it up, delete it, start a restore of `big` to the original place, and **as soon as the status shows RUNNING** restart the VM (`Restart-Computer -Force`). |
+| Do | Put a few GB of incompressible data in `C:\LabRestore\big\` (the seed script's `New-LabFile` with a large size, or any large random files), back it up, delete it, start a restore of `big` from that new snapshot (not the step-5 one, which lacks it) to the original place, and **as soon as the status shows RUNNING** restart the VM (`Restart-Computer -Force`). |
 | Expect | After the VM is back and the agent is up: the restore reads FAILED, class `interrupted` ("cut short"), and is **not run again by itself**. `C:\.cryobackup-restore\<restore id>` is gone (the agent removes leftovers at start). Event Log 1021. The next scheduled backup runs normally. Running the restore again places only what is missing. |
 | Look | The status page; `agent.log` (start-up sweep line, no path); the list of runs for this device (one restore run with this id). |
 | Fail if | The restore starts again after the boot; the status stays RUNNING; a staging folder is left. |
@@ -274,7 +284,7 @@ not succeed removes its folder, ADR 0031) and the run ends cancelled.
 
 | | |
 | --- | --- |
-| Do | Delete `C:\LabRestore\docs\notes.txt`. Shut the VM down. Wait 3 minutes (the console calls a device offline after 2 without a heartbeat). Create a restore of `docs` to the original place. Read the review step. Start it. Watch the status page for a few minutes. Power the VM on. |
+| Do | Delete `C:\LabRestore\docs\notes.txt`. Shut the VM down. Wait 3 minutes (the console calls a device offline after 2 without a heartbeat). Create a restore of `docs` from the snapshot of step 5 to the original place. Read the review step. Start it. Watch the status page for a few minutes. Power the VM on. |
 | Expect | The review step says the device is offline, since when, and until when the request waits (24 hours). The status page reads **QUEUED**, "<host> is offline. Last seen ... Starts when online, until <expiry>. For files now, use Download as zip." After power-on and the agent's check-in (about a minute) it becomes RUNNING, then RESTORED. `notes.txt` is back (`EQUAL`). |
 | Look | The status page; the device's last-seen time. |
 | Fail if | The page says nothing about the device being offline; the restore does not start after power-on; it starts twice. |
@@ -295,7 +305,7 @@ not succeed removes its folder, ADR 0031) and the run ends cancelled.
 | | |
 | --- | --- |
 | Do | Select the large `big` folder and start its zip download. While it is downloading, on the production host `sudo systemctl stop cryo-maintain`. Look at what the browser saved. Then `sudo systemctl start cryo-maintain` and download again. |
-| Expect | The browser reports the download failed. What it saved is **not a usable zip**: opening it with `Expand-Archive` or `unzip -t` fails (the table of contents is only written after every part has been read). The status page reads "Download cut off ... No zip was saved". The System page shows the worker banner (C07) while it is stopped and clears when it starts. The second download is complete and `EQUAL`. No path appears in the console or worker journal. |
+| Expect | The browser reports the download failed. What it saved is **not a usable zip**: opening it with `Expand-Archive` or `unzip -t` fails (the table of contents is only written after every part has been read). The status page reads "The last download did not finish (class: <class>). No zip was saved: a part-file in the browser's downloads is not a usable zip." (class `disconnected` when the console saw the browser stream end). The System page shows the worker banner (C07) while it is stopped and clears when it starts. The second download is complete and `EQUAL`. No path appears in the console or worker journal. |
 | Look | `journalctl -u cryo-console -u cryo-maintain`; the status page. |
 | Fail if | A cut download opens as a zip; the console keeps part of it; the worker's restic child stays running after the stop. |
 | Evidence | |
@@ -304,8 +314,8 @@ not succeed removes its folder, ADR 0031) and the run ends cancelled.
 
 | | |
 | --- | --- |
-| Do | Retire the lab device (device page, Retire; ADR 0016). Open **Restore files**. Download `zipset\single.bin` as a zip and compare it. Try a device destination. Then press **Verify now** on the device page, or from a terminal with an admin token in `$CRYO_ADMIN_TOKEN`: `curl -sS -X POST -H "Authorization: Bearer $CRYO_ADMIN_TOKEN" https://<admin address>/api/v1/devices/<device id>/escrow/verify`. |
-| Expect | The wizard says "This device is retired: download only" and offers only the zip. The zip downloads and is `EQUAL`. A device destination is refused (the API answers 409 `device_retired_download_only`). Verify now answers `"verdict":"verified"` and says it proves the key opens the repository's config, not that the data is intact. The audit log has `device.escrow.verify` without a path. |
+| Do | Retire the lab device (device page, Retire; ADR 0016). Open **Restore files**. Download `zipset\single.bin` as a zip and compare it. Look at the device destinations. Then press **Verify now** on the device page (where your build shows no such button, use the API call below), or from a terminal with an admin token in `$CRYO_ADMIN_TOKEN`: `curl -sS -X POST -H "Authorization: Bearer $CRYO_ADMIN_TOKEN" https://<admin address>/api/v1/devices/<device id>/escrow/verify`. |
+| Expect | The wizard says "This device is retired: download only" and offers only the zip. The zip downloads and is `EQUAL`. The device destinations are greyed out with the reason "This device is retired: it can be downloaded from, not restored to". (A device restore posted with an admin API token is not a test of this: a token gets 403 `mfa_step_up_required` before the retired check, because every restore needs a fresh session. Only a signed-in session past the second-factor step reaches 409 `device_retired_download_only`.) Verify now answers `"verdict":"verified"` and says it proves the key opens the repository's config, not that the data is intact. The audit log has `device.escrow.verify` without a path. |
 | Look | The device page (escrow row, verification time); the fleet board raises no alarm for the retired device. |
 | Fail if | A device restore is accepted for a retired device; the zip is refused; Verify now answers `not_verified` or `failed` on a healthy repository. |
 | Evidence | |
@@ -321,10 +331,16 @@ Linux VM, with the offline kit and nothing else from production.
 | | |
 | --- | --- |
 | Do | (1) Install the binaries and the offline kit (section 3, steps 1 and 2). (2) `cryo-console self-backup restore ...` (section 3, step 3). (3) Place the files (step 4). (4) Set `"drill": true` in `config.json` **before anything starts** and run `cryo-console doctor`. (5) `systemctl start cryo-maintain cryo-console`, never the gateway. (6) Through an SSH tunnel, sign in, open a device that had backups before the snapshot, browse a real snapshot, download one small file as a zip, open it. (7) Check that no mail arrived anywhere. (8) Destroy the VM, disks included. |
-| Expect | `self-backup restore` ends `ok` (manifest sha256, integrity check, row counts, master key id, one escrowed key unwrapped). Doctor prints `WARN  drill  on: drill copy.` The journal shows "DRILL COPY: this console is a restored copy." `ss -ltn` shows no listener on the agent port. **Every page, the sign-in page included, carries the red DRILL COPY strip.** The file in the zip equals the original (record both SHA-256 values). No mail from the drill copy reached any recipient and the agents kept reporting to the production console. On the production host, `restic list locks` on the repository you browsed shows no lock left by the drill (reads ran with `--no-lock`). |
+| Expect | `self-backup restore` ends `ok` (manifest sha256, integrity check, row counts, master key id, one escrowed key unwrapped). Doctor prints a line that starts `WARN  drill  on: drill copy.` and goes on to say what drill mode does. The journal shows "DRILL COPY: this console is a restored copy." `ss -ltn` shows no listener on the agent port. **Every page, the sign-in page included, carries the red DRILL COPY strip.** The file in the zip equals the original (record both SHA-256 values). No mail from the drill copy reached any recipient and the agents kept reporting to the production console. On the production host, list the browsed device repository's `locks/` folder with rclone before and after the drill's browse and download (command under this table): both listings are empty (reads ran with `--no-lock`). |
 | Look | The tunnel's browser; the production host's journal during the drill (nothing from the drill copy); the production console's System page (unchanged). |
 | Fail if | The strip is missing on any page; a listener is open on the agent port; a mail arrives; the drill writes anything to storage; the file differs. If drill mode cannot be confirmed in step 4, stop after step 3: steps 1 to 3 already prove the kit opens the backup. |
 | Evidence | |
+
+The lock check needs no repository password, only the admin remote (run it on the production host, as the worker's user):
+
+```sh
+sudo -u cryobackup rclone --config /etc/cryobackup/rclone-admin.conf lsf admin:<bucket>/<prefix>/<device repository>/locks/
+```
 
 Record the date, the snapshot id and the result. Repeat the drill after every change to the offline kit.
 
@@ -363,12 +379,15 @@ Written above, before day 1. At the end of the pilot (day 45 at the latest) fill
 | Fail if | Any criterion does not hold. A silent miss is a failure of the pilot, not a footnote. |
 | Evidence | |
 
-On the production host, with the sentinel names filled in (the last alternative catches any drive-letter path):
+On the production host, with the sentinel names filled in:
 
 ```sh
 sudo journalctl -u cryo-console -u cryo-maintain --no-pager --since <day 1> \
-  | grep -n -i -E '<sentinel 1>|<sentinel 2>|[A-Za-z]:[\\/]'
+  | grep -n -i -E '<sentinel 1>|<sentinel 2>|(^|[[:space:]"=(])[A-Za-z]:\\'
 ```
+
+The last alternative matches a Windows drive path (`C:\...`) after the start of the line, a space, a quote, `=` or `(`, so a
+URL (`https://...`) does not match it. A path with forward slashes is not caught by it; the sentinel names catch those.
 
 On each device, the same words in `C:\ProgramData\CryoBackup\logs\agent.log`.
 

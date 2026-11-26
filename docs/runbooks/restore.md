@@ -25,7 +25,7 @@ wording of 0027). The lab script that proves all of this before a pilot is
 - **Select.** Tick files and folders. A folder is listed one level at a time, 500 entries a page; your selection
   survives paging and moving between folders (it travels inside the page, never in a URL, and is capped at 64 KiB).
   A folder you tick already holds everything below it, so ticking something inside it folds into it. **At most 50
-  items.** Listing a repository is slow when it holds many backup runs (every listing reads every index file); a
+  items in the wizard, in every destination** (the API accepts up to 100 for a device restore; the zip is capped at 50). Listing a repository is slow when it holds many backup runs (every listing reads every index file); a
   folder of 2 000 entries still comes back in one listing.
 - **Names the restore refuses:** a name that begins or ends with a space, a name that ends with a dot, and a
   Windows device name (`NUL`, `COM1`, ...). Windows would silently change such a name when the file is written, so it could
@@ -39,7 +39,7 @@ wording of 0027). The lab script that proves all of this before a pilot is
 | --- | --- | --- |
 | **Download as a zip** | The zip streams from the repository to your browser. Nothing is stored on the console host. Works while the device is off. | You need the files now, or the device is off, retired or gone. |
 | **Original location, keep existing files** (the default for a device) | Every item goes back where it was. A file that already exists is left as it is. Nothing is deleted or replaced. | A file was deleted or lost. |
-| **A new folder on the device** | Everything lands in `C:\CryoBackup-Restore\<restore id>\<drive letter>\...` on the system drive. Nothing that exists is touched. | You want to look first, compare, or put files somewhere else. |
+| **A new folder on <host>** | Everything lands in `C:\CryoBackup-Restore\<restore id>\<drive letter>\...` on the system drive. Nothing that exists is touched. | You want to look first, compare, or put files somewhere else. |
 | **Original location, replace changed files** | As keep, but a file that differs from the snapshot's copy is replaced by the snapshot's copy. You type the device's host name to confirm. | A file was damaged or changed and you want it back as it was. |
 
 ### Zip
@@ -50,11 +50,11 @@ wording of 0027). The lab script that proves all of this before a pilot is
   ends with `CRYOBACKUP-SKIPPED.txt`, which counts them by kind and names nothing.
 - **A cut download leaves no zip.** The zip's table of contents is written last, after every part has been read; a
   download that stops, or a part that fails, never gives a file a zip program will open. Download again from the
-  beginning (no resume). The status page says "Download cut off".
+  beginning (no resume). The status page says "The last download did not finish ... No zip was saved".
 - **The link works once.** **Download** on the status page makes a single-use link for your session. A new one can be
   made until the restore expires (24 hours after it was created).
 - A name in the snapshot that Windows would extract under another name (a trailing dot or space, a device name, a
-  colon, a backslash, a control character) aborts the whole download. Restore that folder to a new folder on the device.
+  colon, a backslash, a control character) aborts the whole download. Restore that folder to a new folder on the device (destination "A new folder on <host>").
 
 ### Original location, keep existing files
 
@@ -65,7 +65,7 @@ wording of 0027). The lab script that proves all of this before a pilot is
 - A placed file keeps the snapshot's own permission entries and owner, and takes what its new parent hands down.
 - **Alternate data streams are not restored.** restic 0.19.1 does not back them up. This is a known limit.
 
-### A new folder on the device
+### A new folder on <host>
 
 - `C:\CryoBackup-Restore\<restore id>\C\...` (one folder per drive letter of the selection). The folder is readable only by
   Administrators and SYSTEM, and **every file in it is owned by Administrators**, not by the user it belonged to: the
@@ -88,9 +88,10 @@ wording of 0027). The lab script that proves all of this before a pilot is
 
 - The console records the request and queues one command. The agent accepts it at once and runs it on its own, one
   repository task at a time: **it waits for a running backup**, then starts.
-- **One device restore per device at a time.** A second is refused (409). There is no cancel button; the `cancel` command
-  of the command queue ([ADR 0010](../decisions/0010-device-commands.md)) names the restore's id as the run id, or let the
-  request expire.
+- **One device restore per device at a time.** A second is refused (409). There is no cancel button on the restore pages. A restore's
+  id is its run id, so an operator cancels with `POST /api/v1/runs/<restore id>/cancel` (operator role; an API token works),
+  which queues the `cancel` command ([ADR 0010](../decisions/0010-device-commands.md)) for the device; or let the request
+  expire.
 - **A restore never resumes.** If the agent or the machine restarts mid-restore, it ends FAILED, "interrupted", and is not
   run again by itself. Files already placed stay. Run it again; files already in place are kept.
 - **Queued for 24 hours.** A request whose device does not come online within 24 hours expires.
@@ -143,9 +144,9 @@ The class table under **RESTORED WITH ERRORS** and **FAILED**:
 | **QUEUED** / **RUNNING** | The maintenance worker is starting. | Wait. |
 | **READY** | "Ready to download." | Press **Download**. If the page says other restores are downloading, try again in a moment. |
 | **DELIVERED** | The zip was downloaded. Nothing was kept on the server. | Open it. You can download again until it expires; it streams again from the snapshot. |
-| **Download cut off** (a failed finish) | The download did not finish. No zip was saved: a part-file in the browser's downloads is not usable. | Download again from the beginning. |
+| A download that did not finish | The page says "The last download did not finish (class: <class>). No zip was saved: a part-file in the browser's downloads is not a usable zip." (class `disconnected` when the browser's stream ended). | Download again from the beginning. |
 | **FAILED**, `network` / `storage` / `unavailable` / `timeout` | The storage or the maintenance worker could not be reached. | Wait until the banners above clear, then start again. |
-| **FAILED**, `wrong_password` / `auth` | The escrowed key did not open the repository. | Use **Verify now** on the device page. If that fails too, the repository was replaced or the escrowed key no longer opens it. Nothing was restored. |
+| **FAILED**, `wrong_password` / `auth` | The escrowed key did not open the repository. | Use **Verify now** on the device page, or `POST /api/v1/devices/<device id>/escrow/verify` with an admin API token (admin role; no second factor). If that fails too, the repository was replaced or the escrowed key no longer opens it. Nothing was restored. |
 | **FAILED**, `repo_missing` | The device's repository does not exist. | Nothing to restore from. |
 | **FAILED**, `not_found` | The file or snapshot is not in the repository. | Choose again. |
 | **FAILED**, `custody_customer_held` | The device's key is held by the customer. | No technician restore is possible (section 5). |

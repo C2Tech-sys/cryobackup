@@ -32,8 +32,11 @@ ADR 0027 resets the side folder's subtree to inherit from the side folder, so th
 it. A restored file still carries the snapshot's owner after that reset, and an owner holds `READ_CONTROL` and `WRITE_DAC`
 implicitly: the user who owned the file could read its new permissions and grant themselves access back, which would
 break the guarantee of ruling C2. So the same walk that resets each entry also sets its owner to `BUILTIN\Administrators`
-(`internal/agent/restoreplace/side_windows.go:27-34`, foreman ruling D1, 2026-11-25), and the agent's check after the
-walk fails the restore if an entry is not owned that way.
+(`internal/agent/restoreplace/side_windows.go:27-34`, foreman ruling D1, 2026-11-25). The agent then **checks one file**,
+the first file the walk reset, opened again relative to its held parent (`side_windows.go:43-47` and `:350-385`): it must be
+owned by Administrators, carry no explicit permission entry (every entry inherited), and grant only Administrators and
+SYSTEM. A failure fails the restore (`ErrSideCheck`). The other entries are not examined one by one: the walk sets the owner
+and resets the permissions of every entry, and the single check is the proof that the walk did it.
 
 The snapshot's owner is therefore **not** kept for files in a side folder. It is kept for files placed at the original
 location (ADR 0027, consequences). Lab check 6 of `docs/lab/p22-agent-system.md` proves it as SYSTEM: a user the file

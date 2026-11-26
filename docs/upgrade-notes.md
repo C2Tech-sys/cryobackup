@@ -43,11 +43,11 @@ check it before any agent is touched. Agents are pushed afterwards, one site at 
 The console database is now backed up by the maintenance worker every 6 hours into a restic repository of its own
 ([ADR 0029](decisions/0029-console-self-backup-is-a-restic-repository.md)). **It is off until you give it a prefix, and an off
 self-backup is an alarm**: right after the upgrade the C11 banner reads "no self-backup has been written" and the System page's
-"Database self-backup" row says `not_configured`. That is intended. To clear it:
+"Database self-backup" row says "no self-backup has been written (not_configured: CRYO_MAINTAIN_SELF_PREFIX is not set)". That is intended. To clear it:
 
 1. **Choose the prefix.** It must not equal the device prefix (`CRYO_MAINTAIN_PREFIX`), lie inside it, or begin with it. With
    device prefix `<prefix>`, the worker refuses `<prefix>`, `<prefix>/x`, `<prefix>-console` and `<prefix>x`. Pick a name
-   outside it, for example `<self-backup prefix>`. A refused prefix is reported on the job row and by C11 with the reason.
+   outside it, for example `<self-backup prefix>`. **A prefix that breaks the rule is a configuration error, not a job failure:** `cryo-maintain` refuses to start, prints the reason on stderr and exits 2, and systemd keeps restarting it, so look in `journalctl -u cryo-maintain` (and expect the worker banner C07 meanwhile). Refused: a prefix equal to the device prefix, inside it, beginning with it or containing it; any self prefix while `CRYO_MAINTAIN_PREFIX` is empty (device repositories at the bucket root); and a segment with characters other than letters, digits, `.`, `_` and `-`.
 2. **Give the admin key its rights.** The worker writes through the `[admin]` remote, never the gateway. That key needs list,
    get, put and delete on `<bucket>/<self-backup prefix>/*`. An admin key with bucket-wide rights already has them. A key scoped
    by prefix needs the statement in [`deploy/systemd/README.md`](../deploy/systemd/README.md), "Console self-backup". The
@@ -64,7 +64,7 @@ self-backup is an alarm**: right after the upgrade the C11 banner reads "no self
    sudo systemctl restart cryo-maintain
    ```
 
-4. **Wait for one pass, then look.** The System page shows the time of the first self-backup and C11 clears. Run
+4. **Check the worker stayed up** (`systemctl status cryo-maintain`), **wait for one pass, then look.** The System page shows the time of the first self-backup and C11 clears. Run
    `cryo-console self-backup verify` once (the disaster-recovery runbook, section 2); it must exit 0.
 5. **Run the four storage checks of ADR 0029** on the real account before relying on it: the admin key's rights on the prefix,
    the gateway key's lack of any, the cost of `forget --prune` under your bucket's versioning, and the gateway policy's
@@ -77,14 +77,14 @@ self-backup is an alarm**: right after the upgrade the C11 banner reads "no self
 ### Other behaviour that changes on upgrade
 
 - **Restore.** The device page's "Restore files" opens a wizard: several files and folders as one zip, to the original place,
-  or to a new folder on the device ([`docs/runbooks/restore.md`](runbooks/restore.md)). Every restore needs the operator role and
+  or to "A new folder on <host>" ([`docs/runbooks/restore.md`](runbooks/restore.md)). Every restore needs the operator role and
   a two-factor check made in the last 5 minutes. A device restore is refused at once for a device whose agent is older than
   0.4.0 (`agent_too_old`); the zip works for every device.
 - **The escrow recheck is on.** Every escrowed key, retired devices included, is opened with `restic cat config` once a week
   by the worker (at most 5 devices a pass), and a key not verified for `escrow_recheck_days` (30 by default) raises
   ESCROW_UNVERIFIED ([ADR 0030](decisions/0030-escrow-rechecked-and-retired-devices-restorable.md)). A console with many devices
   verified only at enrollment can show that warning until the worker has been through the fleet. A retired device whose check
-  fails raises a fleet banner (C22, C22b) instead of its own alarm. The device page has a "Verify now" button (admin role).
+  fails raises a fleet banner (C22, C22b) instead of its own alarm. The device page has a "Verify now" button (admin role); where your build has none, `POST /api/v1/devices/<device id>/escrow/verify` with an admin API token does the same.
 - **A retired device can be restored by download.** Device modes stay refused for it.
 - **No forget, prune or check on device repositories during the pilot** (ADR 0026, a 45-day box from the pilot client's first
   backup). Repositories only grow.
