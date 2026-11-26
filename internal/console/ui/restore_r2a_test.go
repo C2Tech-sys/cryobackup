@@ -263,3 +263,36 @@ func TestR2A_LateReportHasAnAuditLabel(t *testing.T) {
 		t.Fatalf("restore.late_report reads %q", got)
 	}
 }
+
+// Fix G2: during the reconnect grace after a console start the page never shows a close time in the
+// past: it shows the sweep's own close time (store.DeviceRestoreCloseAt), the end of the grace here.
+func TestR2A_StatusPageShowsTheGraceInItsCloseTime(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.login()
+	e.seedP22(t)
+	ctx := context.Background()
+	fx, _ := fixtures.P22RestoreByKey("device-running")
+	e.advance(30 * time.Hour) // silent past the 24-hour limit: the silence close time is already past
+	e.login()
+	pr, err := e.st.GetPresence(ctx, store.ScopeAll(), e.dev[fx.Host])
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := e.svc.fc(ctx)
+	past := "at about " + c.dayClock(pr.ReceivedAt.Add(store.DeviceRestoreSilenceLimit))
+	// Before this process's first sweep the grace is taken to start now.
+	body := html.UnescapeString(e.page("/restores/"+fx.ID, http.StatusOK))
+	mustContain(t, "before the first sweep", body, "at about "+c.dayClock(e.now.Add(store.DeviceRestoreReconnectGrace)))
+	if strings.Contains(body, past) {
+		t.Errorf("the page shows a close time in the past: %s", past)
+	}
+	// A sweep that started listening an hour ago: the grace ends in an hour, and the sweep holds it.
+	started := e.now.Add(-time.Hour)
+	res, err := e.st.SweepAbandonedRuns(ctx, store.SweepOptions{ConsoleStartedAt: started})
+	if err != nil || res.RestoresClosed != 0 || res.RestoresHeldBack < 1 {
+		t.Fatalf("sweep inside the grace %+v %v", res, err)
+	}
+	body = html.UnescapeString(e.page("/restores/"+fx.ID, http.StatusOK))
+	mustContain(t, "inside the grace", body, "RUNNING", "at about "+c.dayClock(started.Add(store.DeviceRestoreReconnectGrace)))
+}

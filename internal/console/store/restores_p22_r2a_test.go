@@ -242,3 +242,98 @@ func TestR2A_NoGraceWithoutAnOutage(t *testing.T) {
 		t.Fatalf("closed inside an explicit grace: %+v %v", res, err)
 	}
 }
+
+// Fix G1 (fallback path, no ConsoleStartedAt): the first sweep after a 30-hour outage fails in its
+// run sweep, and the job runner records that error run. The grace was settled before the failure,
+// so the second sweep five minutes later still holds the restore open.
+func TestR2A_GraceSurvivesAFailedFirstSweep(t *testing.T) {
+	r := newSweepRig(t)
+	ctx := context.Background()
+	r.runningRestore(t, rsQuiet, 31*time.Hour)
+	r.heartbeat(t, 30*time.Hour, 30*24*time.Hour, "")
+	r.openRun(t, "01JD0000000000000000000B01", 31*time.Hour) // an abandoned backup run: the run sweep has work
+	down := r.now.Add(-30 * time.Hour)
+	if err := r.s.RecordJobRun(ctx, abandonedRunSweeperJob, JobRun{Status: "ok", StartedAt: down, FinishedAt: down}); err != nil {
+		t.Fatal(err)
+	}
+	r.exec(t, `CREATE TRIGGER busy_runs BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'database is busy (test)'); END`)
+	r.now = r.now.Add(5 * time.Second)
+	if _, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{}); err == nil {
+		t.Fatal("the first sweep did not fail")
+	}
+	if err := r.s.RecordJobRun(ctx, abandonedRunSweeperJob, JobRun{Status: "error", StartedAt: r.now, FinishedAt: r.now}); err != nil {
+		t.Fatal(err)
+	}
+	r.exec(t, `DROP TRIGGER busy_runs`)
+	r.now = r.now.Add(5 * time.Minute)
+	res, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{})
+	if err != nil || res.RestoresClosed != 0 || res.RestoresHeldBack != 1 || !res.GraceUntil.Equal(down.Add(30*time.Hour+5*time.Second+DeviceRestoreReconnectGrace)) {
+		t.Fatalf("second sweep inside the grace: %+v %v", res, err)
+	}
+	if st, _, _ := r.restoreState(t, rsQuiet); st != "running" {
+		t.Fatalf("closed inside the grace: %s", st)
+	}
+	r.now = r.now.Add(DeviceRestoreReconnectGrace)
+	if res, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{}); err != nil || res.RestoresClosedBy[RestoreClosedAgentSilent] != 1 || res.RestoresHeldBack != 0 {
+		t.Fatalf("after the grace: %+v %v", res, err)
+	}
+}
+
+// Fix G1 (serve): with ConsoleStartedAt set, every start holds the grace, an outage seen or not; the
+// value is settled once, so a later sweep with other options cannot move it.
+func TestR2A_ConsoleStartedAtHoldsTheGraceOnEveryStart(t *testing.T) {
+	r := newSweepRig(t)
+	ctx := context.Background()
+	r.runningRestore(t, rsQuiet, 26*time.Hour)
+	r.heartbeat(t, 25*time.Hour, 30*24*time.Hour, "")
+	prev := r.now.Add(-5 * time.Minute) // a quick restart: the previous sweep five minutes ago
+	if err := r.s.RecordJobRun(ctx, abandonedRunSweeperJob, JobRun{Status: "ok", StartedAt: prev, FinishedAt: prev}); err != nil {
+		t.Fatal(err)
+	}
+	start := r.now
+	o := SweepOptions{ConsoleStartedAt: start}
+	r.now = r.now.Add(5 * time.Second)
+	if res, err := r.s.SweepAbandonedRuns(ctx, o); err != nil || res.RestoresClosed != 0 || res.RestoresHeldBack != 1 || !res.GraceUntil.Equal(start.Add(DeviceRestoreReconnectGrace)) {
+		t.Fatalf("first sweep: %+v %v", res, err)
+	}
+	r.now = start.Add(DeviceRestoreReconnectGrace - time.Minute)
+	if res, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{}); err != nil || res.RestoresClosed != 0 {
+		t.Fatalf("a sweep without options moved the grace: %+v %v", res, err)
+	}
+	r.now = start.Add(DeviceRestoreReconnectGrace + time.Minute)
+	if res, err := r.s.SweepAbandonedRuns(ctx, o); err != nil || res.RestoresClosedBy[RestoreClosedAgentSilent] != 1 {
+		t.Fatalf("after the grace: %+v %v", res, err)
+	}
+}
+
+// Fix G2: the close time the status page shows is the sweep's own: the silence rule, the 48-hour
+// ceiling, and never before the reconnect grace ends.
+func TestR2A_DeviceRestoreCloseAt(t *testing.T) {
+	r := newSweepRig(t)
+	ctx := context.Background()
+	started := r.now.Add(-30 * time.Hour)
+	heard := r.now.Add(-29 * time.Hour)
+	// Before the first sweep of the process the grace is assumed to start now.
+	if got := DeviceRestoreCloseAt(r.s, started, heard); !got.Equal(r.now.Add(DeviceRestoreReconnectGrace)) {
+		t.Fatalf("before the first sweep: %v", got)
+	}
+	if _, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{ConsoleStartedAt: r.now.Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := DeviceRestoreCloseAt(r.s, started, heard); !got.Equal(r.now.Add(time.Hour)) {
+		t.Fatalf("inside the grace: %v, want its end", got)
+	}
+	r.now = r.now.Add(3 * time.Hour) // the grace is over
+	recent := r.now.Add(-20 * time.Hour)
+	started = r.now.Add(-21 * time.Hour)
+	if got := DeviceRestoreCloseAt(r.s, started, recent); !got.Equal(recent.Add(DeviceRestoreSilenceLimit)) {
+		t.Fatalf("silence rule: %v", got)
+	}
+	old := r.now.Add(-30 * time.Hour)
+	if got := DeviceRestoreCloseAt(r.s, old, r.now); !got.Equal(old.Add(DeviceRestoreRunningBound)) {
+		t.Fatalf("ceiling: %v", got)
+	}
+	if got := DeviceRestoreCloseAt(r.s, started, time.Time{}); !got.Equal(started.Add(DeviceRestoreSilenceLimit)) {
+		t.Fatalf("never heard: %v", got)
+	}
+}

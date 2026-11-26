@@ -93,14 +93,20 @@ type AbandonedRunSweeper struct {
 func (j *AbandonedRunSweeper) Job() Job {
 	return Job{Name: NameAbandonedRunSweeper, Every: AbandonedRunSweeperEvery, Run: func(ctx context.Context) error {
 		res, err := j.Store.SweepAbandonedRuns(ctx, j.Options)
+		log := j.Log
+		if log == nil {
+			log = logx.Default()
+		}
+		// Inside the reconnect grace after a start (ADR 0032) the sweep closes none: said once
+		// per run with the count it held back and when the grace ends, no id.
+		if res.RestoresHeldBack > 0 {
+			log.Info("restore sweep: device restores held open while agents reconnect after the console start", logx.Str("job", NameAbandonedRunSweeper),
+				logx.Int("held_back", res.RestoresHeldBack), logx.Str("grace_until_utc", res.GraceUntil.UTC().Format("20060102T150405Z")))
+		}
 		// A running device restore the sweep closed as FAILED interrupted (ADR 0027,
 		// P22-E, ADR 0032) is said once per run: the count and the count per reason, no id.
 		if res.RestoresClosed > 0 {
-			log := j.Log
-			if log == nil {
-				log = logx.Default()
-			}
-			log.Warn("abandoned-run-sweeper: closed running device restores whose agent stopped reporting", logx.Int("count", res.RestoresClosed),
+			log.Warn("restore sweep: closed running device restores whose agent stopped reporting", logx.Str("job", NameAbandonedRunSweeper), logx.Int("count", res.RestoresClosed),
 				logx.Int("agent_silent", res.RestoresClosedBy[store.RestoreClosedAgentSilent]),
 				logx.Int("agent_restarted", res.RestoresClosedBy[store.RestoreClosedAgentRestarted]),
 				logx.Int("no_run_record", res.RestoresClosedBy[store.RestoreClosedNoRunRecord]))

@@ -63,7 +63,7 @@ func TestR2A_ConcurrentBrowseSharesAFailedWrite(t *testing.T) {
 	go func() {
 		first <- e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID)
 	}()
-	<-entered // the first browse is writing its row
+	recvWithin(t, "the first write starting", entered) // the first browse is writing its row
 	go func() {
 		second <- e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID)
 	}()
@@ -75,10 +75,10 @@ func TestR2A_ConcurrentBrowseSharesAFailedWrite(t *testing.T) {
 	}
 	close(release) // the first write fails
 
-	if err := <-first; !errors.Is(err, store.ErrAudit) {
+	if err := recvWithin(t, "the first browse", first); !errors.Is(err, store.ErrAudit) {
 		t.Fatalf("first browse: %v", err)
 	}
-	if err := <-second; !errors.Is(err, store.ErrAudit) {
+	if err := recvWithin(t, "the waiting browse", second); !errors.Is(err, store.ErrAudit) {
 		t.Fatalf("second browse was let through on a row that was never written: %v", err)
 	}
 	if n := len(browseRows(t, e)); n != 0 {
@@ -111,16 +111,16 @@ func TestR2A_ConcurrentBrowseSharesASuccessfulWrite(t *testing.T) {
 	go func() {
 		first <- e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID)
 	}()
-	<-entered
+	recvWithin(t, "the first write starting", entered)
 	go func() {
 		second <- e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID)
 	}()
 	waitForWaiter(t, e.svc, k, 1)
 	close(release)
-	if err := <-first; err != nil {
+	if err := recvWithin(t, "the first browse", first); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-second; err != nil {
+	if err := recvWithin(t, "the waiting browse", second); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(browseRows(t, e)); n != 1 {
@@ -196,17 +196,17 @@ func TestR2A_PanickingWriteNeverWedgesTheKey(t *testing.T) {
 		defer func() { panicked <- recover() }()
 		_ = e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID)
 	}()
-	<-entered
+	recvWithin(t, "the first write starting", entered)
 	second := make(chan error, 1)
 	go func() {
 		second <- e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID)
 	}()
 	waitForWaiter(t, e.svc, k, 1)
 	close(release)
-	if p := <-panicked; p == nil {
+	if p := recvWithin(t, "the panicking browse", panicked); p == nil {
 		t.Fatal("the panic was swallowed")
 	}
-	if err := <-second; !errors.Is(err, store.ErrAudit) {
+	if err := recvWithin(t, "the waiting browse", second); !errors.Is(err, store.ErrAudit) {
 		t.Fatalf("the waiting browse after a panicked write: %v (want a prompt NOT AUDITED refusal)", err)
 	}
 	e.svc.browseAppend = nil
@@ -216,4 +216,18 @@ func TestR2A_PanickingWriteNeverWedgesTheKey(t *testing.T) {
 	if n := len(browseRows(t, e)); n != 1 {
 		t.Fatalf("%d rows after the retry", n)
 	}
+}
+
+// recvWithin receives from ch, or fails the test after ten seconds: a browse that waits for ever
+// (a claim whose done channel is never closed) fails by assertion, not by the test binary's timeout.
+func recvWithin[T any](t *testing.T, what string, ch <-chan T) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s: no answer within 10 s (a claim was never settled)", what)
+	}
+	var zero T
+	return zero
 }

@@ -277,20 +277,17 @@ func (s *Service) deviceRestoreView(ctx context.Context, v *RestoreView, rr stor
 			// silence passes store.DeviceRestoreSilenceLimit (ADR 0032).
 			v.Status.Class, v.Status.Pulse, v.Class = ClassWarn, false, ClassWarn
 			v.Headline = v.Host + " has not been heard from."
-			heard := rr.CreatedAt
+			started := rr.CreatedAt
 			if rr.StartedAt != nil {
-				heard = *rr.StartedAt
+				started = *rr.StartedAt
 			}
+			var heard time.Time
 			if live.SeenKnown {
 				v.Headline = v.Host + " has not been heard from since " + c.dayClock(live.LastSeen) + "."
-				if live.LastSeen.After(heard) {
-					heard = live.LastSeen
-				}
+				heard = live.LastSeen
 			}
-			closeAt := heard.Add(store.DeviceRestoreSilenceLimit)
-			if rr.StartedAt != nil && rr.StartedAt.Add(store.DeviceRestoreRunningBound).Before(closeAt) {
-				closeAt = rr.StartedAt.Add(store.DeviceRestoreRunningBound)
-			}
+			// The sweep's own rule, the reconnect grace after a console start included (fix G2).
+			closeAt := store.DeviceRestoreCloseAt(s.Store, started, heard)
 			v.Message = "The outcome is unknown until it reports. If it stays silent, the console closes the restore as interrupted at about " +
 				c.dayClock(closeAt) + ", and " + v.Host + " can take another restore."
 		} else if live.BackupOpen {

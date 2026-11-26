@@ -65,22 +65,28 @@ constant, not a setting: no configuration key fits it today.
 The two P22-E cases stay as they were: `agent_restarted`, and `no_run_record`, 48 hours after the fetch
 (`store.DeviceRestoreRunningBound`), which for a restore is a ceiling (see Context).
 
-### 2a. No close while the agents reconnect after a console outage (fix F1 of the blind check)
+### 2a. No close while the agents reconnect after a console start (fixes F1 and G1 of the blind checks)
 
 A console that was down heard nothing from anyone, so the silence it measures across its own outage is not the device's: after a
 24-hour outage every running restore's newest heartbeat is more than 24 hours old, and the first sweep runs seconds after the
-start, while the agents are still waiting to try again. So after an outage the sweep closes no device restore, for any of the three
-reasons, until the console has been listening again for **`store.DeviceRestoreReconnectGrace` = 2 hours**: an agent's longest wait
-before it tries again is a Retry-After of up to 1 hour (its own backoff is clamped at 5 minutes), and its next heartbeat follows
-within 70 seconds; 2 hours is nearly twice that. A heartbeat inside the grace makes the device heard, as always; a device still
-silent when the grace ends is closed then, because it has now been silent while the console listened.
+start, while the agents are still waiting to try again. So after every start of the console process the sweep closes no device
+restore, for any of the three reasons, until the console has been listening for **`store.DeviceRestoreReconnectGrace` = 2 hours**:
+an agent's longest wait before it tries again is a Retry-After of up to 1 hour (its own backoff is clamped at 5 minutes), and its
+next heartbeat follows within 70 seconds; 2 hours is nearly twice that. A heartbeat inside the grace makes the device heard, as
+always; a device still silent when the grace ends is closed then, because it has now been silent while the console listened.
+While the grace holds a close back, the sweep says so once per run, at info, with the count held back and the end of the grace
+(no id, no path).
 
-The start of the grace is `SweepOptions.ConsoleStartedAt` when a caller sets it. Otherwise the sweep works it out from its own
-record: when the previous sweep (the sweeper's `job_state` row, which the job runner writes after every run) finished more than
-15 minutes before this process's first sweep, the console or its job runner was not listening, and the grace starts at that first
-sweep; the process remembers it. A quick restart (sweeps paused under 15 minutes) starts no grace, since the fleet's heartbeats
-are fresh. Left open: a second restart within 15 minutes of a first one that followed an outage does not restart the grace. All
-times are the store's clock, so tests drive them.
+The start of the grace is the console's own start: serve captures it once, when it registers the sweeper, and passes it as
+`SweepOptions.ConsoleStartedAt`. The grace therefore holds after every restart, a second restart soon after a first included, and
+a first sweep that fails cannot lose it: the sweep settles when it started listening first, before anything that can fail, and
+keeps that for the life of the process. A caller that does not pass a start (none in the product today) gets a fallback: when the
+previous sweep (the sweeper's `job_state` row, which the job runner writes after every run) finished more than 15 minutes before
+this process's first sweep, or that row cannot be read, the grace starts at that first sweep. All times are the store's clock, so
+tests drive them.
+
+The status page's "closes ... at about <time>" is the sweep's own rule (`store.DeviceRestoreCloseAt`): the silence or ceiling time,
+and never before the grace ends, so it never names a time in the past while the grace holds.
 
 ### 3. How the console closes it
 
@@ -118,7 +124,7 @@ updated when the stored run was open or "abandoned"). For the restore row:
 ## Consequences
 
 - A dead or uninstalled agent no longer leaves a restore RUNNING forever: within 24 hours of its last heartbeat (48 hours of the
-  fetch at most; plus up to 2 hours after a console outage) the row is FAILED, the device is free, the audit trail says why, and
+  fetch at most; plus up to 2 hours after a console start) the row is FAILED, the device is free, the audit trail says why, and
   the page warned meanwhile.
 - A restore that is genuinely still moving at 48 hours is closed by the ceiling while it runs; its real outcome arrives as a late
   report and is shown beside FAILED. The fix for that is a heartbeat that names the running restore (agent work, not done here).
