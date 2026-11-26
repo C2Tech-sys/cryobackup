@@ -1,0 +1,17 @@
+{{/* design_restore: the restore section of /design (P22-G). Each sample sits in its own inert form so its radio buttons are their own group; nothing posts anywhere useful (/design takes GET only). */}}
+{{define "design_restore"}}<section class="d-section d-restore" id="restore" aria-labelledby="d-restore"><header><h2 id="d-restore">Restore</h2><span class="used">ADR 0027, 0028, 0030 and plan B.1: the wizard's four steps in their states, and every status of a download and of a restore to the device (B17)</span></header>
+<div class="stack" id="d-restore-bars"><h3 class="h-label">Wizard bar</h3>
+{{range .Bars}}<div><p class="meta-mono">{{.Name}}</p><div class="wiz rw">{{template "steps" .Steps}}</div></div>{{end}}</div>
+
+<div class="stack" id="d-restore-select"><h3 class="h-label">Step 1 and 2: snapshot, browse and select</h3>
+{{range .Select}}<div><p class="meta-mono">{{.Name}}</p><form class="wiz rw" method="post" action="/design/restore" aria-label="{{.Name}}">{{template "steps" .D.Steps}}<div class="in">{{template "restore_step_select" .D}}</div></form></div>{{end}}</div>
+
+<div class="stack" id="d-restore-dest"><h3 class="h-label">Step 3: destination</h3>
+{{range .Dest}}<div><p class="meta-mono">{{.Name}}</p><form class="wiz rw" method="post" action="/design/restore" aria-label="{{.Name}}"><div class="in">{{template "restore_step_dest" .D}}</div></form></div>{{end}}</div>
+
+<div class="stack" id="d-restore-review"><h3 class="h-label">Step 4: review</h3>
+{{range .Review}}<div><p class="meta-mono">{{.Name}}</p><form class="wiz rw" method="post" action="/design/restore" aria-label="{{.Name}}"><div class="in">{{template "restore_step_review" .D}}</div><div class="foot"><span class="btn">Back</span><span class="btn primary">{{if .D.Review}}{{.D.Review.Button}}{{end}}</span></div></form></div>{{end}}</div>
+
+<div class="stack" id="d-restore-status"><h3 class="h-label">Restore status: every status and class</h3>
+<div class="d-rs-grid">{{range .Outcomes}}<div class="card stack" id="d-rs-{{.Key}}"><p class="meta-mono">{{.Name}}</p>{{template "restore_outcome" .V}}</div>{{end}}</div></div>
+</section>{{end}}

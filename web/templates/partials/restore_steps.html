@@ -1,0 +1,44 @@
+{{/* P22-G: the three steps of the restore wizard (restore.html restore_box), here so /design (restore_design.html) renders the same markup. */}}
+{{define "restore_step_select"}}<div class="rw-head"><h2>Which file do you need back from {{.Host}}?</h2>
+<p class="help">Tick the files and folders you need, up to {{.BasketMax}} items. A folder brings everything in it. The selection is kept while you move between folders.</p></div>
+{{with .Blocked}}{{template "inline_banner" .}}{{else}}
+{{if .Retired}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>This device is retired: download only.</b> Its files can be downloaded as a zip; nothing is restored to it (ADR 0030).</div></div>{{end}}
+{{with .Notice}}{{template "inline_banner" .}}{{end}}
+{{with .Error}}{{template "inline_banner" .}}{{end}}
+<div class="field rw-snap"><label for="snapshot">Snapshot</label>
+  <div class="rw-snaprow">{{if not .NoSnaps}}<select class="input" id="snapshot" name="snapshot" hx-post="/ui/devices/{{.DeviceID}}/restore" hx-trigger="change" hx-target="#restore-box" hx-swap="outerHTML" hx-include="closest form" hx-vals='{"action":"snapshot"}'>
+      {{range .Snapshots}}<option value="{{.ID}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+    </select><button class="btn rw-snapgo" type="submit" name="action" value="snapshot">Open</button>{{end}}
+    <button class="btn ghost" type="submit" name="action" value="refresh"><svg width="14" height="14" aria-hidden="true"><use href="#i-restore"/></svg>Refresh from repository</button></div>
+  <span class="help">{{if .NoSnaps}}The console knows no snapshot of this device. Refresh reads the list from the repository.{{else}}The newest snapshot is selected. Choosing another clears the selection.{{end}}</span></div>
+{{if .NoSnaps}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>No snapshots are cached for this device.</b> The agent uploads its snapshot list after each successful backup; until then there is nothing to browse.</div></div>
+{{else}}<div class="rw-grid">
+{{template "restore_listing" .}}
+{{template "restore_basket" .}}
+</div>
+<p class="rw-next"><b>Next: where the files go.</b> Back to {{.Host}}, keeping what is there; into a new folder on {{.Host}}; or Download as a zip. The zip streams from the snapshot straight to your browser. Nothing is stored on the server. The download link works once.</p>
+{{end}}{{end}}{{end}}
+
+{{define "restore_step_dest"}}<div class="rw-head"><h2>Where should {{plural (len .Basket) "item" "items"}} go?</h2>
+<p class="help">From the snapshot of {{.SnapLabel}} on {{.Host}}.</p></div>
+{{with .Error}}{{template "inline_banner" .}}{{end}}
+{{if .Retired}}<div class="banner info dense" role="status"><i class="g g-info" aria-hidden="true"></i><div class="b-text"><b>This device is retired: download only.</b> A retired device can be downloaded from, not restored to (ADR 0030).</div></div>{{end}}
+{{template "restore_modes" .}}
+{{if .ActiveID}}<p class="ui"><a href="/restores/{{.ActiveID}}">Open the restore that is already active</a></p>{{end}}
+{{template "restore_picked" .}}
+{{end}}
+
+{{define "restore_step_review"}}{{with .Review}}<div class="rw-head"><h2>{{.Title}}</h2></div>{{end}}
+{{with .Blocked}}{{template "inline_banner" .}}{{end}}
+{{with .Error}}{{template "inline_banner" .}}{{end}}
+{{with .Review}}<ul class="rw-lines">{{range .Lines}}<li>{{.}}</li>{{end}}</ul>
+{{range .Notes}}{{template "inline_banner" .}}{{end}}
+<dl class="kv rw-facts">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl>{{end}}
+{{template "restore_picked" .}}
+{{if and .Review .Review.Replace}}<div class="field rw-confirm"><label for="confirm-host">Type <span class="mono">{{.Host}}</span> to confirm replacing changed files</label>
+  <input class="input mono" id="confirm-host" name="confirm_host" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required{{if .ConfirmErr}} aria-invalid="true" aria-describedby="confirm-err"{{end}}>
+  {{if .ConfirmErr}}<span class="err" id="confirm-err">{{.ConfirmErr}}</span>{{else}}<span class="help">The host name is checked exactly. Nothing is replaced until it matches.</span>{{end}}</div>{{end}}
+{{if .NeedCode}}<div class="field rw-code"><label for="restore-code">Authenticator code</label>
+    <input class="input mono" id="restore-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required spellcheck="false" aria-describedby="restore-code-help">
+    <span class="help" id="restore-code-help">This session's last authenticator check is older than {{.MFAWindow}} minutes. Enter the current code from your authenticator app. A recovery code is not accepted here, and a sign-in with one does not count as a check.</span></div>{{end}}
+{{end}}

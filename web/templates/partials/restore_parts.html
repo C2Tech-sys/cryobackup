@@ -1,0 +1,39 @@
+{{/* P22-G: the parts of the restore wizard that /design shows too (restore_design.html). Names from a client machine appear only in these parts, per request, never in a URL. */}}
+
+{{/* restore_listing: one page of one folder of the snapshot, with a checkbox on every file and folder. */}}
+{{define "restore_listing"}}<div class="browse rw-browse" role="group" aria-label="Snapshot contents">
+  <div class="crumbs">{{range .Crumbs}}<button type="submit" name="dir" value="{{.Path}}" aria-label="Open {{.Label}}"><span aria-hidden="true">{{.Label}}</span></button><span aria-hidden="true">/</span>{{end}}</div>
+  {{if .Inside}}<p class="rw-inside" role="status"><svg width="12" height="12" aria-hidden="true"><use href="#i-check"/></svg>Everything here is selected: it is inside a selected folder.</p>{{end}}
+  {{if .Entries}}<ul class="rw-list">{{range .Entries}}<li class="rw-row {{.Kind}}{{if .Checked}} on{{end}}{{if .Covered}} covered{{end}}">
+    {{if eq .Kind "dir"}}<label class="rw-pick"><input type="checkbox" name="path" value="{{.Path}}"{{if .Checked}} checked{{end}}{{if .Covered}} checked disabled{{end}}><span class="sr-only">Select the folder {{.Name}}</span></label><button class="rw-open" type="submit" name="dir" value="{{.Path}}"><svg aria-hidden="true"><use href="#i-folder"/></svg><span class="nm">{{.Name}}</span><span class="when">{{.When}}</span><svg class="go" aria-hidden="true"><use href="#i-chev"/></svg></button>
+    {{else if eq .Kind "file"}}<label class="rw-file"><input type="checkbox" name="path" value="{{.Path}}"{{if .Checked}} checked{{end}}{{if .Covered}} checked disabled{{end}}><svg aria-hidden="true"><use href="#i-file"/></svg><span class="nm">{{.Name}}</span><span class="size">{{.Size}}</span><span class="when">{{.When}}</span></label>
+    {{else}}<span class="rw-other"><span class="rw-nobox" aria-hidden="true"></span><svg aria-hidden="true"><use href="#i-file"/></svg><span class="nm">{{.Name}}</span><span class="what">{{.What}}</span></span>{{end}}
+  </li>{{end}}</ul>
+  {{else if .Listed}}<p class="muted ui pad-a">This folder is empty.</p>
+  {{else}}<p class="muted ui pad-a">The listing is not shown.</p>{{end}}
+  {{if .Listed}}<div class="rw-page"><span class="meta-mono">{{.PageText}}</span>{{if or .HasPrev .HasNext}}<span class="rw-pager"><button class="btn sm" type="submit" name="page" value="{{.PrevOff}}"{{if not .HasPrev}} disabled{{end}}>Previous 500</button><button class="btn sm" type="submit" name="page" value="{{.NextOff}}"{{if not .HasNext}} disabled{{end}}>Next 500</button></span>{{end}}</div>{{end}}
+</div>{{end}}
+
+{{/* restore_basket: what is selected, with a remove button on each item. */}}
+{{define "restore_basket"}}<aside class="rw-basket" aria-labelledby="rw-basket-h">
+  <div class="rw-bhead"><h3 class="h-label" id="rw-basket-h">Selected</h3><span class="rw-count{{if .Over}} over{{end}}">{{len .Basket}} of {{.BasketMax}}</span></div>
+  {{if .Basket}}<ul class="rw-items">{{range .Basket}}<li><span class="rw-iname"><span class="nm">{{.Name}}</span><span class="pp">{{.Parent}}</span></span><button class="iconbtn sm" type="submit" name="drop" value="{{.Path}}" aria-label="Remove {{.Name}} from the selection"><svg aria-hidden="true"><use href="#i-x"/></svg></button></li>{{end}}</ul>
+  <button class="btn ghost sm" type="submit" name="action" value="clear">Clear the selection</button>
+  {{else}}<p class="muted ui">Nothing selected yet. Tick files and folders in the listing.</p>{{end}}
+</aside>{{end}}
+
+{{/* restore_modes: the destination choices; one that is not offered says why. */}}
+{{define "restore_modes"}}<fieldset class="opt plain rw-modes"><legend class="h-label">Destination</legend>
+  {{range .Modes}}<label class="rw-mode{{if .Disabled}} off{{end}}"><input type="radio" name="mode" value="{{.Value}}"{{if .Checked}} checked{{end}}{{if .Disabled}} disabled{{end}}><div><b>{{.Title}}</b><span>{{.Text}}</span>{{if .Why}}<span class="warnline">{{.Why}}</span>{{end}}</div></label>
+  {{end}}
+</fieldset>{{end}}
+
+{{/* restore_picked: the selection as a compact list on the destination and review steps. */}}
+{{define "restore_picked"}}{{if .Basket}}<details class="rw-picked"><summary>{{len .Basket}} selected {{if eq (len .Basket) 1}}item{{else}}items{{end}}</summary><ul class="rw-items">{{range .Basket}}<li><span class="rw-iname"><span class="nm">{{.Name}}</span><span class="pp">{{.Parent}}</span></span></li>{{end}}</ul></details>{{end}}{{end}}
+
+{{/* restore_outcome: the outcome of a restore (status page and /design). */}}
+{{define "restore_outcome"}}<div class="row">{{template "chip" .Status}}<span class="mono">{{.Created}}</span>{{if .Bytes}}<span class="mono">{{.Bytes}}</span>{{end}}{{if .Poll}}<span class="meta-mono rs-live-note">refreshes by itself</span>{{end}}</div>
+<div class="banner {{.Class}} dense" role="{{if .Failed}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text">{{if .Headline}}<b>{{.Headline}}</b> {{end}}{{.Message}}</div></div>
+{{with .Counts}}<div class="rs-counts"><div class="rs-tile"><span class="label-mono">Restored</span><b>{{.Restored}}</b><span class="meta-mono">files · {{.Bytes}}</span></div><div class="rs-tile"><span class="label-mono">Skipped</span><b>{{.Skipped}}</b><span class="meta-mono">already there</span></div>{{if .ErrTotal}}<div class="rs-tile bad"><span class="label-mono">Not restored</span><b>{{.ErrTotal}}</b><span class="meta-mono">by class below</span></div>{{end}}</div>
+{{if .Errors}}<div class="table-wrap"><table class="rs-errs"><caption class="sr-only">Errors by class</caption><thead><tr><th scope="col">Class</th><th scope="col">What it means</th><th scope="col" class="num">Files</th></tr></thead><tbody>{{range .Errors}}<tr><td class="mono">{{.Class}}</td><td>{{.Label}}</td><td class="num mono">{{.Count}}</td></tr>{{end}}</tbody></table></div>{{end}}{{end}}
+{{if .Facts}}<dl class="kv rs-facts">{{range .Facts}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl>{{end}}{{end}}

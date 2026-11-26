@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/c2tech-sys/cryobackup/internal/api"
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
 	"github.com/c2tech-sys/cryobackup/internal/console/health"
@@ -18,6 +18,56 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/restores"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
+	"github.com/c2tech-sys/cryobackup/internal/state"
+)
+
+// The restore wizard (B17; ADR 0027, ADR 0028, ADR 0030; plan B.1; ticket P22-G).
+//
+// One page, four steps: a point in time (the snapshot) -> browse and select (checkboxes on
+// files and folders) -> the destination -> review. Every step is a plain form post to
+// POST /ui/devices/{id}/restore, so the wizard works with JavaScript off; htmx only swaps the
+// form in place. The selection (the "basket") travels in the POST body as repeated "path"
+// fields: a selected item shown in the current listing is its own checked checkbox, every other
+// one rides along as a hidden field. It is never put in a URL, a cookie or browser storage, and
+// the body is capped (restoreBodyMax).
+//
+// The browse listing, the basket and the review are the only places the console shows names from
+// a client machine (components §0.3, §8.5): rendered per request, never cached (no-store), never
+// logged. Browsing a snapshot is audited as restore.browse, path-free, once per admin, device and
+// snapshot per hour (restores.AuditBrowse).
+//
+// "Continue" moves one step on; the hidden "step" field says which step the form is at. A post
+// that carries no step (the single-file form of earlier versions, and the admin pages' tests of
+// it) is a create: it goes straight to the restore with the mode it names, a download when it
+// names none. Every create needs a fresh authenticator check (ruling C5): the review step asks
+// for the code when the session's last check is older than the window.
+
+const (
+	// restoreBasketMax is the most items one restore takes after nested items are folded into
+	// their selected folder (ADR 0028: a zip of up to 50 items; the wizard uses the same cap for
+	// a device restore).
+	restoreBasketMax = adminpath.MaxDumpPaths
+	// restoreLsPage is one page of the browse listing (plan B.1: Ls pages of 500).
+	restoreLsPage = 500
+	// restoreBodyMax caps a wizard post (plan B.1: 64 KiB): the basket rides in it.
+	restoreBodyMax = 64 << 10
+	// restorePostedMax bounds how many "path" values one post may carry before it is refused.
+	restorePostedMax = 2 * restoreLsPage
+)
+
+// Wizard steps (the hidden "step" field).
+const (
+	stepSelect = "select"
+	stepDest   = "dest"
+	stepReview = "review"
+)
+
+// The destination words of the form ("mode"). The service's own words are restores.Mode*.
+const (
+	modeZip      = "zip"
+	modeOriginal = "original" // original location, existing files kept (ADR 0027 ruling C1 default)
+	modeSide     = "side"     // a new folder beside, nothing existing touched (ruling C2)
+	modeReplace  = "replace"  // original location, changed files replaced: the typed host name confirms
 )
 
 // SnapOption is one entry of the snapshot select.
@@ -27,10 +77,9 @@ type SnapOption struct {
 	Selected bool
 }
 
-// Crumb is one segment of the browse path. The browse listing is the single
-// place the UI shows names from a client machine (components §0.3, §8.5): it is
-// rendered once, never cached, never logged, and carried in POST bodies, never
-// in a URL.
+// Crumb is one segment of the browse path. The browse listing is the single place the UI shows
+// names from a client machine (components §0.3, §8.5): it is rendered once, never cached, never
+// logged, and carried in POST bodies, never in a URL.
 type Crumb struct {
 	Label string
 	Path  string
@@ -38,12 +87,24 @@ type Crumb struct {
 
 // Entry is one row of the listing.
 type Entry struct {
-	Name   string
+	Name string
+	Path string
+	Kind string // dir | file | other
+	// What says what an "other" entry is (a link, a device), which cannot be selected.
+	What string
+	Size string
+	When string
+	// Checked: the entry is in the basket (its checkbox carries it). Covered: a folder above it
+	// is in the basket, so it is included already (a checked, disabled box).
+	Checked bool
+	Covered bool
+}
+
+// BasketItem is one selected file or folder.
+type BasketItem struct {
 	Path   string
-	Kind   string // dir | file | other
-	Size   string
-	When   string
-	Select bool
+	Name   string
+	Parent string
 }
 
 // Banner is an inline banner (components §9.3).
@@ -60,35 +121,97 @@ type Step struct {
 	State string // done | on | todo
 }
 
+// ModeOpt is one destination of the destination step.
+type ModeOpt struct {
+	Value    string
+	Title    string
+	Text     string
+	Checked  bool
+	Disabled bool
+	// Why says why a disabled destination is not offered.
+	Why string
+}
+
+// ReviewView is what the review step says will happen, in plain words.
+type ReviewView struct {
+	Title   string
+	Lines   []string
+	Facts   []Fact
+	Notes   []Banner
+	Button  string
+	Replace bool
+}
+
 // RestoreData is the restore wizard (B17).
 type RestoreData struct {
 	Page
-	DeviceID   string
-	Host       string
-	Customer   string
+	DeviceID string
+	Host     string
+	Customer string
+	// Step is select, dest or review; Steps is the bar.
+	Step  string
+	Steps []Step
+
 	Snapshots  []SnapOption
 	SnapshotID string
-	Dir        string
-	Crumbs     []Crumb
-	Entries    []Entry
-	Truncated  bool
-	Error      *Banner
-	Blocked    *Banner
-	Steps      []Step
+	SnapLabel  string
 	NoSnaps    bool
-	CanSubmit  bool
-	// NeedCode asks for an authenticator code (the session's last check is older
-	// than MFAWindow minutes, ADR 0027 ruling C5); KeepPath carries the file the
-	// operator chose through that round trip, in the POST body only.
+
+	Dir     string
+	Crumbs  []Crumb
+	Entries []Entry
+	// Inside names the selected folder the current folder lies in ("" when none).
+	Inside string
+	// Paging of the listing: Offset of this page, Total children (0 from a worker that predates
+	// paging), and the offsets of the neighbouring pages.
+	Offset, Total, From, To int
+	PrevOff, NextOff        int
+	HasPrev, HasNext        bool
+	Truncated               bool
+	Listed                  bool
+	// PageText says which entries this page shows ("1–500 of 2,000").
+	PageText string
+
+	Basket []BasketItem
+	// Hidden are the basket paths that ride as hidden fields (every basket path not shown as an
+	// enabled checkbox of this listing).
+	Hidden    []string
+	BasketMax int
+	Over      bool
+
+	Notice  *Banner
+	Error   *Banner
+	Blocked *Banner
+	// BlockedStatus is the HTTP status of a create the Blocked rule refuses.
+	BlockedStatus int
+	// Retired: the device is retired, so the wizard offers a download only (ADR 0030).
+	Retired bool
+
+	Mode  string
+	Modes []ModeOpt
+	// DeviceWhy, when set, is why no destination on the device is offered.
+	DeviceWhy string
+	// ActiveID is the device restore that is already queued or running for this device.
+	ActiveID string
+
+	Review     *ReviewView
+	ConfirmErr string
+
+	CanSubmit bool
+	// NeedCode asks for an authenticator code (the session's last check is older than MFAWindow
+	// minutes, ADR 0027 ruling C5).
 	NeedCode  bool
-	KeepPath  string
 	MFAWindow int
+
+	dev store.Device
 }
 
-func (s *Service) restoreBase(ctx context.Context, p *auth.Principal, f health.Fleet, id string) (RestoreData, int, bool) {
+// ---- the device and what it allows ----
+
+func (s *Service) restoreBase(ctx context.Context, p *auth.Principal, f health.Fleet, id string) (RestoreData, bool) {
 	dev, err := s.Store.GetDevice(ctx, p.Scope, id)
 	if err != nil {
-		return RestoreData{}, http.StatusNotFound, false
+		return RestoreData{}, false
 	}
 	custName := ""
 	for _, c := range f.View.Customers {
@@ -96,37 +219,208 @@ func (s *Service) restoreBase(ctx context.Context, p *auth.Principal, f health.F
 			custName = c.Name
 		}
 	}
-	d := RestoreData{Page: s.page(ctx, p, f, "Restore files", "fleet", "/ui/events"), DeviceID: id, Host: dev.Hostname, Customer: custName}
-	d.Dir = "/"
-	switch esc, err := s.Store.ActiveEscrow(ctx, p.Scope, id); {
-	case dev.RetiredAt != nil:
-		d.Blocked = &Banner{ClassWarn, "This device is retired", "A retired device cannot be restored from the console."}
-	case err == nil && esc.Custody != "escrowed":
-		d.Blocked = &Banner{ClassWarn, "Customer-held key: no technician restore", "CryoBackup never stores this key, so the console cannot open the repository. Restore on the machine with the customer's key."}
+	d := RestoreData{Page: s.page(ctx, p, f, "Restore files", "fleet", "/ui/events"), DeviceID: id, Host: dev.Hostname, Customer: custName,
+		Dir: "/", BasketMax: restoreBasketMax, MFAWindow: int(auth.FreshMFAWindow / time.Minute), dev: dev}
+	esc, escErr := s.Store.ActiveEscrow(ctx, p.Scope, id)
+	switch {
+	case dev.Purging():
+		d.Blocked, d.BlockedStatus = &Banner{ClassWarn, "This device is being purged", "Its backups are being removed, so nothing can be restored from it."}, http.StatusConflict
+	case errors.Is(escErr, store.ErrNotFound) || (escErr == nil && esc.Custody != "escrowed"):
+		d.Blocked, d.BlockedStatus = &Banner{ClassWarn, "Customer-held key: no technician restore", "CryoBackup never stores this key, so the console cannot open the repository. Restore on the machine with the customer's key."}, http.StatusConflict
+	case escErr != nil:
+		d.Blocked, d.BlockedStatus = &Banner{ClassCrit, "Restore unavailable", "The device's key record could not be read. Try again shortly."}, http.StatusServiceUnavailable
 	case s.MasterLoaded == nil || !s.MasterLoaded():
-		d.Blocked = &Banner{ClassCrit, "Master key unavailable", "Restores are disabled until the master key is loaded (banner C12)."}
+		d.Blocked, d.BlockedStatus = &Banner{ClassCrit, "Master key unavailable", "Restores are disabled until the master key is loaded (banner C12)."}, http.StatusServiceUnavailable
+	case dev.RetiredAt != nil:
+		d.Retired = true
 	}
-	snaps, err := s.Store.ListSnapshots(ctx, p.Scope, id)
+	switch {
+	case dev.RetiredAt != nil:
+		d.DeviceWhy = "This device is retired: it can be downloaded from, not restored to (ADR 0030)."
+	case !restores.AgentSupportsDeviceRestore(dev.AgentVersion) && dev.AgentVersion == "":
+		d.DeviceWhy = "The agent on " + dev.Hostname + " has not reported its version. Restoring to the device needs agent " + restores.MinDeviceRestoreAgent + " or newer."
+	case !restores.AgentSupportsDeviceRestore(dev.AgentVersion):
+		d.DeviceWhy = "The agent on " + dev.Hostname + " is " + dev.AgentVersion + ". Restoring to the device needs agent " + restores.MinDeviceRestoreAgent + " or newer."
+	default:
+		if aid := s.activeDeviceRestore(ctx, p, id); aid != "" {
+			d.ActiveID = aid
+			d.DeviceWhy = "A restore to " + dev.Hostname + " is already queued or running. It must finish, expire or be cancelled first."
+		}
+	}
+	s.loadSnapshots(ctx, p, f, &d)
+	return d, true
+}
+
+// activeDeviceRestore returns the id of a device restore of the device that is queued (and not
+// past its expiry) or running, or "". It only decides what the wizard offers; the service decides
+// the create (restores.ErrRestoreActive).
+func (s *Service) activeDeviceRestore(ctx context.Context, p *auth.Principal, id string) string {
+	l, err := s.Store.ListRestoreRequests(ctx, p.Scope, id, store.Page{Limit: 50})
+	if err != nil {
+		return ""
+	}
+	now := s.now()
+	for _, r := range l.Items {
+		if store.IsDeviceRestoreMode(r.Mode) && (r.Status == "running" || (r.Status == "queued" && now.Before(r.ExpiresAt))) {
+			return r.ID
+		}
+	}
+	return ""
+}
+
+func (s *Service) loadSnapshots(ctx context.Context, p *auth.Principal, f health.Fleet, d *RestoreData) {
+	d.Snapshots = nil
+	snaps, err := s.Store.ListSnapshots(ctx, p.Scope, d.DeviceID)
 	if err != nil {
 		d.Error = &Banner{ClassCrit, "Snapshots unavailable", "The snapshot list could not be loaded."}
 	}
 	sort.Slice(snaps, func(i, j int) bool { return snaps[i].TakenAt.After(snaps[j].TakenAt) })
 	c := s.fcAt(ctx, f.Computed)
 	for _, sn := range snaps {
-		d.Snapshots = append(d.Snapshots, SnapOption{ID: sn.SnapshotID, Label: sn.TakenAt.In(c.loc()).Format("Mon 2 Jan 3:04 PM") + " · " + sn.SnapshotID[:8]})
+		d.Snapshots = append(d.Snapshots, SnapOption{ID: sn.SnapshotID, Label: snapLabel(sn, c)})
 	}
 	d.NoSnaps = len(d.Snapshots) == 0
-	return d, 0, true
 }
 
-func (d *RestoreData) steps() {
-	st := func(n int, label, state string) Step { return Step{N: n, Label: label, State: state} }
-	switch {
-	case d.SnapshotID == "":
-		d.Steps = []Step{st(1, "Snapshot", "on"), st(2, "Browse and select", "todo"), st(3, "Mode", "todo"), st(4, "Progress", "todo")}
-	default:
-		d.Steps = []Step{st(1, "Snapshot", "done"), st(2, "Browse and select", "on"), st(3, "Mode", "todo"), st(4, "Progress", "todo")}
+func snapLabel(sn store.Snapshot, c fmtCtx) string {
+	short := sn.SnapshotID
+	if len(short) > 8 {
+		short = short[:8]
 	}
+	return sn.TakenAt.In(c.loc()).Format("Mon 2 Jan 3:04 PM") + " · " + short
+}
+
+// refreshSnapshots reads the device's snapshots from the repository through the maintenance
+// worker (adminpath Snapshots) and makes the console's cache equal to them, as the agent's own
+// upload does. It returns the banner that says how it went.
+func (s *Service) refreshSnapshots(ctx context.Context, d *RestoreData) *Banner {
+	if s.Backend == nil {
+		return &Banner{ClassCrit, "Refresh unavailable", "The console has no maintenance worker to read the repository with (banner C07)."}
+	}
+	list, err := s.Backend.Snapshots(ctx, adminpath.DeviceRequest{DeviceID: d.DeviceID, RequestID: httpx.RequestID(ctx)})
+	if err != nil {
+		b := lsBanner(err)
+		b.Title = "The snapshot list was not refreshed"
+		return b
+	}
+	out := make([]store.Snapshot, 0, len(list))
+	for _, sn := range list {
+		out = append(out, store.Snapshot{DeviceID: d.DeviceID, SnapshotID: sn.ID, TakenAt: sn.Time, ParentID: sn.Parent, Hostname: sn.Hostname,
+			Paths: sn.Paths, Tags: sn.Tags, ProgramVersion: sn.ProgramVersion})
+	}
+	if _, _, err := s.Store.AgentReplaceSnapshots(ctx, d.DeviceID, out); err != nil {
+		s.log().Warn("restore: snapshot refresh not stored", logx.ID("device_id", d.DeviceID), logx.Class("store"))
+		return &Banner{ClassCrit, "The snapshot list was not refreshed", "The repository answered, but the console could not store its list. Try again shortly."}
+	}
+	return &Banner{ClassInfo, "Snapshot list refreshed from the repository.", plural(len(out), "snapshot", "snapshots") + " found."}
+}
+
+// ---- the selection ----
+
+// basketFrom is the basket a post carries: its valid "path" values, each clean, absolute and not
+// the snapshot root, without the ones a remove button names, deduplicated, nested items folded
+// into their selected folder. folded counts the items folded in; dropped the values refused as
+// malformed (a tampered form).
+func basketFrom(posted []string, drop map[string]bool) (basket []string, folded, dropped int) {
+	var keep []string
+	for _, p := range posted {
+		switch {
+		case drop[p]:
+		case !restores.ValidPath(p) || p == "/":
+			dropped++
+		default:
+			keep = append(keep, p)
+		}
+	}
+	uniq := map[string]bool{}
+	for _, p := range keep {
+		uniq[p] = true
+	}
+	basket = adminpath.CollapsePaths(keep)
+	folded = len(uniq) - len(basket)
+	sort.SliceStable(basket, func(i, j int) bool { return strings.ToLower(basket[i]) < strings.ToLower(basket[j]) })
+	return basket, folded, dropped
+}
+
+func (d *RestoreData) setBasket(paths []string) {
+	d.Basket = nil
+	for _, p := range paths {
+		d.Basket = append(d.Basket, BasketItem{Path: p, Name: path.Base(p), Parent: path.Dir(p)})
+	}
+	d.Over = len(paths) > restoreBasketMax
+}
+
+func (d *RestoreData) basketPaths() []string {
+	out := make([]string, 0, len(d.Basket))
+	for _, b := range d.Basket {
+		out = append(out, b.Path)
+	}
+	return out
+}
+
+// selectedAbove returns the basket folder that holds p ("" when none).
+func (d *RestoreData) selectedAbove(p string) string {
+	for _, b := range d.Basket {
+		if b.Path != p && strings.HasPrefix(p, b.Path+"/") {
+			return b.Path
+		}
+	}
+	return ""
+}
+
+// markListing sets each entry's checkbox from the basket and works out which basket paths ride
+// as hidden fields.
+func (d *RestoreData) markListing() {
+	in := map[string]bool{}
+	for _, b := range d.Basket {
+		in[b.Path] = true
+	}
+	d.Inside = d.selectedAbove(d.Dir)
+	if in[d.Dir] {
+		d.Inside = d.Dir
+	}
+	shown := map[string]bool{}
+	for i := range d.Entries {
+		e := &d.Entries[i]
+		switch {
+		case e.Kind == "other":
+		case d.Inside != "" || d.selectedAbove(e.Path) != "":
+			e.Covered = true
+		case in[e.Path]:
+			e.Checked = true
+			shown[e.Path] = true
+		}
+	}
+	d.Hidden = nil
+	for _, b := range d.Basket {
+		if !shown[b.Path] {
+			d.Hidden = append(d.Hidden, b.Path)
+		}
+	}
+}
+
+// ---- steps ----
+
+func (d *RestoreData) steps() {
+	st := func(n int, label string, at int) Step {
+		switch {
+		case n < at:
+			return Step{N: n, Label: label, State: "done"}
+		case n == at:
+			return Step{N: n, Label: label, State: "on"}
+		}
+		return Step{N: n, Label: label, State: "todo"}
+	}
+	at := 2
+	switch {
+	case d.Step == stepDest:
+		at = 3
+	case d.Step == stepReview:
+		at = 4
+	case d.SnapshotID == "":
+		at = 1
+	}
+	d.Steps = []Step{st(1, "Snapshot", at), st(2, "Select", at), st(3, "Destination", at), st(4, "Review", at)}
 }
 
 func crumbs(dir string) []Crumb {
@@ -142,20 +436,53 @@ func crumbs(dir string) []Crumb {
 	return out
 }
 
-func (s *Service) browse(ctx context.Context, d *RestoreData, p *auth.Principal, snapshot, dir string) {
-	d.SnapshotID = snapshot
+func (d *RestoreData) chooseSnapshot(id string) {
+	d.SnapshotID = id
 	for i := range d.Snapshots {
-		d.Snapshots[i].Selected = d.Snapshots[i].ID == snapshot
+		d.Snapshots[i].Selected = d.Snapshots[i].ID == id
+		if d.Snapshots[i].Selected {
+			d.SnapLabel = d.Snapshots[i].Label
+		}
 	}
+}
+
+func (s *Service) restoreActor(r *http.Request, p *auth.Principal) restores.Actor {
+	return restores.Actor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: "web", FreshMFA: s.Auth.FreshMFA(p, s.Auth.Now())}
+}
+
+// browse lists one page of one folder of the snapshot. The browse is audited first
+// (restores.AuditBrowse, once per admin, device and snapshot per hour); a browse whose audit row
+// cannot be written is refused and shows nothing.
+func (s *Service) browse(r *http.Request, d *RestoreData, p *auth.Principal, snapshot, dir string, off int) {
+	ctx := r.Context()
+	d.Step = stepSelect
+	d.chooseSnapshot(snapshot)
 	dir = cleanDir(dir)
 	d.Dir, d.Crumbs = dir, crumbs(dir)
-	if d.Blocked != nil || s.Backend == nil {
+	if off < 0 || off%restoreLsPage != 0 {
+		off = 0
+	}
+	if d.Blocked != nil || s.Backend == nil || snapshot == "" {
+		d.markListing()
 		return
 	}
+	if s.Restores != nil {
+		if err := s.Restores.AuditBrowse(ctx, s.restoreActor(r, p), p.Scope, d.DeviceID, snapshot); err != nil {
+			if errors.Is(err, store.ErrAudit) {
+				s.log().Error("restore: browse refused, not audited", logx.ID("device_id", d.DeviceID), logx.Class("audit"))
+				d.Error = &Banner{ClassCrit, "Browsing refused: NOT AUDITED", "The audit record of this browse could not be written, so the listing is not shown. Check the console database and try again."}
+			} else {
+				d.Error = &Banner{ClassCrit, "Browsing is unavailable", "The browse could not be recorded. Try again shortly."}
+			}
+			d.markListing()
+			return
+		}
+	}
 	res, err := s.Backend.Ls(ctx, adminpath.LsRequest{DeviceRequest: adminpath.DeviceRequest{DeviceID: d.DeviceID, RequestID: httpx.RequestID(ctx)},
-		SnapshotID: snapshot, Dir: dir, Limit: 500})
+		SnapshotID: snapshot, Dir: dir, Limit: restoreLsPage, Offset: off})
 	if err != nil {
 		d.Error = lsBanner(err)
+		d.markListing()
 		return
 	}
 	c := fmtCtx{Loc: s.loc(ctx)}
@@ -171,9 +498,12 @@ func (s *Service) browse(ctx context.Context, d *RestoreData, p *auth.Principal,
 		case "dir":
 			e.Kind = "dir"
 		case "file":
-			e.Kind, e.Size, e.Select = "file", byteSize(n.Size), true
+			e.Kind, e.Size = "file", byteSize(n.Size)
 		default:
-			e.Kind = "other"
+			e.Kind, e.What = "other", nodeWhat(n.Type)
+		}
+		if !restores.ValidPath(e.Path) {
+			e.Kind, e.What = "other", "a name the console cannot select"
 		}
 		d.Entries = append(d.Entries, e)
 	}
@@ -183,8 +513,36 @@ func (s *Service) browse(ctx context.Context, d *RestoreData, p *auth.Principal,
 		}
 		return strings.ToLower(d.Entries[i].Name) < strings.ToLower(d.Entries[j].Name)
 	})
-	d.Truncated = res.Truncated
-	d.CanSubmit = true
+	d.Listed, d.Truncated, d.Offset, d.Total = true, res.Truncated, off, res.Total
+	if len(d.Entries) > 0 {
+		d.From, d.To = off+1, off+len(res.Nodes)
+	}
+	d.HasPrev, d.PrevOff = off > 0, max(off-restoreLsPage, 0)
+	d.HasNext, d.NextOff = res.Truncated, off+restoreLsPage
+	switch n := len(d.Entries); {
+	case res.Total > 0 && (d.HasPrev || d.HasNext):
+		d.PageText = commas(uint64(d.From)) + "–" + commas(uint64(d.To)) + " of " + commas(uint64(res.Total)) + " entries"
+	case res.Truncated: // a worker that predates paging gives no total
+		d.PageText = "the first " + commas(uint64(d.To)) + " entries"
+	default:
+		d.PageText = commas(uint64(n)) + " " + oneMany(n, "entry", "entries")
+	}
+	d.markListing()
+}
+
+// nodeWhat names a restic node type the wizard cannot select.
+func nodeWhat(t string) string {
+	switch t {
+	case "symlink":
+		return "a link: left out of a zip"
+	case "dev", "chardev":
+		return "a device entry"
+	case "fifo":
+		return "a named pipe"
+	case "socket":
+		return "a socket"
+	}
+	return "a special entry"
 }
 
 func cleanDir(dir string) string {
@@ -194,8 +552,8 @@ func cleanDir(dir string) string {
 	return path.Clean(dir)
 }
 
-// lsBanner turns a failed browse into a path-free banner: the fixed sentence of
-// the admin-path error code, nothing the worker said.
+// lsBanner turns a failed browse into a path-free banner: the fixed sentence of the admin-path
+// error code, nothing the worker said.
 func lsBanner(err error) *Banner {
 	var ae *adminpath.Error
 	switch {
@@ -209,6 +567,166 @@ func lsBanner(err error) *Banner {
 	return &Banner{ClassCrit, "Browsing is unavailable", "An unexpected error occurred while listing the snapshot."}
 }
 
+// ---- destination and review ----
+
+// modes builds the destination step's choices. The default is the original location with
+// existing files kept (ruling C1) whenever a device restore is offered, else the download.
+func (d *RestoreData) modes(chosen string) {
+	device := d.DeviceWhy == ""
+	if chosen == "" {
+		chosen = modeZip
+		if device {
+			chosen = modeOriginal
+		}
+	}
+	// d.Mode keeps what was posted, even a destination this device is not offered (a stale page,
+	// a forged form): the create refuses it with its own page, never turns it into another mode.
+	// The radio shown checked is the download then.
+	d.Mode = chosen
+	shown := chosen
+	if !device && chosen != modeZip {
+		shown = modeZip
+	}
+	opt := func(v, title, text string, dev bool) ModeOpt {
+		o := ModeOpt{Value: v, Title: title, Text: text, Checked: v == shown}
+		if dev && !device {
+			o.Disabled, o.Why, o.Checked = true, d.DeviceWhy, false
+		}
+		return o
+	}
+	d.Modes = []ModeOpt{
+		opt(modeOriginal, "Original location, keep existing files", "Each item goes back where it was on "+d.Host+". A file that is already there is left as it is; only missing files are written. Nothing is deleted.", true),
+		opt(modeSide, "A new folder on "+d.Host, "Everything lands in a new CryoBackup-Restore folder on the system drive, named after this restore. Nothing that exists is touched.", true),
+		opt(modeReplace, "Original location, replace changed files", "Each item goes back where it was; a file that differs from the snapshot is replaced by the snapshot's copy. Nothing is deleted. You type the host name to confirm.", true),
+		opt(modeZip, "Download as a zip", "The zip streams from the snapshot straight to your browser. Nothing is stored on the server. The download link works once.", false),
+	}
+}
+
+func (d *RestoreData) createInput(confirm string) restores.CreateInput {
+	in := restores.CreateInput{SnapshotID: d.SnapshotID, Paths: d.basketPaths()}
+	switch d.Mode {
+	case modeOriginal:
+		in.Mode, in.Overwrite = restores.ModeDeviceOriginal, api.DeviceOverwriteNever
+	case modeSide:
+		in.Mode = restores.ModeDeviceSide
+	case modeReplace:
+		in.Mode, in.Overwrite, in.ConfirmHostName = restores.ModeDeviceOriginal, api.DeviceOverwriteIfChanged, confirm
+	default:
+		in.Mode = restores.ModeDownloadZip
+	}
+	return in
+}
+
+// restoreOfflineAfter is the engine's offline rule (state/classify.go offlineAfter: no heartbeat
+// for two minutes), restated because the engine does not export it.
+const restoreOfflineAfter = 2 * time.Minute
+
+// liveFacts are what the review and the status page say about the device right now: whether it
+// is offline, when it was last heard from, and whether a backup is running on it.
+type liveFacts struct {
+	Offline    bool
+	SeenKnown  bool
+	LastSeen   time.Time
+	BackupOpen bool
+}
+
+func (s *Service) restoreLiveFacts(ctx context.Context, p *auth.Principal, f health.Fleet, id string) liveFacts {
+	var out liveFacts
+	for _, ds := range f.View.Devices {
+		if ds.ID != id {
+			continue
+		}
+		for _, a := range ds.Attrs {
+			if a == state.AttrOffline {
+				out.Offline = true
+			}
+		}
+		if ds.Primary == state.StateUnseen { // the engine drops the offline badge once UNSEEN says more
+			out.Offline = true
+		}
+		out.BackupOpen = ds.Detail.OpenRunAge > 0 || ds.Detail.OpenRunLimit > 0
+	}
+	if pr, err := s.Store.GetPresence(ctx, p.Scope, id); err == nil && !pr.ReceivedAt.IsZero() {
+		out.SeenKnown, out.LastSeen = true, pr.ReceivedAt
+		if s.now().Sub(pr.ReceivedAt) > restoreOfflineAfter {
+			out.Offline = true
+		}
+	}
+	if !out.SeenKnown {
+		out.Offline = true
+	}
+	return out
+}
+
+// review sets the page up for the review step: what will happen in plain words, the device's
+// state for a device restore, and the authenticator-code field when the session is not fresh.
+func (s *Service) review(ctx context.Context, p *auth.Principal, f health.Fleet, d *RestoreData) {
+	var live liveFacts
+	if d.Mode != modeZip {
+		live = s.restoreLiveFacts(ctx, p, f, d.DeviceID)
+	}
+	reviewWith(s.fc(ctx), d, live)
+	d.NeedCode = !s.Auth.FreshMFA(p, s.Auth.Now())
+}
+
+// reviewWith is review with the formatting context and the device's live facts given (/design
+// builds its samples with it).
+func reviewWith(c fmtCtx, d *RestoreData, live liveFacts) {
+	d.Step = stepReview
+	n := len(d.Basket)
+	items := plural(n, "item", "items")
+	rv := &ReviewView{}
+	expiry := c.dayClock(c.Now.Add(restores.DefaultTTL))
+	switch d.Mode {
+	case modeZip:
+		rv.Title = "Download " + items + " from " + d.Host + " as a zip"
+		rv.Button = "Continue to the download"
+		rv.Lines = []string{
+			"The next page offers the zip. It streams from the snapshot straight to your browser: nothing is stored on the server, and the download link works once.",
+			"A download that is cut off leaves no usable zip: start it again from the beginning.",
+		}
+		if d.Retired {
+			rv.Lines = append(rv.Lines, "This device is retired, so a download is the only way to get these files back (ADR 0030).")
+		}
+	default:
+		rv.Button = "Start the restore"
+		switch d.Mode {
+		case modeOriginal:
+			rv.Title = "Restore " + items + " to their original places on " + d.Host
+			rv.Lines = []string{"Files that already exist there are kept as they are; only missing files are written.", "Nothing on " + d.Host + " is deleted."}
+		case modeSide:
+			rv.Title = "Restore " + items + " into a new folder on " + d.Host
+			rv.Lines = []string{"Everything lands in a new CryoBackup-Restore folder on the system drive of " + d.Host + ", named after this restore.", "Nothing that exists on " + d.Host + " is touched."}
+		case modeReplace:
+			rv.Title = "Restore " + items + " to their original places on " + d.Host + ", replacing changed files"
+			rv.Replace = true
+			rv.Lines = []string{"A file that differs from the snapshot's copy is overwritten with the snapshot's copy. Changes made since the snapshot are lost for those files.", "Nothing on " + d.Host + " is deleted."}
+		}
+		switch {
+		case live.Offline && live.SeenKnown:
+			rv.Notes = append(rv.Notes, Banner{ClassWarn, d.Host + " is offline.", "Last seen " + ageLong(c.Now.Sub(live.LastSeen)) + " (" + c.dayClock(live.LastSeen) + "). The restore waits until it is online, until " + expiry + ". For files now, go back and choose Download as a zip."})
+		case live.Offline:
+			rv.Notes = append(rv.Notes, Banner{ClassWarn, d.Host + " has not been heard from.", "The restore waits until it is online, until " + expiry + ". For files now, go back and choose Download as a zip."})
+		default:
+			rv.Notes = append(rv.Notes, Banner{ClassInfo, d.Host + " is online.", "It picks the restore up at its next check-in, normally within a minute. The request waits until " + expiry + "."})
+		}
+		if live.BackupOpen {
+			rv.Notes = append(rv.Notes, Banner{ClassInfo, "A backup is running on " + d.Host + ".", "The device runs one repository task at a time: the restore starts when the backup finishes."})
+		}
+	}
+	modeLabel := ""
+	for _, m := range d.Modes {
+		if m.Value == d.Mode {
+			modeLabel = m.Title
+		}
+	}
+	rv.Facts = []Fact{{Key: "Device", Value: d.Host}, {Key: "Snapshot", Value: d.SnapLabel, Mono: true}, {Key: "Destination", Value: modeLabel}, {Key: "Selected", Value: items}}
+	d.Review = rv
+	d.CanSubmit = true
+}
+
+// ---- handlers ----
+
 func (s *Service) restorePage(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	f, err := s.Fleet.Fleet(r.Context(), p.Scope)
@@ -216,26 +734,81 @@ func (s *Service) restorePage(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusServiceUnavailable, "error", "base", errorData(s.fallbackPage(r.Context(), p), 503, "Restore unavailable", "The fleet could not be loaded. Try again shortly."))
 		return
 	}
-	d, _, ok := s.restoreBase(r.Context(), p, f, r.PathValue("id"))
+	d, ok := s.restoreBase(r.Context(), p, f, r.PathValue("id"))
 	if !ok {
 		s.notFound(w, r, p, "This device")
 		return
 	}
-	if len(d.Snapshots) > 0 && d.Blocked == nil {
-		s.browse(r.Context(), &d, p, d.Snapshots[0].ID, "/")
+	if d.NoSnaps && d.Blocked == nil && s.Backend != nil { // plan B.1: the cache is empty, so ask the repository once
+		if b := s.refreshSnapshots(r.Context(), &d); b.Class != ClassInfo {
+			d.Error = b
+		} else {
+			s.loadSnapshots(r.Context(), p, f, &d)
+		}
 	}
+	snap := ""
+	if len(d.Snapshots) > 0 {
+		snap = d.Snapshots[0].ID
+	}
+	s.browse(r, &d, p, snap, "/", 0)
+	d.CanSubmit = d.Listed
 	d.steps()
 	s.render(w, r, http.StatusOK, "restore", "base", d)
 }
 
-// restorePost handles browse (navigate one level, change snapshot) and submit.
-// The path travels only in this POST body and in the restore request, which
-// stores it encrypted and clears it when the restore expires.
+// wizForm is one wizard post, read once.
+type wizForm struct {
+	step, action      string
+	snapshot, snapCur string
+	cur, dir          string
+	dirSet            bool
+	off               int
+	posted            []string
+	drop              map[string]bool
+	mode, confirm     string
+	code              string
+}
+
+func readWizForm(r *http.Request) wizForm {
+	f := wizForm{step: r.PostFormValue("step"), action: r.PostFormValue("action"), snapshot: r.PostFormValue("snapshot"), snapCur: r.PostFormValue("snapcur"),
+		cur: r.PostFormValue("cur"), mode: r.PostFormValue("mode"), confirm: r.PostFormValue("confirm_host"),
+		code: strings.ReplaceAll(strings.TrimSpace(r.PostFormValue("code")), " ", ""), drop: map[string]bool{}}
+	f.dir, f.dirSet = r.PostFormValue("dir"), r.PostForm.Has("dir")
+	// "offcur" is the page the listing is at; a paging button names the page to go to ("page").
+	f.off, _ = strconv.Atoi(r.PostFormValue("offcur"))
+	if r.PostForm.Has("page") {
+		f.off, _ = strconv.Atoi(r.PostFormValue("page"))
+	}
+	f.posted = r.PostForm["path"]
+	for _, p := range r.PostForm["drop"] {
+		f.drop[p] = true
+	}
+	switch f.mode {
+	case "download_zip": // the single-file form of earlier versions
+		f.mode = modeZip
+	case modeZip, modeOriginal, modeSide, modeReplace, "":
+	default:
+		f.mode = ""
+	}
+	return f
+}
+
+// restorePost handles every step of the wizard (see the comment at the top of this file).
 func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	r.Body = http.MaxBytesReader(w, r.Body, restoreBodyMax)
 	if err := r.ParseForm(); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			s.errorPage(w, r, p, http.StatusRequestEntityTooLarge, "Selection too large", "The selection is too large to carry in one form (64 KiB). Select the folders that hold the files instead of the files one by one.")
+			return
+		}
 		http.Error(w, "The form could not be read.", http.StatusBadRequest)
+		return
+	}
+	in := readWizForm(r)
+	if len(in.posted) > restorePostedMax {
+		s.errorPage(w, r, p, http.StatusRequestEntityTooLarge, "Selection too large", "More than "+strconv.Itoa(restorePostedMax)+" items were posted at once. Select the folders that hold them instead.")
 		return
 	}
 	f, err := s.Fleet.Fleet(r.Context(), p.Scope)
@@ -244,115 +817,220 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	d, _, ok := s.restoreBase(r.Context(), p, f, id)
+	d, ok := s.restoreBase(r.Context(), p, f, id)
 	if !ok {
 		s.notFound(w, r, p, "This device")
 		return
 	}
-	snapshot := r.PostFormValue("snapshot")
-	valid := false
-	for _, so := range d.Snapshots {
-		valid = valid || so.ID == snapshot
-	}
-	if !valid {
-		if len(d.Snapshots) == 0 {
-			d.steps()
-			s.render(w, r, http.StatusOK, "restore", "base", d)
-			return
+
+	// The point in time. A refresh first reads the repository; then the posted snapshot must be
+	// one the cache holds, else the newest one is used.
+	if in.action == "refresh" {
+		d.Notice = s.refreshSnapshots(r.Context(), &d)
+		if d.Notice.Class == ClassCrit {
+			d.Error, d.Notice = d.Notice, nil
 		}
+		s.loadSnapshots(r.Context(), p, f, &d)
+	}
+	snapshot := ""
+	for _, so := range d.Snapshots {
+		if so.ID == in.snapshot {
+			snapshot = so.ID
+		}
+	}
+	if snapshot == "" && len(d.Snapshots) > 0 {
 		snapshot = d.Snapshots[0].ID
 	}
-	action := r.PostFormValue("action")
-	if action != "submit" {
-		dir := r.PostFormValue("dir")
-		if action == "snapshot" {
-			dir = "/"
+
+	basket, folded, dropped := basketFrom(in.posted, in.drop)
+	if in.action == "clear" {
+		basket = nil
+	}
+	dir, off := in.cur, in.off
+	if in.dirSet {
+		dir, off = in.dir, 0
+	}
+	// A new snapshot is another point in time: what was selected in the old one is not carried
+	// over (it may not exist there). The form names the snapshot its listing came from (snapcur).
+	if in.snapCur != "" && snapshot != in.snapCur {
+		if len(basket) > 0 {
+			d.Notice = &Banner{ClassInfo, "The selection was cleared.", "It belonged to the snapshot you left; select again in this one."}
 		}
-		s.browse(r.Context(), &d, p, snapshot, dir)
-		d.steps()
-		s.renderRestore(w, r, http.StatusOK, d)
+		basket, folded, dir, off = nil, 0, "/", 0
+		if in.step != stepSelect && in.step != "" {
+			in.step, in.action = stepSelect, "snapshot"
+		}
+	}
+	if in.action == "snapshot" {
+		dir, off = "/", 0
+	}
+	d.setBasket(basket)
+	switch {
+	case dropped > 0:
+		d.Error = &Banner{ClassWarn, "Some selected items were not valid.", plural(dropped, "item was", "items were") + " left out of the selection."}
+	case folded > 0 && d.Notice == nil:
+		d.Notice = &Banner{ClassInfo, plural(folded, "item is", "items are") + " inside a selected folder.", "The folder already holds " + oneMany(folded, "it", "them") + ", so " + oneMany(folded, "it was", "they were") + " folded into it."}
+	}
+	d.chooseSnapshot(snapshot)
+	if in.step == "" && in.mode == "" {
+		in.mode = modeZip // the single-file form of earlier versions named no mode: it was a download
+	}
+	d.modes(in.mode)
+
+	if in.action == "submit" && (in.step == "" || in.step == stepReview) {
+		s.restoreCreate(w, r, p, f, &d, in)
 		return
 	}
-	// Every restore needs a fresh MFA check (ADR 0027 ruling C5), checked first,
-	// before any worker listing. A session that is not fresh goes through the
-	// console's step-up (the purge dialogs' flow, purge_adr19.go stepUp: POST
-	// /api/v1/auth/step-up with the authenticator code the form carries in
-	// "code"); without a code, or with one the step-up refuses, the wizard
-	// answers 403 with the reason and nothing is written or asked of the worker.
-	// The Actor is built once, here, and the same value gates this page and goes
-	// to the service, so the page cannot pass a check the service would refuse.
-	// refuse answers a refusal with its own banner; it replaces the page's
-	// standing notice (a retired or customer-held device), so the operator reads
-	// the rule that applied to this submit.
+	next := stepSelect
+	switch {
+	case in.action == "back" && in.step == stepReview:
+		next = stepDest
+	case in.action == "submit" && in.step == stepSelect:
+		next = stepDest
+	case in.action == "submit" && in.step == stepDest:
+		next = stepReview
+	}
+	if next != stepSelect && (len(d.Basket) == 0 || d.Over || d.Blocked != nil) {
+		next = stepSelect
+		switch {
+		case d.Blocked != nil:
+		case len(d.Basket) == 0:
+			d.Error = &Banner{ClassWarn, "Choose a file first", "Tick the files and folders you need in the listing, then continue."}
+		case d.Over:
+			d.Error = overBanner(len(d.Basket))
+		}
+	}
+	if next != stepSelect { // the destination and review steps carry the folder the listing was at, for Back
+		d.Dir, d.Offset = cleanDir(dir), off
+		if d.Offset < 0 || d.Offset%restoreLsPage != 0 {
+			d.Offset = 0
+		}
+	}
+	status := http.StatusOK
+	switch next {
+	case stepDest:
+		d.Step = stepDest
+		d.Hidden = d.basketPaths()
+		d.CanSubmit = true
+	case stepReview:
+		s.review(r.Context(), p, f, &d)
+		d.Hidden = d.basketPaths()
+	default:
+		s.browse(r, &d, p, snapshot, dir, off)
+		if d.Over && d.Error == nil {
+			d.Error = overBanner(len(d.Basket))
+		}
+		if in.action == "submit" && d.Error != nil {
+			status = http.StatusUnprocessableEntity
+		}
+		d.CanSubmit = d.Listed || len(d.Basket) > 0
+	}
+	d.steps()
+	s.renderRestore(w, r, status, d)
+}
+
+// oneMany is one or many by n, without the number (plural puts it first).
+func oneMany(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+func overBanner(n int) *Banner {
+	return &Banner{ClassCrit, strconv.Itoa(n) + " items are selected; one restore takes at most " + strconv.Itoa(restoreBasketMax) + ".",
+		"Select the folder that holds them instead, or remove some. Continue stays off until the selection fits."}
+}
+
+// restoreCreate is the review step's Continue (and a post with no step): the fresh-MFA check,
+// then the restore through the service, then its status page. Every refusal re-renders the
+// review with its own banner and status.
+func (s *Service) restoreCreate(w http.ResponseWriter, r *http.Request, p *auth.Principal, f health.Fleet, d *RestoreData, in wizForm) {
+	d.Hidden = d.basketPaths()
+	d.Dir, d.Offset = cleanDir(in.cur), 0
+	if in.off > 0 && in.off%restoreLsPage == 0 {
+		d.Offset = in.off
+	}
 	refuse := func(status int, b *Banner) {
-		d.Error = b
 		if d.Blocked != nil {
-			d.Blocked = b
+			d.Blocked, d.Error = b, nil // the rule that applied to this submit replaces the standing notice
+			d.Step = stepSelect
+			d.markListing()
+		} else {
+			d.Error = b
 		}
-		s.renderRestore(w, r, status, d)
-	}
-	// askCode sets the page up for the step-up without a worker call: the chosen
-	// snapshot and folder stay selected, the chosen file rides along as KeepPath,
-	// and the form shows the authenticator-code field (restore.html restore_box).
-	askCode := func() {
-		d.SnapshotID = snapshot
-		for i := range d.Snapshots {
-			d.Snapshots[i].Selected = d.Snapshots[i].ID == snapshot
-		}
-		d.Dir = cleanDir(r.PostFormValue("cur"))
-		d.Crumbs = crumbs(d.Dir)
-		if p := r.PostFormValue("path"); restores.ValidPath(p) {
-			d.KeepPath = p
-		}
-		d.NeedCode, d.MFAWindow, d.CanSubmit = true, int(auth.FreshMFAWindow/time.Minute), true
 		d.steps()
+		s.renderRestore(w, r, status, *d)
 	}
-	if code := strings.ReplaceAll(strings.TrimSpace(r.PostFormValue("code")), " ", ""); code != "" {
-		refusal, done := s.stepUp(w, r, p, code)
+	toReview := func() {
+		if d.Blocked == nil {
+			s.review(r.Context(), p, f, d)
+		}
+	}
+	// Every restore needs a fresh MFA check (ADR 0027 ruling C5), checked first, before any
+	// worker call. A session that is not fresh goes through the console's step-up (the purge
+	// dialogs' flow, purge_adr19.go stepUp) with the code the review step carries in "code";
+	// without one, or with one the step-up refuses, the review step answers 403 with the field.
+	if in.code != "" {
+		refusal, done := s.stepUp(w, r, p, in.code)
 		if done {
 			return
 		}
 		if refusal != nil {
-			askCode()
+			toReview()
+			d.NeedCode = true
 			refuse(refusal.status, &Banner{refusal.Note.Class, refusal.Note.Title, refusal.Note.Text})
 			return
 		}
 	}
-	who := restores.Actor{AdminID: p.Admin.ID, Username: p.Admin.Username, IP: httpx.ClientIP(r), Method: "web",
-		FreshMFA: s.Auth.FreshMFA(p, s.Auth.Now())}
+	who := s.restoreActor(r, p)
 	if !who.FreshMFA {
-		askCode()
+		toReview()
+		d.NeedCode = true
 		refuse(http.StatusForbidden, &Banner{ClassWarn, "A recent MFA check is required",
-			"Every restore needs an authenticator check from the last " + strconv.Itoa(int(auth.FreshMFAWindow/time.Minute)) +
+			"Every restore needs an authenticator check from the last " + strconv.Itoa(d.MFAWindow) +
 				" minutes on this session. Enter the current code from your authenticator app below and continue; a recovery code is not accepted."})
 		return
 	}
-	filePath := r.PostFormValue("path")
-	s.browse(r.Context(), &d, p, snapshot, r.PostFormValue("cur"))
-	d.steps()
-	if !restores.ValidPath(filePath) {
-		d.Error = &Banner{ClassWarn, "Choose a file first", "Select one file in the listing, then prepare the zip."}
-		s.renderRestore(w, r, http.StatusUnprocessableEntity, d)
+	if len(d.Basket) == 0 || d.Over {
+		s.browse(r, d, p, d.SnapshotID, in.cur, in.off)
+		d.Error = &Banner{ClassWarn, "Choose a file first", "Tick the files and folders you need in the listing, then continue."}
+		if d.Over {
+			d.Error = overBanner(len(d.Basket))
+		}
+		d.CanSubmit = d.Listed
+		d.steps()
+		s.renderRestore(w, r, http.StatusUnprocessableEntity, *d)
 		return
 	}
-	rr, err := s.Restores.Create(r.Context(), who, p.Scope, id, snapshot, filePath)
+	rr, err := s.Restores.CreateRestore(r.Context(), who, p.Scope, d.DeviceID, d.createInput(in.confirm))
 	if err != nil {
 		status, banner, known := restoreRefusal(err)
 		switch {
+		case d.Blocked != nil && (errors.Is(err, restores.ErrInvalid) || !known):
+			// The service refused on the form (no snapshot is cached for a blocked device); the
+			// rule the page already showed is the one that applies.
+			status, banner = d.BlockedStatus, d.Blocked
 		case known:
-			d.Error = banner
-			if errors.Is(err, restores.ErrStepUp) {
-				d.NeedCode, d.MFAWindow, d.KeepPath = true, int(auth.FreshMFAWindow/time.Minute), filePath
-			}
 		case errors.Is(err, store.ErrAudit):
 			s.log().Error("restore: not created, not audited", logx.Class("audit"), logx.Err(err))
-			status, d.Error = http.StatusInternalServerError, &Banner{ClassCrit, "The restore was not started", "Its audit record could not be written (NOT AUDITED). Nothing was changed. Check the console database and try again."}
+			status, banner = http.StatusInternalServerError, &Banner{ClassCrit, "The restore was not started", "Its audit record could not be written (NOT AUDITED). Nothing was changed. Check the console database and try again."}
 		default:
 			s.log().Error("restore: create failed", logx.Err(err))
-			status, d.Error = http.StatusInternalServerError, &Banner{ClassCrit, "The restore could not be started", "Try again shortly."}
+			status, banner = http.StatusInternalServerError, &Banner{ClassCrit, "The restore could not be started", "Try again shortly."}
 		}
-		refuse(status, d.Error)
+		toReview()
+		switch {
+		case errors.Is(err, restores.ErrStepUp):
+			d.NeedCode = true
+		case errors.Is(err, restores.ErrConfirmHost):
+			d.ConfirmErr = "Type " + d.Host + " exactly as shown, then start the restore."
+		}
+		refuse(status, banner)
 		return
+	}
+	if rr.Mode != store.RestoreModeDownloadZip && s.WakeAgent != nil {
+		s.WakeAgent(d.DeviceID) // the device's command long poll returns now (as the admin API does)
 	}
 	target := "/restores/" + rr.ID
 	if r.Header.Get("HX-Request") == "true" {
@@ -363,13 +1041,15 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
-// restoreRefusal is the page of each rule a restore create can refuse by: its
-// HTTP status and its own sentence (fix E4). known is false for an error that is
-// a fault, not a rule (the caller logs it and answers 500).
+// restoreRefusal is the page of each rule a restore create can refuse by: its HTTP status and
+// its own sentence (fix E4). known is false for an error that is a fault, not a rule (the caller
+// logs it and answers 500).
 func restoreRefusal(err error) (status int, b *Banner, known bool) {
 	switch {
 	case errors.Is(err, restores.ErrStepUp):
 		return http.StatusForbidden, &Banner{ClassWarn, "A recent MFA check is required", "Enter the current code from your authenticator app below and continue."}, true
+	case errors.Is(err, restores.ErrConfirmHost):
+		return http.StatusBadRequest, &Banner{ClassWarn, "The host name does not match", "Replacing files needs the device's host name typed exactly as shown. Nothing was started."}, true
 	case errors.Is(err, restores.ErrCustomerHeld):
 		return http.StatusConflict, &Banner{ClassWarn, "Customer-held key", "No technician restore for a customer-held key."}, true
 	case errors.Is(err, restores.ErrDevicePurging):
@@ -383,227 +1063,17 @@ func restoreRefusal(err error) (status int, b *Banner, known bool) {
 	case errors.Is(err, restores.ErrMasterKey):
 		return http.StatusServiceUnavailable, &Banner{ClassCrit, "Master key unavailable", "Restores are disabled until the master key is loaded."}, true
 	case errors.Is(err, restores.ErrInvalid):
-		return http.StatusBadRequest, &Banner{ClassWarn, "That selection is not valid", "Pick a file from the current listing and try again."}, true
+		return http.StatusBadRequest, &Banner{ClassWarn, "That selection is not valid", "Go back, pick from the current listing and try again."}, true
 	case errors.Is(err, store.ErrNotFound):
 		return http.StatusNotFound, &Banner{ClassWarn, "Not found", "The device or snapshot is no longer available."}, true
 	}
 	return 0, nil, false
 }
+
 func (s *Service) renderRestore(w http.ResponseWriter, r *http.Request, status int, d RestoreData) {
 	if r.Header.Get("HX-Request") == "true" {
 		s.render(w, r, status, "restore", "restore_box", d)
 		return
 	}
 	s.render(w, r, status, "restore", "base", d)
-}
-
-// ---- restore status ----
-
-// RestoreView is the progress and download page of one restore.
-type RestoreView struct {
-	ID          string
-	DeviceID    string
-	Host        string
-	Status      Chip
-	Message     string
-	Bytes       string
-	CanDownload bool
-	CSRF        string
-	Poll        bool
-	Expires     string
-	Created     string
-	Steps       []Step
-	Failed      bool
-}
-
-// RestoreStatusData is GET /restores/{id}.
-type RestoreStatusData struct {
-	Page
-	R RestoreView
-}
-
-func failureMessage(class string) string {
-	switch class {
-	case "network", "storage", "storage_unreachable", "unavailable", "timeout":
-		return "The storage or the maintenance worker could not be reached. Nothing was restored. Try again once the conditions above clear."
-	case "wrong_password", "auth":
-		return "The repository key did not open the repository. Nothing was restored. The escrow copy may need verification."
-	case "repo_missing":
-		return "The device's repository does not exist yet. Nothing was restored."
-	case "not_found":
-		return "The file or snapshot was not found in the repository. Nothing was restored."
-	case "custody_customer_held":
-		return "The device's key is held by the customer. No technician restore is possible."
-	case "cancelled":
-		return "The restore was cancelled because the console was stopping. Nothing was restored."
-	case "disconnected":
-		return "The download was interrupted before it finished. Nothing was kept on the server; download again to start over."
-	case "artifact_missing":
-		return "The prepared zip is no longer on the server. Start the restore again."
-	}
-	return "The restore failed. Nothing was restored. The request id in the console log identifies it."
-}
-
-func (s *Service) restoreView(ctx context.Context, p *auth.Principal, rr store.RestoreRequest, host string) RestoreView {
-	c := s.fc(ctx)
-	v := RestoreView{CSRF: p.CSRF, ID: rr.ID, DeviceID: rr.DeviceID, Host: host, Created: rr.CreatedAt.In(c.loc()).Format("Mon 3:04:05 PM"), Expires: rr.ExpiresAt.In(c.loc()).Format("Mon 2 Jan 3:04 PM")}
-	step := func(on int) []Step {
-		out := []Step{{1, "Snapshot", "done"}, {2, "Browse and select", "done"}, {3, "Mode", "done"}, {4, "Progress", "on"}}
-		if on == 5 {
-			out[3].State = "done"
-		}
-		return out
-	}
-	v.Steps = step(4)
-	switch rr.Status {
-	case "queued":
-		v.Status, v.Poll = Chip{ID: "q", Label: "QUEUED", Class: ClassInfo, Pulse: true}, true
-		v.Message = "Waiting for the maintenance worker to start. This page refreshes by itself."
-	case "running":
-		v.Status, v.Poll = Chip{ID: "q", Label: "RUNNING", Class: ClassInfo, Pulse: true}, true
-		v.Message = "Preparing the zip from the snapshot. Large files take a while. This page refreshes by itself."
-	case "ready", "delivered":
-		// ADR 0008: nothing is prepared or stored; the zip is built from the
-		// snapshot while it downloads, so its size is known only afterwards.
-		live := s.Restores != nil && s.Restores.Downloadable(rr)
-		v.Steps = step(5)
-		if rr.Bytes != nil {
-			v.Bytes = byteSize(uint64(*rr.Bytes))
-		}
-		until := rr.ExpiresAt.In(c.loc()).Format("Mon 3:04 PM")
-		if rr.Status == "ready" {
-			v.Status = Chip{ID: "q", Label: "READY", Class: ClassOK}
-			v.Message = "Ready to download. The zip streams straight from the snapshot: nothing is stored on the server, and a dropped download starts again from the beginning. The link works once; a new one can be made until " + until + "."
-		} else {
-			v.Status = Chip{ID: "q", Label: "DELIVERED", Class: ClassNeutral}
-			v.Message = "The zip was downloaded. Nothing was kept on the server; you can download it again until " + until + ", and it streams from the snapshot again."
-		}
-		if rr.ErrorClass != "" {
-			v.Message = "The last download did not finish (class: " + rr.ErrorClass + "). " + v.Message
-		}
-		if !live {
-			v.Message = "This restore has expired. Start another restore if you need the file again."
-		}
-		// No token in the page: the button is a POST that mints one and redirects.
-		v.CanDownload = live && p.Role >= auth.RoleOperator
-	case "failed":
-		v.Status, v.Failed = Chip{ID: "q", Label: "FAILED", Class: ClassCrit}, true
-		v.Message = failureMessage(rr.ErrorClass)
-		if rr.ErrorClass != "" {
-			v.Message += " Class: " + rr.ErrorClass + "."
-		}
-	default:
-		v.Status = Chip{ID: "q", Label: strings.ToUpper(rr.Status), Class: ClassNeutral}
-		v.Message = "This restore is no longer available. Start another restore if you need the file again."
-		if rr.Status == "purged" || rr.Status == "expired" {
-			v.Steps = step(5)
-		}
-	}
-	return v
-}
-
-func (s *Service) loadRestore(w http.ResponseWriter, r *http.Request, p *auth.Principal) (store.RestoreRequest, string, bool) {
-	rr, err := s.Store.GetRestoreRequest(r.Context(), p.Scope, r.PathValue("id"))
-	if err != nil {
-		s.notFound(w, r, p, "This restore")
-		return store.RestoreRequest{}, "", false
-	}
-	host := ""
-	if d, err := s.Store.GetDevice(r.Context(), p.Scope, rr.DeviceID); err == nil {
-		host = d.Hostname
-	}
-	return rr, host, true
-}
-
-func (s *Service) restoreStatus(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	rr, host, ok := s.loadRestore(w, r, p)
-	if !ok {
-		return
-	}
-	f, err := s.Fleet.Fleet(r.Context(), p.Scope)
-	if err != nil {
-		s.render(w, r, http.StatusServiceUnavailable, "error", "base", errorData(s.fallbackPage(r.Context(), p), 503, "Restore unavailable", "The fleet could not be loaded. Try again shortly."))
-		return
-	}
-	s.render(w, r, http.StatusOK, "restore_status", "base", RestoreStatusData{Page: s.page(r.Context(), p, f, "Restore", "fleet", "/ui/events"), R: s.withBusyNotice(r, s.restoreView(r.Context(), p, rr, host))})
-}
-
-// noticeBusy is adminapi.BusyNotice: the admin API sends a browser back to the
-// restore page with ?notice=busy&at=<unix seconds> when every restore stream
-// is in use.
-const noticeBusy = "busy"
-
-// busyMessage is what the restore page says then. The console does not know
-// the worker's stream budget (CRYO_MAINTAIN_MAX_STREAMS), so it names no number.
-const busyMessage = "Other restores are already downloading. Try again in a moment."
-
-// busyNoticeTTL is how long the notice stays on the page and its live part.
-const busyNoticeTTL = time.Minute
-
-// withBusyNotice puts the busy notice in front of the message while it is
-// current: the download was refused before it began, nothing was recorded or
-// spent. The page reads it from its own URL; the live partial from the URL of
-// the page it sits on (htmx's HX-Current-URL), so a refresh keeps it until
-// the user acts (a new page) or busyNoticeTTL has passed.
-func (s *Service) withBusyNotice(r *http.Request, v RestoreView) RestoreView {
-	if !v.CanDownload {
-		return v
-	}
-	q := r.URL.Query()
-	if q.Get("notice") == "" {
-		if cur := r.Header.Get("HX-Current-URL"); cur != "" {
-			if u, err := url.Parse(cur); err == nil && u.Path == "/restores/"+v.ID {
-				q = u.Query()
-			}
-		}
-	}
-	if q.Get("notice") != noticeBusy {
-		return v
-	}
-	at, err := strconv.ParseInt(q.Get("at"), 10, 64)
-	if err != nil {
-		return v
-	}
-	if age := s.now().Sub(time.Unix(at, 0)); age < -5*time.Second || age > busyNoticeTTL {
-		return v
-	}
-	v.Message = busyMessage + " " + v.Message
-	return v
-}
-
-func (s *Service) restorePartial(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	rr, err := s.Store.GetRestoreRequest(r.Context(), p.Scope, r.PathValue("id"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	host := ""
-	if d, err := s.Store.GetDevice(r.Context(), p.Scope, rr.DeviceID); err == nil {
-		host = d.Hostname
-	}
-	s.render(w, r, http.StatusOK, "restore_status", "restore_live", s.withBusyNotice(r, s.restoreView(r.Context(), p, rr, host)))
-}
-
-// restoreDownload is POST /ui/restores/{id}/download: it mints the single-use
-// token for this session and redirects to the GET URL, so a token never sits in
-// page HTML waiting to be copied. The redirect is the only place it appears.
-func (s *Service) restoreDownload(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	rr, err := s.Store.GetRestoreRequest(r.Context(), p.Scope, r.PathValue("id"))
-	if err != nil {
-		s.notFound(w, r, p, "This restore")
-		return
-	}
-	tok, _, err := s.Restores.MintToken(rr, p.SessionID)
-	h := w.Header()
-	h.Set("Cache-Control", "no-store")
-	h.Set("Referrer-Policy", "no-referrer")
-	if err != nil {
-		// Not downloadable (expired, failed): back to the status page, which says why.
-		http.Redirect(w, r, "/restores/"+rr.ID, http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/api/v1/restores/"+rr.ID+"/download?token="+tok, http.StatusSeeOther)
 }
