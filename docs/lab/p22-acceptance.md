@@ -176,8 +176,8 @@ Keep the printed `icacls` output of `C:\LabRestore\acl\protected.txt`: the Guest
 
 **Pin the snapshot.** Write down the id and time of the snapshot this backup made (device page). Steps 6, 7, 9 and 10 delete
 or change files and then restore: **choose that snapshot in the wizard, not the newest.** A scheduled backup that runs after
-you delete a file makes a newer snapshot without it, and restoring from that one proves nothing. (Or pause the lab policy's
-schedule from here until step 11.)
+you delete a file makes a newer snapshot without it, and restoring from that one proves nothing. (Do not pause the
+schedule instead: step 9 needs a fresh backup.)
 
 The compare script, used in steps 6 to 8, 10, 11 and 13. Set `$Where` (and `$From` and `$Only` for a zip) at the top; it prints
 `EQUAL`, `DIFFERS` or `MISSING` for every file in the manifest and exits 1 when any file is not equal:
@@ -266,7 +266,7 @@ Get-ChildItem C:\CryoBackup-Restore\<restore id> -Recurse -Force |
 
 Cancel-and-clean check (optional but worth doing): start a side restore of a few GB, then cancel it. There is no cancel button on
 the restore pages; the restore id is its run id, so use the API (operator role; an API token works, no second factor is asked
-here): `curl -sS -X POST -H "Authorization: Bearer $CRYO_TOKEN" https://<admin address>/api/v1/runs/<restore id>/cancel`.
+here): `curl -sS -X POST -H "Authorization: Bearer $CRYO_ADMIN_TOKEN" https://<admin address>/api/v1/runs/<restore id>/cancel`.
 Confirm that `C:\CryoBackup-Restore\<restore id>` is gone afterwards (a side restore that does
 not succeed removes its folder, ADR 0031) and the run ends cancelled.
 
@@ -274,7 +274,7 @@ not succeed removes its folder, ADR 0031) and the run ends cancelled.
 
 | | |
 | --- | --- |
-| Do | Put a few GB of incompressible data in `C:\LabRestore\big\` (the seed script's `New-LabFile` with a large size, or any large random files), back it up, delete it, start a restore of `big` from that new snapshot (not the step-5 one, which lacks it) to the original place, and **as soon as the status shows RUNNING** restart the VM (`Restart-Computer -Force`). |
+| Do | Put a few GB of incompressible data in `C:\LabRestore\big\` (the seed script's `New-LabFile` with a large size, or any large random files), back it up and note the new snapshot's id, delete it, start a restore of `big` from that snapshot (not the step-5 one, which lacks it) to the original place, and **as soon as the status shows RUNNING** restart the VM (`Restart-Computer -Force`). |
 | Expect | After the VM is back and the agent is up: the restore reads FAILED, class `interrupted` ("cut short"), and is **not run again by itself**. `C:\.cryobackup-restore\<restore id>` is gone (the agent removes leftovers at start). Event Log 1021. The next scheduled backup runs normally. Running the restore again places only what is missing. |
 | Look | The status page; `agent.log` (start-up sweep line, no path); the list of runs for this device (one restore run with this id). |
 | Fail if | The restore starts again after the boot; the status stays RUNNING; a staging folder is left. |
@@ -339,8 +339,10 @@ Linux VM, with the offline kit and nothing else from production.
 The lock check needs no repository password, only the admin remote (run it on the production host, as the worker's user):
 
 ```sh
-sudo -u cryobackup rclone --config /etc/cryobackup/rclone-admin.conf lsf admin:<bucket>/<prefix>/<device repository>/locks/
+sudo -u cryobackup rclone --config /etc/cryobackup/rclone-admin.conf lsf admin:<bucket>/<prefix>/<device id>/locks/
 ```
+(`admin` is the default remote name, `CRYO_MAINTAIN_REMOTE`; drop `<prefix>/` if `CRYO_MAINTAIN_PREFIX` is empty. Take
+both listings while no agent backup is running, because a running backup holds a lock of its own.)
 
 Record the date, the snapshot id and the result. Repeat the drill after every change to the offline kit.
 
