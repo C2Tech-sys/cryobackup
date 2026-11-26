@@ -184,7 +184,7 @@ func TestP22I_VerifyNowRecordsAVerdictAndShowsIt(t *testing.T) {
 		}
 	}
 	// A token made for one verdict does not show another: the verdict word is under the MAC.
-	swapped := strings.Replace(loc, "escrow%3Averified", "escrow%3Afailed.wrong_password", 1)
+	swapped := strings.Replace(loc, "%3Averified", "%3Afailed.wrong_password", 1)
 	if swapped == loc {
 		t.Fatalf("the flash is not in the expected form: %q", loc)
 	}
@@ -375,20 +375,111 @@ func TestP22I_VerifyNowAuditRefusedIsNotRecorded(t *testing.T) {
 	}
 }
 
-func TestP22I_VerifyNowHTMXAnswersThePanelWithTheVerdict(t *testing.T) {
+func TestP22I_VerifyNowHTMXRedrawsTheWholePageWithTheVerdict(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.login()
 	e.seedEscrow(t)
-	id := e.escrowDev(t, "retired") // a retired device is verified like any other
-	res, frag := e.verifyPost(id, true)
-	if res.StatusCode != 200 {
-		t.Fatalf("%d", res.StatusCode)
+	id := e.escrowDev(t, "stale") // overdue, so the Facts chip and the panel must both change
+	if before := e.page("/devices/"+id, 200); !strings.Contains(before, "verified 10 d ago, overdue") {
+		t.Fatal("setup: the Facts chip is not overdue")
 	}
-	mustContainText(t, "htmx verdict", frag, `<section id="escrow-panel"`, "Verified.", `data-escrow="verified"`, "This device is retired.", verifyAction(id), `hx-post="/ui/devices/`+id+`/escrow/verify"`, `hx-target="#escrow-panel"`)
+	res, frag := e.verifyPost(id, true)
+	loc := res.Header.Get("HX-Redirect")
+	if res.StatusCode != 200 || !strings.HasPrefix(loc, "/devices/"+id+"?escrow=") || !strings.HasSuffix(loc, "#escrow-panel") || strings.TrimSpace(frag) != "" {
+		t.Fatalf("htmx verdict: %d HX-Redirect %q body %.80q, want 200 with the redirect a browser post gets", res.StatusCode, loc, frag)
+	}
+	page := e.page(strings.SplitN(loc, "#", 2)[0], 200)
+	mustContainText(t, "after htmx verify", page, "Verified.", `data-escrow="verified"`, "Key custody", "verified 0 s ago")
+	if strings.Contains(page, ", overdue") || strings.Contains(page, "OVERDUE") || strings.Contains(page, "The weekly check has not run.") {
+		t.Error("the page still says the key is overdue after a pass: it contradicts itself")
+	}
 	if n := len(e.auditRows("device.escrow.verify", id)); n != 1 {
 		t.Errorf("%d audit rows, want 1", n)
 	}
+	// A retired device is verified like any other, htmx or not.
+	rid := e.escrowDev(t, "retired")
+	if res, _ := e.verifyPost(rid, true); res.Header.Get("HX-Redirect") == "" {
+		t.Errorf("retired htmx verify: no redirect (%d)", res.StatusCode)
+	}
+	// The htmx form still posts to its own action, targets the panel and works without JS.
+	panel := e.page("/devices/"+e.escrowDev(t, "never"), 200)
+	mustContainText(t, "form", panel, `hx-post="/ui/devices/`+e.escrowDev(t, "never")+`/escrow/verify"`, `hx-target="#escrow-panel"`, `method="post"`)
+}
+
+func TestP22I_VerdictFlashIsBoundToItsDevice(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.login()
+	e.seedEscrow(t)
+	a, b := e.escrowDev(t, "stale"), e.escrowDev(t, "never")
+	res, _ := e.verifyPost(a, false)
+	loc := e.location(res)
+	_, tok, ok := strings.Cut(strings.SplitN(loc, "#", 2)[0], "?escrow=")
+	if !ok {
+		t.Fatalf("no flash in %q", loc)
+	}
+	const shown = "just now. It was recorded"
+	if body := e.page("/devices/"+a+"?escrow="+tok, 200); !strings.Contains(body, shown) {
+		t.Fatal("device A does not show its own verdict")
+	}
+	// Device B, same admin session, inside the TTL: A's verdict is not B's.
+	body := e.page("/devices/"+b+"?escrow="+tok, 200)
+	if strings.Contains(body, shown) || strings.Contains(body, "Verified.") {
+		t.Error("A's verdict shows on never-verified device B")
+	}
+	mustContainText(t, "device B", body, "NEVER VERIFIED")
+	// A still shows it; after the TTL nobody does.
+	if body := e.page("/devices/"+a+"?escrow="+tok, 200); !strings.Contains(body, shown) {
+		t.Error("A lost its verdict")
+	}
+	e.advance(flashTTL + time.Second)
+	if body := e.page("/devices/"+a+"?escrow="+tok, 200); strings.Contains(body, shown) {
+		t.Error("an expired flash still shows")
+	}
+}
+
+func TestP22I_LeadsOfferVerifyNowOnlyWhenTheButtonIsThere(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.login()
+	e.seedEscrow(t)
+	never := e.page("/devices/"+e.escrowDev(t, "never"), 200)
+	mustContainText(t, "admin, never", never, "This key has never been verified.", "Or press Verify now.", verifyButton)
+	// A device whose enrollment was never confirmed has no repository: no lead, no button, no promise of one.
+	// (The fixture KIOSK-WAIT-01 is unconfirmed; give it a never-verified key.)
+	unc := e.page("/devices/"+e.escrowDev(t, "unconfirmed"), 200)
+	if strings.Contains(unc, "press Verify now") || strings.Contains(unc, verifyButton) || strings.Contains(unc, "This key has never been verified.") {
+		t.Error("an unconfirmed device is offered a check")
+	}
+	mustContainText(t, "unconfirmed", unc, "The device has not confirmed its enrollment")
+	e.addAccount("ops2", "operator")
+	e.loginAs("ops2", testPassword)
+	op := e.page("/devices/"+e.escrowDev(t, "stale"), 200)
+	mustContainText(t, "operator, overdue", op, "The weekly check has not run.", "Verify now needs the admin role.")
+	if strings.Contains(op, "press Verify now") {
+		t.Error("an operator is told to press a button it does not have")
+	}
+}
+
+func TestP22I_NextCheckHonoursTheRetryHold(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.login()
+	e.seedEscrow(t)
+	// "failed": proven 12 d ago, attempted 40 min ago: due, but held until an hour after the attempt.
+	body := e.page("/devices/"+e.escrowDev(t, "failed"), 200)
+	mustContainText(t, "held", body, "Next check", "Due: the next maintenance pass runs it, not before", "(an hour after the last attempt)")
+	// "stale": attempted 3 h ago: no hold.
+	body = e.page("/devices/"+e.escrowDev(t, "stale"), 200)
+	mustContainText(t, "not held", body, "Due now: the next maintenance pass runs it")
+	if strings.Contains(body, "an hour after the last attempt") {
+		t.Error("a hold shows for an attempt made 3 hours ago")
+	}
+	// After the hour has passed the hold is gone.
+	e.advance(30 * time.Minute)
+	body = e.page("/devices/"+e.escrowDev(t, "failed"), 200)
+	mustContainText(t, "hold over", body, "Due now: the next maintenance pass runs it")
 }
 
 func TestP22I_VerifyNowNeedsTheCSRFTokenAndThePageOrigin(t *testing.T) {

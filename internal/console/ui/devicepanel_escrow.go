@@ -182,6 +182,11 @@ func (s *Service) escrowPanel(ctx context.Context, p *auth.Principal, id string,
 	}
 	kind, class := escrowAssess(esc, c.Now)
 	pn.State = kind
+	// The sentences below offer Verify now only when the button is there (the gate at the end of this function).
+	askNow := ""
+	if !t.Purging && t.Confirmed && p.Role >= auth.RoleAdmin && s.MasterLoaded != nil && s.MasterLoaded() && s.Backend != nil {
+		askNow = " Or press Verify now."
+	}
 	stamp := func(at time.Time) string {
 		return c.dayClock(at) + " " + c.zoneAbbr(at) + " · " + ageLong(c.Now.Sub(at))
 	}
@@ -191,11 +196,11 @@ func (s *Service) escrowPanel(ctx context.Context, p *auth.Principal, id string,
 	case escOverdue:
 		pn.Chip = chip("OVERDUE", ageShort(c.Now.Sub(*esc.VerifiedAt)), class)
 		pn.Lead = &CauseView{Class: class, Title: "The weekly check has not run.",
-			Text: "The newest proof is " + strconv.Itoa(int(c.Now.Sub(*esc.VerifiedAt)/(24*time.Hour))) + " days old. Check that the maintenance worker is running (banner C07), or press Verify now."}
+			Text: "The newest proof is " + strconv.Itoa(int(c.Now.Sub(*esc.VerifiedAt)/(24*time.Hour))) + " days old. Check that the maintenance worker is running (banner C07)." + askNow}
 	case escNever:
 		pn.Chip = chip("NEVER VERIFIED", "", class)
 		pn.Lead = &CauseView{Class: class, Title: "This key has never been verified.",
-			Text: "Until it is, nobody knows that a restore from it would work. The next maintenance pass checks it, or press Verify now."}
+			Text: "Until it is, nobody knows that a restore from it would work. The next maintenance pass checks it." + askNow}
 	case escFailed:
 		pn.Chip = chip("FAILED", "", class)
 		lead := escrowFailureText(esc.LastVerifyErrorClass)
@@ -225,7 +230,7 @@ func (s *Service) escrowPanel(ctx context.Context, p *auth.Principal, id string,
 		}
 		pn.Rows = append(pn.Rows, Fact{Key: "Last attempt", Value: v})
 	}
-	pn.Rows = append(pn.Rows, Fact{Key: "Next check", Value: escrowNextCheck(esc.VerifiedAt, c)})
+	pn.Rows = append(pn.Rows, Fact{Key: "Next check", Value: escrowNextCheck(esc.VerifiedAt, esc.LastVerifyAttemptAt, c)})
 
 	switch {
 	case t.Purging:
@@ -243,17 +248,39 @@ func (s *Service) escrowPanel(ctx context.Context, p *auth.Principal, id string,
 	default:
 		pn.CanVerify = true
 	}
+	if t.Purging || !t.Confirmed { // no repository to open, or one going away: the reason below says it, a lead would only mislead
+		pn.Lead = nil
+	}
 	return pn
 }
 
+// escrowRetryHold is how long the verifier leaves a key alone after any attempt, whatever its
+// outcome. It is maintain.escrowVerifyRetry (unexported there, and maintain is not this ticket's to
+// change): keep the two equal.
+const escrowRetryHold = time.Hour
+
 // escrowNextCheck words when the verifier checks the key next: weekly, up to a day sooner (its
-// stagger), and at the next pass once it is due. A key never proven is retried every hour.
-func escrowNextCheck(verified *time.Time, c fmtCtx) string {
+// stagger), at the next pass once it is due, and never within escrowRetryHold of an attempt. A key
+// never proven is retried every hour.
+func escrowNextCheck(verified, attempt *time.Time, c fmtCtx) string {
+	hold := time.Time{}
+	if attempt != nil && c.Now.Before(attempt.Add(escrowRetryHold)) {
+		hold = attempt.Add(escrowRetryHold)
+	}
+	heldUntil := func(what string) string {
+		return what + ", not before " + c.dayClock(hold) + " " + c.zoneAbbr(hold) + " (an hour after the last attempt)"
+	}
 	if verified == nil {
+		if !hold.IsZero() {
+			return heldUntil("At the next maintenance pass") + ", then every hour until it passes"
+		}
 		return "At the next maintenance pass, then every hour until it passes"
 	}
 	due := verified.Add(state.EscrowVerifyEvery)
 	if !c.Now.Before(due.Add(-24 * time.Hour)) {
+		if !hold.IsZero() {
+			return heldUntil("Due: the next maintenance pass runs it")
+		}
 		return "Due now: the next maintenance pass runs it"
 	}
 	return "By " + c.dayClock(due) + " " + c.zoneAbbr(due) + " (weekly, up to a day sooner)"
@@ -331,8 +358,8 @@ var classWordRE = regexp.MustCompile(`^[a-z_]{1,32}$`)
 
 var escrowFlashRE = regexp.MustCompile(`^(verified|failed|not_verified)(\.[a-z_]{1,32})?$`)
 
-func (s *Service) escrowFlashToken(p *auth.Principal, res escrowResult) string {
-	name := "escrow:" + res.Verdict
+func (s *Service) escrowFlashToken(p *auth.Principal, deviceID string, res escrowResult) string {
+	name := "escrow:" + deviceID + ":" + res.Verdict
 	if res.Class != "" {
 		name += "." + res.Class
 	}
@@ -340,13 +367,15 @@ func (s *Service) escrowFlashToken(p *auth.Principal, res escrowResult) string {
 	return url.QueryEscape(name + "~" + strconv.FormatInt(exp, 10) + "~" + s.flashMAC(p, name, exp))
 }
 
-// escrowFlash is the verdict banner of a verified token, else nil.
-func (s *Service) escrowFlash(p *auth.Principal, token string) *CauseView {
+// escrowFlash is the verdict banner of a verified token made for device deviceID, else nil: the
+// device id is in the name the MAC covers, and the page shows only a token that names its own
+// device, so one device's verdict never reads as another's.
+func (s *Service) escrowFlash(p *auth.Principal, deviceID, token string) *CauseView {
 	parts := strings.Split(token, "~")
-	if len(parts) != 3 || !strings.HasPrefix(parts[0], "escrow:") {
+	if len(parts) != 3 || deviceID == "" || !strings.HasPrefix(parts[0], "escrow:"+deviceID+":") {
 		return nil
 	}
-	word, ok := strings.CutPrefix(parts[0], "escrow:")
+	word, ok := strings.CutPrefix(parts[0], "escrow:"+deviceID+":")
 	if !ok || !escrowFlashRE.MatchString(word) {
 		return nil
 	}
@@ -388,14 +417,22 @@ func (s *Service) escrowVerifyPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("HX-Request") == "true" {
-		// htmx swaps no 4xx: the panel, with the outcome in it, answers 200 whatever happened.
+		// A verdict changed what the rest of the page shows (the Facts chip, the alarms, the header chips):
+		// htmx follows the same redirect a browser post gets, so the whole page is redrawn with the verdict
+		// banner and nothing on it contradicts the panel.
+		if res.Verdict != "" && res.Status == http.StatusOK {
+			w.Header().Set("HX-Redirect", "/devices/"+id+"?escrow="+s.escrowFlashToken(p, id, res)+"#escrow-panel")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// htmx swaps no 4xx: a refusal changed nothing, so the panel, with the sentence in it, answers 200.
 		pn := s.escrowPanel(r.Context(), p, id, s.fc(r.Context()))
 		pn.Result = &res.View
 		s.render(w, r, http.StatusOK, "device", "escrow_panel", pn)
 		return
 	}
 	if res.Verdict != "" && res.Status == http.StatusOK {
-		http.Redirect(w, r, "/devices/"+id+"?escrow="+s.escrowFlashToken(p, res)+"#escrow-panel", http.StatusSeeOther)
+		http.Redirect(w, r, "/devices/"+id+"?escrow="+s.escrowFlashToken(p, id, res)+"#escrow-panel", http.StatusSeeOther)
 		return
 	}
 	s.devicePanelAt(w, r, "", res.Status, &res.View)

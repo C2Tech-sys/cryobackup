@@ -503,7 +503,7 @@ func (s *Service) devicePanelAt(w http.ResponseWriter, r *http.Request, tab stri
 		pg.Escrow = s.escrowPanel(r.Context(), p, id, c)
 		pg.Escrow.Result = escrowResult
 		if escrowResult == nil {
-			pg.Escrow.Result = s.escrowFlash(p, r.URL.Query().Get("escrow"))
+			pg.Escrow.Result = s.escrowFlash(p, id, r.URL.Query().Get("escrow"))
 		}
 	}
 	if ds, ok := deviceState(fleet, id); ok { // M2-W2C: the action menu on every tab
