@@ -1,0 +1,9 @@
+{{/* /design/restore (P22-G): the restore wizard's steps and parts and every status of a restore, from the partials the pages render (restore_steps.html, restore_parts.html) with the fixtures' invented sample values. Fixtures mode only. */}}
+{{define "head"}}<script src="{{asset "js/design.js"}}" defer></script>{{end}}
+
+{{define "content"}}{{$o := .Only}}
+<nav class="tabs" aria-label="Design sections"><a href="/design"{{if not $o}} aria-current="page"{{end}}>All</a>{{range .Sections}}<a href="/design/{{.Key}}"{{if eq $o .Key}} aria-current="page"{{end}}>{{.Title}}</a>{{end}}</nav>
+<div class="d-frame">
+{{with .Restore}}{{template "design_restore" .}}{{end}}
+</div>
+{{end}}

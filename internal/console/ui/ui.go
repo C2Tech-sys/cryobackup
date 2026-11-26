@@ -248,7 +248,8 @@ func (s *Service) Register(reg httpx.Registrar) {
 	s.registerCommandsUI(r) // M2-W2C (commands.go)
 	s.registerM4(r)         // P20-W3B: /settings/email, acknowledge and snooze (m4_email.go, m4_acks.go)
 	r.Handle("GET /devices/{id}/restore", op(s.restorePage))
-	r.Handle("POST /ui/devices/{id}/restore", op(s.restorePost))
+	// The wizard post carries the selection: its 64 KiB cap is enforced before the gate parses the form (fix G2).
+	r.Handle("POST /ui/devices/{id}/restore", auth.LimitBody(restoreBodyMax, op(s.restorePost)))
 	r.Handle("GET /restores/{id}", op(s.restoreStatus))
 	r.Handle("POST /ui/restores/{id}/download", op(s.restoreDownload))
 	r.Handle("GET /ui/events", ro(s.events))

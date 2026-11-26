@@ -60,7 +60,7 @@ func TestRestoreWizardNeedsFreshMFA(t *testing.T) {
 	// The 403 page offers the authenticator-code field (fix E7) and keeps the
 	// chosen snapshot and file in the form.
 	for _, want := range []string{`name="code"`, `autocomplete="one-time-code"`, `inputmode="numeric"`, `<label for="restore-code">Authenticator code</label>`,
-		`name="path" value="/C/Users/Public/Documents/Quarterly-Report.txt"`, `value="submit">Continue</button>`} {
+		`name="path" value="/C/Users/Public/Documents/Quarterly-Report.txt"`, `value="submit">Continue to the download</button>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the stale page lacks %s", want)
 		}
@@ -141,7 +141,7 @@ func TestRestoreWizardEveryRefusalPage(t *testing.T) {
 		status int
 		title  string
 	}{
-		{restores.ErrStepUp, 403, "A recent MFA check is required"},
+		{restores.ErrStepUp, 403, "A recent MFA check is required."},
 		{restores.ErrCustomerHeld, 409, "Customer-held key"},
 		{restores.ErrDevicePurging, 409, "This device is being purged"},
 		{restores.ErrRetiredDownloadOnly, 409, "This device is retired: download only"},

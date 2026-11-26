@@ -1,43 +1,29 @@
-{{/* B17 - technician restore wizard, M0: one file from a snapshot as a zip. The listing is the single place the console shows names from a client machine: it is rendered once, never cached or logged, and the path travels in POST bodies only. */}}
-{{define "restore_box"}}<form id="restore-box" class="wiz" method="post" action="/ui/devices/{{.DeviceID}}/restore" hx-post="/ui/devices/{{.DeviceID}}/restore" hx-target="#restore-box" hx-swap="outerHTML">
+{{/* B17 - the restore wizard (P22-G; ADR 0027, 0028, 0030; plan B.1): snapshot -> browse and select -> destination -> review, one form that works without JavaScript (htmx swaps it in place). The listing, the selection and the review are the only places the console shows names from a client machine: rendered per request, never cached or logged; the paths travel in POST bodies only, never in a URL. */}}
+{{define "head"}}<script src="{{asset "js/restore.js"}}" defer></script>{{end}}
+
+{{define "restore_box"}}<form id="restore-box" class="wiz rw" method="post" action="/ui/devices/{{.DeviceID}}/restore" hx-post="/ui/devices/{{.DeviceID}}/restore" hx-target="#restore-box" hx-swap="outerHTML">
+{{if .CanSubmit}}<button class="rw-default" type="submit" name="action" value="submit" tabindex="-1" aria-hidden="true">Continue</button>{{end}}
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<input type="hidden" name="step" value="{{if .Step}}{{.Step}}{{else}}select{{end}}">
 <input type="hidden" name="cur" value="{{.Dir}}">
-{{template "steps" .Steps}}
+<input type="hidden" name="offcur" value="{{.Offset}}">
+{{if .SnapshotID}}<input type="hidden" name="snapcur" value="{{.SnapshotID}}">{{end}}
+{{if or (eq .Step "dest") (eq .Step "review")}}<input type="hidden" name="snapshot" value="{{.SnapshotID}}">{{end}}
+{{if eq .Step "review"}}<input type="hidden" name="mode" value="{{.Mode}}">{{end}}
+{{range .Hidden}}<input type="hidden" name="path" value="{{.}}">
+{{end}}{{template "steps" .Steps}}
+<div id="restore-fail" class="banner crit dense" role="alert" hidden><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b data-fail-title></b> <span data-fail-text></span></div></div>
 <div class="in">
-  <h2>Which file do you need back from {{.Host}}?</h2>
-  {{with .Blocked}}{{template "inline_banner" .}}{{else}}
-  {{if .Error}}{{template "inline_banner" .Error}}{{end}}
-  {{if .NoSnaps}}<div class="banner warn dense" role="status"><i class="g g-warn" aria-hidden="true"></i><div class="b-text"><b>No snapshots are cached for this device.</b> The agent uploads its snapshot list after each successful backup; until then there is nothing to browse.</div></div>
-  {{else}}
-  <div class="field"><label for="snapshot">Snapshot</label>
-    <select class="input" id="snapshot" name="snapshot" hx-post="/ui/devices/{{.DeviceID}}/restore" hx-trigger="change" hx-target="#restore-box" hx-swap="outerHTML" hx-include="closest form" hx-vals='{"action":"snapshot"}'>
-      {{range .Snapshots}}<option value="{{.ID}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-    </select>
-    <span class="help">The newest snapshot is selected. Changing it returns to the snapshot root.</span></div>
-  <div class="browse" role="group" aria-label="Snapshot contents">
-    <div class="crumbs">{{range .Crumbs}}<button type="submit" name="dir" value="{{.Path}}" formaction="/ui/devices/{{$.DeviceID}}/restore" aria-label="Open {{.Label}}"><span aria-hidden="true">{{.Label}}</span></button><span aria-hidden="true">/</span>{{end}}</div>
-    {{if .Entries}}<ul>{{range .Entries}}<li>
-      {{if eq .Kind "dir"}}<button type="submit" name="dir" value="{{.Path}}"><svg aria-hidden="true"><use href="#i-folder"/></svg><span>{{.Name}}</span><span class="when">{{.When}}</span></button>
-      {{else if .Select}}<label><input type="radio" name="path" value="{{.Path}}" required><svg aria-hidden="true"><use href="#i-file"/></svg><span>{{.Name}}</span><span class="size">{{.Size}}</span><span class="when">{{.When}}</span></label>
-      {{else}}<span class="muted ui pad-h">{{.Name}} (not restorable here)</span>{{end}}
-    </li>{{end}}</ul>
-    {{else}}<p class="muted ui pad-a">This folder is empty.</p>{{end}}
-  </div>
-  {{if .Truncated}}<p class="meta-mono">Showing the first 500 entries of this folder. Open a subfolder to narrow it.</p>{{end}}
-  <fieldset class="opt plain"><legend class="h-label">Mode</legend>
-    <label><input type="radio" name="mode" value="download_zip" checked><div><b>Download as a zip</b><span>The zip streams from the snapshot straight to your browser. Nothing is stored on the server. The download link works once.</span></div></label>
-  </fieldset>
-  {{end}}
-  {{end}}
-  {{if .NeedCode}}{{if and .KeepPath (not .Entries)}}<input type="hidden" name="path" value="{{.KeepPath}}">{{end}}<div class="field"><label for="restore-code">Authenticator code</label>
-    <input class="input mono" id="restore-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required spellcheck="false" aria-describedby="restore-code-help">
-    <span class="help" id="restore-code-help">This session's last authenticator check is older than {{.MFAWindow}} minutes. Enter the current code from your authenticator app. A recovery code is not accepted here, and a sign-in with one does not count as a check.</span></div>{{end}}
+{{if eq .Step "dest"}}{{template "restore_step_dest" .}}{{else if eq .Step "review"}}{{template "restore_step_review" .}}{{else}}{{template "restore_step_select" .}}{{end}}
 </div>
-<div class="foot"><a class="btn ghost" href="/devices/{{.DeviceID}}">Cancel</a>{{if .CanSubmit}}<button class="btn primary" type="submit" name="action" value="submit">Continue</button>{{end}}</div>
+<div class="foot"><a class="btn ghost" href="/devices/{{.DeviceID}}">Cancel</a>
+{{if eq .Step "dest"}}<button class="btn" type="submit" name="action" value="back">Back</button>{{end}}
+{{if eq .Step "review"}}<button class="btn" type="submit" name="action" value="back">Back</button>{{end}}
+{{if .CanSubmit}}{{if and (eq .Step "review") .Review}}<button class="btn primary" type="submit" name="action" value="submit">{{.Review.Button}}</button>{{else}}<button class="btn primary" type="submit" name="action" value="submit">Continue</button>{{end}}{{end}}</div>
 </form>{{end}}
 
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/">Fleet</a> / <a href="/devices/{{.DeviceID}}">{{.Host}}</a> / <span>Restore</span></nav>
-<div class="row"><div class="muted ui">{{.Customer}}</div></div>
+{{if .Customer}}<div class="row"><div class="muted ui">{{.Customer}}</div></div>{{end}}
 {{template "restore_box" .}}
 {{end}}

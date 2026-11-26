@@ -376,17 +376,21 @@ func (s *Service) deviceView(ctx context.Context, p *auth.Principal, f health.Fl
 		}
 	}
 
-	// Restore action: enabled only when it can work, otherwise a stated reason.
+	// Restore action: enabled only when it can work, otherwise a stated reason. A retired device
+	// keeps the action for a download (ADR 0030) and says so; a device being purged and a
+	// customer-held key stay refused (P22-G).
 	v.CanRestore = true
 	switch esc, err := s.Store.ActiveEscrow(ctx, p.Scope, id); {
 	case p.Role < auth.RoleOperator:
 		v.CanRestore, v.RestoreNote = false, "Restore needs the operator role."
-	case ds.Primary == state.StateRetired:
-		v.CanRestore, v.RestoreNote = false, "This device is retired."
+	case dev.Purging():
+		v.CanRestore, v.RestoreNote = false, "This device is being purged: nothing can be restored from it."
 	case err == nil && esc.Custody != "escrowed":
 		v.CanRestore, v.RestoreNote = false, "Customer-held key: no technician restore."
 	case s.MasterLoaded == nil || !s.MasterLoaded():
 		v.CanRestore, v.RestoreNote = false, "The master key is unavailable (banner C12)."
+	case ds.Primary == state.StateRetired || dev.RetiredAt != nil:
+		v.RestoreNote = "This device is retired: download as a zip only (ADR 0030)."
 	}
 	s.purgeView(ctx, p, dev, c, &v) // ADR 0019
 	return v, true

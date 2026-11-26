@@ -28,6 +28,7 @@ var designSections = []DesignSection{
 	{"shell", "App shell", "step 9 · every screen"},
 	{"purge", "Purge and delete", "ADR 0019 · B07 B08"},
 	{"mail", "Alert e-mail", "ADR 0020 · S27 B07 B08"}, // P20-W3B (m4_design.go)
+	{"restore", "Restore", "ADR 0027 0028 0030 · B17"}, // P22-G (restore_design.go), served by restore_design.html
 }
 
 // DesignSection names a /design section.
@@ -165,8 +166,9 @@ type DesignData struct {
 	Runs      []RunRow
 	Steps     []Step
 	Facts     []Fact
-	Purge     *DesignPurge // ADR 0019 (purge_adr19.go)
-	Mail      *DesignMail  // P20-W3B (m4_design.go)
+	Purge     *DesignPurge   // ADR 0019 (purge_adr19.go)
+	Mail      *DesignMail    // P20-W3B (m4_design.go)
+	Restore   *DesignRestore // P22-G (restore_design.go)
 }
 
 func sampleStrip(panel bool, now time.Time) StripView {
@@ -314,9 +316,12 @@ func (s *Service) designData(ctx context.Context, only string) DesignData {
 		{ID: "r2", Date: "Fri 2:10 AM", DateISO: now.Format(time.RFC3339), Chip: OutcomeChip("h2", "partial", false), Summary: "4 files unreadable", Exit: "exit 3", Duration: "15m 18s"},
 		{ID: "r3", Date: "Thu 2:10 AM", DateISO: now.Format(time.RFC3339), Chip: OutcomeChip("h3", "success", false), Summary: "312 new · 1.1 GB added", Exit: "exit 0", Duration: "14m 40s"},
 	}
-	d.Steps = []Step{{1, "Snapshot", "done"}, {2, "Browse and select", "on"}, {3, "Mode", "todo"}, {4, "Progress", "todo"}}
+	d.Steps = []Step{{1, "Snapshot", "done"}, {2, "Select", "on"}, {3, "Destination", "todo"}, {4, "Review", "todo"}}
 	d.Purge = s.designPurge(ctx, now)
 	d.Mail = s.designMail(ctx, now, live.View)
+	if only == "restore" {
+		d.Restore = s.designRestore(ctx, now)
+	}
 	d.Facts = []Fact{{Key: "Policy", Value: "v12"}, {Key: "Schedule", Value: "every 4 h in Mon-Fri/7-19 · catch-up on", Mono: true}, {Key: "Repository", Value: "61 snapshots · latest 6 h ago", Mono: true}}
 	return d
 }
@@ -334,5 +339,9 @@ func (s *Service) design(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.render(w, r, http.StatusOK, "design", "base", s.designData(r.Context(), only))
+	page := "design"
+	if only == "restore" { // P22-G: the restore section is its own page (restore_design.html)
+		page = "restore_design"
+	}
+	s.render(w, r, http.StatusOK, page, "base", s.designData(r.Context(), only))
 }
