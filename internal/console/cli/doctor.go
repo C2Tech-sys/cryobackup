@@ -89,6 +89,11 @@ func runDoctor(args []string, io IO) int {
 	} else {
 		report("OK", "config", "valid")
 	}
+	if cfg.Drill { // ADR 0029, ruling C8: said every time, so a drill copy is never mistaken for production, nor left on
+		report("WARN", "drill", "on: drill copy. serve opens no agent listener and sends no mail; maintain serves read methods only and runs no scheduler pass")
+	} else {
+		report("OK", "drill", "off")
+	}
 
 	st, dbWhy := openCheckedDatabase(cfg.DBPath, report)
 	if st != nil {

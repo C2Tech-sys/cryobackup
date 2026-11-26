@@ -120,6 +120,13 @@ func checkMailRelay(cfg config.Config, rep func(level, name, detail string)) {
 		return
 	}
 
+	if cfg.Drill {
+		// ADR 0029, ruling C8: a drill copy contacts no outside service, so doctor does not open the
+		// live relay probe either (a connection, a greeting, a sign-in with the production credential).
+		// The settings above were still checked: that reads local files only.
+		rep("NOT CHECKED", "mail relay", where+": not checked: drill copy (a drill copy contacts no mail relay)")
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), doctorProbeTimeout)
 	err := probeMail(ctx, set)
 	cancel()

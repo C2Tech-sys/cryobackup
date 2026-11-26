@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
@@ -12,6 +13,31 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/state"
 )
+
+// ---- drill copy (ADR 0029, ruling C8) ----
+
+// drillCopy says whether this console process is a drill copy: a console restored from its
+// self-backup and started with "drill": true. It is a property of the process (one serve, one
+// config), set by cli.Build on every build, so it lives here rather than in Service: the page data
+// below reads it through their Drill methods, and every page that uses base.html, and the three
+// bare pages, render the DRILL COPY strip (base.html, "drill_banner") while it is set.
+var drillCopy atomic.Bool
+
+// SetDrillCopy marks this process as a drill copy (true) or not (false).
+func SetDrillCopy(on bool) { drillCopy.Store(on) }
+
+// Drill reports whether the page carries the DRILL COPY strip. Every page data struct embeds
+// Page, so every page that renders base.html has it.
+func (Page) Drill() bool { return drillCopy.Load() }
+
+// Drill is Page.Drill for the bare sign-in page.
+func (loginData) Drill() bool { return drillCopy.Load() }
+
+// Drill is Page.Drill for the bare MFA page.
+func (mfaData) Drill() bool { return drillCopy.Load() }
+
+// Drill is Page.Drill for the bare password-reset page.
+func (resetData) Drill() bool { return drillCopy.Load() }
 
 // UserView is the signed-in admin in the sidebar. Name is what the shell shows
 // for the person: the display name when one is set, else the username.

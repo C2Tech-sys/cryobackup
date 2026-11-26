@@ -70,12 +70,19 @@ var DefaultKeyUnwrapper KeyUnwrapperFactory
 //	                                                     IAM reach), or while CRYO_MAINTAIN_PREFIX is empty
 //	RCLONE_CONFIG                                       the mounted rclone.conf holding the admin credential
 //
+// With drill (CRYO_DRILL) true in the config file, --loop serves only the admin-path read methods
+// and runs no scheduler pass, and --once is refused (drill.go, ADR 0029 ruling C8).
+//
 // The self-backup also reads data_dir (CRYO_DATA_DIR) from the config file: its
 // staging and verify folders go there (default: the database's directory), and
 // it copies the config file itself into each snapshot.
 func Main(args []string) int {
 	return Run(args, os.Stdout, os.Stderr, DefaultKeyUnwrapper)
 }
+
+// notifyContext is signal.NotifyContext; a variable so that a test can stop a --loop run without
+// sending the process a signal (there is none to send on every platform).
+var notifyContext = signal.NotifyContext
 
 // Run is Main with its outputs and key factory injected, for tests.
 func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int {
@@ -94,8 +101,18 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 	}
 
 	fc, err := loadFileConfig(*cfgPath)
+	if errors.Is(err, errDrillEnv) {
+		fmt.Fprintln(stderr, "maintain: CRYO_DRILL must be true or false")
+		return ExitUsage
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, classText(err))
+		return ExitUsage
+	}
+	if fc.Drill && *once {
+		// ADR 0029, ruling C8: a drill copy runs no scheduler pass and no self-backup step, and
+		// `self-backup run` and `verify` are one --once each.
+		fmt.Fprintln(stderr, "maintain: drill mode runs no scheduler pass: --once is refused (this console is a restored copy)")
 		return ExitUsage
 	}
 	if *socket != "" {
@@ -120,7 +137,7 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 		fmt.Fprintln(stderr, "maintain: CRYO_MAINTAIN_STATE_DIR is ignored (ADR 0008: no repository data on disk); temp files go to CRYO_MAINTAIN_SCRATCH_DIR, a tmpfs")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	lg := logx.New(stderr, logx.LevelInfo)
 
@@ -198,6 +215,15 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 		return ExitFailed
 	}
 
+	if fc.Drill {
+		// Read methods only, no scheduler, no self-backup (drill.go); the self-backup key is not
+		// even loaded.
+		if err := w.DrillLoop(ctx); err != nil {
+			fmt.Fprintln(stderr, "maintain: the admin-path server stopped")
+			return ExitFailed
+		}
+		return ExitOK
+	}
 	if w.selfKeys == nil && cfg.SelfPrefix != "" {
 		// The console's unwrapper does not derive the self-backup key itself:
 		// load it from the same master key file (escrow.LoadMasterKey).
@@ -261,6 +287,9 @@ type fileConfig struct {
 	AdminpathSocket string `json:"adminpath_socket"`
 	// DataDir is the console's state directory: the self-backup stages there.
 	DataDir string `json:"data_dir"`
+	// Drill is the console's drill key (ADR 0029, ruling C8; drill.go): --loop serves the read
+	// methods only and runs no scheduler pass, --once is refused. Also CRYO_DRILL.
+	Drill bool `json:"drill"`
 	// path is the config file that was read ("" when none was): the
 	// self-backup copies it into each snapshot.
 	path string
@@ -341,5 +370,14 @@ func loadFileConfig(path string) (fileConfig, error) {
 	override(&fc.MasterKeyPath, "CRYO_MASTER_KEY_PATH")
 	override(&fc.AdminpathSocket, "CRYO_ADMINPATH_SOCKET")
 	override(&fc.DataDir, "CRYO_DATA_DIR")
+	if v := os.Getenv("CRYO_DRILL"); v != "" {
+		// Parsed as the console config package parses it; a value that is not a boolean is refused,
+		// never read as false: a drill copy must not start as a production worker over a typo.
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return fc, errDrillEnv
+		}
+		fc.Drill = b
+	}
 	return fc, nil
 }

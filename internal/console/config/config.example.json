@@ -74,5 +74,6 @@
     "method": "GET",
     "interval_s": 300
   },
-  "fixtures": false
+  "fixtures": false,
+  "drill": false
 }
