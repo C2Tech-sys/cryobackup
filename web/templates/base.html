@@ -3,8 +3,8 @@
      fonts, tokens, css and scripts come from /static, nothing from a CDN. */}}
 {{/* drill_banner - the DRILL COPY strip (ADR 0029, ruling C8): on every page of a drill copy, above the
      topbar here and at the top of the three bare pages (login, login_reset, mfa). It has no close button
-     and is not part of the live-refreshed banner region, so nothing removes it. .Drill is a method of the
-     page data (ui/views.go). */}}
+     and is not part of the live-refreshed banner region, so nothing removes it. .Drill is a field of the
+     page data, set from ui.Service.Drill (ui/views.go, ui/ui.go). */}}
 {{define "drill_banner"}}{{if .Drill}}<div class="banner crit drill-copy" id="drill-copy" role="alert"><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b>DRILL COPY: this console is a restored copy. It does not talk to agents, send mail or change storage.</b></div></div>{{end}}{{end}}
 {{define "base"}}<!doctype html>
 <html lang="en">

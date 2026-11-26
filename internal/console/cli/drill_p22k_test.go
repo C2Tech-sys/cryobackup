@@ -22,7 +22,6 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
-	"github.com/c2tech-sys/cryobackup/internal/console/ui"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
 
@@ -107,7 +106,6 @@ func buildDrill(t *testing.T, cfg config.Config) (*App, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Close)
-	t.Cleanup(func() { ui.SetDrillCopy(false) }) // the strip is process-wide: no later test inherits it
 	return app, &logs
 }
 
@@ -426,12 +424,12 @@ func TestDoctorDrillContactsNoOutsideParty(t *testing.T) {
 	}
 }
 
-// TestDrillBannerFollowsTheLastBuild (FIX BATCH 2, K5): the strip switch is process-wide
-// (ui.SetDrillCopy). A drill console built first and a production console built second in the same
-// process, with no cleanup between them, must leave the second one without the strip: a Build that
-// set the switch only when drill is true would keep serving the first one's banner.
+// TestDrillBannerFollowsTheLastBuild (FIX BATCH 2, K5; P22-I: the switch is now ui.Service.Drill):
+// the strip belongs to the console that was built, not to the process. A drill console and a
+// production console built one after the other in the same process, with no cleanup between them,
+// each answer for themselves, in either order: a process-wide switch would give both the last
+// build's answer.
 func TestDrillBannerFollowsTheLastBuild(t *testing.T) {
-	t.Cleanup(func() { ui.SetDrillCopy(false) })
 	has := func(app *App) bool {
 		t.Helper()
 		b := &r3Browser{t: t, base: r3Serve(t, app)}
@@ -448,13 +446,19 @@ func TestDrillBannerFollowsTheLastBuild(t *testing.T) {
 		t.Cleanup(app.Close)
 		return app
 	}
-	if !has(build(true)) {
+	first := build(true)
+	if !has(first) {
 		t.Fatal("the drill console shows no DRILL COPY strip: the test proves nothing")
 	}
-	if has(build(false)) {
-		t.Fatal("a production console built after a drill console still shows the DRILL COPY strip")
+	second := build(false)
+	if has(second) {
+		t.Fatal("a production console built after a drill console shows the DRILL COPY strip")
 	}
-	if !has(build(true)) { // and back: the switch follows each build
-		t.Fatal("a drill console built after a production console shows no strip")
+	if !has(first) {
+		t.Fatal("building a production console took the strip off the drill console that was built before it")
+	}
+	third := build(true) // and back: each console keeps its own answer
+	if !has(third) || has(second) || !has(first) {
+		t.Fatalf("after a third build: drill-first=%v production-second=%v drill-third=%v, want true false true", has(first), has(second), has(third))
 	}
 }

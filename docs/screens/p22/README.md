@@ -59,3 +59,28 @@ no path ever appears in a URL.
 | `status-device-cancelled` | Restore status | Cancelled | `/restores/{id}` | [1360 dark](status-device-cancelled.1360.dark.png), [1360 light](status-device-cancelled.1360.light.png), [390 dark](status-device-cancelled.390.dark.png), [390 light](status-device-cancelled.390.light.png) |
 | `status-device-expired` | Restore status | Expired: the device never picked it up | `/restores/{id}` | [1360 dark](status-device-expired.1360.dark.png), [1360 light](status-device-expired.1360.light.png), [390 dark](status-device-expired.390.dark.png), [390 light](status-device-expired.390.light.png) |
 | `device-retired` | Device: Summary | retired: Restore files offers a download only | `/devices/{id}` | [1360 dark](device-retired.1360.dark.png), [1360 light](device-retired.1360.light.png), [390 dark](device-retired.390.dark.png), [390 light](device-retired.390.light.png) |
+
+## Device page: the repository-key panel (P22-I)
+
+The Summary tab's repository-key panel and the answers of Verify now (ticket P22-I; ADR 0030; plan B.3), in **fixtures mode**:
+the fictional fleet with `fixtures.SeedP22Escrow` (one device per key state), a frozen clock, no network. Same sizes, themes and file
+names as above. Method: `CRYO_SHOTS=<dir> go test ./internal/console/ui/ -run TestP22I_Screenshots`
+(internal/console/ui/devicepanel_escrow_p22i_shots_test.go).
+
+| Slug | State | Route | Files |
+| --- | --- | --- | --- |
+| `escrow-verified` | key verified 2 days ago, Verify now offered | `/devices/{id}` | [1360 dark](escrow-verified.1360.dark.png), [1360 light](escrow-verified.1360.light.png), [390 dark](escrow-verified.390.dark.png), [390 light](escrow-verified.390.light.png) |
+| `escrow-stale` | last proof 10 days old: overdue, the weekly check has not run | `/devices/{id}` | [1360 dark](escrow-stale.1360.dark.png), [1360 light](escrow-stale.1360.light.png), [390 dark](escrow-stale.390.dark.png), [390 light](escrow-stale.390.light.png) |
+| `escrow-failed` | last check failed: wrong password | `/devices/{id}` | [1360 dark](escrow-failed.1360.dark.png), [1360 light](escrow-failed.1360.light.png), [390 dark](escrow-failed.390.dark.png), [390 light](escrow-failed.390.light.png) |
+| `escrow-failed-repo` | last check failed: repository missing | `/devices/{id}` | [1360 dark](escrow-failed-repo.1360.dark.png), [1360 light](escrow-failed-repo.1360.light.png), [390 dark](escrow-failed-repo.390.dark.png), [390 light](escrow-failed-repo.390.light.png) |
+| `escrow-never` | never verified | `/devices/{id}` | [1360 dark](escrow-never.1360.dark.png), [1360 light](escrow-never.1360.light.png), [390 dark](escrow-never.390.dark.png), [390 light](escrow-never.390.light.png) |
+| `escrow-held` | customer-held key: nothing to verify, no button | `/devices/{id}` | [1360 dark](escrow-held.1360.dark.png), [1360 light](escrow-held.1360.light.png), [390 dark](escrow-held.390.dark.png), [390 light](escrow-held.390.light.png) |
+| `escrow-unconfirmed` | enrollment not confirmed: no repository yet, no button | `/devices/{id}` | [1360 dark](escrow-unconfirmed.1360.dark.png), [1360 light](escrow-unconfirmed.1360.light.png), [390 dark](escrow-unconfirmed.390.dark.png), [390 light](escrow-unconfirmed.390.light.png) |
+| `escrow-purging` | device being purged: key no longer checked, no button | `/devices/{id}` | [1360 dark](escrow-purging.1360.dark.png), [1360 light](escrow-purging.1360.light.png), [390 dark](escrow-purging.390.dark.png), [390 light](escrow-purging.390.light.png) |
+| `escrow-retired` | retired device: same panel, download-only note | `/devices/{id}` | [1360 dark](escrow-retired.1360.dark.png), [1360 light](escrow-retired.1360.light.png), [390 dark](escrow-retired.390.dark.png), [390 light](escrow-retired.390.light.png) |
+| `escrow-retired-failed` | retired device, last check failed: counted in fleet banner C22 | `/devices/{id}` | [1360 dark](escrow-retired-failed.1360.dark.png), [1360 light](escrow-retired-failed.1360.light.png), [390 dark](escrow-retired-failed.390.dark.png), [390 light](escrow-retired-failed.390.light.png) |
+| `escrow-verdict-verified` | Verify now: the key opened the repository config | `POST /ui/devices/{id}/escrow/verify, then /devices/{id}` | [1360 dark](escrow-verdict-verified.1360.dark.png), [1360 light](escrow-verdict-verified.1360.light.png), [390 dark](escrow-verdict-verified.390.dark.png), [390 light](escrow-verdict-verified.390.light.png) |
+| `escrow-verdict-failed` | Verify now: verification failed (wrong password) | `POST /ui/devices/{id}/escrow/verify, then /devices/{id}` | [1360 dark](escrow-verdict-failed.1360.dark.png), [1360 light](escrow-verdict-failed.1360.light.png), [390 dark](escrow-verdict-failed.390.dark.png), [390 light](escrow-verdict-failed.390.light.png) |
+| `escrow-verdict-noverdict` | Verify now: no verdict, storage did not answer | `POST /ui/devices/{id}/escrow/verify, then /devices/{id}` | [1360 dark](escrow-verdict-noverdict.1360.dark.png), [1360 light](escrow-verdict-noverdict.1360.light.png), [390 dark](escrow-verdict-noverdict.390.dark.png), [390 light](escrow-verdict-noverdict.390.light.png) |
+| `escrow-refused-worker` | Verify now refused: the worker did not answer (503) | `POST /ui/devices/{id}/escrow/verify` | [1360 dark](escrow-refused-worker.1360.dark.png), [1360 light](escrow-refused-worker.1360.light.png), [390 dark](escrow-refused-worker.390.dark.png), [390 light](escrow-refused-worker.390.light.png) |
+| `escrow-refused-held` | Verify now refused: customer-held key (409) | `POST /ui/devices/{id}/escrow/verify` | [1360 dark](escrow-refused-held.1360.dark.png), [1360 light](escrow-refused-held.1360.light.png), [390 dark](escrow-refused-held.390.dark.png), [390 light](escrow-refused-held.390.light.png) |

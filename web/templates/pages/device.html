@@ -82,6 +82,18 @@
 <p class="meta-mono">Read-only. Audit rows are never edited; they hold names, ids and field names, never file paths.</p>
 </div>{{end}}
 
+{{/* P22-I: the repository-key panel of the Summary tab (ADR 0030). Custody, last proof, last failure class, next check, what a pass proves, and Verify now for an administrator. Path-free. The form posts with or without JavaScript: an htmx post gets this panel back with 200 (htmx 2 swaps no 4xx), a browser post gets the page. */}}
+{{define "escrow_panel"}}<section id="escrow-panel" class="stack" aria-labelledby="h-escrow" data-escrow="{{.State}}">
+<h3 class="h-label" id="h-escrow">Repository key {{template "chip" .Chip}}</h3>
+{{with .Result}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}" tabindex="-1"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}
+{{if .ShowLead}}{{with .Lead}}<div class="banner {{.Class}} dense" role="{{if eq .Class "crit"}}alert{{else}}status{{end}}"><i class="g g-{{.Class}}" aria-hidden="true"></i><div class="b-text"><b>{{.Title}}</b> {{.Text}}</div></div>{{end}}{{end}}
+{{if .Rows}}<dl class="kv">{{range .Rows}}<dt>{{.Key}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl>{{end}}
+{{if .Note}}<p class="meta-mono">{{.Note}}</p>{{end}}
+<p class="meta-mono" id="escrow-proves">{{.Proves}}</p>
+{{if .CanVerify}}<div class="actions"><form class="inl" method="post" action="{{.Action}}" hx-post="{{.Action}}" hx-target="#escrow-panel" hx-swap="outerHTML" hx-disabled-elt="find button"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="btn sm" type="submit" aria-describedby="escrow-proves">Verify now</button></form><span class="meta-mono">Opens the repository config with the escrowed key. Takes up to a minute.</span></div>
+{{else if .Why}}<p class="meta-mono" id="escrow-why">{{.Why}}</p>{{end}}
+</section>{{end}}
+
 {{define "content"}}
 <nav class="crumbs-nav" aria-label="Breadcrumb"><a href="/devices">Devices</a> / <a href="/customers/{{.Dev.CustomerID}}">{{.Dev.Customer}}</a> / <span>{{.Dev.Host}}</span></nav>
 {{if .Saved}}<div class="banner ok dense" role="status"><i class="g g-ok" aria-hidden="true"></i><div class="b-text">{{.Saved}}</div></div>{{end}}
@@ -96,7 +108,7 @@
     <nav class="tabs" aria-label="Device sections">{{range $i, $t := .Tabs}}<a href="{{$t.Href}}"{{if ge $i 3}} class="tab-ov"{{end}}{{if $t.Current}} aria-current="page"{{end}}>{{$t.Label}}</a>{{end}}<details class="tab-more"{{if $more}} data-current="true"{{end}}><summary{{if $more}} aria-current="page"{{end}}>More</summary><div class="tab-more-pop">{{range $i, $t := .Tabs}}{{if ge $i 3}}<a href="{{$t.Href}}"{{if $t.Current}} aria-current="page"{{end}}>{{$t.Label}}</a>{{end}}{{end}}</div></details></nav>
   </header>
   <div class="mt">
-  {{if eq .Tab "summary"}}{{with .Alarms}}{{template "m4_alarms" .}}{{end}}{{template "device_live" .}}
+  {{if eq .Tab "summary"}}<div class="stack">{{with .Alarms}}{{template "m4_alarms" .}}{{end}}{{template "device_live" .}}{{with .Escrow}}{{template "escrow_panel" .}}{{end}}</div>
   {{else if eq .Tab "history"}}{{template "device_history" .History}}
   {{else if eq .Tab "commands"}}{{template "device_commands" .Commands}}
   {{else if eq .Tab "settings"}}{{template "device_settings" .Settings}}

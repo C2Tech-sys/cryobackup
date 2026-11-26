@@ -785,6 +785,14 @@ func uiMutationCases() map[string]uiMutation {
 				}
 			},
 		},
+		// ---- P22-I: Verify now (the admin API's own handler writes the one device.escrow.verify row, with the record) ----
+		"POST /ui/devices/{id}/escrow/verify": {
+			build: func(e *env) func() (*http.Response, string) {
+				e.login()
+				id := e.dev["FRONTDESK-01"]
+				return func() (*http.Response, string) { return e.post("/ui/devices/"+id+"/escrow/verify", vals(), false) }
+			},
+		},
 		"POST /ui/restores/{id}/download": {
 			zeroWhy: "minting hands out a short-lived token and stores nothing durable; the audited event is the download that spends it",
 			build: func(e *env) func() (*http.Response, string) {

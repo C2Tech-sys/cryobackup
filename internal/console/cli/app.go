@@ -120,7 +120,6 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	// drill with fixtures; a caller that skipped Validate gets fixtures, which touches nothing either.
 	drill := cfg.Drill && !fix
 	a.drill = drill
-	ui.SetDrillCopy(drill) // the DRILL COPY strip on every page (base.html); set either way, so a later build clears it
 	if a.clock == nil {
 		a.clock = time.Now
 		if fix {
@@ -288,7 +287,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 		Events: a.Hub, MaxEventStreams: cfg.RateLimits.EventStreamsMax, MaxEventStreamsPerPrincipal: cfg.RateLimits.EventStreamsPerAccount}
 	a.Admin.GatewaySyncWait = o.GatewaySyncWait // zero is the 5 s default; the pages' API below gets the same value
 	u, err := ui.New(&ui.Service{Auth: a.Auth, Store: a.Store, Fleet: fleet, Restores: a.Restores, Backend: a.Backend, Hub: a.Hub, Clock: a.clock, Loc: disp.Loc(), Display: disp,
-		Zone: disp.Zone(), Refresh: disp.RefreshS(), Fixtures: fix, Log: a.log, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status,
+		Zone: disp.Zone(), Refresh: disp.RefreshS(), Fixtures: fix, Drill: drill, Log: a.log, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status,
 
 		GatewaySyncWait: o.GatewaySyncWait,
 

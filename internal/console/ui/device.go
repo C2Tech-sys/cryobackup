@@ -358,14 +358,25 @@ func (s *Service) deviceView(ctx context.Context, p *auth.Principal, f health.Fl
 	} else {
 		v.FactsErr = true
 	}
+	// The key's line is the repository-key panel's verdict in one chip (devicepanel_escrow.go): a proof older than the
+	// weekly cadence and a day is not green here either, and a failed check is not "verified".
 	if esc, err := s.Store.ActiveEscrow(ctx, p.Scope, id); err == nil {
-		switch {
-		case esc.Custody != "escrowed":
-			v.Facts = append(v.Facts, Fact{Key: "Key custody", Chip: &Chip{ID: "k-" + id, Label: "CUSTOMER-HELD", Class: ClassNeutral, Small: true}})
-		case esc.VerifiedAt == nil:
-			v.Facts = append(v.Facts, Fact{Key: "Key custody", Chip: &Chip{ID: "k-" + id, Label: "ESCROWED", Qual: "not verified", Joiner: " · ", Class: ClassWarn, Small: true}})
-		default:
-			v.Facts = append(v.Facts, Fact{Key: "Key custody", Chip: &Chip{ID: "k-" + id, Label: "ESCROWED", Qual: "verified " + ageLong(c.Now.Sub(*esc.VerifiedAt)), Joiner: " · ", Class: ClassOK, Small: true}})
+		k := func(label, qual, class string) Fact {
+			return Fact{Key: "Key custody", Chip: &Chip{ID: "k-" + id, Label: label, Qual: qual, Joiner: " · ", Class: class, Small: true}}
+		}
+		if esc.Custody != "escrowed" {
+			v.Facts = append(v.Facts, k("CUSTOMER-HELD", "", ClassNeutral))
+		} else {
+			switch kind, class := escrowAssess(esc, c.Now); kind {
+			case escFailed:
+				v.Facts = append(v.Facts, k("ESCROWED", "failed", class))
+			case escNever:
+				v.Facts = append(v.Facts, k("ESCROWED", "not verified", class))
+			case escOverdue:
+				v.Facts = append(v.Facts, k("ESCROWED", "verified "+ageLong(c.Now.Sub(*esc.VerifiedAt))+", overdue", class))
+			default:
+				v.Facts = append(v.Facts, k("ESCROWED", "verified "+ageLong(c.Now.Sub(*esc.VerifiedAt)), class))
+			}
 		}
 	}
 	v.Facts = append(v.Facts, Fact{Key: "Enrolled", Value: c.day(dev.EnrolledAt) + " · via " + orDefault(dev.EnrolledVia, "token"), Mono: true})
