@@ -49,6 +49,10 @@ type Evaluator struct {
 	// Extra supplies banners that cannot be derived here (the /design page and
 	// tests show the full C01-C16 set from canned data).
 	Extra func(now time.Time) []state.Banner
+	// WorkerMode supplies the banner that says the console and its maintenance worker disagree about
+	// drill mode (BannerWorkerMode, P22-R2b B7; serve wires it, fixtures mode and unit tests leave it
+	// nil). It is not Extra: Extra is the fixtures hook, which a real console must never carry.
+	WorkerMode func(now time.Time) []state.Banner
 	// Probes is the probe source (the health-prober's Facts; FixtureProbes in
 	// fixtures mode). Set, the World is wired (probes.go assembles every check)
 	// and the engine derives C01-C03, C05 (gateway), C06, C07, C10-C12 and C14-C16;
@@ -157,6 +161,9 @@ func (e *Evaluator) fleet(ctx context.Context, scope store.Scope, page bool) (Fl
 	}
 	if e.Extra != nil {
 		extra = append(extra, e.Extra(now)...)
+	}
+	if e.WorkerMode != nil {
+		extra = append(extra, e.WorkerMode(now)...)
 	}
 	f.View.Banners = SortBanners(dedupe(append(append([]state.Banner(nil), view.Banners...), extra...)))
 	return f, nil

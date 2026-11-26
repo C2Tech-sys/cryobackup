@@ -370,7 +370,7 @@ func (s *Service) deviceView(ctx context.Context, p *auth.Principal, f health.Fl
 			switch kind, class := escrowAssess(esc, c.Now); kind {
 			case escFailed:
 				v.Facts = append(v.Facts, k("ESCROWED", "failed", class))
-			case escNever:
+			case escNever, escFuture:
 				v.Facts = append(v.Facts, k("ESCROWED", "not verified", class))
 			case escOverdue:
 				v.Facts = append(v.Facts, k("ESCROWED", "verified "+ageLong(c.Now.Sub(*esc.VerifiedAt))+", overdue", class))

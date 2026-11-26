@@ -24,7 +24,7 @@ import (
 func clearSelfEnv(t *testing.T) {
 	t.Helper()
 	for _, v := range []string{"RCLONE_CONFIG", "CRYO_MAINTAIN_REMOTE", "CRYO_MAINTAIN_BUCKET", "CRYO_MAINTAIN_SELF_PREFIX",
-		"CRYO_MASTER_KEY_PATH", "CRYO_MAINTAIN_RESTIC", "CRYO_MAINTAIN_RESTIC_SHA256", "CRYO_MAINTAIN_RCLONE", "CRYO_CONFIG"} {
+		"CRYO_MASTER_KEY_PATH", "CRYO_MAINTAIN_RESTIC", "CRYO_MAINTAIN_RESTIC_SHA256", "CRYO_MAINTAIN_RCLONE", "CRYO_CONFIG", "CRYO_DRILL"} {
 		t.Setenv(v, "")
 	}
 }
@@ -346,5 +346,55 @@ func healthySelfBackup(t *testing.T, st *store.Store, at time.Time) {
 		if err := st.RecordJobRun(ctx, job, store.JobRun{Status: "ok", StartedAt: at, FinishedAt: at}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// P22-R2b B6: --drill (or CRYO_DRILL) marks a drill run, and the flag reaches maintain.SelfRepo.Drill,
+// which makes list and restore read with --no-lock (maintain's TestSelfRestoreDrillReadsRunWithNoLock
+// holds the argv). A malformed CRYO_DRILL is refused, not guessed. Killed mutant: Drill not passed
+// to the SelfRepo.
+func TestSelfBackupDrillFlagReachesTheRepo(t *testing.T) {
+	clearSelfEnv(t)
+	dir := t.TempDir()
+	if code, out, errb := run(t, "", initArgs(dir, "--master-key-copy-confirmed")...); code != 0 {
+		t.Fatalf("init: %d\n%s\n%s", code, out, errb)
+	}
+	cfg, err := config.Read(filepath.Join(dir, "config.json"), func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(dir, "rclone.conf")
+	if err := os.WriteFile(conf, []byte("[admin]\ntype = alias\nremote = /nowhere\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"--rclone-config", conf, "--bucket", "b", "--prefix", "console-self", "--master-key", cfg.MasterKeyPath}
+	repoOf := func(args ...string) (maintain.SelfRepo, bool, string) {
+		t.Helper()
+		fs := newFlags("self-backup list", IO{Stderr: io.Discard})
+		flags := addSelfRepoFlags(fs)
+		if err := fs.Parse(append(append([]string{}, base...), args...)); err != nil {
+			t.Fatal(err)
+		}
+		var errb strings.Builder
+		repo, ok := flags.repo("list", IO{Stderr: &errb})
+		return repo, ok, errb.String()
+	}
+	if r, ok, _ := repoOf(); !ok || r.Drill {
+		t.Fatalf("no flag: ok=%v drill=%v", ok, r.Drill)
+	}
+	if r, ok, _ := repoOf("--drill"); !ok || !r.Drill {
+		t.Fatalf("--drill: ok=%v drill=%v", ok, r.Drill)
+	}
+	t.Setenv("CRYO_DRILL", "true")
+	if r, ok, _ := repoOf(); !ok || !r.Drill {
+		t.Fatalf("CRYO_DRILL=true: ok=%v drill=%v", ok, r.Drill)
+	}
+	t.Setenv("CRYO_DRILL", "false")
+	if r, ok, _ := repoOf(); !ok || r.Drill {
+		t.Fatalf("CRYO_DRILL=false: ok=%v drill=%v", ok, r.Drill)
+	}
+	t.Setenv("CRYO_DRILL", "maybe")
+	if _, ok, errb := repoOf(); ok || !strings.Contains(errb, "CRYO_DRILL must be true or false") {
+		t.Fatalf("CRYO_DRILL=maybe: ok=%v %q", ok, errb)
 	}
 }

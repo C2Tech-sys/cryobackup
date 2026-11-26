@@ -129,10 +129,16 @@ func escrowIssueRecheck(f *DeviceFacts, th Thresholds, now, enrolled time.Time, 
 		}
 		return "", time.Time{}, false
 	}
-	verified, verifiedOK := e.VerifiedAt.Time()
+	// A proof time that is garbled or more than FutureSkewAllowed ahead of now proves nothing
+	// (a console clock that ran ahead when the key was verified): recorded(), as for every
+	// other check time, so it never reads green for the skew plus the recheck interval.
+	verified, verifiedOK := recorded(e.VerifiedAt, now)
 	if !verifiedOK {
 		return ReasonEscrowNeverVerified, since, true
 	}
+	// th.EscrowRecheck is policy sla.escrow_recheck_days. 0 is a recheck interval of zero days: every
+	// proven key is overdue (it has always been so; ADR 0033), never "off". The policy floor for a
+	// write is 8 (policy.EscrowRecheckMinDays); a stored 1 to 7 is raised to 8 when it is read.
 	if recheck && now.Sub(verified) > th.EscrowRecheck {
 		return ReasonEscrowRecheckOverdue, verified.Add(th.EscrowRecheck), true
 	}

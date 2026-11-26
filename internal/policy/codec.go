@@ -278,7 +278,7 @@ func Patch(p Policy, patch json.RawMessage) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	if err := out.Validate(); err != nil {
+	if err := out.ValidateWrite(); err != nil {
 		return Policy{}, err
 	}
 	return out, nil

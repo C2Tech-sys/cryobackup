@@ -107,8 +107,9 @@ func (s *Service) escrowVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const action = "device.escrow.verify"
+	method := actorOf(r, p).Method // "api" for a real API call, "web" for a console page's in-process call
 	audit := func(result string, details map[string]any) store.AuditEvent {
-		ev := store.AuditEvent{ActorType: "admin", ActorID: p.Admin.ID, ActorLabel: p.Admin.Username, Method: "api",
+		ev := store.AuditEvent{ActorType: "admin", ActorID: p.Admin.ID, ActorLabel: p.Admin.Username, Method: method,
 			SourceIP: httpx.ClientIP(r), Action: action, ObjectType: "device", ObjectID: t.DeviceID, CustomerID: t.CustomerID, Result: result}
 		if result != "ok" {
 			ev.Severity = "warning"
@@ -151,7 +152,14 @@ func (s *Service) escrowVerify(w http.ResponseWriter, r *http.Request) {
 	v, class, skip := maintain.ClassifyEscrowCheck(cerr)
 	switch {
 	case skip:
-		httpx.Problem(w, r, api.CodeCustodyCustomerHeld, 0) // the worker found the key customer-held after all
+		// The worker found the key customer-held after all. It was asked, so the request is audited
+		// like every other one that asks it (path-free: a verdict word and a fixed outcome).
+		if _, err := s.Store.AppendAudit(context.WithoutCancel(ctx), audit("error", map[string]any{"outcome": "custody_customer_held"})); err != nil {
+			s.log().Error("admin api: action not audited", logx.Class("audit"), logx.Err(err))
+			httpx.Problem(w, r, api.CodeInternal, 0)
+			return
+		}
+		httpx.Problem(w, r, api.CodeCustodyCustomerHeld, 0)
 		return
 	case class == adminpath.CodeUnavailable:
 		unavailable("worker_unavailable", api.CodeUnavailable) // the worker went away mid-check

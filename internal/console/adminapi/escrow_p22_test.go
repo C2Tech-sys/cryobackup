@@ -252,3 +252,96 @@ func rowOK(rows []SystemComponentJSON, id string) bool {
 	}
 	return false
 }
+
+// P22-R2b B5: the worker found the key customer-held after the console's own check passed. The
+// request asked the worker, so it has its audit row (path-free, result error, outcome
+// custody_customer_held), and the answer is the 409. Killed mutant: the audit row dropped from the skip path.
+func TestP22R2bWorkerFoundCustomerHeldIsAudited(t *testing.T) {
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	dev := e.dev
+	e.be.Errors = map[string]error{adminpath.MethodCatConfig: adminpath.NewError(adminpath.CodeCustodyCustomerHeld, "")}
+	before := e.escrowRow(dev.ID)
+	if code, _, pc := e.escrowVerify(owner, dev.ID); code != 409 || pc != api.CodeCustodyCustomerHeld {
+		t.Fatalf("worker says customer-held: %d %s", code, pc)
+	}
+	rows := e.pathFreeAudit("device.escrow.verify", dev.ID, dev.Hostname)
+	if len(rows) != 1 || rows[0].Result != "error" || rows[0].Severity != "warning" || !strings.Contains(string(rows[0].Details), `"outcome":"custody_customer_held"`) {
+		t.Fatalf("audit rows: %+v", rows)
+	}
+	if after := e.escrowRow(dev.ID); !equalTimePtr(after.LastVerifyAttemptAt, before.LastVerifyAttemptAt) || !equalTimePtr(after.VerifiedAt, before.VerifiedAt) {
+		t.Fatalf("a customer-held answer was recorded: %+v -> %+v", before, after)
+	}
+}
+
+func equalTimePtr(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
+// P22-R2b K2: the audit row's Method is the actor's transport: "api" for a direct API call (this
+// test), "web" when a console page made the call in process (the ui package's test asserts "web").
+// Killed mutant: Method hard-coded "web".
+func TestP22R2bEscrowVerifyAuditMethodIsAPIForAPICalls(t *testing.T) {
+	e := newEnv(t)
+	owner := e.login("admin", pw)
+	if code, b, _ := e.escrowVerify(owner, e.dev.ID); code != 200 {
+		t.Fatalf("verify: %d %s", code, b)
+	}
+	rows := e.auditOf("device.escrow.verify", e.dev.ID)
+	if len(rows) != 1 || rows[0].Method != "api" {
+		t.Fatalf("audit rows: %+v", rows)
+	}
+}
+
+// P22-R2b B4: keys that could not be read, or a candidate set that disagrees with the confirmed
+// escrowed devices (store.ErrEscrowCandidates), make the System page's escrow row appear as "not
+// checked" with the reason, never hide it: the row is only skipped when the facts were not gathered
+// at all or the set is genuinely empty. Killed mutant: the row's skip condition widened to
+// NotRead != "" (a fault hides the row).
+func TestP22R2bSystemEscrowRowShowsAnUnreadableCandidateSet(t *testing.T) {
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	f := healthFacts{Now: now, Escrow: &state.EscrowVerifyFacts{NotRead: "the escrowed keys could not be read (escrow_invalid)"}}
+	var row *SystemComponentJSON
+	for _, c := range buildComponents(f) {
+		if c.ID == "escrow" {
+			c := c
+			row = &c
+		}
+	}
+	if row == nil {
+		t.Fatal("no escrow row for an unreadable candidate set")
+	}
+	if row.Status != statusNotChecked || !strings.Contains(row.Detail, "escrow_invalid") {
+		t.Fatalf("row: %+v", row)
+	}
+	for _, c := range buildComponents(healthFacts{Now: now, Escrow: &state.EscrowVerifyFacts{}}) {
+		if c.ID == "escrow" {
+			t.Fatal("a genuinely empty candidate set shows a row")
+		}
+	}
+}
+
+// P22-R2b H1 (ADR 0033): the admin API refuses a write of sla.escrow_recheck_days from 1 to 7 on every route
+// that saves a policy or an override, naming the field (422 with the field), and accepts 8 and 0.
+// Killed mutants: the floor check dropped from the store's write paths.
+func TestP22R2bAdminAPIRefusesRecheckBelowTheFloor(t *testing.T) {
+	e := newEnv(t)
+	s := e.adminSession()
+	sla := func(d int) map[string]any { return map[string]any{"sla": map[string]any{"escrow_recheck_days": d}} }
+	for i, c := range []struct {
+		days int
+		ok   bool
+	}{{3, false}, {7, false}, {8, true}, {0, true}} {
+		res, b := e.req("POST", "/api/v1/policies", s, map[string]any{"scope": "template", "name": "Recheck " + string(rune('A'+i)), "sections": sla(c.days)})
+		if c.ok != (res.StatusCode == 201) || (!c.ok && !strings.Contains(string(b), "sla.escrow_recheck_days")) {
+			t.Errorf("POST policy %d: %d %s", c.days, res.StatusCode, b)
+		}
+		res, b = e.req("PUT", "/api/v1/devices/"+e.dev.ID+"/override", s, map[string]any{"patch": sla(c.days), "reason": "recheck test"})
+		if c.ok != (res.StatusCode == 200 || res.StatusCode == 201) || (!c.ok && !strings.Contains(string(b), "sla.escrow_recheck_days")) {
+			t.Errorf("PUT override %d: %d %s", c.days, res.StatusCode, b)
+		}
+	}
+}

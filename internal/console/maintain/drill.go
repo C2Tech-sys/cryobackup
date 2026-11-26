@@ -72,13 +72,14 @@ var (
 	drillWorkers = map[*Worker]bool{}
 )
 
-// drillNoLockFlag is restic's global --no-lock: Worker.common adds it in drill mode.
-const drillNoLockFlag = "--no-lock"
+// noLockFlag is restic's global --no-lock: Worker.common adds it in drill mode, Worker.noLockCommon
+// in every mode.
+const noLockFlag = "--no-lock"
 
 // enterDrill puts w in drill mode for the rest of its life: there is no way back. It also closes
 // w's background work (dump_multi.go), so the stale-lock unlock after a stalled dump never starts.
-// dumpIdleStopped then logs its "stale lock not removed" warning (class dump_idle_unlock, worded
-// for a shutdown); in drill mode there is no lock to remove, because every read ran with --no-lock.
+// dumpIdleStopped then logs a warning of class dump_idle_unlock worded for drill mode (not for a
+// shutdown): there is no lock to remove, because every read ran with --no-lock.
 func (w *Worker) enterDrill() {
 	drillMu.Lock()
 	drillWorkers[w] = true

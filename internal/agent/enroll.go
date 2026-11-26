@@ -193,6 +193,7 @@ func Enroll(ctx context.Context, o EnrollOptions) (EnrollResult, error) {
 	if resp.Custody != api.CustodyEscrowed && resp.Custody != api.CustodyCustomerHeld {
 		return res, errors.New("agent: the console returned an unknown custody")
 	}
+	clampPolicy(&resp.Policy.Policy, nil) // ADR 0033: a value below the escrow_recheck_days floor is raised, never refused
 	if err := resp.Policy.Policy.Validate(); err != nil {
 		return res, errors.New("agent: the first policy from the console does not validate")
 	}

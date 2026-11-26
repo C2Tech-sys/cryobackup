@@ -294,6 +294,7 @@ func composeLayers(defSections, sparse map[string]json.RawMessage, overridePatch
 	if err != nil {
 		return out, invalidf("effective policy: %v", err)
 	}
+	clampStored(&p) // composing reads stored policies: a value below the escrow_recheck_days floor is raised, never refused (ADR 0033); writes are checked on their input (CheckEscrowRecheckWritten)
 	if err := p.Validate(); err != nil {
 		return out, &composeError{err}
 	}

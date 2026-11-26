@@ -220,6 +220,7 @@ func selfStepOutcome(what, out string) (string, int) {
 // as defaults.
 type selfRepoFlags struct {
 	rcloneConfig, remote, bucket, prefix, masterKey, restic, resticSHA, rclone *string
+	drill                                                                      *bool
 }
 
 func envOr(name, def string) string {
@@ -239,13 +240,26 @@ func addSelfRepoFlags(fs *flag.FlagSet) selfRepoFlags {
 		restic:       fs.String("restic", envOr("CRYO_MAINTAIN_RESTIC", "restic"), "restic 0.19.1 (default $CRYO_MAINTAIN_RESTIC, else restic on PATH)"),
 		resticSHA:    fs.String("restic-sha256", os.Getenv("CRYO_MAINTAIN_RESTIC_SHA256"), "the restic binary's pinned sha256 (default $CRYO_MAINTAIN_RESTIC_SHA256)"),
 		rclone:       fs.String("rclone", envOr("CRYO_MAINTAIN_RCLONE", "rclone"), "rclone (default $CRYO_MAINTAIN_RCLONE, else rclone on PATH)"),
+		drill:        fs.Bool("drill", envBool("CRYO_DRILL"), "a drill run: read the live repository with --no-lock, leaving no lock object in it (default $CRYO_DRILL)"),
 	}
+}
+
+// envBool is the boolean value of the variable; unset, empty or not a boolean is false.
+func envBool(name string) bool {
+	b, err := strconv.ParseBool(os.Getenv(name))
+	return err == nil && b
 }
 
 // repo checks the flags and loads the master key. A missing flag or a key
 // file that cannot be read is a usage error; the message names the flag, never
 // a path or a secret.
 func (f selfRepoFlags) repo(cmd string, io IO) (maintain.SelfRepo, bool) {
+	if v := os.Getenv("CRYO_DRILL"); v != "" {
+		if _, err := strconv.ParseBool(v); err != nil { // as the worker: a malformed value is refused, not guessed
+			fmt.Fprintf(io.Stderr, "cryo-console self-backup %s: CRYO_DRILL must be true or false\n", cmd)
+			return maintain.SelfRepo{}, false
+		}
+	}
 	for _, req := range []struct{ name, env, val string }{
 		{"--rclone-config", "RCLONE_CONFIG", *f.rcloneConfig}, {"--remote", "CRYO_MAINTAIN_REMOTE", *f.remote},
 		{"--bucket", "CRYO_MAINTAIN_BUCKET", *f.bucket}, {"--prefix", "CRYO_MAINTAIN_SELF_PREFIX", *f.prefix},
@@ -264,6 +278,7 @@ func (f selfRepoFlags) repo(cmd string, io IO) (maintain.SelfRepo, bool) {
 	return maintain.SelfRepo{
 		ResticProgram: *f.restic, ResticSHA256: *f.resticSHA, RcloneProgram: *f.rclone,
 		RcloneConfig: *f.rcloneConfig, Remote: *f.remote, Bucket: *f.bucket, Prefix: *f.prefix, MasterKey: mk,
+		Drill: *f.drill,
 	}, true
 }
 

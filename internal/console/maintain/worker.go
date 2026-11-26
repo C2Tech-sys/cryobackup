@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -357,7 +358,21 @@ func (w *Worker) common() restic.Common {
 	}
 	if w.inDrill() {
 		c.RetryLock = 0
-		c.Extra = append(c.Extra, drillNoLockFlag)
+		c.Extra = append(c.Extra, noLockFlag)
+	}
+	return c
+}
+
+// noLockCommon is common() for a read that must leave no lock object in the
+// repository, in every mode: --no-lock and no --retry-lock (there is no lock to
+// wait for). `restic cat config` without --no-lock creates and deletes a lock
+// object (proven on restic 0.19.1 with locks/ write-denied), so the escrow
+// verifier, an on-demand verify and enrollment's config read all use this.
+func (w *Worker) noLockCommon() restic.Common {
+	c := w.common()
+	c.RetryLock = 0
+	if !slices.Contains(c.Extra, noLockFlag) {
+		c.Extra = append(c.Extra, noLockFlag)
 	}
 	return c
 }

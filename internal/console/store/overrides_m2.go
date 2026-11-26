@@ -241,6 +241,13 @@ func (s *Store) SetDeviceOverride(ctx context.Context, scope Scope, deviceID str
 				return err
 			}
 		}
+		// A WRITE: an override that sets sla.escrow_recheck_days must meet the floor (ADR 0033).
+		var written map[string]json.RawMessage
+		if json.Unmarshal([]byte(patch), &written) == nil {
+			if err := policy.CheckEscrowRecheckWritten(written["sla"]); err != nil {
+				return validation(PolicyProblems(err))
+			}
+		}
 		if _, err := composeLayers(def, sparse, string(patch)); err != nil {
 			if fe := PolicyProblems(err); len(fe) > 0 {
 				return validation(fe)

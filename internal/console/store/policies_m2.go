@@ -470,6 +470,10 @@ func (r resultingPolicy) sameAs(rec PolicyRecord) (bool, error) {
 // for the default itself, over the proposed defaults) they must validate. The
 // error is a *ValidationError with one field per problem, keyed by document path.
 func validateProposal(tx *Tx, scopeKind string, sections map[string]json.RawMessage) error {
+	// A WRITE: the sla.escrow_recheck_days it carries must meet the floor (ADR 0033).
+	if err := policy.CheckEscrowRecheckWritten(sections["sla"]); err != nil {
+		return validation(PolicyProblems(err))
+	}
 	def, _, err := loadDefaultSections(tx)
 	if err != nil {
 		return err
