@@ -257,6 +257,10 @@ func checkThrottle(c *collector, t Throttle) {
 	}
 }
 
+// EscrowRecheckMinDays is the smallest sla.escrow_recheck_days other than 0 (recheck off): the
+// weekly escrow verification (state.EscrowVerifyEvery, ADR 0030) must fit inside it.
+const EscrowRecheckMinDays = 7
+
 func checkSLA(c *collector, s SLA) {
 	nonNeg := []struct {
 		name string
@@ -273,6 +277,14 @@ func checkSLA(c *collector, s SLA) {
 	}
 	for _, f := range nonNeg {
 		c.atLeast("sla."+f.name, f.v, 0)
+	}
+	// escrow_recheck_days: 0 is "recheck off" (an escrowed key's age never raises ESCROW_UNVERIFIED;
+	// a recorded failure and a never-verified key still do), and 1 to EscrowRecheckMinDays-1 is
+	// refused: the console's verifier re-proves every escrowed key weekly (ADR 0030), so a shorter
+	// interval would raise the alarm between two checks of a healthy key. Negative values are the
+	// ">= 0" problem above.
+	if d := s.EscrowRecheckDays; d > 0 && d < EscrowRecheckMinDays {
+		c.add("sla.escrow_recheck_days", "must be 0 (recheck off) or at least %d days: the weekly verification would otherwise leave a healthy key overdue between checks, got %d", EscrowRecheckMinDays, d)
 	}
 	c.atLeast("sla.stale_after_hours", s.StaleAfterHours, 1)
 	if s.UnseenAfterHours < s.StaleAfterHours {

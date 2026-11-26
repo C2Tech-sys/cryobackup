@@ -351,6 +351,12 @@ func TestDrillReadsRunWithNoLock(t *testing.T) {
 		t.Fatalf("production reads made %d restic calls, want at least 4", len(prod))
 	}
 	for _, c := range prod {
+		if c.Args[0] == "cat" { // P22-R2b B1: cat config reads the config only and leaves no lock object, in every mode
+			if !hasArg(c, "--no-lock") || hasArg(c, "--retry-lock") {
+				t.Fatalf("production cat config: argv %v, want --no-lock and no --retry-lock", c.Args)
+			}
+			continue
+		}
 		if hasArg(c, "--no-lock") || !hasArg(c, "--retry-lock") {
 			t.Fatalf("production %s: argv %v, want --retry-lock and no --no-lock", c.Args[0], c.Args)
 		}
@@ -405,6 +411,11 @@ func TestDrillWatchdogStopSchedulesNoUnlock(t *testing.T) {
 	}
 	if !strings.Contains(e.logs.String(), "dump_idle_unlock") {
 		t.Errorf("the skipped cleanup was not logged:\n%s", e.logs.String())
+	}
+	// P22-R2b G8: the drill line says drill, not "shutting down" (the worker is not), and promises no
+	// scheduled retry (a drill copy has no scheduler).
+	if l := e.logs.String(); strings.Contains(l, "shutting down") || strings.Contains(l, "scheduled unlock step") || !strings.Contains(l, "drill mode") {
+		t.Errorf("the drill line is worded for a shutdown or a retry that will not come:\n%s", l)
 	}
 }
 

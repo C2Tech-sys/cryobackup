@@ -151,19 +151,26 @@ Drill on a throwaway Linux virtual machine in your lab, never on the production 
 machine that can reach production in a way that matters.
 
 1. Create the VM. Install the binaries and the offline kit (section 3, steps 1 and 2).
-2. Run `self-backup restore` (step 3). It must end in `ok`: the manifest checks and the escrow unwrap
-   passed.
+2. Run `self-backup restore` (step 3) with `--drill` (or `CRYO_DRILL=true` in your shell). The production
+   self-backup repository is live under the production console; with `--drill` the read carries
+   `--no-lock`, so it leaves no lock object there, and the restore writes only to `--out`. It must end in
+   `ok`: the manifest checks and the escrow unwrap passed. `self-backup list --drill` is the same read.
 3. Place the files (step 4). Skip step 5: a drill issues no certificate and changes no DNS.
 4. **Turn drill mode on before anything starts.** In `/etc/cryobackup/config.json` set
    `"drill": true`. Both `cryo-console` and `cryo-maintain` read it from that file. `CRYO_DRILL=true`
-   in a unit's environment does the same for that unit only, so prefer the file. Then check:
+   in a unit's environment does the same for that unit only, so prefer the file, and make sure no
+   `CRYO_DRILL=false` is left in `maintain.env` (an environment value beats the file). The two programs
+   decide independently; the worker reports its mode to the console, and a console and a worker that
+   disagree raise the red "WORKER DRILL MODE MISMATCH" banner on every page and fail the
+   `maintenance worker` line of `doctor`. Then check:
 
 ```sh
 cryo-console doctor --config /etc/cryobackup/config.json
 ```
 
    It must print `WARN  drill  on: drill copy. ...`. If it prints `OK  drill  off`, stop and fix the
-   file. The agent certificate is not needed: in drill mode `tls.cert` and `tls.key` are not
+   file. Run it again after step 5 has started the worker: the `maintenance worker` line must be `OK`,
+   not `FAIL ... drill mode differs`. The agent certificate is not needed: in drill mode `tls.cert` and `tls.key` are not
    checked, because no agent listener is opened. If `admin.tls` names certificate files, issue a
    throwaway self-signed pair on the VM or clear both keys. Keep `admin_listen` on `127.0.0.1` and
    reach it through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 <drill VM>`).

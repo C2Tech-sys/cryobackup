@@ -24,11 +24,12 @@ import (
 // active escrowed key and a confirmed enrollment that is not being purged,
 // retired devices included, whether or not maintenance applies to it.
 
-// escrowVerifyRetry is how long a key waits after an attempt, whatever its
+// EscrowVerifyRetry is how long a key waits after an attempt, whatever its
 // outcome, before the scheduler tries cat config on it again: a key that could
 // not be proven (storage unreachable, a timeout, a busy worker) or whose last
-// verdict was a failure is retried hourly, not every pass.
-const escrowVerifyRetry = time.Hour
+// verdict was a failure is retried hourly, not every pass (escrowVerifyDue). The
+// device page reads the same constant for its "next check" wording.
+const EscrowVerifyRetry = time.Hour
 
 // escrowVerifyStagger is the widest per-device advance of the due time: a key is
 // due once its newest proof is state.EscrowVerifyEvery old less a stable offset
@@ -63,23 +64,33 @@ func escrowVerifyOffset(deviceID string) time.Duration {
 	return time.Duration(h.Sum64()%uint64(escrowVerifyStagger/time.Second)) * time.Second
 }
 
-// escrowVerifyDue reports whether k is due at now: it was never proven, or its
-// newest proof is state.EscrowVerifyEvery old less its stagger offset, and no
-// attempt was made within escrowVerifyRetry. A proof time that does not parse is
-// due (it proves nothing); an attempt time more than a few minutes in the future
-// does not hold the key back.
+// escrowVerifyDue reports whether k is due at now. No attempt within EscrowVerifyRetry holds
+// it back, whatever else is true (an attempt time more than a few minutes in the future does
+// not hold it). Past the hold it is due when it was never proven; when its last verdict was a
+// failure (wrong_password, repo_missing: retried hourly, so a repaired repository clears the
+// alarm within the hour, not a week later); when its proof time does not parse or lies more than
+// state.FutureSkewAllowed ahead of now (such a proof proves nothing, as the state rules treat
+// it: a console clock that ran ahead must not keep a key unchecked); or when its newest proof is
+// state.EscrowVerifyEvery old less its stagger offset.
 func escrowVerifyDue(k state.EscrowKeyFacts, now time.Time) bool {
-	if at, ok := k.LastAttemptAt.Time(); ok && !at.After(now.Add(state.FutureSkewAllowed)) && now.Sub(at) < escrowVerifyRetry {
+	if at, ok := k.LastAttemptAt.Time(); ok && !at.After(now.Add(state.FutureSkewAllowed)) && now.Sub(at) < EscrowVerifyRetry {
 		return false
 	}
-	if k.Escrow.VerifiedAt == 0 {
+	if k.Escrow.VerifiedAt == 0 || k.Escrow.LastVerifyErrorClass != "" {
 		return true
 	}
 	proven, ok := k.Escrow.VerifiedAt.Time()
-	if !ok {
+	if !ok || proven.After(now.Add(state.FutureSkewAllowed)) {
 		return true
 	}
 	return now.Sub(proven) >= state.EscrowVerifyEvery-escrowVerifyOffset(k.DeviceID)
+}
+
+// EscrowVerifyDueAt is when the verifier next checks a key whose newest proof is proven (and
+// whose device has the given id): proven plus state.EscrowVerifyEvery less the device's stable
+// stagger offset. The device page says "due" from this time, so it agrees with the scheduler.
+func EscrowVerifyDueAt(deviceID string, proven time.Time) time.Time {
+	return proven.Add(state.EscrowVerifyEvery - escrowVerifyOffset(deviceID))
 }
 
 // escrowVerifyOrder sorts the due keys: never proven first (never attempted,
@@ -179,8 +190,9 @@ func ClassifyEscrowCheck(err error) (v store.EscrowVerification, class string, s
 // last_verify_error_class, which raises ESCROW_UNVERIFIED with the "verify
 // failed" reason (C22 for a retired device). Anything else records only the
 // attempt: the key was not proven, so its previous proof keeps ageing, and the
-// next attempt is an hour later. cat config takes no repository lock, so step 1
-// does not apply.
+// next attempt is an hour later. cat config runs with --no-lock (Worker.noLockCommon):
+// it takes no repository lock and leaves no lock object, so step 1 does not apply and the
+// check writes nothing to the repository.
 func (w *Worker) verifyEscrow(ctx context.Context, deviceID string, rep *CycleReport) {
 	cctx, cancel := context.WithTimeout(ctx, schedulerSlotWait+w.cfg.Timeouts.CatConfig)
 	_, err := w.CatConfig(cctx, adminpath.DeviceRequest{DeviceID: deviceID, RequestID: w.schedulerRequestID()})

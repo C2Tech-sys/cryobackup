@@ -16,6 +16,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/adminapi"
 	"github.com/c2tech-sys/cryobackup/internal/console/adminpath"
 	"github.com/c2tech-sys/cryobackup/internal/console/auth"
+	"github.com/c2tech-sys/cryobackup/internal/console/maintain"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -230,7 +231,7 @@ func (s *Service) escrowPanel(ctx context.Context, p *auth.Principal, id string,
 		}
 		pn.Rows = append(pn.Rows, Fact{Key: "Last attempt", Value: v})
 	}
-	pn.Rows = append(pn.Rows, Fact{Key: "Next check", Value: escrowNextCheck(esc.VerifiedAt, esc.LastVerifyAttemptAt, c)})
+	pn.Rows = append(pn.Rows, Fact{Key: "Next check", Value: escrowNextCheck(id, esc, c)})
 
 	switch {
 	case t.Purging:
@@ -254,30 +255,30 @@ func (s *Service) escrowPanel(ctx context.Context, p *auth.Principal, id string,
 	return pn
 }
 
-// escrowRetryHold is how long the verifier leaves a key alone after any attempt, whatever its
-// outcome. It is maintain.escrowVerifyRetry (unexported there, and maintain is not this ticket's to
-// change): keep the two equal.
-const escrowRetryHold = time.Hour
-
-// escrowNextCheck words when the verifier checks the key next: weekly, up to a day sooner (its
-// stagger), at the next pass once it is due, and never within escrowRetryHold of an attempt. A key
-// never proven is retried every hour.
-func escrowNextCheck(verified, attempt *time.Time, c fmtCtx) string {
+// escrowNextCheck words when the verifier checks the key next, from the verifier's own due rule
+// (maintain.EscrowVerifyDueAt: the proof plus a week less this device's stable stagger offset, up to
+// a day sooner; maintain.EscrowVerifyRetry: no key is touched within an hour of an attempt). "Due
+// now" is said only once that time has come, never a day early. A key never proven, or whose last
+// check reached a verdict of failure, is retried every hour until it passes.
+func escrowNextCheck(deviceID string, esc store.Escrow, c fmtCtx) string {
 	hold := time.Time{}
-	if attempt != nil && c.Now.Before(attempt.Add(escrowRetryHold)) {
-		hold = attempt.Add(escrowRetryHold)
+	if at := esc.LastVerifyAttemptAt; at != nil && c.Now.Before(at.Add(maintain.EscrowVerifyRetry)) {
+		hold = at.Add(maintain.EscrowVerifyRetry)
 	}
 	heldUntil := func(what string) string {
 		return what + ", not before " + c.dayClock(hold) + " " + c.zoneAbbr(hold) + " (an hour after the last attempt)"
 	}
-	if verified == nil {
+	if esc.VerifiedAt == nil {
 		if !hold.IsZero() {
 			return heldUntil("At the next maintenance pass") + ", then every hour until it passes"
 		}
 		return "At the next maintenance pass, then every hour until it passes"
 	}
-	due := verified.Add(state.EscrowVerifyEvery)
-	if !c.Now.Before(due.Add(-24 * time.Hour)) {
+	// A recorded failure is retried as soon as the hold is over, whatever the proof's age; a proof
+	// time in the future (a clock that ran ahead) proves nothing and is due too.
+	due := maintain.EscrowVerifyDueAt(deviceID, *esc.VerifiedAt)
+	retry := esc.LastVerifyErrorClass != "" || esc.VerifiedAt.After(c.Now.Add(state.FutureSkewAllowed))
+	if retry || !c.Now.Before(due) {
 		if !hold.IsZero() {
 			return heldUntil("Due: the next maintenance pass runs it")
 		}

@@ -29,6 +29,7 @@ func (w *Worker) Ping(ctx context.Context) (adminpath.PingResult, error) {
 		Uptime:           w.clock().Sub(w.started),
 		MasterKeyLoaded:  loaded,
 		StorageReachable: reach,
+		Drill:            w.inDrill(),
 	}, nil
 }
 
@@ -148,9 +149,12 @@ func abortError(ctx context.Context, r execResult) error {
 	return nil
 }
 
-// catConfig runs `restic cat config` for t and decodes the document.
+// catConfig runs `restic cat config` for t and decodes the document. It runs
+// with --no-lock in every mode (noLockCommon): reading the config needs no lock,
+// and a lock object would be a write to the repository (ADR 0031 section 5: the
+// escrow check reads only the config).
 func (w *Worker) catConfig(ctx context.Context, t *target) (restic.Config, execResult, error) {
-	cmd, err := restic.CatConfig(w.common())
+	cmd, err := restic.CatConfig(w.noLockCommon())
 	if err != nil {
 		return restic.Config{}, execResult{}, adminpath.NewError(adminpath.CodeInvalidRequest, "")
 	}

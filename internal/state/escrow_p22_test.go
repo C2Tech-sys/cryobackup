@@ -49,6 +49,9 @@ func TestP22HEscrowKeyFailingClasses(t *testing.T) {
 		{"never proven, inside the grace", EscrowFacts{CreatedAt: ago(2 * hour)}, ""},
 		{"never proven, past the grace", EscrowFacts{CreatedAt: ago(30 * hour)}, ReasonEscrowNeverVerified},
 		{"garbled proof time", EscrowFacts{VerifiedAt: 12345}, ReasonEscrowNeverVerified},
+		{"proof 60 days in the future (P22-R2b B2)", EscrowFacts{VerifiedAt: ahead(60 * day)}, ReasonEscrowNeverVerified},
+		{"proof past the allowed skew", EscrowFacts{VerifiedAt: ahead(FutureSkewAllowed + time.Minute)}, ReasonEscrowNeverVerified},
+		{"proof inside the allowed skew", EscrowFacts{VerifiedAt: ahead(time.Minute)}, ""},
 	} {
 		r, bad := EscrowKeyFailing(escrowKey("d", true, c.e), t0)
 		if bad != (c.want != "") || r != c.want {
@@ -77,7 +80,7 @@ func TestP22HRetiredEscrowBannerCountsRetiredFailuresOnly(t *testing.T) {
 	v := Evaluate(w, t0)
 	b, ok := findBanner(v, escrowRetiredID)
 	if !ok || b.Count != 2 || b.Severity != SeverityAlarm || !strings.HasPrefix(b.Text, "Escrow verification failing for 2 retired devices") {
-		t.Fatalf("C22 = %+v (%v), want a warning counting 2 retired devices; banners %v", b, ok, bannerIDs(v))
+		t.Fatalf("C22 = %+v (%v), want an alarm counting 2 retired devices; banners %v", b, ok, bannerIDs(v))
 	}
 	if strings.Contains(b.Text, "retired-old") || strings.Contains(b.Text, devID(3)) {
 		t.Errorf("the banner names a device: %q", b.Text)

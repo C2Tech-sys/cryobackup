@@ -38,13 +38,14 @@ const (
 	// (a sampled device is not due again for Config.UsageInterval).
 	usageRefreshPerPass = 20
 	usageRefreshBudget  = 5 * time.Minute
-	// schedulerSlotWait bounds how long one scheduler call (escrow cat config,
-	// usage stats) waits for a free concurrency slot (Config.MaxConcurrent, shared
-	// with the console's admin-path calls) before its own method timeout starts.
-	// A call that cannot get a slot in time is left for the next pass: a deferral,
-	// not a failure.
-	schedulerSlotWait = 30 * time.Second
 )
+
+// schedulerSlotWait bounds how long one scheduler call (escrow cat config,
+// usage stats) waits for a free concurrency slot (Config.MaxConcurrent, shared
+// with the console's admin-path calls) before its own method timeout starts.
+// A call that cannot get a slot in time is left for the next pass: a deferral,
+// not a failure. A variable only so that a test can shorten it.
+var schedulerSlotWait = 30 * time.Second
 
 // CycleReport is what one scheduler pass did, in counts only.
 type CycleReport struct {

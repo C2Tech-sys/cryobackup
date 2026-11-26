@@ -438,3 +438,39 @@ func TestListSelfSnapshotsNewestFirst(t *testing.T) {
 		}
 	}
 }
+
+// P22-R2b B6: a drill run (SelfRepo.Drill) reads the live self-backup repository with --no-lock and no
+// --retry-lock, for the snapshot listing and for the restore, so it leaves no lock object in the
+// production repository; a normal run keeps --retry-lock and no --no-lock. The restore writes only to
+// --out. Killed mutants: Drill ignored (argv keeps --retry-lock), --no-lock dropped from the restore.
+func TestSelfRestoreDrillReadsRunWithNoLock(t *testing.T) {
+	for _, drill := range []bool{false, true} {
+		h := newRestoreHarness(t, nil)
+		h.repo.Drill = drill
+		src := t.TempDir()
+		selfCopy(t, src, h.repo.MasterKey)
+		seamFrom(t, src, nil)
+		if _, err := ListSelfSnapshots(context.Background(), h.repo); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := RestoreSelfBackup(context.Background(), h.repo, "", filepath.Join(t.TempDir(), "restored")); err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for _, c := range h.calls() {
+			if c.Args[0] == "version" {
+				continue
+			}
+			seen[c.Args[0]] = true
+			if got := argsHave(c, "--no-lock"); got != drill {
+				t.Errorf("drill=%v: %s argv %v: --no-lock = %v", drill, c.Args[0], c.Args, got)
+			}
+			if got := argsHave(c, "--retry-lock"); got == drill {
+				t.Errorf("drill=%v: %s argv %v: --retry-lock = %v", drill, c.Args[0], c.Args, got)
+			}
+		}
+		if !seen["snapshots"] || !seen["restore"] {
+			t.Fatalf("drill=%v: calls seen %v", drill, seen)
+		}
+	}
+}

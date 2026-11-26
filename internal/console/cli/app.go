@@ -255,6 +255,11 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	fleet := &health.Evaluator{Store: a.Store, Clock: a.clock, MasterLoaded: a.Master.Loaded, Maintain: a.Probe.Status, Endpoint: a.Endpoint.Status,
 		Probes: a.probeSource(fix), Refresh: func() time.Duration { return time.Duration(disp.RefreshS()) * time.Second },
 		PurgeBanner: true} // ADR 0019: "Purge not finished", in serve and in fixtures mode
+	if !fix {
+		// P22-R2b B7: serve and maintain decide drill independently; a mismatch is a critical banner
+		// on every page (workermode.go). Fixtures mode has no worker to compare with.
+		fleet.WorkerMode = (&workerMode{ping: a.Backend.Ping, drill: drill, clock: a.clock, log: a.log}).Banners
+	}
 	idle := time.Duration(cfg.Session.IdleH) * time.Hour
 	abs := time.Duration(cfg.Session.AbsoluteH) * time.Hour
 	a.Auth = auth.NewManager(a.Store, idle, abs, cfg.RateLimits.LoginPerMinPerIP, cfg.RateLimits.LoginLockAfter,

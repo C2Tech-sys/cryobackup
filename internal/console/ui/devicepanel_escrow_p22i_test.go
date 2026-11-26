@@ -163,6 +163,11 @@ func TestP22I_VerifyNowRecordsAVerdictAndShowsIt(t *testing.T) {
 	if len(rows) != 1 { // the service audits; the page writes none of its own
 		t.Fatalf("%d audit rows, want exactly 1 (not doubled)", len(rows))
 	}
+	// P22-R2b K2: a click on the page reaches the API in process, so the audit row's method is "web";
+	// a direct API call says "api" (adminapi's TestP22R2bEscrowVerifyAuditMethodIsAPIForAPICalls).
+	if rows[0].Method != "web" {
+		t.Errorf("audit method = %q, want web for a page click", rows[0].Method)
+	}
 	if strings.Contains(string(rows[0].Details), "/") || pathLike.MatchString(string(rows[0].Details)) {
 		t.Errorf("the audit row is not path-free: %s", rows[0].Details)
 	}
@@ -429,6 +434,22 @@ func TestP22I_VerdictFlashIsBoundToItsDevice(t *testing.T) {
 		t.Error("A's verdict shows on never-verified device B")
 	}
 	mustContainText(t, "device B", body, "NEVER VERIFIED")
+	// P22-R2b K1: the device id is covered by the MAC. A token for A with the device id edited to B's
+	// names B and carries a MAC made over A's name, so B shows nothing. (Mutant: the id dropped from the
+	// MAC, at mint and at verify, accepts this token.)
+	raw, err := url.QueryUnescape(tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(raw, "escrow:"+a+":", "escrow:"+b+":", 1)
+	if edited == raw {
+		t.Fatalf("the token has another form: %q", raw)
+	}
+	body = e.page("/devices/"+b+"?escrow="+url.QueryEscape(edited), 200)
+	if strings.Contains(body, shown) || strings.Contains(body, "Verified.") {
+		t.Error("device B shows A's verdict from a token whose device id was edited")
+	}
+	mustContainText(t, "device B, edited token", body, "NEVER VERIFIED")
 	// A still shows it; after the TTL nobody does.
 	if body := e.page("/devices/"+a+"?escrow="+tok, 200); !strings.Contains(body, shown) {
 		t.Error("A lost its verdict")

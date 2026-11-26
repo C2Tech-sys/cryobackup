@@ -80,6 +80,10 @@ type SelfRepo struct {
 	// MasterKey is the console master key of the offline kit; the repository
 	// password is derived from it and never leaves this process.
 	MasterKey *escrow.MasterKey
+	// Drill is a drill run (runbook section 5, ADR 0029 ruling C8): the production repository is
+	// live under another console, so the reads (snapshots, restore) run with --no-lock and no
+	// --retry-lock and leave no lock object in it. A restore writes only to its local --out.
+	Drill bool
 }
 
 // SelfRestoreError is a failure of ListSelfSnapshots or RestoreSelfBackup: a
@@ -195,6 +199,10 @@ func openSelfRepo(ctx context.Context, r SelfRepo, parent string) (*selfSession,
 	s.env = restic.Env{Repository: repo, Password: pw, NoCache: true, TempDir: filepath.Join(tmp, "tmp")}
 	s.common = restic.Common{RetryLock: DefaultRetryLock,
 		Extra: append([]string{restic.NoCacheFlag}, restic.AdminOptions(rcloneProgram, false)...)}
+	if r.Drill {
+		s.common.RetryLock = 0
+		s.common.Extra = append(s.common.Extra, noLockFlag)
+	}
 
 	// The pinned engine only (ADR 0003), as the worker checks at start.
 	var info restic.VersionInfo

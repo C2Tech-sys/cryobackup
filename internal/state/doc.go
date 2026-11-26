@@ -196,8 +196,9 @@
 //	C16  a rejected manifest: warning. release-check never ran, or not for ReleaseCheckMaxAge (45 min: three
 //	     of its 15-min periods): C16b warning.
 //	C22  retired devices whose escrowed key fails its verification (EscrowKeyFailing: a recorded failure,
-//	     never proven after the grace, or a proof older than the recheck interval; ADR 0030): warning, with
-//	     the count. RETIRED keeps those devices' own rows quiet. World.EscrowVerify, not ProbeFacts: nil
+//	     never proven after the grace, a proof older than the recheck interval, or a proof time that is
+//	     garbled or in the future; ADR 0030): alarm, with the count (the banner stands in for the retired
+//	     device's own ESCROW_UNVERIFIED alarm, which RETIRED suppresses). RETIRED keeps those devices' own rows quiet. World.EscrowVerify, not ProbeFacts: nil
 //	     raises nothing; keys that could not be read (NotRead) are C22b warning.
 //
 // # Not in this build

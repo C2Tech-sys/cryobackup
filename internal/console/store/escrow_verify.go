@@ -94,8 +94,9 @@ func recordEscrowVerificationTx(tx *Tx, scope Scope, deviceID string, v EscrowVe
 // that is not being purged (its repository is going away; ADR 0019). Retired
 // devices are included: retire keeps the repository and the key (ADR 0016), and
 // a retired device can still be restored by download. The scope clause is
-// appended on the customer id.
-const escrowVerifyKeysSQL = `
+// appended on the customer id. (A var, not a const, only so a test can break the query and watch
+// the cross-check against escrowConfirmedCountSQL fire.)
+var escrowVerifyKeysSQL = `
 	SELECT d.id, d.retired_at IS NOT NULL, e.custody, e.created_at, e.verified_at, e.last_verify_attempt_at,
 	       COALESCE(e.last_verify_error_class, '')
 	FROM repo_key_escrow e
@@ -105,10 +106,28 @@ const escrowVerifyKeysSQL = `
 	  AND d.enroll_confirmed_at IS NOT NULL AND d.purge_requested_at IS NULL
 	  AND `
 
+// escrowConfirmedCountSQL counts, by a different route than escrowVerifyKeysSQL, the devices the
+// verifier must have a candidate for: confirmed, not purging, an active escrowed key, a customer
+// that holds escrowed custody. It exists only to cross-check the candidate query (B4): if that query
+// ever returned no rows (or fewer) while these devices exist, the verifier would see nothing to do and
+// the fleet would read green, so the mismatch is an error. The scope clause is appended on d.customer_id.
+const escrowConfirmedCountSQL = `
+	SELECT COUNT(*) FROM devices d
+	WHERE d.enroll_confirmed_at IS NOT NULL AND d.purge_requested_at IS NULL
+	  AND EXISTS (SELECT 1 FROM repo_key_escrow e WHERE e.device_id = d.id AND e.retired_at IS NULL AND e.custody = 'escrowed')
+	  AND EXISTS (SELECT 1 FROM customers c WHERE c.id = d.customer_id AND c.key_custody = 'escrowed')
+	  AND `
+
+// ErrEscrowCandidates is the candidate set disagreeing with the devices it should cover: fewer
+// candidates than confirmed devices with an escrowed key. It is an ErrInvalid so the facts loaders
+// report it as a fixed class ("escrow_invalid"), never as an empty candidate list that reads healthy.
+var ErrEscrowCandidates = fmt.Errorf("%w: the escrow verifier's candidates do not cover the confirmed devices with an escrowed key", ErrInvalid)
+
 // EscrowVerifyKeys lists the escrow verifier's candidate keys inside scope, by
 // device id: what the scheduler checks (maintain/escrowverify.go), what banner
 // C22 and the System page's escrow row judge (state.EscrowVerifyFacts). Times
-// are the raw milliseconds the engine parses itself.
+// are the raw milliseconds the engine parses itself. It is ErrEscrowCandidates when
+// fewer candidates come back than confirmed devices with an escrowed key exist.
 func (s *Store) EscrowVerifyKeys(ctx context.Context, scope Scope) ([]state.EscrowKeyFacts, error) {
 	if err := scope.check(); err != nil {
 		return nil, err
@@ -125,6 +144,22 @@ func (s *Store) EscrowVerifyKeys(ctx context.Context, scope Scope) ([]state.Escr
 // escrowVerifyKeysTx is EscrowVerifyKeys inside an open transaction (for a
 // facts load that reads it beside the devices, in the same snapshot).
 func escrowVerifyKeysTx(tx *Tx, scope Scope) ([]state.EscrowKeyFacts, error) {
+	out, err := escrowVerifyKeysRows(tx, scope)
+	if err != nil {
+		return nil, err
+	}
+	clause, args := scope.clause("d.customer_id")
+	var want int
+	if err := tx.QueryRow(escrowConfirmedCountSQL+clause, args...).Scan(&want); err != nil {
+		return nil, err
+	}
+	if len(out) < want {
+		return nil, ErrEscrowCandidates
+	}
+	return out, nil
+}
+
+func escrowVerifyKeysRows(tx *Tx, scope Scope) ([]state.EscrowKeyFacts, error) {
 	clause, args := scope.clause("d.customer_id")
 	rows, err := tx.Query(escrowVerifyKeysSQL+clause+` ORDER BY d.id`, args...)
 	if err != nil {

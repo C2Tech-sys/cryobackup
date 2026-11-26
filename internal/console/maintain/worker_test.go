@@ -199,10 +199,14 @@ func TestCommandEnvironmentAndArgs(t *testing.T) {
 		}
 	}
 	args := strings.Join(c.Args, " ")
-	for _, want := range []string{"cat config", "--no-cache", "rclone.program=rclone-test-program", "rclone.args=serve restic --stdio", "--retry-lock 30s"} {
+	for _, want := range []string{"cat config", "--no-cache", "rclone.program=rclone-test-program", "rclone.args=serve restic --stdio", "--no-lock"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args %q lack %q", args, want)
 		}
+	}
+	// P22-R2b B1: this call is cat config, which reads the config only: --no-lock, never --retry-lock.
+	if strings.Contains(args, "--retry-lock") {
+		t.Errorf("cat config args %q carry --retry-lock", args)
 	}
 	for _, bad := range []string{testPassword, "bypass-governance", "--password", "-r "} {
 		if strings.Contains(args, bad) {

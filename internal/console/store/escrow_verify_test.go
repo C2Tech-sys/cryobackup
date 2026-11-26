@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -323,5 +324,84 @@ func TestP22HLoadWorldFeedsBannerC22(t *testing.T) {
 	}
 	if _, raised := banner(wr, "C22"); raised {
 		t.Error("C22 counted on facts that were not read")
+	}
+}
+
+// P22-R2b G1: the customer's key_custody clause in the candidate query. A device whose customer is
+// customer_held is not a candidate even when its key row says escrowed (a direct update; the service
+// layers keep the two in step, the query must not depend on it). Killed mutant: dropping
+// `AND c.key_custody = 'escrowed'` from escrowVerifyKeysSQL (and from the count's twin: the count and
+// the candidates then still agree, so this test is what holds both clauses).
+func TestP22R2bCustomerHeldCustomerIsNotACandidate(t *testing.T) {
+	s, _, byHost := fixtureEscrowStore(t)
+	ctx := t.Context()
+	never := byHost("TECH-BENCH-07") // escrowed key, confirmed, not purging, never verified
+	before := must[[]state.EscrowKeyFacts](t)(s.EscrowVerifyKeys(ctx, ScopeAll()))
+	if !slices.ContainsFunc(before, func(k state.EscrowKeyFacts) bool { return k.DeviceID == never.ID }) {
+		t.Fatal("precondition: the device is a candidate")
+	}
+	ok(t, s.Write(ctx, func(tx *Tx) error {
+		_, err := tx.Exec(`UPDATE customers SET key_custody = 'customer_held' WHERE id = ?`, never.CustomerID)
+		return err
+	}))
+	after := must[[]state.EscrowKeyFacts](t)(s.EscrowVerifyKeys(ctx, ScopeAll()))
+	for _, k := range after {
+		if d := deviceByID(t, s, k.DeviceID); d.CustomerID == never.CustomerID {
+			t.Fatalf("device %s of a customer-held customer is a candidate", k.DeviceID)
+		}
+	}
+	if len(after) >= len(before) {
+		t.Fatalf("candidates %d -> %d after the customer went customer_held", len(before), len(after))
+	}
+	// The active key row of the device still says escrowed (the clause, not the row, excluded it).
+	if custody := must[string](t)(func() (string, error) {
+		var c string
+		err := s.Read(ctx, func(tx *Tx) error {
+			return tx.QueryRow(`SELECT custody FROM repo_key_escrow WHERE device_id = ? AND retired_at IS NULL`, never.ID).Scan(&c)
+		})
+		return c, err
+	}()); custody != "escrowed" {
+		t.Fatalf("precondition: key custody = %q", custody)
+	}
+}
+
+// P22-R2b B4: a candidate query that returns fewer keys than the confirmed devices with an escrowed
+// key is a read failure (ErrEscrowCandidates), never an empty list: EscrowVerifyKeys fails, the facts
+// are NotRead (System row "not checked", banner C22b), LoadWorld likewise, and no C22 is raised on
+// facts that were not read. An empty set with no such device is fine. Killed mutants: the count
+// cross-check removed (an empty candidate set reads healthy), the comparison inverted.
+func TestP22R2bEmptyCandidateSetWithEscrowedDevicesIsAFault(t *testing.T) {
+	s, clk, _ := fixtureEscrowStore(t)
+	ctx := t.Context()
+	good := escrowVerifyKeysSQL
+	t.Cleanup(func() { escrowVerifyKeysSQL = good })
+	// A regression that selects nothing (here: a clause that can never hold).
+	escrowVerifyKeysSQL = good + `1 = 0 AND `
+	if keys, err := s.EscrowVerifyKeys(ctx, ScopeAll()); !errors.Is(err, ErrEscrowCandidates) || len(keys) != 0 {
+		t.Fatalf("EscrowVerifyKeys with a query that returns nothing = %d keys, %v", len(keys), err)
+	}
+	f, err := s.EscrowVerifyFactsOf(ctx, ScopeAll())
+	if err != nil || f.NotRead == "" || len(f.Keys) != 0 {
+		t.Fatalf("facts = %+v, %v: want NotRead", f, err)
+	}
+	w := must[state.World](t)(s.LoadWorld(ctx, ScopeAll(), LoadOptions{}))
+	if w.EscrowVerify == nil || w.EscrowVerify.NotRead == "" {
+		t.Fatalf("LoadWorld: %+v, want NotRead", w.EscrowVerify)
+	}
+	var c22, c22b bool
+	for _, b := range state.Evaluate(w, clk.Now()).Banners {
+		c22, c22b = c22 || b.ID == "C22", c22b || b.ID == "C22b"
+	}
+	if c22 || !c22b {
+		t.Fatalf("banners: C22=%v C22b=%v, want only C22b", c22, c22b)
+	}
+	// A scope with no escrowed device is an empty set and not a fault.
+	if keys, err := s.EscrowVerifyKeys(ctx, ScopeOf("no-such-customer")); err != nil || len(keys) != 0 {
+		t.Fatalf("an empty scope = %d keys, %v", len(keys), err)
+	}
+	// And the real query agrees with the count again.
+	escrowVerifyKeysSQL = good
+	if keys, err := s.EscrowVerifyKeys(ctx, ScopeAll()); err != nil || len(keys) == 0 {
+		t.Fatalf("the real query = %d keys, %v", len(keys), err)
 	}
 }

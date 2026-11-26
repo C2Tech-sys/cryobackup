@@ -476,7 +476,14 @@ func (w *Worker) dumpIdleStopped(t *target, res execResult, limit time.Duration)
 				attrDevice(deviceID), attrClass("dump_idle_unlock"), attrExit(ur.Exit))
 		}
 	})
-	if !started {
+	switch {
+	case started:
+	case w.inDrill():
+		// Drill mode closes the background on purpose (enterDrill), and every read ran with --no-lock:
+		// there is no stale lock to remove, and no scheduled unlock step in a drill copy to retry it.
+		w.log.Warn("no stale lock to remove after a stalled dump: drill mode, every read ran with no lock",
+			attrDevice(deviceID), attrClass("dump_idle_unlock"))
+	default:
 		w.log.Warn("stale lock not removed after a stalled dump: the worker is shutting down; the next scheduled unlock step retries it",
 			attrDevice(deviceID), attrClass("dump_idle_unlock"))
 	}

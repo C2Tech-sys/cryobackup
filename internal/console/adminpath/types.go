@@ -189,6 +189,12 @@ type PingResult struct {
 	// StorageReachable is the result of the worker's last storage probe; nil
 	// when it has not probed yet.
 	StorageReachable *bool `json:"storage_reachable,omitempty"`
+	// Drill is true when the worker runs in drill mode (ADR 0029, ruling C8: it serves read
+	// methods only and runs no scheduler pass). serve and maintain decide drill independently,
+	// each from its own configuration, so the console compares this with its own mode and says
+	// so loudly when they differ (cli workermode.go, doctor). A worker that predates the field
+	// reads as false.
+	Drill bool `json:"drill"`
 }
 
 // InitRequest creates the repository of a device (architecture DH17).
