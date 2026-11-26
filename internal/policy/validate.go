@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -86,8 +87,22 @@ func isAbsWindowsPath(p string) bool { return driveRE.MatchString(p) || uncRE.Ma
 // returns nil or a *ValidationError holding every problem, sorted by path.
 // The numeric ranges are the bounds the agent and console can honour; they are
 // not product promises.
-func (p Policy) Validate() error {
+//
+// Validate is the READ-side check: it never refuses a stored sla.escrow_recheck_days below
+// EscrowRecheckMinDays (ClampStored raises such a value first), so a policy saved before that floor
+// existed cannot stop a console or an agent from running. ValidateWrite is the check every path that
+// saves or applies a change uses.
+func (p Policy) Validate() error { return p.validate(false) }
+
+// ValidateWrite is Validate plus the write-only rule: sla.escrow_recheck_days is 0 or at least
+// EscrowRecheckMinDays (ADR 0033).
+func (p Policy) ValidateWrite() error { return p.validate(true) }
+
+func (p Policy) validate(write bool) error {
 	c := &collector{}
+	if write {
+		checkEscrowRecheckFloor(c, p.SLA.EscrowRecheckDays)
+	}
 	checkSchedule(c, p.Schedule)
 	checkConditions(c, p.Conditions)
 	checkSelection(c, p.Selection)
@@ -257,9 +272,46 @@ func checkThrottle(c *collector, t Throttle) {
 	}
 }
 
-// EscrowRecheckMinDays is the smallest sla.escrow_recheck_days other than 0 (recheck off): the
-// weekly escrow verification (state.EscrowVerifyEvery, ADR 0030) must fit inside it.
-const EscrowRecheckMinDays = 7
+// EscrowRecheckMinDays is the smallest sla.escrow_recheck_days a write accepts, other than 0 (which
+// keeps its meaning: a recheck interval of zero days, see ADR 0033). It is state.EscrowVerifyMaxAge in
+// days: the weekly verifier (state.EscrowVerifyEvery, ADR 0030) needs the slack of that day, or a healthy
+// key is overdue between two checks.
+const EscrowRecheckMinDays = 8
+
+func checkEscrowRecheckFloor(c *collector, days int) {
+	if days > 0 && days < EscrowRecheckMinDays {
+		c.add("sla.escrow_recheck_days", "must be 0 or at least %d days: the console re-proves every escrowed key weekly, so a shorter recheck interval would raise ESCROW UNVERIFIED on a healthy key between two checks, got %d", EscrowRecheckMinDays, days)
+	}
+}
+
+// CheckEscrowRecheckWritten applies the write rule to the "sla" section (or the sla object of a
+// patch) that a write carries: nil, or a *ValidationError naming sla.escrow_recheck_days. A value
+// that is absent or does not parse is left to the ordinary decode and Validate.
+func CheckEscrowRecheckWritten(sla json.RawMessage) error {
+	var v struct {
+		Days *int `json:"escrow_recheck_days"`
+	}
+	if len(sla) == 0 || json.Unmarshal(sla, &v) != nil || v.Days == nil {
+		return nil
+	}
+	c := &collector{}
+	checkEscrowRecheckFloor(c, *v.Days)
+	return c.err()
+}
+
+// ClampStored raises a stored sla.escrow_recheck_days of 1 to EscrowRecheckMinDays-1 to
+// EscrowRecheckMinDays. It returns the stored value and whether it clamped. READ paths (the console
+// composing an effective policy, the agent loading a policy or its last-known-good copy) call it
+// before Validate: a policy stored before the floor existed keeps working, never fails. The caller
+// logs one warning (this package has no side effects). 0 is not clamped.
+func (p *Policy) ClampStored() (stored int, clamped bool) {
+	d := p.SLA.EscrowRecheckDays
+	if d <= 0 || d >= EscrowRecheckMinDays {
+		return d, false
+	}
+	p.SLA.EscrowRecheckDays = EscrowRecheckMinDays
+	return d, true
+}
 
 func checkSLA(c *collector, s SLA) {
 	nonNeg := []struct {
@@ -277,14 +329,6 @@ func checkSLA(c *collector, s SLA) {
 	}
 	for _, f := range nonNeg {
 		c.atLeast("sla."+f.name, f.v, 0)
-	}
-	// escrow_recheck_days: 0 is "recheck off" (an escrowed key's age never raises ESCROW_UNVERIFIED;
-	// a recorded failure and a never-verified key still do), and 1 to EscrowRecheckMinDays-1 is
-	// refused: the console's verifier re-proves every escrowed key weekly (ADR 0030), so a shorter
-	// interval would raise the alarm between two checks of a healthy key. Negative values are the
-	// ">= 0" problem above.
-	if d := s.EscrowRecheckDays; d > 0 && d < EscrowRecheckMinDays {
-		c.add("sla.escrow_recheck_days", "must be 0 (recheck off) or at least %d days: the weekly verification would otherwise leave a healthy key overdue between checks, got %d", EscrowRecheckMinDays, d)
 	}
 	c.atLeast("sla.stale_after_hours", s.StaleAfterHours, 1)
 	if s.UnseenAfterHours < s.StaleAfterHours {

@@ -331,3 +331,32 @@ func TestP22R2bTimeoutAndBusyRecordTheAttemptOnly(t *testing.T) {
 		})
 	}
 }
+
+// L1: when the candidate set does not cover every confirmed escrowed device (store.ErrEscrowCandidates), the
+// pass says so loudly (error line, class escrow_candidates_mismatch) and STILL verifies the candidates it
+// has: each is a valid key, and stopping would leave all of them unchecked because of one that is missing.
+// Killed mutant: the pass returns on the mismatch.
+func TestP22R2bMismatchedCandidatesAreStillVerified(t *testing.T) {
+	e := newTenv(t, []fakeRule{{Cmd: "cat", Stdout: "cat_config.json"}, {Cmd: "stats", Stdout: "stats_raw_data.json"}}, nil)
+	a, b := e.esc, e.deviceID("TECH-BENCH-07")
+	e.onlyDevice(a)
+	e.provenNowExcept(a, b)
+	old := e.clk.Now().Add(-8 * 24 * time.Hour)
+	e.setProof(a, old, time.Time{})
+	e.setProof(b, old, time.Time{})
+	restore := store.ForceEscrowCandidateMismatch("d.id <> '" + b + "'")
+	defer restore()
+	rep, err := e.w.RunOnce(e.ctx)
+	if err != nil || rep.EscrowVerified != 1 {
+		t.Fatalf("pass = %+v, %v: want the one candidate found verified", rep, err)
+	}
+	if got := e.catDevices(); len(got) != 1 || got[0] != a {
+		t.Fatalf("cat config ran for %v, want only %s", got, a)
+	}
+	if l := e.logs.String(); !strings.Contains(l, "escrow_candidates_mismatch") || !strings.Contains(l, `"level":"ERROR"`) {
+		t.Fatalf("no loud mismatch line: %s", l)
+	}
+	if esc := e.escrowOf(b); esc.LastVerifyAttemptAt != nil {
+		t.Fatalf("the missing candidate was touched: %+v", esc)
+	}
+}

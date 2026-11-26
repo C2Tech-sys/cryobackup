@@ -323,3 +323,25 @@ func TestP22R2bSystemEscrowRowShowsAnUnreadableCandidateSet(t *testing.T) {
 		}
 	}
 }
+
+// P22-R2b H1 (ADR 0033): the admin API refuses a write of sla.escrow_recheck_days from 1 to 7 on every route
+// that saves a policy or an override, naming the field (422 with the field), and accepts 8 and 0.
+// Killed mutants: the floor check dropped from the store's write paths.
+func TestP22R2bAdminAPIRefusesRecheckBelowTheFloor(t *testing.T) {
+	e := newEnv(t)
+	s := e.adminSession()
+	sla := func(d int) map[string]any { return map[string]any{"sla": map[string]any{"escrow_recheck_days": d}} }
+	for i, c := range []struct {
+		days int
+		ok   bool
+	}{{3, false}, {7, false}, {8, true}, {0, true}} {
+		res, b := e.req("POST", "/api/v1/policies", s, map[string]any{"scope": "template", "name": "Recheck " + string(rune('A'+i)), "sections": sla(c.days)})
+		if c.ok != (res.StatusCode == 201) || (!c.ok && !strings.Contains(string(b), "sla.escrow_recheck_days")) {
+			t.Errorf("POST policy %d: %d %s", c.days, res.StatusCode, b)
+		}
+		res, b = e.req("PUT", "/api/v1/devices/"+e.dev.ID+"/override", s, map[string]any{"patch": sla(c.days), "reason": "recheck test"})
+		if c.ok != (res.StatusCode == 200 || res.StatusCode == 201) || (!c.ok && !strings.Contains(string(b), "sla.escrow_recheck_days")) {
+			t.Errorf("PUT override %d: %d %s", c.days, res.StatusCode, b)
+		}
+	}
+}

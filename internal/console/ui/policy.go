@@ -369,7 +369,7 @@ func (s *Service) proposal(ctx context.Context, rec store.PolicyRecord, vals url
 	}
 	pol, err := policy.DecodeDocument(doc, false)
 	if err == nil {
-		err = pol.Validate()
+		err = pol.ValidateWrite() // a save: escrow_recheck_days must meet its floor (ADR 0033)
 	}
 	if err != nil {
 		var ve *policy.ValidationError

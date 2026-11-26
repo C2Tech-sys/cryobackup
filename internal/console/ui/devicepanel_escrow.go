@@ -53,6 +53,7 @@ const (
 	escOverdue     = "overdue"       // proven, but longer ago than the cadence and a day: the verifier is not keeping up
 	escFailed      = "failed"        // the last check reached a verdict on the key or the repository
 	escNever       = "never"         // escrowed, never proven
+	escFuture      = "future_proof"  // the recorded proof time is later than now plus the allowed skew: it proves nothing
 	escHeld        = "customer_held" // CryoBackup never holds the key: nothing to verify
 	escPurging     = "purging"       // the device is being purged: its repository is going away
 	escUnconfirmed = "unconfirmed"   // the enrollment is not confirmed: no repository yet
@@ -105,6 +106,8 @@ func escrowAssess(esc store.Escrow, now time.Time) (kind, class string) {
 		return escFailed, ClassCrit
 	case esc.VerifiedAt == nil:
 		return escNever, loud
+	case esc.VerifiedAt.After(now.Add(state.FutureSkewAllowed)): // as state's recorded(): a proof "from the future" is not a proof
+		return escFuture, loud
 	case now.Sub(*esc.VerifiedAt) > state.EscrowVerifyMaxAge:
 		return escOverdue, loud
 	}
@@ -202,6 +205,10 @@ func (s *Service) escrowPanel(ctx context.Context, p *auth.Principal, id string,
 		pn.Chip = chip("NEVER VERIFIED", "", class)
 		pn.Lead = &CauseView{Class: class, Title: "This key has never been verified.",
 			Text: "Until it is, nobody knows that a restore from it would work. The next maintenance pass checks it." + askNow}
+	case escFuture:
+		pn.Chip = chip("NOT PROVEN", "", class)
+		pn.Lead = &CauseView{Class: class, Title: "The recorded proof time is in the future.",
+			Text: "The console's clock was probably wrong when this key was verified, so the record proves nothing. The next maintenance pass checks the key again." + askNow}
 	case escFailed:
 		pn.Chip = chip("FAILED", "", class)
 		lead := escrowFailureText(esc.LastVerifyErrorClass)
@@ -213,7 +220,11 @@ func (s *Service) escrowPanel(ctx context.Context, p *auth.Principal, id string,
 		pn.Lead = &CauseView{Class: class, Title: "The last check failed.", Text: lead}
 	}
 	if esc.VerifiedAt != nil {
-		pn.Rows = append(pn.Rows, Fact{Key: "Last verified", Value: stamp(*esc.VerifiedAt)})
+		if kind == escFuture {
+			pn.Rows = append(pn.Rows, Fact{Key: "Last verified", Value: c.dayClock(*esc.VerifiedAt) + " " + c.zoneAbbr(*esc.VerifiedAt) + " · later than now, not counted"})
+		} else {
+			pn.Rows = append(pn.Rows, Fact{Key: "Last verified", Value: stamp(*esc.VerifiedAt)})
+		}
 	} else {
 		pn.Rows = append(pn.Rows, Fact{Key: "Last verified", Value: "Never"})
 	}

@@ -119,15 +119,26 @@ const escrowConfirmedCountSQL = `
 	  AND `
 
 // ErrEscrowCandidates is the candidate set disagreeing with the devices it should cover: fewer
-// candidates than confirmed devices with an escrowed key. It is an ErrInvalid so the facts loaders
-// report it as a fixed class ("escrow_invalid"), never as an empty candidate list that reads healthy.
-var ErrEscrowCandidates = fmt.Errorf("%w: the escrow verifier's candidates do not cover the confirmed devices with an escrowed key", ErrInvalid)
+// candidates than confirmed devices with an escrowed key. The facts loaders report it as the fixed class
+// "escrow_candidates_mismatch" (loadClass), never as a candidate list that reads healthy. The keys that
+// were found come back with it: each is a valid candidate, so the scheduler still checks them.
+var ErrEscrowCandidates = errors.New("store: the escrow verifier's candidates do not cover the confirmed devices with an escrowed key")
+
+// ForceEscrowCandidateMismatch is a TEST SEAM for other packages' tests: it narrows the candidate query by
+// cond (an SQL condition on d and e, for example "d.id <> 'x'") so that fewer candidates come back than
+// confirmed escrowed devices exist, as a regression of the query would. Production never calls it. The
+// returned function undoes it. Not safe for concurrent use with a running store.
+func ForceEscrowCandidateMismatch(cond string) (restore func()) {
+	old := escrowVerifyKeysSQL
+	escrowVerifyKeysSQL = old + cond + " AND "
+	return func() { escrowVerifyKeysSQL = old }
+}
 
 // EscrowVerifyKeys lists the escrow verifier's candidate keys inside scope, by
 // device id: what the scheduler checks (maintain/escrowverify.go), what banner
 // C22 and the System page's escrow row judge (state.EscrowVerifyFacts). Times
-// are the raw milliseconds the engine parses itself. It is ErrEscrowCandidates when
-// fewer candidates come back than confirmed devices with an escrowed key exist.
+// are the raw milliseconds the engine parses itself. It is ErrEscrowCandidates (with the
+// keys that were found) when fewer candidates come back than confirmed devices with an escrowed key exist.
 func (s *Store) EscrowVerifyKeys(ctx context.Context, scope Scope) ([]state.EscrowKeyFacts, error) {
 	if err := scope.check(); err != nil {
 		return nil, err
@@ -154,7 +165,7 @@ func escrowVerifyKeysTx(tx *Tx, scope Scope) ([]state.EscrowKeyFacts, error) {
 		return nil, err
 	}
 	if len(out) < want {
-		return nil, ErrEscrowCandidates
+		return out, ErrEscrowCandidates
 	}
 	return out, nil
 }

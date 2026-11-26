@@ -381,8 +381,8 @@ func TestP22R2bEmptyCandidateSetWithEscrowedDevicesIsAFault(t *testing.T) {
 		t.Fatalf("EscrowVerifyKeys with a query that returns nothing = %d keys, %v", len(keys), err)
 	}
 	f, err := s.EscrowVerifyFactsOf(ctx, ScopeAll())
-	if err != nil || f.NotRead == "" || len(f.Keys) != 0 {
-		t.Fatalf("facts = %+v, %v: want NotRead", f, err)
+	if err != nil || f.NotRead == "" || len(f.Keys) != 0 || !strings.Contains(f.NotRead, "escrow_candidates_mismatch") {
+		t.Fatalf("facts = %+v, %v: want NotRead with the class escrow_candidates_mismatch", f, err)
 	}
 	w := must[state.World](t)(s.LoadWorld(ctx, ScopeAll(), LoadOptions{}))
 	if w.EscrowVerify == nil || w.EscrowVerify.NotRead == "" {
@@ -395,6 +395,15 @@ func TestP22R2bEmptyCandidateSetWithEscrowedDevicesIsAFault(t *testing.T) {
 	if c22 || !c22b {
 		t.Fatalf("banners: C22=%v C22b=%v, want only C22b", c22, c22b)
 	}
+	// A partial set (one device missing) returns the keys found with the error, and the facts stay NotRead.
+	escrowVerifyKeysSQL = good + `d.hostname <> 'TECH-BENCH-07' AND `
+	if keys, err := s.EscrowVerifyKeys(ctx, ScopeAll()); !errors.Is(err, ErrEscrowCandidates) || len(keys) == 0 {
+		t.Fatalf("a partial candidate set = %d keys, %v: want the keys found and ErrEscrowCandidates", len(keys), err)
+	}
+	if f, _ := s.EscrowVerifyFactsOf(ctx, ScopeAll()); f.NotRead == "" || len(f.Keys) != 0 {
+		t.Fatalf("a partial set must not be judged: %+v", f)
+	}
+	escrowVerifyKeysSQL = good + `1 = 0 AND `
 	// A scope with no escrowed device is an empty set and not a fault.
 	if keys, err := s.EscrowVerifyKeys(ctx, ScopeOf("no-such-customer")); err != nil || len(keys) != 0 {
 		t.Fatalf("an empty scope = %d keys, %v", len(keys), err)

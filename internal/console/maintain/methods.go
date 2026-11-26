@@ -24,12 +24,13 @@ func (w *Worker) Ping(ctx context.Context) (adminpath.PingResult, error) {
 		v := *p
 		reach = &v
 	}
+	drill := w.inDrill()
 	return adminpath.PingResult{
 		Version:          w.cfg.Version,
 		Uptime:           w.clock().Sub(w.started),
 		MasterKeyLoaded:  loaded,
 		StorageReachable: reach,
-		Drill:            w.inDrill(),
+		Drill:            &drill,
 	}, nil
 }
 

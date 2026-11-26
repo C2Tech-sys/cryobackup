@@ -192,8 +192,8 @@ func (b *Backend) Ping(ctx context.Context) (adminpath.PingResult, error) {
 	if b.PingStatus != nil {
 		return *b.PingStatus, nil
 	}
-	yes := true
-	return adminpath.PingResult{Version: "fixtures", Uptime: time.Hour, MasterKeyLoaded: true, StorageReachable: &yes}, nil
+	yes, no := true, false // a current worker: it reports its drill mode (production)
+	return adminpath.PingResult{Version: "fixtures", Uptime: time.Hour, MasterKeyLoaded: true, StorageReachable: &yes, Drill: &no}, nil
 }
 
 // Init implements adminpath.Backend: idempotent, Created only the first time.

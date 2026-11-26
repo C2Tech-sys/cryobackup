@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/maintain"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
+	"github.com/c2tech-sys/cryobackup/internal/state"
 )
 
 // P22-R2b B8 and G6: the device page's "Next check" is the verifier's own due time, not a guess.
@@ -84,5 +86,54 @@ func TestP22R2bNextCheckHoldIsTheVerifiersRetry(t *testing.T) {
 	}
 	if got := escrowNextCheck(id, at(maintain.EscrowVerifyRetry), c); strings.Contains(got, "an hour after the last attempt") {
 		t.Errorf("exactly at the hold: %q", got)
+	}
+}
+
+// M3: a proof time later than now plus the allowed skew (a clock that ran ahead) is not "verified": the panel,
+// its chip and the Key custody fact all say it proves nothing, by the rule state.recorded() uses. Killed
+// mutant: the future clause dropped from escrowAssess.
+func TestP22R2bFutureProofIsNotVerifiedOnTheDevicePage(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) store.Escrow {
+		v := now.Add(d)
+		c := now.Add(-90 * 24 * time.Hour)
+		return store.Escrow{CreatedAt: c, VerifiedAt: &v}
+	}
+	for _, c := range []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{"60 days ahead", 60 * 24 * time.Hour, escFuture},
+		{"just past the skew", state.FutureSkewAllowed + time.Second, escFuture},
+		{"inside the skew", state.FutureSkewAllowed - time.Second, escVerified},
+		{"a day ago", -24 * time.Hour, escVerified},
+	} {
+		if kind, class := escrowAssess(at(c.d), now); kind != c.want || (kind == escFuture && class != ClassCrit) {
+			t.Errorf("%s: %q %q, want %q (crit for a future proof)", c.name, kind, class, c.want)
+		}
+	}
+
+	e := newEnv(t)
+	e.login()
+	e.seedEscrow(t)
+	id := e.escrowDev(t, "verified")
+	if err := e.st.Write(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE repo_key_escrow SET verified_at = ?, last_verify_attempt_at = NULL, last_verify_error_class = NULL WHERE device_id = ? AND retired_at IS NULL`,
+			e.now.Add(60*24*time.Hour).UnixMilli(), id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := e.page("/devices/"+id, 200)
+	mustContainText(t, "future proof", body, `data-escrow="future_proof"`, "NOT PROVEN", "The recorded proof time is in the future.", "later than now, not counted", "Due now: the next maintenance pass runs it")
+	for _, bad := range []string{`data-escrow="verified"`, "VERIFIED ·", "verified -", "verified in "} {
+		if strings.Contains(body, bad) {
+			t.Errorf("a proof 60 days ahead reads as verified: %q", bad)
+		}
+	}
+	if i := strings.Index(body, "Key custody"); i >= 0 && !strings.Contains(body[i:i+400], "not verified") {
+		t.Errorf("the Key custody fact: %.400s", body[i:])
 	}
 }

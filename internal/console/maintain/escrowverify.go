@@ -126,7 +126,14 @@ func escrowVerifyOrder(due []state.EscrowKeyFacts) {
 func (w *Worker) verifyEscrows(ctx context.Context, rep *CycleReport) {
 	start := w.clock()
 	keys, err := w.st.EscrowVerifyKeys(ctx, store.ScopeAll())
-	if err != nil {
+	switch {
+	case errors.Is(err, store.ErrEscrowCandidates):
+		// Fewer candidates than confirmed escrowed devices: loud (this line, the System row, banner C22b), but
+		// the keys that were found are each a valid candidate, so they are still checked. Stopping the pass
+		// would leave every one of them unchecked because of one that is missing.
+		w.log.Error("escrow verification candidates do not cover every confirmed escrowed device; checking the ones found",
+			attrClass("escrow_candidates_mismatch"), attrCount(len(keys)))
+	case err != nil:
 		if ctx.Err() == nil {
 			w.log.Error("escrow verification cannot run: its candidates could not be read", attrClass("store"))
 		}

@@ -297,6 +297,7 @@ func (c *composer) effectiveDoc(deviceID, customerPolicyID string) (EffectivePol
 	if err != nil {
 		return EffectivePolicy{}, invalidf("effective policy: %v", err)
 	}
+	clampStored(&p) // a READ: a stored escrow_recheck_days below the floor is raised, never refused (ADR 0033)
 	if err := p.Validate(); err != nil {
 		return EffectivePolicy{}, invalidf("effective policy: %v", err)
 	}
@@ -389,6 +390,11 @@ func effectiveFor(tx *Tx, scope Scope, deviceID string) (EffectivePolicy, error)
 // validateComposed checks that sections, applied over the default policy (the
 // stored one, else the proposed defaults), give a valid policy.
 func validateComposed(tx *Tx, scopeKind string, sections map[string]json.RawMessage) error {
+	// A WRITE: the sla.escrow_recheck_days it carries must meet the floor (ADR 0033). The stored
+	// default it is composed over is not judged by it (reads clamp it).
+	if err := policy.CheckEscrowRecheckWritten(sections["sla"]); err != nil {
+		return invalidf("policy invalid: %v", err)
+	}
 	base := policy.Default(policy.ClassUnknown)
 	if rec, err := one(tx, `SELECT `+policyCols+` FROM policies WHERE scope = 'default'`, nil, scanPolicy); err == nil {
 		if p, derr := policy.Decode(rec.Sections); derr == nil {

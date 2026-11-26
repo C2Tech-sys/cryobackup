@@ -26,18 +26,23 @@ import (
 // nothing, one ping answers for the TTL, and a standing mismatch logs once. Killed mutants: either
 // direction of the comparison dropped, the error treated as a mismatch.
 func TestWorkerModeBanner(t *testing.T) {
+	yes, no := true, false
 	for _, c := range []struct {
-		name          string
-		console, work bool
-		err           error
-		want          string // "" none
+		name    string
+		console bool
+		work    *bool // nil: the worker does not report its mode (an older worker)
+		err     error
+		want    string // "" none
+		wantSev state.Severity
 	}{
-		{"production console, production worker", false, false, nil, ""},
-		{"drill console, drill worker", true, true, nil, ""},
-		{"drill console, production worker", true, false, nil, workerModeDrillConsole},
-		{"production console, drill worker", false, true, nil, workerModeProdConsole},
-		{"worker unreachable, production console", false, false, errors.New("down"), ""},
-		{"worker unreachable, drill console", true, false, errors.New("down"), ""},
+		{"production console, production worker", false, &no, nil, "", 0},
+		{"drill console, drill worker", true, &yes, nil, "", 0},
+		{"drill console, production worker", true, &no, nil, workerModeDrillConsole, state.SeverityCritical},
+		{"production console, drill worker", false, &yes, nil, workerModeProdConsole, state.SeverityCritical},
+		{"worker unreachable, production console", false, &no, errors.New("down"), "", 0},
+		{"worker unreachable, drill console", true, &no, errors.New("down"), "", 0},
+		{"production console, worker mode unknown (L2)", false, nil, nil, workerModeUnknown, state.SeverityAlarm},
+		{"drill console, worker mode unknown (L2)", true, nil, nil, workerModeDrillConsole, state.SeverityCritical},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
@@ -55,8 +60,8 @@ func TestWorkerModeBanner(t *testing.T) {
 				if len(b) != 0 {
 					t.Fatalf("banners = %+v", b)
 				}
-			} else if len(b) != 1 || b[0].ID != health.BannerWorkerMode || b[0].Severity != state.SeverityCritical || b[0].Text != c.want {
-				t.Fatalf("banners = %+v, want one critical with %q", b, c.want)
+			} else if wantID := map[bool]string{true: health.BannerWorkerModeUnknown, false: health.BannerWorkerMode}[c.want == workerModeUnknown]; len(b) != 1 || b[0].ID != wantID || b[0].Severity != c.wantSev || b[0].Text != c.want {
+				t.Fatalf("banners = %+v, want one %v banner %s with %q", b, c.wantSev, wantID, c.want)
 			}
 			now = now.Add(10 * time.Second)
 			m.Banners(now)
@@ -69,7 +74,7 @@ func TestWorkerModeBanner(t *testing.T) {
 				t.Fatalf("%d pings after the TTL, want 2", pings)
 			}
 			wantLogs := 0
-			if c.want != "" {
+			if c.want != "" && c.want != workerModeUnknown {
 				wantLogs = 1
 			}
 			if n := strings.Count(logs.String(), "disagree about drill mode"); n != wantLogs {
@@ -85,11 +90,14 @@ func TestWorkerModeBanner(t *testing.T) {
 // TestDoctorFailsOnWorkerDrillMismatch: a worker answering on the socket whose drill mode differs
 // from the config's is a FAIL line (exit 1), in both directions; a match is OK.
 func TestDoctorFailsOnWorkerDrillMismatch(t *testing.T) {
+	yes, no := true, false
 	for _, c := range []struct {
-		cfgDrill, workerDrill bool
-		want                  string
+		cfgDrill    bool
+		workerDrill *bool // nil: the worker does not report its mode
+		want        string
 	}{
-		{false, false, "OK"}, {true, true, "OK"}, {true, false, "FAIL"}, {false, true, "FAIL"},
+		{false, &no, "OK"}, {true, &yes, "OK"}, {true, &no, "FAIL"}, {false, &yes, "FAIL"},
+		{true, nil, "FAIL"}, {false, nil, "WARN"},
 	} {
 		cfg, _ := drillConfig(t, c.cfgDrill)
 		sockDir, err := os.MkdirTemp("", "wm")
@@ -135,7 +143,7 @@ func TestDoctorFailsOnWorkerDrillMismatch(t *testing.T) {
 			t.Errorf("config drill %v, worker drill %v: no %s maintenance worker line:\n%s", c.cfgDrill, c.workerDrill, c.want, out)
 			continue
 		}
-		if c.want == "FAIL" && (code != ExitFailed || !strings.Contains(line, "drill mode differs")) {
+		if c.want == "FAIL" && (code != ExitFailed || (c.workerDrill != nil && !strings.Contains(line, "drill mode differs")) || (c.workerDrill == nil && !strings.Contains(line, "does not report"))) {
 			t.Errorf("config drill %v, worker drill %v: exit %d, line %q", c.cfgDrill, c.workerDrill, code, line)
 		}
 	}
@@ -146,15 +154,19 @@ func TestDoctorFailsOnWorkerDrillMismatch(t *testing.T) {
 // show the banner (label and a fixed sentence) on the dashboard; a matching pair shows none.
 // Killed mutant: fleet.Extra not wired in Build.
 func TestServeShowsTheWorkerModeBannerOnPages(t *testing.T) {
+	yes, no := true, false
 	for _, c := range []struct {
 		name                  string
-		consoleDrill, wDrill  bool
+		consoleDrill          bool
+		wDrill                *bool
 		wantBanner, wantSense string
 	}{
-		{"production console, drill worker", false, true, "WORKER DRILL MODE MISMATCH", "in production mode but its maintenance worker is in drill mode"},
-		{"drill console, production worker", true, false, "WORKER DRILL MODE MISMATCH", "DRILL COPY but its maintenance worker is not in drill mode"},
-		{"production pair", false, false, "", ""},
-		{"drill pair", true, true, "", ""},
+		{"production console, drill worker", false, &yes, "WORKER DRILL MODE MISMATCH", "in production mode but its maintenance worker is in drill mode"},
+		{"drill console, production worker", true, &no, "WORKER DRILL MODE MISMATCH", "DRILL COPY but its maintenance worker is not in drill mode"},
+		{"production console, worker mode unknown", false, nil, "WORKER MODE UNKNOWN", "Worker mode unknown (older worker)"},
+		{"drill console, worker mode unknown", true, nil, "WORKER DRILL MODE MISMATCH", "DRILL COPY but its maintenance worker is not in drill mode"},
+		{"production pair", false, &no, "", ""},
+		{"drill pair", true, &yes, "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg, _ := drillConfig(t, c.consoleDrill)
@@ -171,14 +183,21 @@ func TestServeShowsTheWorkerModeBannerOnPages(t *testing.T) {
 			if res.StatusCode != 200 {
 				t.Fatalf("GET /: %d %.200s", res.StatusCode, body)
 			}
-			has := strings.Contains(body, "WORKER DRILL MODE MISMATCH")
+			if c.wantBanner == "" && (strings.Contains(body, "WORKER DRILL MODE MISMATCH") || strings.Contains(body, "WORKER MODE UNKNOWN")) {
+				t.Fatal("a worker-mode banner on a matching pair")
+			}
+			has := strings.Contains(body, c.wantBanner) && c.wantBanner != ""
+			if c.wantBanner != "" && !has {
+				i := strings.Index(body, `id="banners"`)
+				t.Logf("banners section: %.1500s", body[max(i, 0):])
+			}
 			if has != (c.wantBanner != "") {
 				t.Fatalf("banner present = %v, want %v", has, c.wantBanner != "")
 			}
 			if has && !strings.Contains(body, c.wantSense) {
 				t.Fatalf("the banner does not carry its sentence %q", c.wantSense)
 			}
-			if has != strings.Contains(logs.String(), "disagree about drill mode") {
+			if has != strings.Contains(logs.String(), "worker_drill_") {
 				t.Fatalf("log line present = %v: %s", !has, logs.String())
 			}
 		})

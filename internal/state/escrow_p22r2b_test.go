@@ -74,29 +74,20 @@ func TestP22R2bRetiredEscrowBannerIsAnAlarm(t *testing.T) {
 	}
 }
 
-// TestP22R2bEscrowRecheckZeroIsOff: policy sla.escrow_recheck_days 0 is "recheck off" (policy
-// validation allows it): a proven key's age never raises ESCROW_UNVERIFIED, while a recorded failure and a
-// never-verified key still do. Killed mutant: the EscrowRecheck > 0 guard dropped (every key overdue at once).
-func TestP22R2bEscrowRecheckZeroIsOff(t *testing.T) {
+// TestP22R2bEscrowRecheckZeroKeepsItsMeaning: policy sla.escrow_recheck_days 0 is a recheck interval of
+// zero days (ADR 0033), which is what it has been since the recheck became enforced: every proven key is
+// overdue at once. It is never "off": ESCROW_UNVERIFIED stays raised. Killed mutant: a guard that skips the
+// recheck when the interval is 0.
+func TestP22R2bEscrowRecheckZeroKeepsItsMeaning(t *testing.T) {
 	th := DefaultThresholds()
 	th.EscrowRecheck = 0
-	check := func(e EscrowFacts) (Reason, bool) {
-		e.Custody, e.CreatedAt = "escrowed", ago(200*day)
-		f := DeviceFacts{Escrow: &e}
-		r, _, bad := escrowIssueRecheck(&f, th, t0, time.Time{}, false, true)
-		return r, bad
-	}
-	if r, bad := check(EscrowFacts{VerifiedAt: ago(365 * day)}); bad {
-		t.Errorf("a year-old proof with the recheck off: %q", r)
-	}
-	if r, bad := check(EscrowFacts{VerifiedAt: ago(day), LastVerifyErrorClass: "wrong_password"}); !bad || r != ReasonEscrowVerifyFailed {
-		t.Errorf("a recorded failure with the recheck off: %q %v", r, bad)
-	}
-	if r, bad := check(EscrowFacts{}); !bad || r != ReasonEscrowNeverVerified {
-		t.Errorf("a never-verified key with the recheck off: %q %v", r, bad)
+	e := EscrowFacts{Custody: "escrowed", CreatedAt: ago(200 * day), VerifiedAt: ago(time.Minute)}
+	f := DeviceFacts{Escrow: &e}
+	if r, _, bad := escrowIssueRecheck(&f, th, t0, time.Time{}, false, true); !bad || r != ReasonEscrowRecheckOverdue {
+		t.Errorf("a key proven a minute ago with a recheck of 0 days: %q %v, want overdue", r, bad)
 	}
 	th.EscrowRecheck = 30 * 24 * time.Hour
-	if r, bad := check(EscrowFacts{VerifiedAt: ago(31 * day)}); !bad || r != ReasonEscrowRecheckOverdue {
-		t.Errorf("a 31-day-old proof with a 30-day recheck: %q %v", r, bad)
+	if r, _, bad := escrowIssueRecheck(&f, th, t0, time.Time{}, false, true); bad {
+		t.Errorf("the same key with 30 days: %q", r)
 	}
 }

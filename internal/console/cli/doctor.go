@@ -144,10 +144,14 @@ func runDoctor(args []string, io IO) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	if p, err := c.Ping(ctx); err != nil {
 		report("WARN", "maintenance worker", "not reachable on the adminpath socket (banner C07; restore browsing is off)")
-	} else if p.Drill != cfg.Drill {
+	} else if p.Drill == nil && cfg.Drill {
+		report("FAIL", "maintenance worker", "reachable, but it does not report its drill mode (an older worker) and this config says drill: it cannot be shown to be in drill mode")
+	} else if p.Drill == nil {
+		report("WARN", "maintenance worker", "reachable, but it does not report its drill mode (an older worker): update it so a mismatch can be seen")
+	} else if *p.Drill != cfg.Drill {
 		// serve and maintain decide drill independently (P22-R2b B7): a drill console in front of a
 		// production worker, or the reverse, is a failure, not a detail of the OK line.
-		report("FAIL", "maintenance worker", fmt.Sprintf("reachable, but drill mode differs: this config says drill %v, the running worker says %v (set both the same: config.json \"drill\" and CRYO_DRILL in the worker's environment)", cfg.Drill, p.Drill))
+		report("FAIL", "maintenance worker", fmt.Sprintf("reachable, but drill mode differs: this config says drill %v, the running worker says %v (set both the same: config.json drill, and CRYO_DRILL in the worker environment)", cfg.Drill, *p.Drill))
 	} else {
 		report("OK", "maintenance worker", fmt.Sprintf("reachable, master key loaded: %v", p.MasterKeyLoaded))
 	}

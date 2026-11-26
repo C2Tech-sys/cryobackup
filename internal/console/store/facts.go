@@ -249,6 +249,8 @@ func loadClass(step string, err error) string {
 		return "timeout"
 	case errors.Is(err, ErrNoDefaultPolicy):
 		return "policy_missing"
+	case errors.Is(err, ErrEscrowCandidates): // the escrow verifier's candidates do not cover the confirmed escrowed devices (P22-R2b L1)
+		return "escrow_candidates_mismatch"
 	case errors.Is(err, ErrInvalid):
 		return step + "_invalid"
 	}

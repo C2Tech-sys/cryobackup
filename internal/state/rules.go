@@ -136,9 +136,10 @@ func escrowIssueRecheck(f *DeviceFacts, th Thresholds, now, enrolled time.Time, 
 	if !verifiedOK {
 		return ReasonEscrowNeverVerified, since, true
 	}
-	// th.EscrowRecheck is policy sla.escrow_recheck_days; 0 means "recheck off" (policy validation
-	// allows 0 and refuses 1 to 6), not "every key is overdue at once".
-	if recheck && th.EscrowRecheck > 0 && now.Sub(verified) > th.EscrowRecheck {
+	// th.EscrowRecheck is policy sla.escrow_recheck_days. 0 is a recheck interval of zero days: every
+	// proven key is overdue (it has always been so; ADR 0033), never "off". The policy floor for a
+	// write is 8 (policy.EscrowRecheckMinDays); a stored 1 to 7 is raised to 8 when it is read.
+	if recheck && now.Sub(verified) > th.EscrowRecheck {
 		return ReasonEscrowRecheckOverdue, verified.Add(th.EscrowRecheck), true
 	}
 	return "", time.Time{}, false

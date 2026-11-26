@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/agent/commands"
@@ -42,12 +44,30 @@ const (
 
 // ---- policy ---------------------------------------------------------------
 
+var clampWarned sync.Once
+
+// clampPolicy is the READ-side rule for sla.escrow_recheck_days (ADR 0033): a value of 1 to 7, from a
+// last-known-good saved before the floor existed or from an older console, is raised to 8 and never
+// refused. The first clamp in a process logs one warning (a class and two numbers, no path).
+func clampPolicy(p *policy.Policy, log *slog.Logger) {
+	if stored, clamped := p.ClampStored(); clamped {
+		clampWarned.Do(func() {
+			if log == nil {
+				log = slog.Default()
+			}
+			log.Warn("a stored policy has an escrow recheck interval below the minimum; using the minimum",
+				"class", "policy_clamped", "stored_days", stored, "used_days", policy.EscrowRecheckMinDays)
+		})
+	}
+}
+
 // decodePolicy decodes and validates a stored or received policy response.
 func decodePolicy(raw []byte) (api.PolicyResponse, error) {
 	var resp api.PolicyResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return resp, errors.New("policy response is not valid JSON")
 	}
+	clampPolicy(&resp.Policy, nil) // a last-known-good saved before the escrow_recheck_days floor is raised, never refused (ADR 0033)
 	if err := resp.Policy.Validate(); err != nil {
 		return resp, err
 	}
@@ -78,6 +98,7 @@ func (a *Agent) applyPolicy(ctx context.Context, resp api.PolicyResponse) error 
 		_ = a.jr.KVSet(ctx, journal.KVGatewayAckPend, "1")
 		a.log.Info("gateway credential rotated by the console")
 	}
+	clampPolicy(&resp.Policy, a.log) // an older console may still send a value below the escrow_recheck_days floor (ADR 0033)
 	if err := resp.Policy.Validate(); err != nil {
 		a.mu.Lock()
 		a.polParseErr = true
