@@ -84,8 +84,10 @@ self-backup is an alarm**: right after the upgrade the C11 banner reads "no self
   by the worker (at most 5 devices a pass), and a key not verified for `escrow_recheck_days` (30 by default) raises
   ESCROW_UNVERIFIED ([ADR 0030](decisions/0030-escrow-rechecked-and-retired-devices-restorable.md)). A console with many devices
   verified only at enrollment can show that warning until the worker has been through the fleet. A policy may set `escrow_recheck_days` to 0 or to 8 days or more
-  ([ADR 0033](decisions/0033-escrow-recheck-days-floor-and-read-side-clamp.md)): saving 1 to 7 is refused, and a stored 1 to 7 is used
-  as 8 (the console logs `policy_clamped` once). A retired device whose check
+  ([ADR 0033](decisions/0033-escrow-recheck-days-floor-and-read-side-clamp.md)); 0 does not turn the recheck off: every key is
+  then always overdue and ESCROW_UNVERIFIED stays raised. Saving 1 to 7 is refused; a stored 1 to 7 is used as 8 (the console logs
+  `policy_clamped` once), an API save of that policy is refused until the field is fixed, and a save from the web policy editor
+  writes 8. Check your policies before upgrading. A retired device whose check
   fails raises a fleet banner (C22, C22b) instead of its own alarm. The device page has a "Verify now" button (admin role); where your build has none, `POST /api/v1/devices/<device id>/escrow/verify` with an admin API token does the same.
 - **A retired device can be restored by download.** Device modes stay refused for it.
 - **No forget, prune or check on device repositories during the pilot** (ADR 0026, a 45-day box from the pilot client's first

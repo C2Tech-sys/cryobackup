@@ -18,8 +18,10 @@ alarm between checks"). This ADR answers it. It changes no other decision of ADR
    turns the recheck off except removing `EscrowRecheckEnforced` by a new ADR.
 3. **Write paths refuse; read paths never fail on it.**
    - Write: `policy.ValidateWrite` (the policy editor, `policy.Patch`) and `policy.CheckEscrowRecheckWritten` on the input of a save
-     (policy create and update, override set) refuse 1 to 7 with the field named. The check is on what the write carries, so saving a
-     different field of a policy whose stored value is below the floor is not blocked by the stored value.
+     (policy create and update, override set) refuse 1 to 7 with the field named. A policy update merges the stored sections into
+     what it checks, so on a policy whose stored value is below the floor any save through the API (a rename, a retention edit) is
+     refused, loudly and naming `sla.escrow_recheck_days`, until the save also sets that field to 0 or at least 8. The web policy editor
+     starts from the clamped value, so a save there writes 8.
    - Read: the console's effective-policy composition (`effectiveDoc`, `composeLayers`, the enrollment grace read, hence the agent policy
      and the facts load), and the agent's policy decode and its last-known-good copy, raise a stored 1 to 7 to 8 (`Policy.ClampStored`) and
      go on. The first clamp in a process logs one warning of class `policy_clamped` with the stored and the used number (no path, no name).
@@ -27,7 +29,7 @@ alarm between checks"). This ADR answers it. It changes no other decision of ADR
 
 ## Consequences
 
-- A policy stored with 1 to 7 before this ADR keeps working, and is judged as 8 days. It is not rewritten; the next save of that field is
-  refused until the value is 0 or at least 8. Look for the `policy_clamped` warning after upgrading.
+- A policy stored with 1 to 7 before this ADR keeps working, and is judged as 8 days. Reads never rewrite it; an API save of that policy is
+  refused until the value is 0 or at least 8, and a save from the web policy editor writes 8. Look for the `policy_clamped` warning after upgrading.
 - An agent older than this ADR still refuses nothing new (it never had the floor); an agent with it accepts an older console's value.
 - `policy.EscrowRecheckMinDays` is tied to `state.EscrowVerifyMaxAge` by a test.
