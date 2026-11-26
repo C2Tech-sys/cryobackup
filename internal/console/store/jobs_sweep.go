@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/state"
@@ -19,6 +21,11 @@ type SweepOptions struct {
 	ActiveWithin time.Duration
 	// Limit bounds the open runs examined in one pass.
 	Limit int
+	// ConsoleStartedAt is when the console started listening again after an
+	// outage; no device restore is closed before ConsoleStartedAt plus
+	// DeviceRestoreReconnectGrace. Zero: the sweep works it out itself
+	// (restoreSweepListeningSince).
+	ConsoleStartedAt time.Time
 }
 
 // Defaults of SweepOptions (architecture §5.7 abandoned-run-sweeper).
@@ -69,6 +76,13 @@ type SweepResult struct {
 //     heartbeat leaves the run id and progress out while a restore holds the
 //     restic slot), so for a restore this is a ceiling counted from the fetch.
 //
+// A console that was down heard nothing from anyone, so silence it measures
+// across its own outage is not the device's. After an outage no device restore
+// is closed, for any reason, until the console has been listening again for
+// DeviceRestoreReconnectGrace (restoreSweepListeningSince): every live agent
+// has heartbeated by then, and the one that has not is silent while the console
+// listens. A heartbeat inside the grace makes the device heard, as always.
+//
 // A run record that arrives later is still ingested. The row stays as the sweep
 // closed it, and the agent's report is kept beside it (recordLateRestoreReport,
 // audited restore.late_report): FAILED never turns quietly into RESTORED.
@@ -76,10 +90,11 @@ const (
 	// DeviceRestoreSilenceLimit is how long a running device restore may go
 	// with nothing at all from its device before the console calls it
 	// interrupted (ADR 0032). The agent's own bounds (internal/agent): a
-	// heartbeat every 60 s (+-10 s), and while the console does not answer a
-	// retry backoff capped at 5 min (+20 %); with a refused device token one
-	// probe an hour (+-20 %), at most 72 min. The restore itself is stopped by
-	// the agent after 15 min without movement (restoreIdleBound), a selection
+	// heartbeat every 60 s (+-10 s); while the console does not answer, a retry
+	// backoff clamped at 5 min (uplink.BackoffMax, jitter never above it), or
+	// the console's own Retry-After, honoured exactly up to 1 h; with a refused
+	// device token one probe an hour (+-20 %), at most 72 min. The restore
+	// itself is stopped by the agent after 15 min without movement (restoreIdleBound), a selection
 	// fetch is retried for at most 30 min (restoreFetchFor), and a restore that
 	// waits for a running backup (up to sla.max_run_hours, 12 h by default)
 	// keeps heartbeating meanwhile. So no restore still running on a device
@@ -99,7 +114,52 @@ const (
 	// record it journaled before restic started (its outbox sends within
 	// minutes of start-up) before the sweep calls the restore lost.
 	deviceRestoreRestartGrace = 30 * time.Minute
+	// DeviceRestoreReconnectGrace is how long the console listens after an
+	// outage before it closes any device restore (ADR 0032). An agent's longest
+	// wait before it tries the console again is the Retry-After the console
+	// sent, honoured up to 1 h (uplink.Backoff.Delay); its own backoff is
+	// clamped at 5 min; the heartbeat that follows takes at most 70 s. Two
+	// hours is that 1 h 6 min with the margin of nearly twice over.
+	DeviceRestoreReconnectGrace = 2 * time.Hour
+	// sweepOutageAfter: a sweep that finds the previous sweep finished longer
+	// ago than this (the sweeper runs every 5 min) knows the console, or its
+	// job runner, was not listening, and starts the reconnect grace.
+	sweepOutageAfter = 15 * time.Minute
+	// abandonedRunSweeperJob is jobs.NameAbandonedRunSweeper, the job_state
+	// row of the sweeper (restated: the store does not import jobs).
+	abandonedRunSweeperJob = "abandoned-run-sweeper"
 )
+
+// sweepListening remembers, per Store, when this process's sweeps started
+// listening after an outage (ms; 0 when its first sweep found no outage).
+var sweepListening sync.Map // *Store -> int64
+
+// restoreSweepListeningSince is when the console started listening again after
+// an outage, or 0 when there was none to see: o.ConsoleStartedAt when set, else
+// the time of this process's first sweep when the previous sweep (job_state of
+// the sweeper, written by the job runner after every run) finished more than
+// sweepOutageAfter before it. Remembered for the life of the process. A quick
+// restart (sweeps paused for less than sweepOutageAfter) starts no grace: the
+// fleet's heartbeats are fresh then.
+func (s *Store) restoreSweepListeningSince(ctx context.Context, o SweepOptions) (int64, error) {
+	if !o.ConsoleStartedAt.IsZero() {
+		return msOf(o.ConsoleStartedAt), nil
+	}
+	if v, ok := sweepListening.Load(s); ok {
+		return v.(int64), nil
+	}
+	now := msOf(s.Now())
+	since := int64(0)
+	js, err := s.GetJobState(ctx, abandonedRunSweeperJob)
+	switch {
+	case err == nil && js.LastFinishedAt != nil && now-msOf(*js.LastFinishedAt) > sweepOutageAfter.Milliseconds():
+		since = now
+	case err != nil && !errors.Is(err, ErrNotFound):
+		return 0, err
+	}
+	v, _ := sweepListening.LoadOrStore(s, since)
+	return v.(int64), nil
+}
 
 // stuckRestore is one running device restore as the sweep reads it.
 type stuckRestore struct {
@@ -138,9 +198,17 @@ func (r stuckRestore) stuckReason(now int64, activeWithin time.Duration) string 
 // sweepStuckDeviceRestores closes the running device restores stuckReason names,
 // one transaction per row with its audit row; a failed audit write leaves that
 // row running for the next sweep and is returned.
-func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.Duration) (int, map[string]int, error) {
+func (s *Store) sweepStuckDeviceRestores(ctx context.Context, o SweepOptions) (int, map[string]int, error) {
+	listening, err := s.restoreSweepListeningSince(ctx, o)
+	if err != nil {
+		return 0, nil, err // closes nothing: it cannot tell whether the console was listening
+	}
+	if listening > 0 && msOf(s.Now()) < listening+DeviceRestoreReconnectGrace.Milliseconds() {
+		return 0, nil, nil // back from an outage: the agents are still reconnecting
+	}
+	activeWithin := o.ActiveWithin
 	var rows []stuckRestore
-	err := s.Read(ctx, func(tx *Tx) error {
+	err = s.Read(ctx, func(tx *Tx) error {
 		var err error
 		rows, err = collect(tx, `SELECT r.id, r.device_id, d.customer_id, COALESCE(r.started_at, r.updated_at),
 				EXISTS (SELECT 1 FROM runs x WHERE x.id = r.id AND x.device_id = r.device_id),
@@ -297,7 +365,7 @@ func (s *Store) SweepAbandonedRuns(ctx context.Context, o SweepOptions) (SweepRe
 	if err != nil {
 		return res, err
 	}
-	res.RestoresClosed, res.RestoresClosedBy, err = s.sweepStuckDeviceRestores(ctx, o.ActiveWithin)
+	res.RestoresClosed, res.RestoresClosedBy, err = s.sweepStuckDeviceRestores(ctx, o)
 	return res, err
 }
 

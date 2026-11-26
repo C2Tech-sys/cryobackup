@@ -319,8 +319,10 @@ func (s *Service) deviceRestoreView(ctx context.Context, v *RestoreView, rr stor
 		v.Message = deviceNext(rr.Status, rr.ErrorClass)
 		if oc.ClosedBy != "" {
 			v.Message = closedByConsole(v.Host, oc)
-			if oc.Late != nil {
-				v.Class = ClassWarn // the device has spoken since; the chip keeps the console's verdict
+			if oc.Late != nil && oc.Late.Status == "delivered" {
+				// The device reports files restored (fully or with errors) since: the banner is lowered
+				// to a warning; the chip keeps the console's verdict. A late failure stays critical.
+				v.Class = ClassWarn
 			}
 		}
 	case "cancelled":

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"html"
 	"net/http"
 	"strings"
@@ -222,5 +223,43 @@ func TestR2A_RefreshSnapshotsReadsCustodyItself(t *testing.T) {
 	}
 	if n := e.be.Count(adminpath.MethodSnapshots) - before; n != 1 {
 		t.Fatalf("an escrowed device: %d worker calls", n)
+	}
+}
+
+// Fix F4: only a late report of files restored (fully or with errors) lowers the banner of a restore
+// the console closed; a late failure or cancel keeps it critical. The chip stays FAILED either way.
+func TestR2A_LateFailureKeepsThePageCritical(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	c := e.svc.fc(context.Background())
+	for _, tc := range []struct {
+		name, status, class, want string
+	}{
+		{"late success", "delivered", "", ClassWarn},
+		{"late partial", "delivered", store.RestoreClassPartial, ClassWarn},
+		{"late failure", "failed", "disk", ClassCrit},
+		{"late cancel", "cancelled", "cancelled", ClassCrit},
+	} {
+		prog, err := json.Marshal(store.DeviceRestoreProgress{Outcome: "interrupted", ClosedBy: store.RestoreClosedAgentSilent,
+			Late: &store.DeviceRestoreLate{Outcome: "x", Status: tc.status, Class: tc.class, ReceivedAt: e.now}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fin := e.now
+		rr := store.RestoreRequest{ID: "01JR2A00000000000000000002", Mode: store.RestoreModeDeviceOriginal, Overwrite: store.RestoreOverwriteNever,
+			Status: "failed", ErrorClass: "interrupted", Progress: prog, SelectionCount: 1, FinishedAt: &fin, CreatedAt: e.now, ExpiresAt: e.now}
+		v := RestoreView{Host: "PC-X"}
+		e.svc.deviceRestoreView(context.Background(), &v, rr, restores.DescribeOutcome(rr), liveFacts{}, c)
+		if v.Class != tc.want || v.Status.Label != "FAILED" || v.Status.Class != ClassCrit {
+			t.Errorf("%s: banner %s, chip %s %s (want banner %s, chip FAILED crit)", tc.name, v.Class, v.Status.Label, v.Status.Class, tc.want)
+		}
+	}
+}
+
+// Fix F5: the audit log names the late report in words, as it names the other restore actions.
+func TestR2A_LateReportHasAnAuditLabel(t *testing.T) {
+	t.Parallel()
+	if got := humanAction("restore.late_report"); got != "Restore reported late" {
+		t.Fatalf("restore.late_report reads %q", got)
 	}
 }

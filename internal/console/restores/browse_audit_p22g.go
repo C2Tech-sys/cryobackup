@@ -3,6 +3,7 @@ package restores
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,6 +24,10 @@ import (
 // BrowseAuditWindow is how long one restore.browse row covers an admin's browsing of one
 // snapshot of one device.
 const BrowseAuditWindow = time.Hour
+
+// errBrowseWritePanicked is the recorded result of a restore.browse write that panicked: the
+// browses that waited on it are refused as NOT AUDITED.
+var errBrowseWritePanicked = errors.New("restores: the restore.browse write panicked")
 
 type browseKey struct {
 	admin, device, snapshot string
@@ -94,6 +99,27 @@ func (s *Service) AuditBrowse(ctx context.Context, who Actor, scope store.Scope,
 	s.browseSeen[k] = c // claimed before the write, so two browses at once write one row
 	s.browseMu.Unlock()
 
+	// The claim is settled on every way out of the write, a panic included: the result is
+	// recorded, a failed claim is forgotten, and done is closed, so no browse of this key waits
+	// for ever and the next one tries again. A panic is recorded as a failed write, then goes on.
+	var werr error
+	defer func() {
+		p := recover()
+		if p != nil {
+			werr = errBrowseWritePanicked
+		}
+		s.browseMu.Lock()
+		c.err = werr
+		if werr != nil && s.browseSeen[k] == c {
+			delete(s.browseSeen, k)
+		}
+		close(c.done)
+		s.browseMu.Unlock()
+		if p != nil {
+			panic(p)
+		}
+	}()
+
 	method := who.Method
 	if method == "" {
 		method = "web"
@@ -103,16 +129,8 @@ func (s *Service) AuditBrowse(ctx context.Context, who Actor, scope store.Scope,
 	if write == nil {
 		write = s.Store.AppendAudit
 	}
-	_, werr := write(ctx, store.AuditEvent{ActorType: "admin", ActorID: who.AdminID, ActorLabel: who.Username, Method: method, SourceIP: who.IP,
+	_, werr = write(ctx, store.AuditEvent{ActorType: "admin", ActorID: who.AdminID, ActorLabel: who.Username, Method: method, SourceIP: who.IP,
 		Action: "restore.browse", ObjectType: "device", ObjectID: deviceID, CustomerID: dev.CustomerID, Result: "ok", Details: details})
-
-	s.browseMu.Lock()
-	c.err = werr
-	if werr != nil && s.browseSeen[k] == c {
-		delete(s.browseSeen, k)
-	}
-	close(c.done)
-	s.browseMu.Unlock()
 	if werr != nil {
 		return fmt.Errorf("%w: restore.browse", store.ErrAudit)
 	}

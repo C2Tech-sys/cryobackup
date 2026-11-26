@@ -175,3 +175,45 @@ func TestR2A_BrowseMemoryIsPerServiceAndPruned(t *testing.T) {
 		t.Fatalf("A wrote %d rows, want 2", n)
 	}
 }
+
+// Fix F2: a write that panics settles its claim on the way out. The browse that waited on it is
+// refused at once (NOT AUDITED), the panicking browse panics on, and the next browse writes a
+// fresh row instead of waiting for ever.
+func TestR2A_PanickingWriteNeverWedgesTheKey(t *testing.T) {
+	e := newEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	who := Actor{AdminID: "01JADMINGGGGGGGGGGGGGGGGGG", Username: "gus"}
+	k := browseKey{admin: who.AdminID, device: e.device.ID, snapshot: fixtures.FixtureSnapshotID}
+	entered, release := make(chan struct{}), make(chan struct{})
+	e.svc.browseAppend = func(context.Context, store.AuditEvent) (store.AuditEvent, error) {
+		close(entered)
+		<-release
+		panic("audit write blew up (test)")
+	}
+	panicked := make(chan any, 1)
+	go func() {
+		defer func() { panicked <- recover() }()
+		_ = e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID)
+	}()
+	<-entered
+	second := make(chan error, 1)
+	go func() {
+		second <- e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID)
+	}()
+	waitForWaiter(t, e.svc, k, 1)
+	close(release)
+	if p := <-panicked; p == nil {
+		t.Fatal("the panic was swallowed")
+	}
+	if err := <-second; !errors.Is(err, store.ErrAudit) {
+		t.Fatalf("the waiting browse after a panicked write: %v (want a prompt NOT AUDITED refusal)", err)
+	}
+	e.svc.browseAppend = nil
+	if err := e.svc.AuditBrowse(ctx, who, store.ScopeAll(), e.device.ID, fixtures.FixtureSnapshotID); err != nil {
+		t.Fatalf("the next browse after a panicked write: %v", err)
+	}
+	if n := len(browseRows(t, e)); n != 1 {
+		t.Fatalf("%d rows after the retry", n)
+	}
+}

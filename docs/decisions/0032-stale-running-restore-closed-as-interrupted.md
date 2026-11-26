@@ -30,7 +30,8 @@ The agent's own bounds (`internal/agent`, numbers as built):
 | Bound | Value | Where |
 | --- | --- | --- |
 | Heartbeat cadence | 60 s, plus or minus 10 s | `loops.go` `defaultHeartbeatEvery`, `heartbeatJitter` |
-| Retry while the console does not answer | backoff capped at 5 min, plus 20 % jitter | `uplink/backoff.go` `BackoffMax` |
+| Retry while the console does not answer | backoff 1 min doubling, clamped at 5 min (the jitter never takes it above) | `uplink/backoff.go` `BackoffMax` |
+| Retry when the console sends Retry-After | the console's value, honoured exactly, up to 1 h | `uplink/backoff.go` `Delay` |
 | Retry with a refused device token | one probe an hour, plus or minus 20 % (at most 72 min) | `loops.go` `refusedProbeEvery` |
 | A restore that stops moving | stopped after 15 min | `restore.go` `restoreIdleBound` |
 | Fetch of the selection | retried for at most 30 min | `restore.go` `restoreFetchFor` |
@@ -55,14 +56,31 @@ The sweeper gains a third case, checked first: **`agent_silent`**, nothing from 
 **`store.DeviceRestoreSilenceLimit` = 24 hours**, counted from the later of the fetch and the device's newest heartbeat.
 
 Reasoning: no restore still running on a device that can reach the console goes silent for longer than 72 minutes (the refused-
-token probe; 6 minutes otherwise), because the agent heartbeats throughout the restore, including the fetch retries and the wait
-behind a backup. 24 hours is that bound twenty times over, and it is the same day a QUEUED restore waits for its device (ruling
+token probe; a Retry-After of up to 1 hour when the console asks for one; 5 minutes otherwise), because the agent heartbeats
+throughout the restore, including the fetch retries and the wait behind a backup. 24 hours is that bound twenty times over, and it is the same day a QUEUED restore waits for its device (ruling
 C6), so "a device not heard from for a day" ends both kinds of wait the same way. What 24 hours does not cover, a machine asleep
 or cut off from the console while its restic can still reach the gateway, is the case section 4 exists for. It is a named
 constant, not a setting: no configuration key fits it today.
 
 The two P22-E cases stay as they were: `agent_restarted`, and `no_run_record`, 48 hours after the fetch
 (`store.DeviceRestoreRunningBound`), which for a restore is a ceiling (see Context).
+
+### 2a. No close while the agents reconnect after a console outage (fix F1 of the blind check)
+
+A console that was down heard nothing from anyone, so the silence it measures across its own outage is not the device's: after a
+24-hour outage every running restore's newest heartbeat is more than 24 hours old, and the first sweep runs seconds after the
+start, while the agents are still waiting to try again. So after an outage the sweep closes no device restore, for any of the three
+reasons, until the console has been listening again for **`store.DeviceRestoreReconnectGrace` = 2 hours**: an agent's longest wait
+before it tries again is a Retry-After of up to 1 hour (its own backoff is clamped at 5 minutes), and its next heartbeat follows
+within 70 seconds; 2 hours is nearly twice that. A heartbeat inside the grace makes the device heard, as always; a device still
+silent when the grace ends is closed then, because it has now been silent while the console listened.
+
+The start of the grace is `SweepOptions.ConsoleStartedAt` when a caller sets it. Otherwise the sweep works it out from its own
+record: when the previous sweep (the sweeper's `job_state` row, which the job runner writes after every run) finished more than
+15 minutes before this process's first sweep, the console or its job runner was not listening, and the grace starts at that first
+sweep; the process remembers it. A quick restart (sweeps paused under 15 minutes) starts no grace, since the fleet's heartbeats
+are fresh. Left open: a second restart within 15 minutes of a first one that followed an outage does not restart the grace. All
+times are the store's clock, so tests drive them.
 
 ### 3. How the console closes it
 
@@ -90,8 +108,9 @@ updated when the stored run was open or "abandoned"). For the restore row:
   closed the row with, the counts by class and the time it arrived. The audit row `restore.late_report` (actor the device,
   severity warning) carries the same, path-free.
 - **The page shows both.** The outcome sentence adds "The device reported it later: restored, N restored, M skipped because they
-  already exist." (or "failed (<class>)", "restored with errors ...", "cancelled"); the banner turns from critical to warning; a
-  "Late report" line gives the time; the chip stays FAILED.
+  already exist." (or "failed (<class>)", "restored with errors ...", "cancelled"); when the late report says files were restored
+  (fully or with errors) the banner turns from critical to warning, and a late failure or cancel keeps it critical; a "Late
+  report" line gives the time; the chip stays FAILED.
 - Only the first closed record is kept: a resend is a duplicate (`AgentIngestRuns`) and changes nothing. An open record changes
   nothing. A row the agent closed itself, and a row the purge job expired or cancelled before the agent fetched it, are left alone
   as before (no `closed_by`).
@@ -99,7 +118,8 @@ updated when the stored run was open or "abandoned"). For the restore row:
 ## Consequences
 
 - A dead or uninstalled agent no longer leaves a restore RUNNING forever: within 24 hours of its last heartbeat (48 hours of the
-  fetch at most) the row is FAILED, the device is free, the audit trail says why, and the page warned meanwhile.
+  fetch at most; plus up to 2 hours after a console outage) the row is FAILED, the device is free, the audit trail says why, and
+  the page warned meanwhile.
 - A restore that is genuinely still moving at 48 hours is closed by the ceiling while it runs; its real outcome arrives as a late
   report and is shown beside FAILED. The fix for that is a heartbeat that names the running restore (agent work, not done here).
 - The restore runbook's status table gains the silent-device line and the console-closed line.

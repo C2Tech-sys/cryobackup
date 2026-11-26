@@ -172,3 +172,73 @@ func TestR2A_LateReportOnlyForRowsTheSweepClosed(t *testing.T) {
 		t.Fatalf("late report for a row the sweep did not close: %+v", l.Items)
 	}
 }
+
+// P22-R2a fix F1: a console back from a 30-hour outage closes no device restore until its agents
+// have had DeviceRestoreReconnectGrace to reconnect; a device still silent then is closed, and one
+// that heartbeats inside the grace stays open.
+func TestR2A_NoSilentCloseInTheGraceAfterAConsoleOutage(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		heartbeats bool // the device heartbeats 30 minutes after the console is back
+	}{{"still silent", false}, {"heartbeat inside the grace", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newSweepRig(t)
+			ctx := context.Background()
+			r.runningRestore(t, rsQuiet, 31*time.Hour)        // fetched before the outage
+			r.heartbeat(t, 30*time.Hour, 30*24*time.Hour, "") // its last heartbeat: when the console went down
+			down := r.now.Add(-30 * time.Hour)                // the last sweep before the outage
+			if err := r.s.RecordJobRun(ctx, abandonedRunSweeperJob, JobRun{Status: "ok", StartedAt: down, FinishedAt: down}); err != nil {
+				t.Fatal(err)
+			}
+			sweep := func(when string, wantClosed bool) {
+				t.Helper()
+				res, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{})
+				if err != nil {
+					t.Fatalf("%s: %v", when, err)
+				}
+				// The job runner records each run, as in production.
+				if err := r.s.RecordJobRun(ctx, abandonedRunSweeperJob, JobRun{Status: "ok", StartedAt: r.now, FinishedAt: r.now}); err != nil {
+					t.Fatal(err)
+				}
+				st, _, _ := r.restoreState(t, rsQuiet)
+				if closed := st != "running"; closed != wantClosed || (wantClosed && res.RestoresClosedBy[RestoreClosedAgentSilent] != 1) {
+					t.Fatalf("%s: status %s, result %+v (want closed %v)", when, st, res, wantClosed)
+				}
+			}
+			r.now = r.now.Add(5 * time.Second) // the first sweep, five seconds after the console started
+			sweep("first sweep", false)
+			r.now = r.now.Add(5 * time.Minute)
+			sweep("second sweep", false)
+			if tc.heartbeats {
+				r.now = r.now.Add(25 * time.Minute)
+				r.heartbeat(t, 0, 30*24*time.Hour, "")
+			}
+			r.now = r.now.Add(DeviceRestoreReconnectGrace - 30*time.Minute - time.Minute)
+			sweep("inside the grace", false)
+			r.now = r.now.Add(32 * time.Minute) // the grace has passed
+			sweep("after the grace", !tc.heartbeats)
+		})
+	}
+}
+
+// With no outage to see (the previous sweep five minutes ago), the 24-hour rule applies at once.
+func TestR2A_NoGraceWithoutAnOutage(t *testing.T) {
+	r := newSweepRig(t)
+	ctx := context.Background()
+	r.runningRestore(t, rsQuiet, 26*time.Hour)
+	r.heartbeat(t, 25*time.Hour, 30*24*time.Hour, "")
+	prev := r.now.Add(-5 * time.Minute)
+	if err := r.s.RecordJobRun(ctx, abandonedRunSweeperJob, JobRun{Status: "ok", StartedAt: prev, FinishedAt: prev}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := r.s.SweepAbandonedRuns(ctx, SweepOptions{}); err != nil || res.RestoresClosedBy[RestoreClosedAgentSilent] != 1 {
+		t.Fatalf("sweep %+v %v", res, err)
+	}
+	// An explicit start (SweepOptions.ConsoleStartedAt) holds the grace as well.
+	r2 := newSweepRig(t)
+	r2.runningRestore(t, rsQuiet, 26*time.Hour)
+	r2.heartbeat(t, 25*time.Hour, 30*24*time.Hour, "")
+	if res, err := r2.s.SweepAbandonedRuns(ctx, SweepOptions{ConsoleStartedAt: r2.now.Add(-time.Hour)}); err != nil || res.RestoresClosed != 0 {
+		t.Fatalf("closed inside an explicit grace: %+v %v", res, err)
+	}
+}
