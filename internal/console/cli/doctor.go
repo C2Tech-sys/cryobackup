@@ -61,7 +61,9 @@ func isLoopbackBind(addr string) bool {
 // doctor_mail_m4.go).
 // It prints OK, WARN, FAIL or NOT CHECKED per check and exits 1 on any FAIL.
 // Doctor has no flag that skips network checks: the bind tests, the adminpath
-// ping and the mail relay probe always run.
+// ping and the mail relay probe always run, except that a drill copy
+// ("drill": true, ADR 0029) never probes the mail relay and reports it as
+// NOT CHECKED (doctor_mail_m4.go).
 // It changes no data it checks: the database is opened read-only without
 // migrations or checkpoints (openCheckedDatabase, store.OpenNoMigrate), so doctor is
 // safe to run before an upgrade and beside a running console. SQLite may create
