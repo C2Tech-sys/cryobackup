@@ -3,6 +3,7 @@ package maintain
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -404,5 +405,125 @@ func TestDrillWatchdogStopSchedulesNoUnlock(t *testing.T) {
 	}
 	if !strings.Contains(e.logs.String(), "dump_idle_unlock") {
 		t.Errorf("the skipped cleanup was not logged:\n%s", e.logs.String())
+	}
+}
+
+// TestRunLoopInDrillModeServesTheDrillLoop (FIX BATCH 2, K4): `maintain --loop` with a drill config
+// goes through Run to DrillLoop, not to Loop. The worker has a self-backup prefix and its keys, so a
+// production Loop would start a scheduler pass and a self-backup step the moment it is up (the
+// first pass is not delayed to a tick); here neither job row exists once the loop has stopped, the
+// worker says it is in drill mode, and a method the drill socket refuses is refused. (Run builds the
+// worker itself, so this is the only test that reaches the `if fc.Drill` branch of Run.)
+func TestRunLoopInDrillModeServesTheDrillLoop(t *testing.T) {
+	dir := t.TempDir()
+	exe, sum := fakeResticPath(t)
+	harness := filepath.Join(dir, "harness")
+	if err := os.MkdirAll(harness, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixtures, err := filepath.Abs(filepath.Join("..", "..", "restic", "testdata", "v0.19.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(dir, "data")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rules := append([]fakeRule{{Cmd: "version", Stdout: "version.json"}}, selfRules(filepath.Join(dataDir, SelfBackupStagingDir))...)
+	sc, _ := json.Marshal(fakeScenario{Fixtures: fixtures, Rules: rules})
+	if err := os.WriteFile(filepath.Join(harness, "fake.json"), sc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(harness, "rclone.conf"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sockDir, err := os.MkdirTemp("", "cd") // a short path: a unix socket's name is length limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	sock := filepath.Join(sockDir, "d.sock")
+	dbPath := filepath.Join(dataDir, "c.db")
+	cfg := filepath.Join(dir, "config.json")
+	body := `{"db_path":` + jsonStr(dbPath) + `,"master_key_path":` + jsonStr(filepath.Join(dir, "master.key")) +
+		`,"adminpath_socket":` + jsonStr(sock) + `,"drill":true}`
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CRYO_MAINTAIN_RESTIC", exe)
+	t.Setenv("CRYO_MAINTAIN_RESTIC_SHA256", sum)
+	t.Setenv("RCLONE_CONFIG", filepath.Join(harness, "rclone.conf"))
+	t.Setenv("CRYO_MAINTAIN_SCRATCH_DIR", filepath.Join(dir, "scratch"))
+	t.Setenv("CRYO_MAINTAIN_BUCKET", "bucket")
+	t.Setenv("CRYO_MAINTAIN_PREFIX", "cb")
+	t.Setenv("CRYO_MAINTAIN_SELF_PREFIX", testSelfPrefix)
+	keys := func(string, *store.Store) (KeyUnwrapper, error) {
+		return selfAndUnwrap{&fakeKeys{pw: "x"}, &fakeSelfKeys{pw: testSelfPW, keyID: testSelfKeyID}}, nil
+	}
+
+	// Stand in for SIGTERM: Run's context is cancelled by the test.
+	runCtx, stopRun := context.WithCancel(context.Background())
+	prev := notifyContext
+	notifyContext = func(context.Context, ...os.Signal) (context.Context, context.CancelFunc) {
+		return context.WithCancel(runCtx)
+	}
+	t.Cleanup(func() { notifyContext = prev; stopRun() })
+
+	var out, errb bytes.Buffer
+	done := make(chan int, 1)
+	go func() { done <- Run([]string{"--config", cfg, "--loop"}, &out, &errb, keys) }()
+
+	cl := adminpath.NewClient(sock, adminpath.ClientOptions{})
+	defer cl.Close()
+	var pingErr error
+	for i := 0; i < 200; i++ {
+		select {
+		case code := <-done:
+			t.Fatalf("maintain --loop returned %d before serving (stderr %q)", code, errb.String())
+		default:
+		}
+		if _, pingErr = cl.Ping(runCtx); pingErr == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if pingErr != nil {
+		stopRun()
+		t.Fatalf("ping over the --loop socket: %v", pingErr)
+	}
+	// A drill socket refuses a method a production worker serves, with the refusal's own code.
+	_, err = cl.Unlock(runCtx, adminpath.UnlockRequest{DeviceRequest: adminpath.DeviceRequest{DeviceID: "no-such-device"}})
+	wantCode(t, err, adminpath.CodeUnavailable, "")
+
+	stopRun()
+	select {
+	case code := <-done:
+		if code != ExitOK {
+			t.Fatalf("maintain --loop exit %d, want %d (stderr %q)", code, ExitOK, errb.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("maintain --loop did not stop")
+	}
+	// The log carries classes, not sentences (log messages are redacted): DrillLoop's own class, and
+	// the refusal of the one method called above.
+	for _, want := range []string{`"class":"drill"`, `"class":"drill_refused"`} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("--loop with a drill config did not log %s:\n%s", want, errb.String())
+		}
+	}
+	st, err := store.Open(context.Background(), store.Options{Path: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, job := range []string{SchedulerJob, SelfBackupJob, SelfBackupVerifyJob} {
+		js, err := st.GetJobState(context.Background(), job)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			t.Fatalf("%s: %v", job, err)
+		case js.RunCount != 0 || js.LastStatus != "" || js.LeaseHolder != "":
+			t.Errorf("job %s ran under maintain --loop in drill mode: %+v", job, js)
+		}
 	}
 }

@@ -80,6 +80,10 @@ func Main(args []string) int {
 	return Run(args, os.Stdout, os.Stderr, DefaultKeyUnwrapper)
 }
 
+// notifyContext is signal.NotifyContext; a variable so that a test can stop a --loop run without
+// sending the process a signal (there is none to send on every platform).
+var notifyContext = signal.NotifyContext
+
 // Run is Main with its outputs and key factory injected, for tests.
 func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int {
 	fs := flag.NewFlagSet("maintain", flag.ContinueOnError)
@@ -133,7 +137,7 @@ func Run(args []string, stdout, stderr io.Writer, keys KeyUnwrapperFactory) int 
 		fmt.Fprintln(stderr, "maintain: CRYO_MAINTAIN_STATE_DIR is ignored (ADR 0008: no repository data on disk); temp files go to CRYO_MAINTAIN_SCRATCH_DIR, a tmpfs")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	lg := logx.New(stderr, logx.LevelInfo)
 

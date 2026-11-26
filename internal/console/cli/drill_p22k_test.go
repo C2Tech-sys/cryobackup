@@ -376,3 +376,85 @@ func TestDrillCopyBannerOnEveryPage(t *testing.T) {
 		})
 	}
 }
+
+// TestDoctorDrillContactsNoOutsideParty (FIX BATCH 2, K3): doctor against a drill config whose smtp
+// block, gateway, heartbeat URL and public URL all name counting listeners opens no connection to
+// any of them and says so ("not checked: drill copy") for the mail relay; the same config without
+// the drill key still runs the live relay probe (one connection), so the zero is the drill key's.
+func TestDoctorDrillContactsNoOutsideParty(t *testing.T) {
+	for _, drill := range []bool{true, false} {
+		t.Run("drill="+strconv.FormatBool(drill), func(t *testing.T) {
+			cfg, o := drillConfig(t, drill)
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := `{"data_dir": ` + strconv.Quote(cfg.DataDir) + `, "db_path": ` + strconv.Quote(cfg.DBPath) +
+				`, "master_key_path": ` + strconv.Quote(cfg.MasterKeyPath) + `, "insecure_http_for_lab": true, "agent_listen": "127.0.0.1:0"` +
+				`, "public_url": ` + strconv.Quote(cfg.PublicURL) + `, "gateway_url": ` + strconv.Quote(cfg.GatewayURL) +
+				`, "healthcheck_ping": {"url": ` + strconv.Quote(cfg.HealthcheckPing.URL) + `, "interval_s": ` + strconv.Itoa(cfg.HealthcheckPing.IntervalS) + `}` +
+				`, "smtp": {"host": ` + strconv.Quote(cfg.SMTP.Host) + `, "port": ` + strconv.Itoa(cfg.SMTP.Port) +
+				`, "security": "plain", "allow_plaintext": true, "from": "cryo@example.invalid"}` +
+				`, "drill": ` + strconv.FormatBool(drill) + `}`
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, out, _ := run(t, "", "doctor", "--config", path)
+			var relay string
+			for _, l := range strings.Split(out, "\n") {
+				if strings.Contains(l, "mail relay") {
+					relay = l
+				}
+			}
+			if relay == "" {
+				t.Fatalf("doctor printed no mail relay line:\n%s", out)
+			}
+			if drill {
+				if n := o.total(); n != 0 {
+					t.Errorf("doctor in drill mode opened %d connection(s) to outside parties (smtp %d, gateway %d, ping %d, endpoint %d):\n%s",
+						n, o.smtp.Load(), o.gateway.Load(), o.ping.Load(), o.endpoint.Load(), out)
+				}
+				if !strings.HasPrefix(relay, "NOT CHECKED") || !strings.Contains(relay, "not checked: drill copy") {
+					t.Errorf("drill relay line = %q, want NOT CHECKED ... not checked: drill copy", relay)
+				}
+				return
+			}
+			if n := o.smtp.Load(); n != 1 {
+				t.Errorf("non-drill doctor opened %d relay connection(s), want the one live probe:\n%s", n, out)
+			}
+			if strings.Contains(relay, "drill copy") {
+				t.Errorf("non-drill relay line mentions the drill: %q", relay)
+			}
+		})
+	}
+}
+
+// TestDrillBannerFollowsTheLastBuild (FIX BATCH 2, K5): the strip switch is process-wide
+// (ui.SetDrillCopy). A drill console built first and a production console built second in the same
+// process, with no cleanup between them, must leave the second one without the strip: a Build that
+// set the switch only when drill is true would keep serving the first one's banner.
+func TestDrillBannerFollowsTheLastBuild(t *testing.T) {
+	t.Cleanup(func() { ui.SetDrillCopy(false) })
+	has := func(app *App) bool {
+		t.Helper()
+		b := &r3Browser{t: t, base: r3Serve(t, app)}
+		_, body := b.do("GET", "/login", nil)
+		return strings.Contains(body, drillBannerText)
+	}
+	build := func(drill bool) *App {
+		t.Helper()
+		cfg, _ := drillConfig(t, drill)
+		app, err := Build(context.Background(), cfg, BuildOptions{Backend: &fixtures.Backend{}, Log: logx.New(&bytes.Buffer{}, logx.LevelDebug)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(app.Close)
+		return app
+	}
+	if !has(build(true)) {
+		t.Fatal("the drill console shows no DRILL COPY strip: the test proves nothing")
+	}
+	if has(build(false)) {
+		t.Fatal("a production console built after a drill console still shows the DRILL COPY strip")
+	}
+	if !has(build(true)) { // and back: the switch follows each build
+		t.Fatal("a drill console built after a production console shows no strip")
+	}
+}
