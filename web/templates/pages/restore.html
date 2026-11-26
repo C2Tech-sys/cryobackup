@@ -1,4 +1,6 @@
 {{/* B17 - the restore wizard (P22-G; ADR 0027, 0028, 0030; plan B.1): snapshot -> browse and select -> destination -> review, one form that works without JavaScript (htmx swaps it in place). The listing, the selection and the review are the only places the console shows names from a client machine: rendered per request, never cached or logged; the paths travel in POST bodies only, never in a URL. */}}
+{{define "head"}}<script src="{{asset "js/restore.js"}}" defer></script>{{end}}
+
 {{define "restore_box"}}<form id="restore-box" class="wiz rw" method="post" action="/ui/devices/{{.DeviceID}}/restore" hx-post="/ui/devices/{{.DeviceID}}/restore" hx-target="#restore-box" hx-swap="outerHTML">
 {{if .CanSubmit}}<button class="rw-default" type="submit" name="action" value="submit" tabindex="-1" aria-hidden="true">Continue</button>{{end}}
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
@@ -10,6 +12,7 @@
 {{if eq .Step "review"}}<input type="hidden" name="mode" value="{{.Mode}}">{{end}}
 {{range .Hidden}}<input type="hidden" name="path" value="{{.}}">
 {{end}}{{template "steps" .Steps}}
+<div id="restore-fail" class="banner crit dense" role="alert" hidden><i class="g g-crit" aria-hidden="true"></i><div class="b-text"><b data-fail-title></b> <span data-fail-text></span></div></div>
 <div class="in">
 {{if eq .Step "dest"}}{{template "restore_step_dest" .}}{{else if eq .Step "review"}}{{template "restore_step_review" .}}{{else}}{{template "restore_step_select" .}}{{end}}
 </div>

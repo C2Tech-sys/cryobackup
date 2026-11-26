@@ -767,6 +767,8 @@ type wizForm struct {
 	drop              map[string]bool
 	mode, confirm     string
 	code              string
+	// dropped counts posted paths that failed validation (set by restorePost from basketFrom).
+	dropped int
 }
 
 func readWizForm(r *http.Request) wizForm {
@@ -864,6 +866,7 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 	if in.action == "snapshot" {
 		dir, off = "/", 0
 	}
+	in.dropped = dropped
 	d.setBasket(basket)
 	switch {
 	case dropped > 0:
@@ -987,9 +990,20 @@ func (s *Service) restoreCreate(w http.ResponseWriter, r *http.Request, p *auth.
 	if !who.FreshMFA {
 		toReview()
 		d.NeedCode = true
-		refuse(http.StatusForbidden, &Banner{ClassWarn, "A recent MFA check is required",
+		refuse(http.StatusForbidden, &Banner{ClassWarn, "A recent MFA check is required.",
 			"Every restore needs an authenticator check from the last " + strconv.Itoa(d.MFAWindow) +
 				" minutes on this session. Enter the current code from your authenticator app below and continue; a recovery code is not accepted."})
+		return
+	}
+	// A create whose form carries a path that fails validation is refused, not trimmed: the
+	// operator asked for something the console cannot do, and saying so beats a restore of less.
+	if in.dropped > 0 && d.Blocked == nil {
+		s.browse(r, d, p, d.SnapshotID, in.cur, in.off)
+		d.Error = &Banner{ClassWarn, "Some selected items are not valid.", plural(in.dropped, "item", "items") +
+			" in the form could not be used, so nothing was started. Select again from the listing and continue."}
+		d.CanSubmit = d.Listed
+		d.steps()
+		s.renderRestore(w, r, http.StatusBadRequest, *d)
 		return
 	}
 	if len(d.Basket) == 0 || d.Over {
@@ -1047,7 +1061,7 @@ func (s *Service) restoreCreate(w http.ResponseWriter, r *http.Request, p *auth.
 func restoreRefusal(err error) (status int, b *Banner, known bool) {
 	switch {
 	case errors.Is(err, restores.ErrStepUp):
-		return http.StatusForbidden, &Banner{ClassWarn, "A recent MFA check is required", "Enter the current code from your authenticator app below and continue."}, true
+		return http.StatusForbidden, &Banner{ClassWarn, "A recent MFA check is required.", "Enter the current code from your authenticator app below and continue."}, true
 	case errors.Is(err, restores.ErrConfirmHost):
 		return http.StatusBadRequest, &Banner{ClassWarn, "The host name does not match", "Replacing files needs the device's host name typed exactly as shown. Nothing was started."}, true
 	case errors.Is(err, restores.ErrCustomerHeld):
@@ -1070,8 +1084,15 @@ func restoreRefusal(err error) (status int, b *Banner, known bool) {
 	return 0, nil, false
 }
 
+// renderRestore renders the wizard. A browser post gets the refusal's real status (400, 403, 409,
+// 422 ...). An htmx post gets 200 with the same box: htmx 2 swaps no 4xx response, so a refusal
+// answered with its real status would show the operator nothing (fix G1). The refusal is in the
+// banner of the box either way; restore.js shows a message for the errors that are not a box.
 func (s *Service) renderRestore(w http.ResponseWriter, r *http.Request, status int, d RestoreData) {
 	if r.Header.Get("HX-Request") == "true" {
+		if status >= 400 {
+			status = http.StatusOK
+		}
 		s.render(w, r, status, "restore", "restore_box", d)
 		return
 	}

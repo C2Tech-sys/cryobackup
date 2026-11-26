@@ -141,7 +141,7 @@ func TestRestoreWizardEveryRefusalPage(t *testing.T) {
 		status int
 		title  string
 	}{
-		{restores.ErrStepUp, 403, "A recent MFA check is required"},
+		{restores.ErrStepUp, 403, "A recent MFA check is required."},
 		{restores.ErrCustomerHeld, 409, "Customer-held key"},
 		{restores.ErrDevicePurging, 409, "This device is being purged"},
 		{restores.ErrRetiredDownloadOnly, 409, "This device is retired: download only"},

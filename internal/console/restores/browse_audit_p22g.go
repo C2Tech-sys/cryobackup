@@ -49,6 +49,9 @@ func (s *Service) AuditBrowse(ctx context.Context, who Actor, scope store.Scope,
 	k := browseKey{st: s.Store, admin: who.AdminID, device: deviceID, snapshot: snapshotID}
 	browseMu.Lock()
 	for old, at := range browseSeen { // keep the memory to the window: an entry past it decides nothing
+		if old.st != s.Store {
+			continue // another console database has its own clock (tests run many side by side)
+		}
 		if now.Sub(at) >= BrowseAuditWindow || at.After(now) {
 			delete(browseSeen, old)
 		}

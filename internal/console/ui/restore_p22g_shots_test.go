@@ -58,10 +58,20 @@ func TestP22G_Screenshots(t *testing.T) {
 	plain.be.Files = fixtures.P22Files()
 
 	forms, scans := fixtures.P22FormsFolder, fixtures.P22BigFolder
+	// CRYO_SHOTS_ONLY=slug,slug re-shoots just those screens and leaves README.md as it is.
+	only := map[string]bool{}
+	for _, s := range strings.Split(os.Getenv("CRYO_SHOTS_ONLY"), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			only[s] = true
+		}
+	}
 	var shots []p22Shot
 	add := func(slug, page, state, route, html string) {
 		if !strings.Contains(html, "</html>") {
 			t.Fatalf("%s: not a page", slug)
+		}
+		if len(only) > 0 && !only[slug] {
+			return
 		}
 		shots = append(shots, p22Shot{slug, page, state, route, html})
 	}
@@ -202,8 +212,10 @@ func TestP22G_Screenshots(t *testing.T) {
 		}
 		fmt.Fprintf(&readme, "| `%s` | %s | %s | `%s` | %s |\n", s.slug, s.page, s.state, s.route, strings.Join(files, ", "))
 	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readme.String()), 0o644); err != nil {
-		t.Fatal(err)
+	if len(only) == 0 {
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readme.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Logf("wrote %d screens to %s", len(shots), dir)
 }
