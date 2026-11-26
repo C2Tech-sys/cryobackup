@@ -12,6 +12,120 @@ create the -shm file next to it, and doctor says so when it cannot. On a databas
 schema version, the version the first start will migrate it to and the pending migrations, and
 reports the checks that need the new schema as NOT CHECKED.
 
+## 0.4.0: the pilot slice (ADRs 0026 to 0031)
+
+Release 0.4.0 puts restore in the console, the console's own backup, the escrow recheck and restore from a retired device
+into production ([ADR 0026](decisions/0026-the-pilot-slice.md)). The console binary and the agent MSI carry the same version.
+
+**Order: the console first, then the agents.** The console is the one that knows the new restore routes, so upgrade it and
+check it before any agent is touched. Agents are pushed afterwards, one site at a time, as any MSI upgrade.
+
+### The console
+
+- **No schema change.** The database stays at schema version 8. A console coming from v0.3.0 (schema 6) still migrates to 8 on
+  its first start: read "M4" below.
+- **Run `cryo-console doctor` with the new binary first**, as above. It checks the new keys below.
+- **New configuration.** None is required to start; a console without them behaves as before, except that C11 is raised (see
+  the next section).
+
+| key | environment | what it does | where it is described |
+| --- | --- | --- | --- |
+| `admin_url` | `CRYO_ADMIN_URL` | the address an operator types to open the console; the link in e-mails | "The "Open the console" link in e-mails is `admin_url`", below |
+| `trusted_proxies` | `CRYO_TRUSTED_PROXIES` | the reverse proxies in front of the admin listener whose forwarded headers are believed | "The admin UI behind a reverse proxy", below |
+| `drill` | `CRYO_DRILL` | marks a console restored from its self-backup for a drill; **never set it on the production console** | [`docs/runbooks/console-disaster-recovery.md`](runbooks/console-disaster-recovery.md), section 5 |
+| (worker only) | `CRYO_MAINTAIN_SELF_PREFIX` in `maintain.env` | the storage prefix of the console's self-backup | the next section |
+
+- **`cryo-console init` writes `"drill": false` and `"admin_url": ""` into every config.json it creates**, set or not. See
+  "What a rollback must remove first".
+
+### Turn the self-backup on (CRYO_MAINTAIN_SELF_PREFIX)
+
+The console database is now backed up by the maintenance worker every 6 hours into a restic repository of its own
+([ADR 0029](decisions/0029-console-self-backup-is-a-restic-repository.md)). **It is off until you give it a prefix, and an off
+self-backup is an alarm**: right after the upgrade the C11 banner reads "no self-backup has been written" and the System page's
+"Database self-backup" row says "no self-backup has been written (not_configured: CRYO_MAINTAIN_SELF_PREFIX is not set)". That is intended. To clear it:
+
+1. **Choose the prefix.** It must not equal the device prefix (`CRYO_MAINTAIN_PREFIX`), lie inside it, or begin with it. With
+   device prefix `<prefix>`, the worker refuses `<prefix>`, `<prefix>/x`, `<prefix>-console` and `<prefix>x`. Pick a name
+   outside it, for example `<self-backup prefix>`. **A prefix that breaks the rule is a configuration error, not a job failure:** `cryo-maintain` refuses to start, prints the reason on stderr and exits 2, and systemd keeps restarting it, so look in `journalctl -u cryo-maintain` (and expect the worker banner C07 meanwhile). Refused: a prefix equal to the device prefix, inside it, beginning with it or containing it; any self prefix while `CRYO_MAINTAIN_PREFIX` is empty (device repositories at the bucket root); and a segment with characters other than letters, digits, `.`, `_` and `-`.
+2. **Give the admin key its rights.** The worker writes through the `[admin]` remote, never the gateway. That key needs list,
+   get, put and delete on `<bucket>/<self-backup prefix>/*`. An admin key with bucket-wide rights already has them. A key scoped
+   by prefix needs the statement in [`deploy/systemd/README.md`](../deploy/systemd/README.md), "Console self-backup". The
+   **gateway** key must have no right there: every resource in its policy ends with a slash (`<bucket>/<prefix>/*`, never
+   `<bucket>/<prefix>*`).
+3. **Set it and restart the worker:**
+
+   ```sh
+   # /etc/cryobackup/maintain.env
+   CRYO_MAINTAIN_SELF_PREFIX=<self-backup prefix>
+   ```
+
+   ```sh
+   sudo systemctl restart cryo-maintain
+   ```
+
+4. **Check the worker stayed up** (`systemctl status cryo-maintain`), **wait for one pass, then look.** The System page shows the time of the first self-backup and C11 clears. Run
+   `cryo-console self-backup verify` once (the disaster-recovery runbook, section 2); it must exit 0.
+5. **Run the four storage checks of ADR 0029** on the real account before relying on it: the admin key's rights on the prefix,
+   the gateway key's lack of any, the cost of `forget --prune` under your bucket's versioning, and the gateway policy's
+   prefix scope.
+6. **Keep `CRYO_MAINTAIN_MAX_STREAMS` at 2 (the default).** At 3 the self-backup has no restic slot, the job row says `no_slot`
+   and C11 alarms (the runbook, section 6).
+7. **Make the offline kit and drill it** (the runbook, sections 1 and 5). The self-backup cannot hold the master key or the
+   storage credentials.
+
+### Other behaviour that changes on upgrade
+
+- **Restore.** The device page's "Restore files" opens a wizard: several files and folders as one zip, to the original place,
+  or to "A new folder on <host>" ([`docs/runbooks/restore.md`](runbooks/restore.md)). Every restore needs the operator role and
+  a two-factor check made in the last 5 minutes. A device restore is refused at once for a device whose agent is older than
+  0.4.0 (`agent_too_old`); the zip works for every device.
+- **The escrow recheck is on.** Every escrowed key, retired devices included, is opened with `restic cat config` once a week
+  by the worker (at most 5 devices a pass), and a key not verified for `escrow_recheck_days` (30 by default) raises
+  ESCROW_UNVERIFIED ([ADR 0030](decisions/0030-escrow-rechecked-and-retired-devices-restorable.md)). A console with many devices
+  verified only at enrollment can show that warning until the worker has been through the fleet. A retired device whose check
+  fails raises a fleet banner (C22, C22b) instead of its own alarm. The device page has a "Verify now" button (admin role); where your build has none, `POST /api/v1/devices/<device id>/escrow/verify` with an admin API token does the same.
+- **A retired device can be restored by download.** Device modes stay refused for it.
+- **No forget, prune or check on device repositories during the pilot** (ADR 0026, a 45-day box from the pilot client's first
+  backup). Repositories only grow.
+
+### The agent 0.4.0
+
+Install the new MSI over the old one (`msiexec /i`, or the RMM wrapper; `TOKEN` is not needed, the device stays enrolled;
+[`deploy/windows/README.md`](../deploy/windows/README.md)). 0.4.0 adds restore to the device
+([ADR 0027](decisions/0027-restore-to-the-original-device.md)): it takes a restore command, fetches the selection with its
+device token, restores with its own login through the gateway, and reports counts by class, never a path.
+
+- **A console older than this build refuses nothing new.** A 0.4.0 agent under a console older than 0.4.0 backs up exactly as a
+  0.3.x agent does: the restore statistics are omitted from backup records, and an older console ignores a field it does not
+  know. Such a console cannot create a restore command, so the agent's restore code never runs.
+- **A 0.3.x agent under a 0.4.0 console** backs up as before. Device restores to it are refused when the request is made; the
+  zip works.
+- **Run the SYSTEM lab checks before the first device restore on a production machine**
+  ([`docs/lab/p22-agent-system.md`](lab/p22-agent-system.md)). They need the agent's own account, which the build machine could
+  not give. If one fails, that device mode does not ship (ADR 0027). The zip download is not affected.
+- At its start the 0.4.0 agent removes restore staging folders a cut-short restore left (`<L>:\.cryobackup-restore\<id>`) and
+  side folders whose restore did not succeed.
+
+### What a rollback must remove first
+
+A console binary older than the keys refuses a config.json that contains them and does not start
+(`json: unknown field "drill"`). This extends "Rolling back after setting `admin_url` or `trusted_proxies`", below. **Before you
+put an older binary back, remove from config.json:** `admin_url`, `trusted_proxies` and `drill`. Remove them from the
+environment too (`CRYO_ADMIN_URL`, `CRYO_TRUSTED_PROXIES`, `CRYO_DRILL`); an older binary ignores the variables, but a file that
+still carries one invites the mistake.
+
+- `cryo-console init` of this release writes `"drill": false` and `"admin_url": ""`, so a config made by it always needs the
+  keys removed. `cryo-upgrade.sh` does not edit config.json, and its own recovery path starts the old binary on the config as it
+  is: add the new keys **after** the upgrade has been checked, not before.
+- If the version you ran before is v0.3.0, the schema-8 rule of "M4" below applies: restore the database copy `cryo-upgrade.sh`
+  made, and accept that what was written after it is lost.
+- An older console has no restore route: let every queued or running device restore end, or cancel it, before rolling back.
+- The self-backup repository stays in storage and stays valid; an older worker does not write to it, so nothing is backed up
+  while it runs. Leave the repository where it is.
+- Agents: install the older MSI. An older agent does not know `<L>:\.cryobackup-restore` or `C:\CryoBackup-Restore`; look for
+  those folders on a machine where a restore was cut short and remove them by hand.
+
 ## The admin UI behind a reverse proxy: `trusted_proxies` (ADR draft "trusted proxies")
 
 **New optional config key `trusted_proxies`** (environment override `CRYO_TRUSTED_PROXIES`, entries
