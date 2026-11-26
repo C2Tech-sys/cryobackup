@@ -20,6 +20,16 @@ var testHookBeforeMove func(dest string)
 // read after the move (to drive the alarm branch).
 var testHookPostMove func(got string) string
 
+// testHookBeforeFileOpen, when a test sets it, runs just before a staged file
+// is opened (with its staged full path): the window for swapping something
+// else in at the name.
+var testHookBeforeFileOpen func(staged string)
+
+// testHookBeforeFix, when a test sets it, runs after a file was moved and
+// passed the final-path check, just before its descriptor is rewritten (with
+// its full destination path): the window for adding a hard link.
+var testHookBeforeFix func(dest string)
+
 // Place moves the files restic restored into staging to their original
 // location under driveRoot (ADR 0027, "Original location: restore into
 // staging, then place", step 4). staging is the restore's fresh staging folder
@@ -52,9 +62,12 @@ var testHookPostMove func(got string) string
 //   - names are compared exactly and the chain is confirmed: each component's
 //     final path, read through its handle, must equal its parent's final path
 //     plus the expected name (chainOK), which also refuses an 8.3 match;
-//   - one handle per placed file: opened once, renamed through it relative to
-//     the held parent with FileRenameInfoEx, descriptor applied through it
-//     (placeFile);
+//   - one handle per placed file: opened once, as a non-directory, shared for
+//     reading only, renamed through it relative to the held parent with
+//     FileRenameInfoEx, descriptor applied through it (placeFile); a staged
+//     entry that is a folder, a reparse point or a file with more than one
+//     link is refused (guard_refused), and the link count is read again
+//     through the handle just before the descriptor rewrite (P22-D2);
 //   - immediately before each move the parent's tag and final path are read
 //     again through its held handle (placeFile), and after the move the
 //     file's final path is checked against the intended one (the ADR's
@@ -231,8 +244,22 @@ const stagedAccess = windows.DELETE | windows.SYNCHRONIZE | windows.FILE_READ_AT
 // placeFile places the staged file name (in the staged folder held as sh) at
 // the same name inside the destination folder held as dh (final path dPath).
 func (p *placer) placeFile(sh windows.Handle, name string, dh windows.Handle, dPath string) {
-	fh, err := openAt(sh, name, stagedAccess, windows.FILE_SHARE_READ)
+	if testHookBeforeFileOpen != nil {
+		if sp, err := finalPath(sh); err == nil {
+			testHookBeforeFileOpen(p.vol + sp + pathSep(sp) + name)
+		}
+	}
+	// The staged file is opened once, relative to its held staged folder, as
+	// a non-directory (FILE_NON_DIRECTORY_FILE: the type is enforced in the
+	// open itself, P22-D2 S2) and shared for reading only: no other process
+	// may write it, or rename or delete it (no FILE_SHARE_WRITE, no
+	// FILE_SHARE_DELETE), from this open to the rename (S3).
+	fh, err := openStagedFileAt(sh, name)
 	if err != nil {
+		if stagedNotRegular(sh, name) {
+			p.c.Add(ClassGuardRefused, 1) // a folder or a reparse point at a file's name
+			return
+		}
 		p.c.Add(ClassOther, 1)
 		return
 	}
@@ -242,13 +269,22 @@ func (p *placer) placeFile(sh windows.Handle, name string, dh windows.Handle, dP
 		p.c.Add(ClassOther, 1)
 		return
 	}
-	if ti.reparse() {
-		p.c.Skipped++ // a link restic made: never moved into place
+	if ti.reparse() || ti.dir() {
+		// RemoveReparsePoints ran before placement, so a link here was put
+		// there since: never moved into place (S2).
+		p.c.Add(ClassGuardRefused, 1)
 		return
 	}
 	fi, err := fileInfo(fh)
 	if err != nil {
 		p.c.Add(ClassOther, 1)
+		return
+	}
+	if fi.NumberOfLinks > 1 {
+		// A staged file with another name: its descriptor is the other
+		// name's too, which may be outside staging. Never renamed into place,
+		// never given fixDescriptor; the clean-up walk unlinks it (S1).
+		p.c.Add(ClassGuardRefused, 1)
 		return
 	}
 	size := sizeOf(fi)
@@ -329,6 +365,19 @@ func (p *placer) placeFile(sh windows.Handle, name string, dh windows.Handle, dP
 		p.c.Alarms++
 		return
 	}
+	if testHookBeforeFix != nil {
+		testHookBeforeFix(p.vol + want)
+	}
+	// The link count again, through the same handle, immediately before the
+	// descriptor rewrite (S1): a link created after the rename would let the
+	// rewrite reach another file. Then nothing is rewritten (the file keeps
+	// staging's Administrators and SYSTEM entries), it is a refusal, and the
+	// alarm is raised.
+	if fi, err := fileInfo(fh); err != nil || fi.NumberOfLinks > 1 {
+		p.c.Add(ClassGuardRefused, 1)
+		p.c.Alarms++
+		return
+	}
 	p.c.Restored++
 	p.c.BytesRestored += size
 	if err := fixDescriptor(fh); err != nil {
@@ -339,6 +388,26 @@ func (p *placer) placeFile(sh windows.Handle, name string, dh windows.Handle, dP
 		p.c.BytesRestored -= size
 		p.c.Add(ClassOther, 1)
 	}
+}
+
+// openStagedFileAt opens a staged file relative to its held folder: once,
+// without following a reparse point, as a non-directory, shared for reading
+// only (P22-D2 S2, S3).
+func openStagedFileAt(dir windows.Handle, name string) (windows.Handle, error) {
+	return ntAt(dir, name, stagedAccess, windows.FILE_SHARE_READ, ntDispOpen, windows.FILE_NON_DIRECTORY_FILE)
+}
+
+// stagedNotRegular reports whether the staged entry name, which a
+// non-directory open refused, is a folder or a reparse point (a refusal, not a
+// failure). It only reads attributes, relative to the held folder.
+func stagedNotRegular(dir windows.Handle, name string) bool {
+	h, err := openAt(dir, name, windows.FILE_READ_ATTRIBUTES, shareAll)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	ti, err := tagOf(h)
+	return err == nil && (ti.dir() || ti.reparse())
 }
 
 // countItemsAt is how many items a refused staged entry (name, in the folder

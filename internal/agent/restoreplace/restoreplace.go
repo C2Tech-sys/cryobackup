@@ -78,10 +78,11 @@ type Counts struct {
 	BytesRestored uint64
 	BytesSkipped  uint64
 	Errors        map[Class]int64
-	// Alarms counts placed files whose final path, read through their handle
-	// after the move, was not the intended one (ADR 0027's fallback check):
-	// each is also counted under guard_refused, and the caller raises the
-	// alarm (fix batch 3, T4).
+	// Alarms counts moved files that failed a check after the move: their
+	// final path, read through their handle, was not the intended one (ADR
+	// 0027's fallback check, fix batch 3 T4), or they had gained another link
+	// before their descriptor was rewritten (P22-D2 S1). Each is also counted
+	// under guard_refused, and the caller raises the alarm.
 	Alarms int64
 }
 

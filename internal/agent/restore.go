@@ -531,17 +531,19 @@ func (a *Agent) restoreOriginalGroup(ctx context.Context, root *restoreplace.Roo
 	return true
 }
 
-// placementAlarm raises the alarm of ADR 0027's fallback check (fix batch 3,
-// T4): a placed file whose final path, read through its own handle after the
-// move, was not the intended one. The file was counted under guard_refused;
+// placementAlarm raises the alarm of the checks after a move (fix batch 3 T4,
+// P22-D2 S1): a moved file whose final path, read through its own handle, was
+// not the intended one, or that gained another link before its descriptor was
+// rewritten (its descriptor is left as staging gave it). The file was counted
+// under guard_refused;
 // the device log gets an ERROR line and the Event Log entry 1021, with the
 // restore id, the drive and the count only (no path).
 func (a *Agent) placementAlarm(id, letter string, n int64) {
 	if n <= 0 {
 		return
 	}
-	a.log.Error("ALARM: a placed file did not land where intended (its final path differs); counted as guard_refused", "restore", id, "drive", letter, "files", n)
-	a.eventLog("error", eventRestoreFailed, "ALARM: a restore placed a file that did not land where intended; see agent.log")
+	a.log.Error("ALARM: a moved file failed a check after the move (final path or link count); counted as guard_refused", "restore", id, "drive", letter, "files", n)
+	a.eventLog("error", eventRestoreFailed, "ALARM: a restore moved a file that failed a check after the move; see agent.log")
 }
 
 // restoreSideGroup restores one group into the side folder, deletes every
