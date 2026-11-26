@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/c2tech-sys/cryobackup/internal/console/jobs"
 	"github.com/c2tech-sys/cryobackup/internal/console/mail"
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
+	"github.com/c2tech-sys/cryobackup/internal/console/ui"
 	"github.com/c2tech-sys/cryobackup/internal/logx"
 )
 
@@ -105,6 +107,7 @@ func buildDrill(t *testing.T, cfg config.Config) (*App, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Close)
+	t.Cleanup(func() { ui.SetDrillCopy(false) }) // the strip is process-wide: no later test inherits it
 	return app, &logs
 }
 
@@ -295,5 +298,81 @@ func TestDoctorSaysDrill(t *testing.T) {
 		case !drill && (!strings.HasPrefix(line, "OK") || !strings.Contains(line, "off")):
 			t.Errorf("drill off: %q", line)
 		}
+	}
+}
+
+// drillBannerText is the DRILL COPY strip's sentence (FIX BATCH 1, K1).
+const drillBannerText = "DRILL COPY: this console is a restored copy. It does not talk to agents, send mail or change storage."
+
+// drillPageRoutes are the console's page routes without a path parameter (every one renders
+// base.html).
+var drillPageRoutes = []string{"/", "/customers", "/devices", "/policies", "/policies/new", "/activity", "/runs",
+	"/fleet/overdue", "/fleet/unseen", "/system", "/enroll", "/enroll/new", "/downloads", "/audit",
+	"/settings", "/settings/accounts", "/settings/email", "/account"}
+
+// TestDrillCopyBannerOnEveryPage (FIX BATCH 1, K1): in a drill copy the DRILL COPY strip is on the
+// three bare pages (sign-in, password reset, MFA) and on every page route, as an alert with no
+// close button; in a production console it is on none of them.
+func TestDrillCopyBannerOnEveryPage(t *testing.T) {
+	for _, drill := range []bool{true, false} {
+		name := "production"
+		if drill {
+			name = "drill"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg, _ := drillConfig(t, drill)
+			app, _ := buildDrill(t, cfg)
+			base := r3Serve(t, app)
+			check := func(what, body string) {
+				t.Helper()
+				has := strings.Contains(body, drillBannerText)
+				if has != drill {
+					t.Errorf("%s: DRILL COPY strip present=%v, want %v", what, has, drill)
+					return
+				}
+				if drill {
+					// The strip is one element: from its opening tag to the end of its sentence's block.
+					i := strings.Index(body, `<div class="banner crit drill-copy"`)
+					j := strings.Index(body[max(i, 0):], "</b></div></div>")
+					if i < 0 || j < 0 || strings.Count(body, `id="drill-copy"`) != 1 {
+						t.Errorf("%s: no single DRILL COPY strip element", what)
+						return
+					}
+					strip := body[i : i+j]
+					if !strings.Contains(strip, `role="alert"`) || !strings.Contains(strip, drillBannerText) {
+						t.Errorf("%s: the strip is not an alert carrying the sentence: %.300s", what, strip)
+					}
+					if strings.Contains(strip, "<button") || strings.Contains(strip, "dismiss") {
+						t.Errorf("%s: the strip can be dismissed: %.300s", what, strip)
+					}
+				}
+			}
+			anon := &r3Browser{t: t, base: base}
+			_, body := anon.do("GET", "/login", nil)
+			check("GET /login", body)
+			_, body = anon.do("GET", "/login/reset?token=not-a-token", nil)
+			check("GET /login/reset", body)
+
+			b := r3SignIn(t, app, base) // the owner enrolls TOTP on the way in
+			for _, path := range drillPageRoutes {
+				res, body := b.do("GET", path, nil)
+				if res.StatusCode != http.StatusOK {
+					t.Errorf("GET %s: %d %.200s", path, res.StatusCode, body)
+					continue
+				}
+				check("GET "+path, body)
+			}
+			// The MFA page: a second sign-in of the same owner lands on its verify step.
+			again := &r3Browser{t: t, base: base}
+			res, body := again.do("POST", "/login", url.Values{"username": {"r3-owner"}, "password": {"r3-owner-password-1"}})
+			if res.StatusCode != http.StatusSeeOther {
+				t.Fatalf("second sign-in: %d %.200s", res.StatusCode, body)
+			}
+			res, body = again.do("GET", "/login/mfa", nil)
+			if res.StatusCode != http.StatusOK || !strings.Contains(body, "Verify it is you") {
+				t.Fatalf("GET /login/mfa: %d %.200s", res.StatusCode, body)
+			}
+			check("GET /login/mfa", body)
+		})
 	}
 }

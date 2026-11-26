@@ -20,12 +20,14 @@ import (
 //   - the socket answers only the methods drillServed lists; every other method is refused with
 //     adminpath.CodeUnavailable before any restic or rclone process starts (drillBackend);
 //   - PurgeRepo refuses on a worker in drill mode even when called in process (purge_adr19.go);
-//   - Run refuses --once in drill mode, which is also what `self-backup run` and `verify` use.
+//   - Run refuses --once in drill mode, which is also what `self-backup run` and `verify` use;
+//   - every restic run carries --no-lock and no --retry-lock (Worker.common), so a read leaves no
+//     lock object in the device repository (in production restic holds one while a read runs);
+//   - the idle watchdog's stale-lock unlock after a stalled dump never starts (enterDrill closes the
+//     worker's background work, so goBackground refuses it): with --no-lock there is no lock to
+//     remove, and an unlock is a storage call that deletes.
 //
-// Two writes remain that this file does not control, both restic's own and both temporary: a read
-// (ls, dump, snapshots) takes restic's usual lock object in the device repository while it runs,
-// and a dump the idle watchdog stops is followed by the worker's stale-lock unlock of that lock
-// (dump_multi.go). Neither changes repository data.
+// A drill copy therefore writes nothing to storage.
 
 // drillServed lists the admin-path methods a drill worker serves: the four read methods the
 // console's browse and download use, and ping, which runs no restic and reads nothing.
@@ -70,11 +72,20 @@ var (
 	drillWorkers = map[*Worker]bool{}
 )
 
-// enterDrill puts w in drill mode for the rest of its life: there is no way back.
+// drillNoLockFlag is restic's global --no-lock: Worker.common adds it in drill mode.
+const drillNoLockFlag = "--no-lock"
+
+// enterDrill puts w in drill mode for the rest of its life: there is no way back. It also closes
+// w's background work (dump_multi.go), so the stale-lock unlock after a stalled dump never starts.
+// dumpIdleStopped then logs its "stale lock not removed" warning (class dump_idle_unlock, worded
+// for a shutdown); in drill mode there is no lock to remove, because every read ran with --no-lock.
 func (w *Worker) enterDrill() {
 	drillMu.Lock()
 	drillWorkers[w] = true
 	drillMu.Unlock()
+	backgroundMu.Lock()
+	w.background().closed = true
+	backgroundMu.Unlock()
 }
 
 // inDrill reports whether w is in drill mode.

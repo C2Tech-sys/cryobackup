@@ -183,13 +183,15 @@ ss -ltn                                        # no listener on the agent port (
    still expires sessions, queued commands and spent restores in its own database. `cryo-maintain`
    serves only `ping`, `ls`, `dump`, `cat_config` and `snapshots`, refuses every other admin-path
    method, including `purge_repo`, with `unavailable`, and runs no scheduler pass: no device
-   maintenance, no usage sample, no escrow verify, no self-backup. `self-backup run` and `verify`
-   exit 2 on a drill copy.
-6. **Log in, browse a real snapshot, download one file.** Sign in through the tunnel as an owner from
-   the restored database. Open a device that had backups before the snapshot, open its restore page,
+   maintenance, no usage sample, no escrow verify, no self-backup. Its restic runs carry `--no-lock`,
+   so a read leaves no lock object, and a stalled download is stopped without the stale-lock unlock
+   that production runs after it. A drill copy writes nothing to storage. `self-backup run` and
+   `verify` exit 2 on a drill copy.
+6. **Log in, browse a real snapshot, download one file.** Every page, the sign-in page included,
+   carries the red "DRILL COPY" strip; if it is missing, stop. Sign in through the tunnel as an owner
+   from the restored database. Open a device that had backups before the snapshot, open its restore page,
    browse a snapshot and download one small file as a zip. Open the file. The worker reads production
-   storage with the admin credential for this, as any browse does. restic holds one lock object in
-   that device's repository while each read runs and removes it after.
+   storage with the admin credential for this, read-only: no lock object, nothing written.
 7. **Confirm that no mail arrived.** No alert recipient and no digest recipient received anything
    from the drill copy, and the agents kept reporting to the production console.
 8. **Destroy the VM**, disks included: it holds the master key and the admin credential.

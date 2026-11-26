@@ -120,6 +120,7 @@ func Build(ctx context.Context, cfg config.Config, o BuildOptions) (*App, error)
 	// drill with fixtures; a caller that skipped Validate gets fixtures, which touches nothing either.
 	drill := cfg.Drill && !fix
 	a.drill = drill
+	ui.SetDrillCopy(drill) // the DRILL COPY strip on every page (base.html); set either way, so a later build clears it
 	if a.clock == nil {
 		a.clock = time.Now
 		if fix {

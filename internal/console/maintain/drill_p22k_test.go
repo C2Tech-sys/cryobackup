@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -300,5 +301,108 @@ func TestRunInDrillModeRefusesOnce(t *testing.T) {
 	t.Setenv("CRYO_DRILL", "false")
 	if fc, err := loadFileConfig(cfgPath); err != nil || fc.Drill {
 		t.Fatalf("CRYO_DRILL=false = %+v, %v", fc, err)
+	}
+}
+
+// leaveDrill forgets a test worker's drill mark when the test ends.
+func leaveDrill(t *testing.T, w *Worker) {
+	t.Cleanup(func() { drillMu.Lock(); delete(drillWorkers, w); drillMu.Unlock() })
+}
+
+// hasArg reports whether a restic call's argv holds arg.
+func hasArg(c fakeCall, arg string) bool {
+	for _, a := range c.Args {
+		if a == arg {
+			return true
+		}
+	}
+	return false
+}
+
+// TestDrillReadsRunWithNoLock (FIX BATCH 1, K2): a production worker's reads carry --retry-lock
+// and take restic's lock; the same worker in drill mode runs cat config, snapshots, ls and dump
+// with --no-lock and no --retry-lock, so a drill copy leaves no lock object in storage.
+func TestDrillReadsRunWithNoLock(t *testing.T) {
+	e := newTenv(t, []fakeRule{
+		{Cmd: "cat", Stdout: "cat_config.json"},
+		{Cmd: "snapshots", Stdout: "snapshots.json"},
+		{Cmd: "ls", Stdout: "inline:" + lsFileJSON},
+		{Cmd: "dump", Stdout: "inline:" + docxBody},
+	}, nil)
+	reads := func() {
+		t.Helper()
+		if _, err := e.w.CatConfig(e.ctx, dev(e.esc)); err != nil {
+			t.Fatalf("cat config: %v", err)
+		}
+		if _, err := e.w.Snapshots(e.ctx, dev(e.esc)); err != nil {
+			t.Fatalf("snapshots: %v", err)
+		}
+		if _, err := e.w.Ls(e.ctx, adminpath.LsRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest", Dir: dumpTree}); err != nil {
+			t.Fatalf("ls: %v", err)
+		}
+		if _, err := e.w.Dump(e.ctx, adminpath.DumpRequest{DeviceRequest: dev(e.esc), SnapshotID: "latest", Path: dumpTree + "/report.docx"}, io.Discard); err != nil {
+			t.Fatalf("dump: %v", err)
+		}
+	}
+	reads()
+	prod := e.repoCalls()
+	if len(prod) < 4 {
+		t.Fatalf("production reads made %d restic calls, want at least 4", len(prod))
+	}
+	for _, c := range prod {
+		if hasArg(c, "--no-lock") || !hasArg(c, "--retry-lock") {
+			t.Fatalf("production %s: argv %v, want --retry-lock and no --no-lock", c.Args[0], c.Args)
+		}
+	}
+	e.w.enterDrill()
+	leaveDrill(t, e.w)
+	reads()
+	drill := e.repoCalls()[len(prod):]
+	seen := map[string]bool{}
+	for _, c := range drill {
+		seen[c.Args[0]] = true
+		if !hasArg(c, "--no-lock") || hasArg(c, "--retry-lock") {
+			t.Fatalf("drill %s: argv %v, want --no-lock and no --retry-lock", c.Args[0], c.Args)
+		}
+	}
+	for _, cmd := range []string{"cat", "snapshots", "ls", "dump"} {
+		if !seen[cmd] {
+			t.Errorf("drill reads made no %s call: %v", cmd, drill)
+		}
+	}
+}
+
+// TestDrillWatchdogStopSchedulesNoUnlock (FIX BATCH 1, K2): a stalled dump in drill mode is still
+// stopped by the idle watchdog and fails as in production, but no stale-lock unlock runs: no
+// restic unlock, no unlock run row. (In production TestDumpMultiStalledChildTripsTheWatchdog
+// sees exactly one.)
+func TestDrillWatchdogStopSchedulesNoUnlock(t *testing.T) {
+	shortIdle(t, 2*time.Second)
+	e := newTenv(t, stalledDumpRules(t, 0), nil)
+	e.w.enterDrill()
+	leaveDrill(t, e.w)
+	var out bytes.Buffer
+	_, err := e.w.Dump(e.ctx, multiReq(e, "latest", multiTree+"/docs"), &out)
+	wantCode(t, err, adminpath.CodeTimeout, "")
+	notAZip(t, out.Bytes())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	e.w.Drain(ctx)          // waits for any background work: there must be none
+	time.Sleep(time.Second) // and nothing late either
+	for _, c := range e.repoCalls() {
+		if c.Args[0] == "unlock" {
+			t.Fatalf("a drill copy ran restic unlock after the watchdog: %v", c.Args)
+		}
+		if c.Args[0] == "dump" && !hasArg(c, "--no-lock") {
+			t.Fatalf("the drill dump ran without --no-lock: %v", c.Args)
+		}
+	}
+	for _, r := range e.consoleRuns(e.esc) {
+		if r.Kind == "unlock" {
+			t.Fatalf("a drill copy recorded an unlock run: %+v", r)
+		}
+	}
+	if !strings.Contains(e.logs.String(), "dump_idle_unlock") {
+		t.Errorf("the skipped cleanup was not logged:\n%s", e.logs.String())
 	}
 }

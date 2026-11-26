@@ -347,12 +347,19 @@ func notDirErr(err error) bool { return errors.Is(err, syscall.ENOTDIR) }
 // common returns the restic.Common of every repository call: --retry-lock,
 // --no-cache (ADR 0008: no repository data on the console host's disk) and the
 // rclone admin-path options (restic.AdminOptions, BypassGovernance is always
-// false in v0).
+// false in v0). A worker in drill mode (drill.go) adds --no-lock and drops
+// --retry-lock: a drill copy's reads leave no lock object in storage, so
+// there is nothing to wait for either.
 func (w *Worker) common() restic.Common {
-	return restic.Common{
+	c := restic.Common{
 		RetryLock: w.cfg.RetryLock,
 		Extra:     append([]string{restic.NoCacheFlag}, restic.AdminOptions(w.cfg.RcloneProgram, false)...),
 	}
+	if w.inDrill() {
+		c.RetryLock = 0
+		c.Extra = append(c.Extra, drillNoLockFlag)
+	}
+	return c
 }
 
 // target is one device repository ready to address: the device, the restic

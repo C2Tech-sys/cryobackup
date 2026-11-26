@@ -17,6 +17,7 @@
 <script src="{{asset "js/copy.js"}}" defer></script>{{/* the manual key and the recovery codes have copy buttons (F1) */}}
 </head>
 <body>
+{{template "drill_banner" .}}
 {{template "icons"}}
 <main class="login mfa" id="main">
   <div class="box{{if ne .Mode "verify"}} wide{{end}}">
