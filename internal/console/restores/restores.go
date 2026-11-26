@@ -148,6 +148,14 @@ type Service struct {
 	mu        sync.Mutex
 	tokens    *tokenTable
 	streaming map[string]bool
+
+	// The browse audit's once-per-window memory (browse_audit_p22g.go): one per
+	// Service, so it is judged by this Service's clock and pruned by it.
+	browseMu   sync.Mutex
+	browseSeen map[browseKey]*browseClaim
+	// browseAppend writes the restore.browse row; nil is Store.AppendAudit.
+	// Tests inject a slow or failing write through it.
+	browseAppend func(context.Context, store.AuditEvent) (store.AuditEvent, error)
 }
 
 func (s *Service) now() time.Time {

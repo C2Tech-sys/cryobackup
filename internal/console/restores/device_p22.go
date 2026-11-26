@@ -513,6 +513,12 @@ type Outcome struct {
 	// Skipped counts what a download left out (links, devices), by kind; nil
 	// before a completed download and for a device restore.
 	Skipped *adminpath.DumpSkipped
+	// ClosedBy is set when the console closed the device restore because the
+	// agent stopped reporting it (store.DeviceRestoreProgress.ClosedBy, ADR 0032).
+	ClosedBy string
+	// Late is the agent's report that arrived after the console closed it; nil
+	// when none did.
+	Late *store.DeviceRestoreLate
 }
 
 // classText is the sentence of a failed device restore's class. ADR 0027 says
@@ -526,6 +532,27 @@ var classText = map[string]string{
 	string(api.RestoreResultNothingMatched):  "FAILED: nothing in the backup matched the selection.",
 	string(api.RestoreResultInterrupted):     "FAILED: the restore was cut short; files already placed stay, run the restore again.",
 	string(api.RestoreResultRepoUnreachable): "FAILED: the device could not reach its repository.",
+}
+
+// lateText is the sentence of a device restore's late report (ADR 0032), in the
+// words of the status it would have closed the row with.
+func lateText(l store.DeviceRestoreLate) string {
+	counts := fmt.Sprintf("%d restored, %d skipped because they already exist", l.FilesRestored, l.FilesSkipped)
+	switch {
+	case l.Status == "delivered" && l.Class == store.RestoreClassPartial:
+		var parts []string
+		for _, e := range l.Errors {
+			parts = append(parts, fmt.Sprintf("%s %d", e.Class, e.Count))
+		}
+		return "restored with errors, " + counts + ". Errors by class: " + strings.Join(parts, ", ") + "."
+	case l.Status == "delivered":
+		return "restored, " + counts + "."
+	case l.Status == "cancelled":
+		return "cancelled, " + counts + "."
+	case l.Class != "":
+		return "failed (" + l.Class + "), " + counts + "."
+	}
+	return strings.ToLower(l.Status) + ", " + counts + "."
 }
 
 // DescribeOutcome is what the operator reads for r.
@@ -556,9 +583,15 @@ func DescribeOutcome(r store.RestoreRequest) Outcome {
 	var pr store.DeviceRestoreProgress
 	if len(r.Progress) > 0 && json.Unmarshal(r.Progress, &pr) == nil {
 		out.FilesRestored, out.FilesSkipped, out.BytesRestored, out.Errors = pr.FilesRestored, pr.FilesSkipped, pr.BytesRestored, pr.Errors
+		out.ClosedBy, out.Late = pr.ClosedBy, pr.Late
 	}
 	counts := fmt.Sprintf("%d restored, %d skipped because they already exist", out.FilesRestored, out.FilesSkipped)
 	switch {
+	case r.Status == "failed" && out.ClosedBy != "":
+		out.Text = "FAILED: the device stopped reporting this restore, so the console closed it as interrupted. What it restored is unknown."
+		if out.Late != nil {
+			out.Text += " The device reported it later: " + lateText(*out.Late)
+		}
 	case r.Status == "queued":
 		out.Text = "Queued: starts when the device is online, until the request expires. For files now, use Download as zip."
 	case r.Status == "running":

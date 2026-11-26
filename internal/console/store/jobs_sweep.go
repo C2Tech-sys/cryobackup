@@ -34,40 +34,66 @@ type SweepResult struct {
 	Examined, Abandoned int
 	// RestoresClosed is how many running device restores the sweep closed as
 	// FAILED interrupted (sweepStuckDeviceRestores), and RestoresClosedBy the same
-	// count by reason (no_run_record, agent_restarted); nil when none closed.
+	// count by reason (agent_silent, agent_restarted, no_run_record); nil when
+	// none closed.
 	RestoresClosed   int
 	RestoresClosedBy map[string]int
 }
 
-// Running device restores that stop reporting (ADR 0027; ticket P22-E, fix E3).
+// Running device restores that stop reporting (ADR 0027; ticket P22-E, fix E3;
+// ADR 0032).
 //
 // A device restore becomes running when the agent fetches its selection, and
 // only the agent's run record (run id = restore id) closes it. An agent that
 // never sends one would leave the row running and, through the one active device
 // restore rule, block every later device restore of that device for good: the
 // quiet failure this product exists to prevent. So the abandoned-run-sweeper
-// also closes such a row, as FAILED with class interrupted ("the restore was cut
-// short; run it again"), audited restore.finish, in two cases:
+// also closes such a row, as FAILED with class interrupted, audited
+// restore.finish with the reason, and keeps the reason in the row's progress
+// document (DeviceRestoreProgress.ClosedBy), in three cases:
 //
-//   - DeviceRestoreRunningBound after the fetch, unless the device reports it
-//     active right now (its start lease is live, or its newest heartbeat, no
-//     older than SweepOptions.ActiveWithin, carries progress for that run id).
-//   - The agent restarted after the fetch (its newest heartbeat's uptime puts
-//     the boot after the fetch) and, deviceRestoreRestartGrace after that boot,
-//     no run record of the restore has arrived at all. A restore never resumes
-//     after a restart (ADR 0027), and the agent reports an interrupted run from
-//     the journal it wrote before restic started; a restart with no record at
-//     all means the agent never got that far.
+//   - agent_silent: nothing from the device (no heartbeat) for
+//     DeviceRestoreSilenceLimit, counted from the later of the fetch and its
+//     newest heartbeat.
+//   - agent_restarted: the agent restarted after the fetch (its newest
+//     heartbeat's uptime puts the boot after the fetch) and,
+//     deviceRestoreRestartGrace after that boot, no run record of the restore
+//     has arrived at all. A restore never resumes after a restart (ADR 0027),
+//     and the agent reports an interrupted run from the journal it wrote before
+//     restic started; a restart with no record at all means the agent never got
+//     that far.
+//   - no_run_record: DeviceRestoreRunningBound after the fetch, unless the
+//     device reports it active right now (its start lease is live, or its
+//     newest heartbeat, no older than SweepOptions.ActiveWithin, carries
+//     progress for that run id). The agent sends neither for a restore (its
+//     heartbeat leaves the run id and progress out while a restore holds the
+//     restic slot), so for a restore this is a ceiling counted from the fetch.
 //
-// A run record that arrives later is still ingested; the row stays as the sweep
-// closed it (closeDeviceRestore leaves a closed row alone).
+// A run record that arrives later is still ingested. The row stays as the sweep
+// closed it, and the agent's report is kept beside it (recordLateRestoreReport,
+// audited restore.late_report): FAILED never turns quietly into RESTORED.
 const (
+	// DeviceRestoreSilenceLimit is how long a running device restore may go
+	// with nothing at all from its device before the console calls it
+	// interrupted (ADR 0032). The agent's own bounds (internal/agent): a
+	// heartbeat every 60 s (+-10 s), and while the console does not answer a
+	// retry backoff capped at 5 min (+20 %); with a refused device token one
+	// probe an hour (+-20 %), at most 72 min. The restore itself is stopped by
+	// the agent after 15 min without movement (restoreIdleBound), a selection
+	// fetch is retried for at most 30 min (restoreFetchFor), and a restore that
+	// waits for a running backup (up to sla.max_run_hours, 12 h by default)
+	// keeps heartbeating meanwhile. So no restore still running on a device
+	// that can reach the console goes silent for more than 72 min; 24 h is that
+	// bound twenty times over, and the same day a queued restore waits for its
+	// device (ruling C6).
+	DeviceRestoreSilenceLimit = 24 * time.Hour
 	// DeviceRestoreRunningBound is how long a running device restore may go
-	// without its run record. It is far longer than any plausible pilot restore:
-	// the agent stops restic itself when no status line arrives within its
-	// watchdog bound (ADR 0027, "A restore that stops moving is stopped"), and a
-	// selection of at most 100 paths that has not finished in two days on a
-	// working link is not finishing; the operator then sees FAILED, not RUNNING.
+	// without its run record, heartbeats or not. It is far longer than any
+	// plausible pilot restore: the agent stops restic itself when no status
+	// line arrives within its watchdog bound (ADR 0027, "A restore that stops
+	// moving is stopped"), and a selection of at most 100 paths that has not
+	// finished in two days on a working link is not finishing; the operator
+	// then sees FAILED, not RUNNING, and a late record is kept beside it.
 	DeviceRestoreRunningBound = 48 * time.Hour
 	// deviceRestoreRestartGrace gives a restarted agent time to post the run
 	// record it journaled before restic started (its outbox sends within
@@ -87,17 +113,24 @@ type stuckRestore struct {
 
 // stuckReason says why a running device restore must be closed now, or "".
 func (r stuckRestore) stuckReason(now int64, activeWithin time.Duration) string {
-	progressFor, _ := progressRun(r.progress)
-	active := (r.leaseUntil.Valid && r.leaseUntil.Int64 > now) ||
-		(progressFor == r.id && r.presenceAt.Valid && now-r.presenceAt.Int64 <= activeWithin.Milliseconds())
-	if now-r.started >= DeviceRestoreRunningBound.Milliseconds() && !active {
-		return "no_run_record"
+	heard := r.started
+	if r.presenceAt.Valid && r.presenceAt.Int64 > heard {
+		heard = r.presenceAt.Int64
+	}
+	if now-heard >= DeviceRestoreSilenceLimit.Milliseconds() {
+		return RestoreClosedAgentSilent
 	}
 	if !r.runExists && r.presenceAt.Valid && r.uptime.Valid {
 		boot := r.presenceAt.Int64 - r.uptime.Int64*1000
 		if boot > r.started && now-boot >= deviceRestoreRestartGrace.Milliseconds() {
-			return "agent_restarted"
+			return RestoreClosedAgentRestarted
 		}
+	}
+	progressFor, _ := progressRun(r.progress)
+	active := (r.leaseUntil.Valid && r.leaseUntil.Int64 > now) ||
+		(progressFor == r.id && r.presenceAt.Valid && now-r.presenceAt.Int64 <= activeWithin.Milliseconds())
+	if now-r.started >= DeviceRestoreRunningBound.Milliseconds() && !active {
+		return RestoreClosedNoRunRecord
 	}
 	return ""
 }
@@ -137,7 +170,7 @@ func (s *Store) sweepStuckDeviceRestores(ctx context.Context, activeWithin time.
 		err := s.Write(ctx, func(tx *Tx) error {
 			did = false
 			now := tx.nowMS()
-			prog, _ := json.Marshal(DeviceRestoreProgress{Outcome: "interrupted"})
+			prog, _ := json.Marshal(DeviceRestoreProgress{Outcome: "interrupted", ClosedBy: reason})
 			res, err := tx.Exec(`UPDATE restore_requests SET status = 'failed', error_class = 'interrupted', progress = ?, selection_wrapped = NULL,
 				finished_at = ?, updated_at = ? WHERE id = ? AND status = 'running'`, string(prog), now, now, r.id)
 			if err != nil {

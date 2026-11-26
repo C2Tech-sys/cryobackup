@@ -16,7 +16,8 @@ import (
 // could read it); the agent's restore run closes the row when its record arrives
 // (closeDeviceRestore, called by AgentIngestRuns in the same transaction); a row
 // the device never picked up is closed by the restore-purge job
-// (ExpireDeviceRestores).
+// (ExpireDeviceRestores); a running row whose agent stopped reporting it is
+// closed by the abandoned-run-sweeper (jobs_sweep.go, ADR 0032).
 //
 // The selection itself never reaches this package in clear: SelectionWrapped is
 // the master-key-wrapped blob the restores service writes, and it is cleared the
@@ -127,7 +128,8 @@ func restoreGate(tx *Tx, scope Scope, deviceID string) (Device, error) {
 
 // activeDeviceRestore reports whether the device has a device restore that is
 // still in flight at now: queued, not past its expiry and with a command that
-// was not cancelled, or running (the agent fetched it; its run record closes it).
+// was not cancelled, or running (the agent fetched it; its run record closes it,
+// or the abandoned-run-sweeper once the agent stops reporting it, ADR 0032).
 func activeDeviceRestore(tx *Tx, deviceID string, now int64) (bool, error) {
 	var n int
 	err := tx.QueryRow(`SELECT count(*) FROM restore_requests r LEFT JOIN commands c ON c.id = r.command_id
@@ -314,6 +316,37 @@ type DeviceRestoreProgress struct {
 	BytesRestored uint64                `json:"bytes_restored"`
 	BytesSkipped  uint64                `json:"bytes_skipped"`
 	Errors        []RestoreClassCounted `json:"errors,omitempty"`
+	// ClosedBy is set when the console, not the agent's run record, closed the
+	// restore (the abandoned-run-sweeper, jobs_sweep.go, ADR 0032): the reason
+	// word (RestoreClosedAgentSilent, RestoreClosedAgentRestarted,
+	// RestoreClosedNoRunRecord). Empty for a row its run record closed.
+	ClosedBy string `json:"closed_by,omitempty"`
+	// Late is the agent's own report of a restore the console had already
+	// closed (ADR 0032): recorded beside the console's verdict, never reopening
+	// the row. Nil until such a report arrives.
+	Late *DeviceRestoreLate `json:"late,omitempty"`
+}
+
+// Reasons the console closes a running device restore whose agent stopped
+// reporting it (DeviceRestoreProgress.ClosedBy and the audit row's "reason").
+const (
+	RestoreClosedAgentSilent    = "agent_silent"
+	RestoreClosedAgentRestarted = "agent_restarted"
+	RestoreClosedNoRunRecord    = "no_run_record"
+)
+
+// DeviceRestoreLate is what the agent reported for a restore after the console
+// had closed it (ADR 0032): the status and class its run record would have
+// closed the row with, and its counts. No path, no message.
+type DeviceRestoreLate struct {
+	Outcome       string                `json:"outcome"`
+	Status        string                `json:"status"`
+	Class         string                `json:"class,omitempty"`
+	FilesRestored int64                 `json:"files_restored"`
+	FilesSkipped  int64                 `json:"files_skipped"`
+	BytesRestored uint64                `json:"bytes_restored"`
+	Errors        []RestoreClassCounted `json:"errors,omitempty"`
+	ReceivedAt    time.Time             `json:"received_at"`
 }
 
 // RestoreClassCounted is one class and how many files (or, for
@@ -357,8 +390,10 @@ func restoreClose(outcome, result, runClass string) (status, class string) {
 // An open run marks a queued row running; a closed run moves a queued or running
 // row to delivered, failed or cancelled with its class and counts, clears the
 // wrapped selection and writes the audit row restore.finish (a failed audit
-// write fails the batch, and the agent resends it). A row of another device, a
-// download and a row already closed are left alone.
+// write fails the batch, and the agent resends it). A row of another device and
+// a download are left alone. A row already closed is left as it is; when the
+// console closed it (the sweep, ADR 0032) the agent's closed record is kept
+// beside it (recordLateRestoreReport).
 func closeDeviceRestore(tx *Tx, deviceID string, r RunInput) error {
 	cur, err := one(tx, `SELECT `+restoreCols+` FROM restore_requests WHERE id = ? AND device_id = ?`, []any{r.ID, deviceID}, scanRestore)
 	switch {
@@ -367,8 +402,11 @@ func closeDeviceRestore(tx *Tx, deviceID string, r RunInput) error {
 	case err != nil:
 		return err
 	}
-	if !IsDeviceRestoreMode(cur.Mode) || (cur.Status != "queued" && cur.Status != "running") {
+	if !IsDeviceRestoreMode(cur.Mode) {
 		return nil
+	}
+	if cur.Status != "queued" && cur.Status != "running" {
+		return recordLateRestoreReport(tx, deviceID, cur, r)
 	}
 	now := tx.nowMS()
 	if r.Outcome == "" {
@@ -378,21 +416,12 @@ func closeDeviceRestore(tx *Tx, deviceID string, r RunInput) error {
 		}
 		return nil
 	}
-	var st restoreRunStats
-	if len(r.Stats) > 0 {
-		_ = json.Unmarshal(r.Stats, &st) // validated by the agent API; an unreadable block closes with zero counts
-	}
-	status, class := restoreClose(r.Outcome, st.RestoreResult, r.ErrorClass)
-	prog := DeviceRestoreProgress{Outcome: r.Outcome, FilesRestored: st.FilesRestored, FilesSkipped: st.FilesSkipped,
-		BytesRestored: st.BytesRestored, BytesSkipped: st.BytesSkipped}
-	for _, e := range st.RestoreErrors {
-		prog.Errors = append(prog.Errors, RestoreClassCounted{Class: e.Class, Count: e.Count})
-	}
+	status, class, prog := restoreVerdictOf(r)
 	raw, err := json.Marshal(prog)
 	if err != nil {
 		return err
 	}
-	bytes := int64(st.BytesRestored)
+	bytes := int64(prog.BytesRestored)
 	if _, err := tx.Exec(`UPDATE restore_requests SET status = ?, error_class = ?, progress = ?, bytes = ?, selection_wrapped = NULL,
 			started_at = COALESCE(started_at, ?), finished_at = ?, updated_at = ? WHERE id = ?`,
 		status, nullStr(class), string(raw), bytes, now, now, now, r.ID); err != nil {
@@ -403,13 +432,69 @@ func closeDeviceRestore(tx *Tx, deviceID string, r RunInput) error {
 		return err
 	}
 	details, _ := json.Marshal(map[string]any{"status": status, "error_class": class, "outcome": r.Outcome,
-		"files_restored": st.FilesRestored, "files_skipped": st.FilesSkipped, "errors": prog.Errors})
+		"files_restored": prog.FilesRestored, "files_skipped": prog.FilesSkipped, "errors": prog.Errors})
 	result, sev := "ok", "info"
 	if status != "delivered" || class != "" {
 		result, sev = "error", "warning"
 	}
 	return audited(tx, AuditEvent{ActorType: "device", ActorID: deviceID, Method: "agent", Action: "restore.finish",
 		ObjectType: "restore", ObjectID: r.ID, CustomerID: cust, Result: result, Severity: sev, Details: details})
+}
+
+// restoreVerdictOf reads a closed restore run record: the status and class it
+// closes the row with, and the progress document it leaves (counts and classes,
+// never a path).
+func restoreVerdictOf(r RunInput) (status, class string, prog DeviceRestoreProgress) {
+	var st restoreRunStats
+	if len(r.Stats) > 0 {
+		_ = json.Unmarshal(r.Stats, &st) // validated by the agent API; an unreadable block closes with zero counts
+	}
+	status, class = restoreClose(r.Outcome, st.RestoreResult, r.ErrorClass)
+	prog = DeviceRestoreProgress{Outcome: r.Outcome, FilesRestored: st.FilesRestored, FilesSkipped: st.FilesSkipped,
+		BytesRestored: st.BytesRestored, BytesSkipped: st.BytesSkipped}
+	for _, e := range st.RestoreErrors {
+		prog.Errors = append(prog.Errors, RestoreClassCounted{Class: e.Class, Count: e.Count})
+	}
+	return status, class, prog
+}
+
+// recordLateRestoreReport keeps the agent's closed record of a restore the
+// console had already closed because the agent stopped reporting it (ADR 0032).
+// The row is not reopened: its status, class and finish time stay the
+// console's verdict, so the operator never sees a FAILED restore turn quietly
+// into RESTORED. What the agent reported is added to the progress document
+// (DeviceRestoreProgress.Late) and written as the audit row restore.late_report,
+// path-free, in the ingest transaction (a failed audit write fails the batch and
+// the agent resends). Only the first late closed record is kept; an open record,
+// a row the agent itself closed and a row the console expired or cancelled
+// before the agent fetched it are left alone, as before.
+func recordLateRestoreReport(tx *Tx, deviceID string, cur RestoreRequest, r RunInput) error {
+	if r.Outcome == "" || len(cur.Progress) == 0 {
+		return nil
+	}
+	var prog DeviceRestoreProgress
+	if json.Unmarshal(cur.Progress, &prog) != nil || prog.ClosedBy == "" || prog.Late != nil {
+		return nil
+	}
+	status, class, got := restoreVerdictOf(r)
+	prog.Late = &DeviceRestoreLate{Outcome: r.Outcome, Status: status, Class: class, FilesRestored: got.FilesRestored,
+		FilesSkipped: got.FilesSkipped, BytesRestored: got.BytesRestored, Errors: got.Errors, ReceivedAt: time.UnixMilli(tx.nowMS()).UTC()}
+	raw, err := json.Marshal(prog)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE restore_requests SET progress = ?, updated_at = ? WHERE id = ?`, string(raw), tx.nowMS(), cur.ID); err != nil {
+		return err
+	}
+	var cust string
+	if err := tx.QueryRow(`SELECT customer_id FROM devices WHERE id = ?`, deviceID).Scan(&cust); err != nil {
+		return err
+	}
+	details, _ := json.Marshal(map[string]any{"status": cur.Status, "error_class": cur.ErrorClass, "closed_by": prog.ClosedBy,
+		"late_outcome": r.Outcome, "late_status": status, "late_error_class": class,
+		"files_restored": got.FilesRestored, "files_skipped": got.FilesSkipped, "errors": got.Errors})
+	return audited(tx, AuditEvent{ActorType: "device", ActorID: deviceID, Method: "agent", Action: "restore.late_report",
+		ObjectType: "restore", ObjectID: cur.ID, CustomerID: cust, Result: "ok", Severity: "warning", Details: details})
 }
 
 // ExpireDeviceRestores closes the device restores the device never picked up

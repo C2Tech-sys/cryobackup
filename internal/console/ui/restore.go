@@ -304,6 +304,16 @@ func (s *Service) refreshSnapshots(ctx context.Context, d *RestoreData) *Banner 
 	if d.dev.Purging() {
 		return &Banner{ClassWarn, "This device is being purged", "Its backups are being removed, so nothing can be restored from it."}
 	}
+	// Custody is read again here, not taken from d.Blocked, so a caller that built d by hand
+	// cannot skip it (ticket P22-R2a, A4). ScopeAll: the device id came through the caller's
+	// scoped read, and this read only ever refuses.
+	esc, err := s.Store.ActiveEscrow(ctx, store.ScopeAll(), d.DeviceID)
+	switch {
+	case errors.Is(err, store.ErrNotFound) || (err == nil && esc.Custody != "escrowed"):
+		return &Banner{ClassWarn, "Customer-held key: no technician restore", "CryoBackup never stores this key, so the console cannot open the repository. Restore on the machine with the customer's key."}
+	case err != nil:
+		return &Banner{ClassCrit, "Restore unavailable", "The device's key record could not be read. Try again shortly."}
+	}
 	if s.Backend == nil {
 		return &Banner{ClassCrit, "Refresh unavailable", "The console has no maintenance worker to read the repository with (banner C07)."}
 	}
@@ -779,6 +789,9 @@ type wizForm struct {
 	code              string
 	// dropped counts posted paths that failed validation (set by restorePost from basketFrom).
 	dropped int
+	// snapUnknown: the posted snapshot is not one the console lists for the device (or none was
+	// posted), so the page fell back to the newest. A create never does (set by restorePost).
+	snapUnknown bool
 }
 
 func readWizForm(r *http.Request) wizForm {
@@ -836,7 +849,7 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The point in time. A refresh first reads the repository; then the posted snapshot must be
-	// one the cache holds, else the newest one is used.
+	// one the cache holds, else the newest one is shown, and a create is refused (restoreCreate).
 	if in.action == "refresh" && d.Blocked == nil { // a blocked device is not asked: its sentence is already on the page
 		d.Notice = s.refreshSnapshots(r.Context(), &d)
 		if d.Notice.Class == ClassCrit {
@@ -850,6 +863,7 @@ func (s *Service) restorePost(w http.ResponseWriter, r *http.Request) {
 			snapshot = so.ID
 		}
 	}
+	in.snapUnknown = snapshot == ""
 	if snapshot == "" && len(d.Snapshots) > 0 {
 		snapshot = d.Snapshots[0].ID
 	}
@@ -1012,6 +1026,22 @@ func (s *Service) restoreCreate(w http.ResponseWriter, r *http.Request, p *auth.
 		d.Error = &Banner{ClassWarn, "Some selected items are not valid.", plural(in.dropped, "item", "items") +
 			" in the form could not be used, so nothing was started. Select again from the listing and continue."}
 		d.CanSubmit = d.Listed
+		d.steps()
+		s.renderRestore(w, r, http.StatusBadRequest, *d)
+		return
+	}
+	// A create never substitutes the point in time (ticket P22-R2a, A2): a form that names a
+	// snapshot the console does not list for the device, or none, is refused before anything is
+	// listed or started. The page goes back to the select step with the newest snapshot chosen
+	// and an empty selection, so the next create names the snapshot the operator saw.
+	if in.snapUnknown && d.Blocked == nil {
+		d.setBasket(nil)
+		d.Hidden, d.Entries = nil, nil
+		d.Step, d.Dir, d.Offset, d.Crumbs = stepSelect, "/", 0, crumbs("/")
+		d.markListing()
+		d.Error = &Banner{ClassWarn, "That snapshot is not one the console knows.",
+			"The form named a snapshot that is not in this device's list, so nothing was started. Choose the point in time again (Refresh reads the list from the repository), then select the items."}
+		d.CanSubmit = false
 		d.steps()
 		s.renderRestore(w, r, http.StatusBadRequest, *d)
 		return

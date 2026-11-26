@@ -141,6 +141,25 @@ func deviceNext(status, class string) string {
 	return "Nothing more was restored. The device's log has the details."
 }
 
+// closedByConsole is what the operator does after the console closed a device restore whose
+// agent stopped reporting it (store.DeviceRestoreProgress.ClosedBy, ADR 0032), and after the
+// agent's late report of it.
+func closedByConsole(host string, oc restores.Outcome) string {
+	var why string
+	switch oc.ClosedBy {
+	case store.RestoreClosedAgentSilent:
+		why = "Nothing came from " + host + " for " + strconv.Itoa(int(store.DeviceRestoreSilenceLimit/time.Hour)) + " hours while the restore was open, so the console closed it."
+	case store.RestoreClosedAgentRestarted:
+		why = "The agent on " + host + " restarted during the restore and never reported it, so the console closed it."
+	default:
+		why = host + " sent no result " + strconv.Itoa(int(store.DeviceRestoreRunningBound/time.Hour)) + " hours after it started the restore, so the console closed it."
+	}
+	if oc.Late != nil {
+		return why + " " + host + " reported it afterwards (above). This restore stays closed: start a new one for anything still missing."
+	}
+	return why + " Files it placed before it stopped stay. Check the files on " + host + ", then run the restore again for anything missing; a late report from " + host + " is shown here."
+}
+
 func (s *Service) restoreView(ctx context.Context, p *auth.Principal, rr store.RestoreRequest, host string, live liveFacts) RestoreView {
 	c := s.fc(ctx)
 	v := RestoreView{CSRF: p.CSRF, ID: rr.ID, DeviceID: rr.DeviceID, Host: host, Created: rr.CreatedAt.In(c.loc()).Format("Mon 3:04:05 PM"),
@@ -163,6 +182,16 @@ func (s *Service) restoreView(ctx context.Context, p *auth.Principal, rr store.R
 			v.Facts = append(v.Facts, Fact{Key: "Finished", Value: c.dayClock(*rr.FinishedAt), Mono: true})
 		} else if rr.Status == "queued" || rr.Status == "running" {
 			v.Facts = append(v.Facts, Fact{Key: "Waits until", Value: c.dayClock(rr.ExpiresAt), Mono: true})
+		}
+		if rr.Status == "running" && live.Offline {
+			seen := "Never"
+			if live.SeenKnown {
+				seen = ageLong(c.Now.Sub(live.LastSeen)) + " (" + c.dayClock(live.LastSeen) + ")"
+			}
+			v.Facts = append(v.Facts, Fact{Key: "Last seen", Value: seen})
+		}
+		if oc.Late != nil {
+			v.Facts = append(v.Facts, Fact{Key: "Late report", Value: c.dayClock(oc.Late.ReceivedAt), Mono: true})
 		}
 		return v
 	}
@@ -242,7 +271,29 @@ func (s *Service) deviceRestoreView(ctx context.Context, v *RestoreView, rr stor
 		}
 	case "running":
 		v.Status, v.Poll, v.Class = Chip{ID: "q", Label: "RUNNING", Class: ClassInfo, Pulse: true}, true, ClassInfo
-		if live.BackupOpen {
+		if live.Offline {
+			// The device has gone quiet with the restore open (ticket P22-R2a, A1): never the
+			// plain "Files are being restored." The sweep closes it as interrupted once the
+			// silence passes store.DeviceRestoreSilenceLimit (ADR 0032).
+			v.Status.Class, v.Status.Pulse, v.Class = ClassWarn, false, ClassWarn
+			v.Headline = v.Host + " has not been heard from."
+			heard := rr.CreatedAt
+			if rr.StartedAt != nil {
+				heard = *rr.StartedAt
+			}
+			if live.SeenKnown {
+				v.Headline = v.Host + " has not been heard from since " + c.dayClock(live.LastSeen) + "."
+				if live.LastSeen.After(heard) {
+					heard = live.LastSeen
+				}
+			}
+			closeAt := heard.Add(store.DeviceRestoreSilenceLimit)
+			if rr.StartedAt != nil && rr.StartedAt.Add(store.DeviceRestoreRunningBound).Before(closeAt) {
+				closeAt = rr.StartedAt.Add(store.DeviceRestoreRunningBound)
+			}
+			v.Message = "The outcome is unknown until it reports. If it stays silent, the console closes the restore as interrupted at about " +
+				c.dayClock(closeAt) + ", and " + v.Host + " can take another restore."
+		} else if live.BackupOpen {
 			v.Status.Label = "WAITING"
 			v.Headline = "Waiting for the running backup."
 			v.Message = v.Host + " took the restore and runs one repository task at a time: it starts as soon as the backup finishes. This page refreshes by itself."
@@ -266,6 +317,12 @@ func (s *Service) deviceRestoreView(ctx context.Context, v *RestoreView, rr stor
 	case "failed":
 		v.Status, v.Failed, v.Class = Chip{ID: "q", Label: "FAILED", Class: ClassCrit}, true, ClassCrit
 		v.Message = deviceNext(rr.Status, rr.ErrorClass)
+		if oc.ClosedBy != "" {
+			v.Message = closedByConsole(v.Host, oc)
+			if oc.Late != nil {
+				v.Class = ClassWarn // the device has spoken since; the chip keeps the console's verdict
+			}
+		}
 	case "cancelled":
 		v.Status, v.Class = Chip{ID: "q", Label: "CANCELLED", Class: ClassNeutral}, ClassNeutral
 		v.Message = deviceNext(rr.Status, rr.ErrorClass)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/c2tech-sys/cryobackup/internal/console/store"
@@ -15,28 +14,46 @@ import (
 // names the device and the snapshot id, never a folder: what was opened inside the snapshot stays
 // out of the audit trail exactly as it stays out of every log.
 //
-// The once-per-window memory is in this process. A console restart forgets it, so the first
-// browse after a restart is audited again: the trail can hold an extra row, never a missing one.
+// The once-per-window memory is in this process, on the Service (Service.browseSeen). A console
+// restart forgets it, so the first browse after a restart is audited again: the trail can hold an
+// extra row, never a missing one. A key counts as seen only once its row is written: a browse that
+// arrives while the row of the same key is being written waits for that write and shares its
+// result, so a failed write refuses every browse that relied on it (ticket P22-R2a, A3).
 
 // BrowseAuditWindow is how long one restore.browse row covers an admin's browsing of one
 // snapshot of one device.
 const BrowseAuditWindow = time.Hour
 
 type browseKey struct {
-	st                      *store.Store // one memory per console database (tests run many side by side)
 	admin, device, snapshot string
 }
 
-var (
-	browseMu   sync.Mutex
-	browseSeen = map[browseKey]time.Time{}
-)
+// browseClaim is one key's row: being written until done is closed, then written (err nil) at
+// at, or failed (err set; the claim is gone from the memory by then).
+type browseClaim struct {
+	at   time.Time
+	done chan struct{}
+	err  error
+	// waiters counts the browses waiting on this write (read by the tests).
+	waiters int
+}
+
+// written reports whether the claim's write has finished; call with browseMu held.
+func (c *browseClaim) written() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
 
 // AuditBrowse records that who is browsing snapshotID of deviceID, unless a restore.browse row
 // for the same admin, device and snapshot was written within BrowseAuditWindow. It refuses a
 // device outside scope (store.ErrNotFound) and a malformed snapshot id (ErrInvalid). When the
 // audit row cannot be written it returns an error wrapping store.ErrAudit and remembers nothing,
-// so the caller refuses the listing ("a failed audit refuses") and the next browse tries again.
+// so the caller refuses the listing ("a failed audit refuses") and the next browse tries again;
+// a browse that waited on that write gets the same error.
 func (s *Service) AuditBrowse(ctx context.Context, who Actor, scope store.Scope, deviceID, snapshotID string) error {
 	if !snapshotIDRE.MatchString(snapshotID) || who.AdminID == "" {
 		return ErrInvalid
@@ -46,35 +63,57 @@ func (s *Service) AuditBrowse(ctx context.Context, who Actor, scope store.Scope,
 		return err
 	}
 	now := s.now()
-	k := browseKey{st: s.Store, admin: who.AdminID, device: deviceID, snapshot: snapshotID}
-	browseMu.Lock()
-	for old, at := range browseSeen { // keep the memory to the window: an entry past it decides nothing
-		if old.st != s.Store {
-			continue // another console database has its own clock (tests run many side by side)
-		}
-		if now.Sub(at) >= BrowseAuditWindow || at.After(now) {
-			delete(browseSeen, old)
+	k := browseKey{admin: who.AdminID, device: deviceID, snapshot: snapshotID}
+	s.browseMu.Lock()
+	if s.browseSeen == nil {
+		s.browseSeen = map[browseKey]*browseClaim{}
+	}
+	for old, c := range s.browseSeen { // keep the memory to the window: an entry past it decides nothing
+		if c.written() && (now.Sub(c.at) >= BrowseAuditWindow || c.at.After(now)) {
+			delete(s.browseSeen, old)
 		}
 	}
-	if _, seen := browseSeen[k]; seen {
-		browseMu.Unlock()
+	if c, ok := s.browseSeen[k]; ok {
+		if c.written() {
+			s.browseMu.Unlock()
+			return nil
+		}
+		c.waiters++
+		s.browseMu.Unlock()
+		select {
+		case <-c.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if c.err != nil {
+			return fmt.Errorf("%w: restore.browse", store.ErrAudit)
+		}
 		return nil
 	}
-	browseSeen[k] = now // claimed before the write, so two browses at once write one row
-	browseMu.Unlock()
+	c := &browseClaim{at: now, done: make(chan struct{})}
+	s.browseSeen[k] = c // claimed before the write, so two browses at once write one row
+	s.browseMu.Unlock()
 
 	method := who.Method
 	if method == "" {
 		method = "web"
 	}
 	details, _ := json.Marshal(map[string]any{"snapshot_id": snapshotID, "window_minutes": int(BrowseAuditWindow / time.Minute)})
-	if _, err := s.Store.AppendAudit(ctx, store.AuditEvent{ActorType: "admin", ActorID: who.AdminID, ActorLabel: who.Username, Method: method, SourceIP: who.IP,
-		Action: "restore.browse", ObjectType: "device", ObjectID: deviceID, CustomerID: dev.CustomerID, Result: "ok", Details: details}); err != nil {
-		browseMu.Lock()
-		if at, ok := browseSeen[k]; ok && at.Equal(now) {
-			delete(browseSeen, k)
-		}
-		browseMu.Unlock()
+	write := s.browseAppend
+	if write == nil {
+		write = s.Store.AppendAudit
+	}
+	_, werr := write(ctx, store.AuditEvent{ActorType: "admin", ActorID: who.AdminID, ActorLabel: who.Username, Method: method, SourceIP: who.IP,
+		Action: "restore.browse", ObjectType: "device", ObjectID: deviceID, CustomerID: dev.CustomerID, Result: "ok", Details: details})
+
+	s.browseMu.Lock()
+	c.err = werr
+	if werr != nil && s.browseSeen[k] == c {
+		delete(s.browseSeen, k)
+	}
+	close(c.done)
+	s.browseMu.Unlock()
+	if werr != nil {
 		return fmt.Errorf("%w: restore.browse", store.ErrAudit)
 	}
 	return nil
