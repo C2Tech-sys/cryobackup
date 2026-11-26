@@ -545,4 +545,8 @@ type World struct {
 	// DisplayZone is the operator's display zone: banner text cites times in it on a 12-hour clock, and
 	// the digest time is read in it. Nil means UTC. The engine never loads a zone itself.
 	DisplayZone *time.Location
+	// EscrowVerify is the escrow verifier's candidate keys (ADR 0030), from which banner C22 counts
+	// the retired devices whose verification fails (escrow_p22.go). Nil means the loader does not
+	// supply them, which raises nothing.
+	EscrowVerify *EscrowVerifyFacts
 }

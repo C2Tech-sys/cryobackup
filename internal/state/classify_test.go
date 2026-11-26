@@ -798,11 +798,25 @@ func TestClassifyMatrix(t *testing.T) {
 			want: expectation{primary: StateOK, alarm: "none", attrs: []Attr{AttrCustomerHeldKey}},
 		},
 		{
-			// The recheck rule is off until the M5 verification job exists
-			// (EscrowRecheckEnforced, ADR 0014); escrowIssueRecheck tests it on.
-			name: "B37_escrow_recheck_overdue_not_enforced_before_m5",
+			// The recheck rule is on since the weekly verifier exists (EscrowRecheckEnforced,
+			// ADR 0030 completing ADR 0014): a 40-day-old proof against a 30-day recheck alarms,
+			// from the proof plus the recheck interval.
+			name: "B37_escrow_recheck_overdue",
 			mod: func(f *DeviceFacts) {
 				f.Escrow = &EscrowFacts{Custody: "escrowed", CreatedAt: ago(90 * day), VerifiedAt: ago(40 * day)}
+			},
+			want: expectation{primary: StateEscrowUnverified, flags: []State{StateEscrowUnverified}, alarm: "alarm", reason: ReasonEscrowRecheckOverdue,
+				check: func(t *testing.T, got DeviceState) {
+					if want := t0.Add(-40*day + 30*day); !got.Since.Equal(want) {
+						t.Errorf("since = %v, want verified + recheck %v", got.Since, want)
+					}
+				}},
+		},
+		{
+			// Inside the recheck interval a proof stays good with the rule on.
+			name: "B37_escrow_recheck_within_interval_ok",
+			mod: func(f *DeviceFacts) {
+				f.Escrow = &EscrowFacts{Custody: "escrowed", CreatedAt: ago(90 * day), VerifiedAt: ago(29 * day)}
 			},
 			want: expectation{primary: StateOK, flags: []State{StateOK}, alarm: "none"},
 		},

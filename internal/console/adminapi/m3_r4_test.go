@@ -70,6 +70,8 @@ var fleetMutationRoutes = map[string]bool{
 	PatternAckCreate:       true,
 	PatternAckClear:        true,
 	PatternDigestSend:      true,
+	// P22-H: a verification sets the key's verified_at, which the escrow state reads (ADR 0030).
+	PatternDeviceEscrowVerify: true,
 }
 
 func TestEveryFleetMutationAdvancesTheChangeGeneration(t *testing.T) { // r4 MEDIUM-1

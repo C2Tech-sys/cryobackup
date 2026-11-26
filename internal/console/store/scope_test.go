@@ -362,6 +362,7 @@ func matrix() map[string]matrixCase {
 	addW2AMatrix(m)        // P20-W2A: batch reads, snooze re-arm, suppress (notify_w2a_m4_test.go)
 	addW2BMatrix(m)        // P20-W2B: closed episodes left out of a retried alert (notify_w2b_m4_test.go)
 	addRestoreP22Matrix(m) // P22-E: device restore create (restores_p22_test.go)
+	addEscrowP22Matrix(m)  // P22-H: escrow verifier (escrow_verify_test.go)
 	return m
 }
 

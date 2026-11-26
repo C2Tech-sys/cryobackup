@@ -57,6 +57,7 @@ func Patterns() []string {
 	p = append(p, m3Patterns()...)         // M3-T3: state, fleet, runs, views, system, status, events, metrics (m3*.go)
 	p = append(p, purgePatterns()...)      // ADR 0019: step-up, device purge, customer delete (purge_adr19.go)
 	p = append(p, m4Patterns()...)         // P20-W3A: recipients, delivery log, SMTP, acks, digest (m4_*.go)
+	p = append(p, escrowPatterns()...)     // P22-H: escrow verification on demand (escrow_p22.go, ADR 0030)
 	return p
 }
 
@@ -171,6 +172,7 @@ func (s *Service) Register(r httpx.Registrar) {
 	s.registerM3(r)       // M3-T3 (m3.go)
 	s.registerPurge(r)    // ADR 0019 (purge_adr19.go)
 	s.registerM4(r)       // P20-W3A (m4_mail.go)
+	s.registerEscrow(r)   // P22-H (escrow_p22.go, ADR 0030)
 }
 
 // display is one consistent reading of the display zone (the live preference,

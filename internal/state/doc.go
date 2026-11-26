@@ -83,9 +83,9 @@
 // finish time of the newest failed run, which approximates the first failure of
 // the streak because the facts do not carry the streak start; PARTIAL that run's
 // finish time; UNSEEN last heartbeat plus unseen_after; STALE last success plus
-// stale_after; ESCROW_UNVERIFIED key creation plus the verify grace (or, once
-// EscrowRecheckEnforced is on, the last verification plus the recheck
-// interval); MAINT_FAILED the failing run's finish;
+// stale_after; ESCROW_UNVERIFIED key creation plus the verify grace (or, for a
+// verification older than the recheck interval, the last verification plus the
+// recheck interval: EscrowRecheckEnforced, ADR 0030); MAINT_FAILED the failing run's finish;
 // MISSED the expected run time; DEFERRED the deferred run's start; OUTDATED zero;
 // OK the last success. A zero Since means the facts do not know.
 //
@@ -195,6 +195,10 @@
 //	     targets than QuotaFacts.WithQuota, is C15b warning.
 //	C16  a rejected manifest: warning. release-check never ran, or not for ReleaseCheckMaxAge (45 min: three
 //	     of its 15-min periods): C16b warning.
+//	C22  retired devices whose escrowed key fails its verification (EscrowKeyFailing: a recorded failure,
+//	     never proven after the grace, or a proof older than the recheck interval; ADR 0030): warning, with
+//	     the count. RETIRED keeps those devices' own rows quiet. World.EscrowVerify, not ProbeFacts: nil
+//	     raises nothing; keys that could not be read (NotRead) are C22b warning.
 //
 // # Not in this build
 //

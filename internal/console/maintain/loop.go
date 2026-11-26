@@ -67,13 +67,14 @@ type CycleReport struct {
 	// M5Due is the number of forget, prune and check operations that are due and
 	// that this version does not run.
 	M5Due int
-	// EscrowVerified is the number of never-verified escrowed keys this pass
-	// proved with cat config (M2-FIX-B1, see verifyEscrow).
+	// EscrowVerified is the number of due escrowed keys this pass proved with
+	// cat config (the escrow verifier, ADR 0030, escrowverify.go).
 	EscrowVerified int
 	// EscrowUnverified is the number of those verifications that did not succeed.
 	EscrowUnverified int
 	// EscrowDeferred is the number of due verifications left for a later pass
-	// by the per-pass bound (escrowVerifyPerPass, escrowVerifyBudget).
+	// by the per-pass bound (escrowVerifyPerPass, escrowVerifyBudget), or all of
+	// them when the verifier cannot run (no master key).
 	EscrowDeferred int
 	// UsageDeferred is the number of due usage refreshes left for a later pass by
 	// the per-pass bound (usageRefreshPerPass, usageRefreshBudget) or because no
@@ -216,8 +217,9 @@ func (w *Worker) RunOnce(ctx context.Context) (CycleReport, error) {
 		w.recordJob(ctx, "error", string(restic.ClassInternal), start)
 		return rep, w.storeErr(ctx, err)
 	}
-	// Never-verified escrowed keys first, bounded in count and time (verifyEscrows).
-	w.verifyEscrows(ctx, cands, &rep)
+	// The escrow verifier first, over its own candidates (retired devices included),
+	// bounded in count and time (escrowverify.go, ADR 0030).
+	w.verifyEscrows(ctx, &rep)
 	classes := make(restic.ErrorCounts)
 	usageStart, usageRuns := w.clock(), 0
 	for _, c := range cands {
@@ -327,10 +329,6 @@ type candidate struct {
 	nextCheck       sql.NullInt64
 	deferredCount   int
 	lastUsageSample sql.NullInt64
-	// escrowUnverified: the active escrowed key has never been verified
-	// (repo_key_escrow.verified_at NULL); lastVerifyAttempt is its last attempt.
-	escrowUnverified  bool
-	lastVerifyAttempt sql.NullInt64
 }
 
 // candidates is architecture §7.3 step 0 (applicability): devices with
@@ -343,12 +341,10 @@ func (w *Worker) candidates(ctx context.Context) ([]candidate, error) {
 	err := w.st.Read(ctx, func(tx *store.Tx) error {
 		rows, err := tx.Query(`
 			SELECT d.id, m.next_forget_after, m.next_prune_after, m.next_check_after, m.deferred_count,
-			       (SELECT MAX(u.sampled_at) FROM usage_samples u WHERE u.device_id = d.id),
-			       (e.id IS NOT NULL AND e.verified_at IS NULL), e.last_verify_attempt_at
+			       (SELECT MAX(u.sampled_at) FROM usage_samples u WHERE u.device_id = d.id)
 			FROM maintenance_schedule m
 			JOIN devices d   ON d.id = m.device_id
 			JOIN customers c ON c.id = d.customer_id
-			LEFT JOIN repo_key_escrow e ON e.device_id = d.id AND e.retired_at IS NULL AND e.custody = 'escrowed'
 			WHERE m.enabled = 1 AND d.retired_at IS NULL AND d.enroll_confirmed_at IS NOT NULL
 			  AND c.key_custody = 'escrowed' AND c.state <> 'archived'
 			ORDER BY d.id`)
@@ -358,8 +354,7 @@ func (w *Worker) candidates(ctx context.Context) ([]candidate, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var c candidate
-			if err := rows.Scan(&c.deviceID, &c.nextForget, &c.nextPrune, &c.nextCheck, &c.deferredCount, &c.lastUsageSample,
-				&c.escrowUnverified, &c.lastVerifyAttempt); err != nil {
+			if err := rows.Scan(&c.deviceID, &c.nextForget, &c.nextPrune, &c.nextCheck, &c.deferredCount, &c.lastUsageSample); err != nil {
 				return err
 			}
 			out = append(out, c)
